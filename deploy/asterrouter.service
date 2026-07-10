@@ -1,0 +1,29 @@
+[Unit]
+Description=AsterRouter - AI Gateway Control Plane
+Documentation=https://github.com/astercloud/asterrouter
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=asterrouter
+Group=asterrouter
+WorkingDirectory=/opt/asterrouter
+EnvironmentFile=/etc/asterrouter/asterrouter.env
+ExecStart=/opt/asterrouter/asterrouter
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=asterrouter
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/asterrouter
+ReadWritePaths=/etc/asterrouter
+ReadWritePaths=/var/lib/asterrouter
+
+[Install]
+WantedBy=multi-user.target

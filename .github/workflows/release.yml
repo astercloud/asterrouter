@@ -1,0 +1,93 @@
+name: GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish, for example v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.meta.outputs.tag }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Build release assets
+        run: bash scripts/build-release.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          TAG_MESSAGE="$(git tag -l --format='%(contents:body)' "$TAG")"
+          cat > release-notes.md <<EOF
+          > AsterRouter - AI Gateway Control Plane
+
+          ${TAG_MESSAGE}
+
+          ## Linux install or upgrade
+
+          \`\`\`bash
+          curl -sSL https://raw.githubusercontent.com/astercloud/asterrouter/main/deploy/install.sh | sudo bash
+          asterrouter upgrade -v ${TAG}
+          \`\`\`
+
+          ## Release assets
+
+          - asterrouter_${VERSION}_linux_amd64.tar.gz
+          - asterrouter_${VERSION}_linux_arm64.tar.gz
+          - asterrouter_${VERSION}_linux_amd64
+          - asterrouter_${VERSION}_linux_arm64
+          - checksums.txt
+          - asterrouter_update_manifest.json
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: AsterRouter ${{ steps.meta.outputs.version }}
+          body_path: release-notes.md
+          files: |
+            dist/asterrouter_*_linux_amd64
+            dist/asterrouter_*_linux_arm64
+            dist/asterrouter_*_linux_amd64.tar.gz
+            dist/asterrouter_*_linux_arm64.tar.gz
+            dist/checksums.txt
+            dist/asterrouter_update_manifest.json

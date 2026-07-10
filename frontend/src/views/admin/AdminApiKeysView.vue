@@ -1,0 +1,557 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue'
+import { Activity, Edit3, Plus, RefreshCw, RotateCw, Save, Search, ShieldOff, X } from '@lucide/vue'
+import { useI18n } from 'vue-i18n'
+import {
+  createAPIKey,
+  disableAPIKey,
+  getAPIKeys,
+  getApplications,
+  getGatewayTraces,
+  getProjects,
+  getUsageReport,
+  rotateAPIKey,
+  updateAPIKey
+} from '@/api/control'
+import type { APIKeyCreateRequest, APIKeyRecord, Application, GatewayTrace, Project, UsageReport } from '@/types'
+
+const { t } = useI18n()
+const loading = ref(false)
+const saving = ref(false)
+const error = ref('')
+const message = ref('')
+const modalOpen = ref(false)
+const editing = ref<APIKeyRecord | null>(null)
+const selectedKey = ref<APIKeyRecord | null>(null)
+const detailLoading = ref(false)
+const detailError = ref('')
+const detailUsage = ref<UsageReport | null>(null)
+const detailTraces = ref<GatewayTrace[]>([])
+const oneTimeKey = ref('')
+const apiKeys = ref<APIKeyRecord[]>([])
+const projects = ref<Project[]>([])
+const applications = ref<Application[]>([])
+const query = ref('')
+const statusFilter = ref('')
+const modelsText = ref('gpt-4o-mini')
+const keyStatus = ref('active')
+const form = reactive<APIKeyCreateRequest>({
+  project_id: '',
+  application_id: '',
+  name: '',
+  model_allowlist: [],
+  qps_limit: 10,
+  monthly_token_limit: 1000000,
+  expires_at: ''
+})
+
+const filteredApplications = computed(() => applications.value.filter((app) => app.project_id === form.project_id))
+const projectByID = computed(() => new Map(projects.value.map((item) => [item.id, item])))
+const appByID = computed(() => new Map(applications.value.map((item) => [item.id, item])))
+
+const filteredKeys = computed(() => {
+  const keyword = query.value.trim().toLowerCase()
+  return apiKeys.value.filter((key) => {
+    if (statusFilter.value && key.status !== statusFilter.value) return false
+    if (!keyword) return true
+    const project = projectByID.value.get(key.project_id)?.name || ''
+    const app = appByID.value.get(key.application_id)?.name || ''
+    return [key.name, key.fingerprint, key.prefix, project, app, key.model_allowlist.join(' ')].some((value) =>
+      value.toLowerCase().includes(keyword)
+    )
+  })
+})
+
+const summary = computed(() => ({
+  total: apiKeys.value.length,
+  active: apiKeys.value.filter((item) => item.status === 'active').length,
+  disabled: apiKeys.value.filter((item) => item.status === 'disabled').length,
+  projects: new Set(apiKeys.value.map((item) => item.project_id)).size
+}))
+
+function splitModels(value: string): string[] {
+  return value.split(/\n|,/).map((item) => item.trim()).filter(Boolean)
+}
+
+function dateInputValue(value?: string): string {
+  return value ? value.slice(0, 10) : ''
+}
+
+function syncDefaults() {
+  if (!form.project_id && projects.value[0]) {
+    form.project_id = projects.value[0].id
+  }
+  if (!form.application_id && filteredApplications.value[0]) {
+    form.application_id = filteredApplications.value[0].id
+  }
+}
+
+function openCreate() {
+  editing.value = null
+  Object.assign(form, {
+    project_id: projects.value[0]?.id || '',
+    application_id: '',
+    name: '',
+    model_allowlist: [],
+    qps_limit: 10,
+    monthly_token_limit: 1000000,
+    expires_at: ''
+  })
+  keyStatus.value = 'active'
+  modelsText.value = 'gpt-4o-mini'
+  syncDefaults()
+  modalOpen.value = true
+}
+
+function openEdit(key: APIKeyRecord) {
+  editing.value = key
+  Object.assign(form, {
+    project_id: key.project_id,
+    application_id: key.application_id,
+    name: key.name,
+    model_allowlist: [...key.model_allowlist],
+    qps_limit: key.qps_limit,
+    monthly_token_limit: key.monthly_token_limit,
+    expires_at: dateInputValue(key.expires_at)
+  })
+  keyStatus.value = key.status
+  modelsText.value = key.model_allowlist.join('\n')
+  modalOpen.value = true
+}
+
+async function openDetails(key: APIKeyRecord) {
+  selectedKey.value = key
+  detailLoading.value = true
+  detailError.value = ''
+  detailUsage.value = null
+  detailTraces.value = []
+  try {
+    const params = { api_key_id: key.id, limit: 5 }
+    const [usage, traces] = await Promise.all([getUsageReport(params), getGatewayTraces(params)])
+    detailUsage.value = usage
+    detailTraces.value = traces
+  } catch (err) {
+    detailError.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function load() {
+  loading.value = true
+  error.value = ''
+  try {
+    const [projectData, appData, keyData] = await Promise.all([getProjects(), getApplications(), getAPIKeys()])
+    projects.value = projectData
+    applications.value = appData
+    apiKeys.value = keyData
+    syncDefaults()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    loading.value = false
+  }
+}
+
+async function save() {
+  saving.value = true
+  error.value = ''
+  oneTimeKey.value = ''
+  try {
+    const model_allowlist = splitModels(modelsText.value)
+    if (editing.value) {
+      await updateAPIKey(editing.value.id, {
+        name: form.name,
+        model_allowlist,
+        qps_limit: form.qps_limit,
+        monthly_token_limit: form.monthly_token_limit,
+        expires_at: form.expires_at,
+        status: keyStatus.value
+      })
+      message.value = t('apiKeys.updated')
+    } else {
+      const created = await createAPIKey({ ...form, model_allowlist })
+      oneTimeKey.value = created.key
+      message.value = t('apiKeys.created')
+    }
+    modalOpen.value = false
+    editing.value = null
+    await load()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function rotate(key: APIKeyRecord) {
+  error.value = ''
+  message.value = ''
+  oneTimeKey.value = ''
+  try {
+    const rotated = await rotateAPIKey(key.id)
+    oneTimeKey.value = rotated.key
+    message.value = t('apiKeys.rotated')
+    await load()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  }
+}
+
+async function disable(id: string) {
+  error.value = ''
+  message.value = ''
+  try {
+    await disableAPIKey(id)
+    message.value = t('apiKeys.disabled')
+    await load()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  }
+}
+
+function formatDate(value?: string): string {
+  return value ? new Date(value).toLocaleString() : '-'
+}
+
+function formatTokens(value: number): string {
+  return new Intl.NumberFormat().format(value)
+}
+
+function formatCostCents(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2
+  }).format(value / 100)
+}
+
+function statusClass(status: string): string {
+  if (status === 'forwarded' || status === 'accepted') return 'status-success'
+  if (status === 'error' || status === 'upstream_error') return 'status-danger'
+  return 'status-warning'
+}
+
+onMounted(load)
+</script>
+
+<template>
+  <main class="content crud-page">
+    <section class="page-header">
+      <div>
+        <h1>{{ t('admin.apiKeys') }}</h1>
+        <p>{{ t('apiKeys.subtitle') }}</p>
+      </div>
+      <button class="button" type="button" @click="openCreate">
+        <Plus :size="17" />
+        {{ t('apiKeys.newKey') }}
+      </button>
+    </section>
+
+    <div class="crud-summary">
+      <span><strong>{{ summary.total }}</strong>{{ t('apiKeys.keys') }}</span>
+      <span><strong>{{ summary.active }}</strong>{{ t('dashboard.active') }}</span>
+      <span><strong>{{ summary.disabled }}</strong>{{ t('providers.disabled') }}</span>
+      <span><strong>{{ summary.projects }}</strong>{{ t('dashboard.projects') }}</span>
+    </div>
+
+    <section class="table-toolbar">
+      <label class="search-box">
+        <Search :size="17" />
+        <input v-model="query" :placeholder="t('apiKeys.searchPlaceholder')" />
+      </label>
+      <select v-model="statusFilter">
+        <option value="">{{ t('providers.allStatuses') }}</option>
+        <option value="active">active</option>
+        <option value="disabled">disabled</option>
+      </select>
+      <button class="button secondary" type="button" :disabled="loading" @click="load">
+        <RefreshCw :size="17" />
+        {{ t('common.refresh') }}
+      </button>
+    </section>
+
+    <div v-if="message" class="notice success">{{ message }}</div>
+    <div v-if="error" class="notice">{{ error }}</div>
+    <div v-if="oneTimeKey" class="notice success">
+      <strong>{{ t('apiKeys.oneTime') }}</strong>
+      <input :value="oneTimeKey" readonly />
+    </div>
+
+    <section class="panel table-panel content-fit">
+      <div class="panel-body table-scroll">
+        <table class="data-table crud-table">
+          <thead>
+            <tr>
+              <th>{{ t('apiKeys.name') }}</th>
+              <th>{{ t('projects.project') }}</th>
+              <th>{{ t('projects.application') }}</th>
+              <th>{{ t('apiKeys.fingerprint') }}</th>
+              <th>{{ t('providers.status') }}</th>
+              <th>{{ t('apiKeys.models') }}</th>
+              <th>{{ t('apiKeys.monthlyTokens') }}</th>
+              <th>{{ t('apiKeys.lastUsed') }}</th>
+              <th>{{ t('common.actions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="key in filteredKeys" :key="key.id">
+              <td>
+                <strong>{{ key.name }}</strong>
+                <span>{{ key.prefix }}</span>
+              </td>
+              <td>{{ projectByID.get(key.project_id)?.name || '-' }}</td>
+              <td>{{ appByID.get(key.application_id)?.name || '-' }}</td>
+              <td>{{ key.fingerprint }}</td>
+              <td><span class="pill" :class="key.status === 'active' ? 'status-success' : 'status-danger'">{{ key.status }}</span></td>
+              <td>
+                <div class="chip-list">
+                  <span v-for="model in key.model_allowlist.slice(0, 3)" :key="model" class="pill">{{ model }}</span>
+                  <span v-if="key.model_allowlist.length > 3" class="pill">+{{ key.model_allowlist.length - 3 }}</span>
+                </div>
+              </td>
+              <td>{{ formatTokens(key.monthly_token_limit) }}</td>
+              <td>{{ formatDate(key.last_used_at) }}</td>
+              <td>
+                <div class="row-actions">
+                  <button class="button secondary" type="button" @click="openEdit(key)">
+                    <Edit3 :size="15" />
+                    {{ t('common.edit') }}
+                  </button>
+                  <button class="button secondary" type="button" @click="openDetails(key)">
+                    <Activity :size="15" />
+                    {{ t('common.details') }}
+                  </button>
+                  <button class="button secondary" type="button" @click="rotate(key)">
+                    <RotateCw :size="15" />
+                    {{ t('apiKeys.rotate') }}
+                  </button>
+                  <button v-if="key.status === 'active'" class="button danger" type="button" @click="disable(key.id)">
+                    <ShieldOff :size="15" />
+                    {{ t('apiKeys.disable') }}
+                  </button>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="!filteredKeys.length">
+              <td colspan="9" class="empty-cell">{{ loading ? t('common.loading') : t('apiKeys.empty') }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div v-if="modalOpen" class="modal-backdrop" @click.self="modalOpen = false">
+      <section class="modal-card">
+        <header class="modal-header">
+          <div>
+            <h2>{{ editing ? t('apiKeys.editKey') : t('apiKeys.newKey') }}</h2>
+            <p>{{ t('apiKeys.modalSubtitle') }}</p>
+          </div>
+          <button class="icon-button" type="button" @click="modalOpen = false; editing = null"><X :size="19" /></button>
+        </header>
+
+        <div class="modal-body form-grid">
+          <div class="field">
+            <label>{{ t('projects.project') }}</label>
+            <select v-model="form.project_id" :disabled="Boolean(editing)" @change="form.application_id = filteredApplications[0]?.id || ''">
+              <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>{{ t('projects.application') }}</label>
+            <select v-model="form.application_id" :disabled="Boolean(editing)">
+              <option v-for="app in filteredApplications" :key="app.id" :value="app.id">{{ app.name }}</option>
+            </select>
+          </div>
+          <div class="field form-span-2">
+            <label>{{ t('apiKeys.name') }}</label>
+            <input v-model="form.name" />
+          </div>
+          <div class="field form-span-2">
+            <label>{{ t('apiKeys.models') }}</label>
+            <textarea v-model="modelsText" rows="3" />
+          </div>
+          <div class="field">
+            <label>{{ t('apiKeys.qps') }}</label>
+            <input v-model.number="form.qps_limit" type="number" min="0" />
+          </div>
+          <div class="field">
+            <label>{{ t('apiKeys.monthlyTokens') }}</label>
+            <input v-model.number="form.monthly_token_limit" type="number" min="0" />
+          </div>
+          <div class="field form-span-2">
+            <label>{{ t('apiKeys.expiresAt') }}</label>
+            <input v-model="form.expires_at" type="date" />
+          </div>
+          <div v-if="editing" class="field form-span-2">
+            <label>{{ t('providers.status') }}</label>
+            <select v-model="keyStatus">
+              <option value="active">active</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </div>
+        </div>
+
+        <footer class="modal-footer">
+          <button class="button secondary" type="button" @click="modalOpen = false; editing = null">{{ t('common.cancel') }}</button>
+          <button class="button" type="button" :disabled="saving" @click="save">
+            <Save :size="17" />
+            {{ saving ? t('common.saving') : t('common.save') }}
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div v-if="selectedKey" class="modal-backdrop" @click.self="selectedKey = null">
+      <section class="modal-card">
+        <header class="modal-header">
+          <div>
+            <h2>{{ selectedKey.name }}</h2>
+            <p>{{ selectedKey.fingerprint }} · {{ projectByID.get(selectedKey.project_id)?.name || '-' }}</p>
+          </div>
+          <button class="icon-button" type="button" @click="selectedKey = null"><X :size="19" /></button>
+        </header>
+
+        <div class="modal-body api-key-detail">
+          <div v-if="detailError" class="notice">{{ detailError }}</div>
+          <div class="detail-grid">
+            <div>
+              <label>{{ t('projects.application') }}</label>
+              <p>{{ appByID.get(selectedKey.application_id)?.name || '-' }}</p>
+            </div>
+            <div>
+              <label>{{ t('providers.status') }}</label>
+              <p>{{ selectedKey.status }}</p>
+            </div>
+            <div>
+              <label>{{ t('apiKeys.qps') }}</label>
+              <p>{{ selectedKey.qps_limit || t('apiKeys.unlimited') }}</p>
+            </div>
+            <div>
+              <label>{{ t('apiKeys.monthlyTokens') }}</label>
+              <p>{{ selectedKey.monthly_token_limit ? formatTokens(selectedKey.monthly_token_limit) : t('apiKeys.unlimited') }}</p>
+            </div>
+            <div>
+              <label>{{ t('apiKeys.lastUsed') }}</label>
+              <p>{{ formatDate(selectedKey.last_used_at) }}</p>
+            </div>
+            <div>
+              <label>{{ t('apiKeys.expiresAt') }}</label>
+              <p>{{ formatDate(selectedKey.expires_at) }}</p>
+            </div>
+            <div class="form-span-2">
+              <label>{{ t('apiKeys.models') }}</label>
+              <p>{{ selectedKey.model_allowlist.join(', ') }}</p>
+            </div>
+          </div>
+
+          <section class="metric-grid">
+            <article class="metric-card">
+              <div>
+                <span>{{ t('usage.requests') }}</span>
+                <strong>{{ detailLoading ? '-' : formatTokens(detailUsage?.total_requests || 0) }}</strong>
+                <small>{{ t('apiKeys.filteredByKey') }}</small>
+              </div>
+            </article>
+            <article class="metric-card">
+              <div>
+                <span>{{ t('usage.errors') }}</span>
+                <strong>{{ detailLoading ? '-' : formatTokens(detailUsage?.error_requests || 0) }}</strong>
+                <small>{{ t('traces.summary') }}</small>
+              </div>
+            </article>
+            <article class="metric-card">
+              <div>
+                <span>{{ t('usage.tokens') }}</span>
+                <strong>{{ detailLoading ? '-' : formatTokens(detailUsage?.total_tokens || 0) }}</strong>
+                <small>{{ t('usage.totalTokens') }}</small>
+              </div>
+            </article>
+            <article class="metric-card">
+              <div>
+                <span>{{ t('usage.cost') }}</span>
+                <strong>{{ detailLoading ? '-' : formatCostCents(detailUsage?.total_cost_cents || 0) }}</strong>
+                <small>{{ t('usage.estimatedCost') }}</small>
+              </div>
+            </article>
+          </section>
+
+          <section class="panel table-panel">
+            <header class="panel-header">
+              <div>
+                <h2>{{ t('apiKeys.recentUsage') }}</h2>
+                <p>{{ t('apiKeys.recentUsageSubtitle') }}</p>
+              </div>
+            </header>
+            <div class="panel-body table-scroll">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('audit.time') }}</th>
+                    <th>{{ t('usage.model') }}</th>
+                    <th>{{ t('providers.status') }}</th>
+                    <th>{{ t('usage.route') }}</th>
+                    <th>{{ t('usage.tokens') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="record in detailUsage?.recent || []" :key="record.id">
+                    <td>{{ formatDate(record.created_at) }}</td>
+                    <td>{{ record.model }}</td>
+                    <td><span class="pill" :class="statusClass(record.status)">{{ record.status }}</span></td>
+                    <td>{{ record.provider_account_id || record.provider_id || '-' }}</td>
+                    <td>{{ formatTokens(record.input_tokens + record.output_tokens) }}</td>
+                  </tr>
+                  <tr v-if="!detailLoading && !(detailUsage?.recent || []).length">
+                    <td colspan="5" class="empty-cell">{{ t('usage.noData') }}</td>
+                  </tr>
+                  <tr v-if="detailLoading">
+                    <td colspan="5" class="empty-cell">{{ t('common.loading') }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel table-panel">
+            <header class="panel-header">
+              <div>
+                <h2>{{ t('apiKeys.recentTraces') }}</h2>
+                <p>{{ t('apiKeys.recentTracesSubtitle') }}</p>
+              </div>
+            </header>
+            <div class="panel-body table-scroll">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('audit.time') }}</th>
+                    <th>{{ t('usage.model') }}</th>
+                    <th>{{ t('providers.status') }}</th>
+                    <th>{{ t('traces.http') }}</th>
+                    <th>{{ t('traces.summary') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="trace in detailTraces" :key="trace.id">
+                    <td>{{ formatDate(trace.created_at) }}</td>
+                    <td>{{ trace.model }}</td>
+                    <td><span class="pill" :class="statusClass(trace.status)">{{ trace.status }}</span></td>
+                    <td>{{ trace.http_status || '-' }}</td>
+                    <td>{{ trace.response_summary || trace.request_summary || '-' }}</td>
+                  </tr>
+                  <tr v-if="!detailLoading && !detailTraces.length">
+                    <td colspan="5" class="empty-cell">{{ t('traces.empty') }}</td>
+                  </tr>
+                  <tr v-if="detailLoading">
+                    <td colspan="5" class="empty-cell">{{ t('common.loading') }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+  </main>
+</template>

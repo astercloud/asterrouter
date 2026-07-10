@@ -1,0 +1,67 @@
+name: Build Artifacts
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional build version override, for example 0.1.0'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="$(tr -d '\r\n' < backend/cmd/asterrouter/VERSION)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release assets
+        run: bash scripts/build-release.sh "${{ steps.version.outputs.version }}"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: asterrouter-${{ steps.version.outputs.version }}-linux
+          path: |
+            dist/asterrouter_*_linux_amd64
+            dist/asterrouter_*_linux_arm64
+            dist/asterrouter_*_linux_amd64.tar.gz
+            dist/asterrouter_*_linux_arm64.tar.gz
+            dist/checksums.txt
+            dist/asterrouter_update_manifest.json
+          if-no-files-found: error

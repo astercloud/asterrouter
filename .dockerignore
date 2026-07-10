@@ -1,0 +1,13 @@
+.git
+.DS_Store
+
+backend/bin/
+dist/
+frontend/dist/
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+docs/
+
+.env
+.env.*
+!.env.example

@@ -1,0 +1,21 @@
+.DS_Store
+
+# Go
+bin/
+dist/
+*.test
+coverage.out
+
+# Frontend
+frontend/dist/
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+!frontend/package-lock.json
+
+# Local agent notes and product drafts
+docs/
+
+# Local environment
+.env
+.env.*
+!.env.example

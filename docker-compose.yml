@@ -1,0 +1,34 @@
+services:
+  asterrouter:
+    build: .
+    environment:
+      ASTER_ADDR: ":8080"
+      ASTER_ADMIN_USERNAME: "admin"
+      ASTER_ADMIN_PASSWORD: "change-me"
+      ASTER_PROFILE: "enterprise"
+      ASTER_SECRET_KEY: "replace-with-a-stable-random-secret"
+      DATABASE_URL: "postgres://asterrouter:asterrouter@postgres:5432/asterrouter?sslmode=disable"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: asterrouter
+      POSTGRES_USER: asterrouter
+      POSTGRES_PASSWORD: asterrouter
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asterrouter -d asterrouter"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres_data:
