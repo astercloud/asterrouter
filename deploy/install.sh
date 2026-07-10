@@ -15,6 +15,7 @@ COMMAND_NAME="asterrouter"
 COMMAND_PATH="/usr/local/bin/${COMMAND_NAME}"
 DEFAULT_ADDR="127.0.0.1:8082"
 REMOTE_RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy"
+DOWNLOAD_TMP=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -26,6 +27,14 @@ info() { echo -e "${BLUE}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
+cleanup() {
+  if [ -n "${DOWNLOAD_TMP:-}" ]; then
+    rm -rf "$DOWNLOAD_TMP"
+  fi
+}
+
+trap cleanup EXIT
 
 usage() {
   cat <<EOF
@@ -291,10 +300,9 @@ install_release() {
   asset="asterrouter_${version}_${os}_${arch}"
   archive_name="${asset}.tar.gz"
   base_url="https://github.com/${GITHUB_REPO}/releases/download/${tag}"
-  tmp="$(mktemp -d)"
+  DOWNLOAD_TMP="$(mktemp -d)"
+  tmp="$DOWNLOAD_TMP"
   extract_dir="${tmp}/${asset}"
-
-  trap 'rm -rf "$tmp"' EXIT
 
   info "Installing AsterRouter ${tag} for ${os}/${arch}"
   curl -fL "${base_url}/${archive_name}" -o "${tmp}/${archive_name}"
