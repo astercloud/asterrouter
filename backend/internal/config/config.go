@@ -11,36 +11,58 @@ import (
 const localDevelopmentSecret = "asterrouter-local-development-secret"
 
 type Config struct {
-	Addr              string
-	AdminToken        string
-	AdminUsername     string
-	AdminPassword     string
-	DatabaseURL       string
-	FrontendDir       string
-	Profile           string
-	PublicBase        string
-	SecretKey         string
-	Version           string
-	BuildType         string
-	UpdateManifestURL string
-	AllowRestart      bool
+	Addr                string
+	AdminToken          string
+	AdminUsername       string
+	AdminPassword       string
+	DatabaseURL         string
+	FrontendDir         string
+	Profile             string
+	PublicBase          string
+	SecretKey           string
+	Version             string
+	BuildType           string
+	UpdateManifestURL   string
+	CatalogMode         string
+	CatalogURL          string
+	CatalogKeyID        string
+	CatalogPublicKey    string
+	LicenseURL          string
+	LicenseKeyID        string
+	LicensePublicKey    string
+	InstanceID          string
+	InstanceFingerprint string
+	InstanceDisplayName string
+	PluginCacheDir      string
+	AllowRestart        bool
 }
 
 func Load() Config {
 	return Config{
-		Addr:              getEnv("ASTER_ADDR", ":8080"),
-		AdminToken:        strings.TrimSpace(os.Getenv("ASTER_ADMIN_TOKEN")),
-		AdminUsername:     getEnv("ASTER_ADMIN_USERNAME", "admin"),
-		AdminPassword:     strings.TrimSpace(os.Getenv("ASTER_ADMIN_PASSWORD")),
-		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		FrontendDir:       getEnv("ASTER_FRONTEND_DIR", "../frontend/dist"),
-		Profile:           normalizeProfile(os.Getenv("ASTER_PROFILE")),
-		PublicBase:        strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")),
-		SecretKey:         getEnv("ASTER_SECRET_KEY", localDevelopmentSecret),
-		Version:           getEnv("ASTER_VERSION", buildinfo.Version),
-		BuildType:         getEnv("ASTER_BUILD_TYPE", buildinfo.BuildType),
-		UpdateManifestURL: strings.TrimSpace(os.Getenv("ASTER_UPDATE_MANIFEST_URL")),
-		AllowRestart:      getBoolEnv("ASTER_ALLOW_RESTART"),
+		Addr:                getEnv("ASTER_ADDR", ":8080"),
+		AdminToken:          strings.TrimSpace(os.Getenv("ASTER_ADMIN_TOKEN")),
+		AdminUsername:       getEnv("ASTER_ADMIN_USERNAME", "admin"),
+		AdminPassword:       strings.TrimSpace(os.Getenv("ASTER_ADMIN_PASSWORD")),
+		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		FrontendDir:         getEnv("ASTER_FRONTEND_DIR", "../frontend/dist"),
+		Profile:             normalizeProfile(os.Getenv("ASTER_PROFILE")),
+		PublicBase:          strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")),
+		SecretKey:           getEnv("ASTER_SECRET_KEY", localDevelopmentSecret),
+		Version:             getEnv("ASTER_VERSION", buildinfo.Version),
+		BuildType:           getEnv("ASTER_BUILD_TYPE", buildinfo.BuildType),
+		UpdateManifestURL:   strings.TrimSpace(os.Getenv("ASTER_UPDATE_MANIFEST_URL")),
+		CatalogMode:         getEnv("ASTER_CATALOG_MODE", "disabled"),
+		CatalogURL:          strings.TrimSpace(os.Getenv("ASTER_CATALOG_URL")),
+		CatalogKeyID:        strings.TrimSpace(os.Getenv("ASTER_CATALOG_KEY_ID")),
+		CatalogPublicKey:    strings.TrimSpace(os.Getenv("ASTER_CATALOG_PUBLIC_KEY")),
+		LicenseURL:          strings.TrimSpace(os.Getenv("ASTER_LICENSE_URL")),
+		LicenseKeyID:        strings.TrimSpace(os.Getenv("ASTER_LICENSE_KEY_ID")),
+		LicensePublicKey:    strings.TrimSpace(os.Getenv("ASTER_LICENSE_PUBLIC_KEY")),
+		InstanceID:          strings.TrimSpace(os.Getenv("ASTER_INSTANCE_ID")),
+		InstanceFingerprint: strings.TrimSpace(os.Getenv("ASTER_INSTANCE_FINGERPRINT")),
+		InstanceDisplayName: strings.TrimSpace(os.Getenv("ASTER_INSTANCE_DISPLAY_NAME")),
+		PluginCacheDir:      getEnv("ASTER_PLUGIN_CACHE_DIR", "data/plugin-cache"),
+		AllowRestart:        getBoolEnv("ASTER_ALLOW_RESTART"),
 	}
 }
 
@@ -56,6 +78,22 @@ func ValidateRuntime(cfg Config) error {
 	}
 	if strings.TrimSpace(cfg.AdminPassword) == "" && strings.TrimSpace(cfg.AdminToken) == "" {
 		return errors.New("ASTER_ADMIN_PASSWORD or ASTER_ADMIN_TOKEN is required for release deployments")
+	}
+	switch strings.TrimSpace(cfg.CatalogMode) {
+	case "online", "private_mirror":
+		if strings.TrimSpace(cfg.CatalogURL) == "" {
+			return errors.New("ASTER_CATALOG_URL is required when ASTER_CATALOG_MODE=online or private_mirror")
+		}
+		if strings.TrimSpace(cfg.CatalogKeyID) == "" || strings.TrimSpace(cfg.CatalogPublicKey) == "" {
+			return errors.New("ASTER_CATALOG_KEY_ID and ASTER_CATALOG_PUBLIC_KEY are required when ASTER_CATALOG_MODE=online or private_mirror")
+		}
+		if (strings.TrimSpace(cfg.LicenseKeyID) == "") != (strings.TrimSpace(cfg.LicensePublicKey) == "") {
+			return errors.New("ASTER_LICENSE_KEY_ID and ASTER_LICENSE_PUBLIC_KEY must be set together")
+		}
+	case "offline":
+		if strings.TrimSpace(cfg.CatalogKeyID) == "" || strings.TrimSpace(cfg.CatalogPublicKey) == "" {
+			return errors.New("ASTER_CATALOG_KEY_ID and ASTER_CATALOG_PUBLIC_KEY are required when ASTER_CATALOG_MODE=offline")
+		}
 	}
 	return nil
 }

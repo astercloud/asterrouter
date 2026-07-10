@@ -89,6 +89,10 @@ export interface Project {
   description: string
   cost_center: string
   monthly_budget_cents: number
+  current_month_cost_cents: number
+  budget_remaining_cents: number
+  budget_used_percent: number
+  budget_status: string
   status: string
   created_at: string
   updated_at: string
@@ -97,6 +101,27 @@ export interface Project {
 export interface ProjectRequest {
   name: string
   description: string
+  cost_center: string
+  monthly_budget_cents: number
+  status: string
+}
+
+export interface Department {
+  id: string
+  name: string
+  code: string
+  parent_id: string
+  cost_center: string
+  monthly_budget_cents: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DepartmentRequest {
+  name: string
+  code: string
+  parent_id: string
   cost_center: string
   monthly_budget_cents: number
   status: string
@@ -119,6 +144,41 @@ export interface ApplicationRequest {
   environment: string
   owner: string
   status: string
+}
+
+export interface WorkspaceUser {
+  id: string
+  email: string
+  display_name: string
+  status: string
+  role: string
+  project_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkspaceUserRequest {
+  email: string
+  display_name: string
+  status: string
+  role: string
+}
+
+export interface RoleBinding {
+  id: string
+  user_id: string
+  role: string
+  scope_type: string
+  scope_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RoleBindingRequest {
+  user_id: string
+  role: string
+  scope_type: string
+  scope_id: string
 }
 
 export interface RoutingGroup {
@@ -193,6 +253,25 @@ export interface ProviderAccountHealthCheck {
   checked_at: string
 }
 
+export interface ModelPricing {
+  id: string
+  model: string
+  currency: string
+  input_price_cents_per_1m_tokens: number
+  output_price_cents_per_1m_tokens: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ModelPricingRequest {
+  model: string
+  currency: string
+  input_price_cents_per_1m_tokens: number
+  output_price_cents_per_1m_tokens: number
+  status: string
+}
+
 export interface APIKeyRecord {
   id: string
   project_id: string
@@ -242,6 +321,35 @@ export interface AuditLog {
   resource_id: string
   summary: string
   created_at: string
+}
+
+export interface AlertEvent {
+  id: string
+  type: string
+  severity: string
+  status: string
+  title: string
+  summary: string
+  resource_type: string
+  resource_id: string
+  project_id: string
+  dedupe_key: string
+  metadata: Record<string, string>
+  first_seen_at: string
+  last_seen_at: string
+  acknowledged_at?: string
+  acknowledged_by: string
+  resolved_at?: string
+  resolved_by: string
+}
+
+export interface AlertSummary {
+  total: number
+  active: number
+  acknowledged: number
+  resolved: number
+  warning: number
+  critical: number
 }
 
 export interface Dashboard {
@@ -295,6 +403,8 @@ export interface SystemUpdateInfo {
   restart_supported: boolean
   channel: string
   platform: string
+  source: string
+  signed_metadata: boolean
 }
 
 export interface SystemApplyResult {
@@ -322,8 +432,143 @@ export interface Plugin {
   surfaces: string[]
   entry_point: string
   configurable: boolean
+  packages?: PluginPackage[]
   created_at: string
   updated_at: string
+}
+
+export interface PluginPackage {
+  plugin_id: string
+  package_id: string
+  version: string
+  channel: string
+  os: string
+  arch: string
+  sha256: string
+  size_bytes: number
+  required_entitlement: boolean
+  revoked: boolean
+  revoked_by_advisory: boolean
+  advisory_id?: string
+  advisory_title?: string
+  advisory_severity?: string
+  compatible: boolean
+  compatibility_error?: string
+  cache_status?: string
+  cache_path?: string
+  cached_at?: string
+  install_status?: string
+  installed_at?: string
+}
+
+export interface PluginPackageDownloadRequest {
+  license_id?: string
+  activation_secret?: string
+  instance_id?: string
+}
+
+export interface PluginPackageImportRequest {
+  content_base64?: string
+  file_json?: unknown
+}
+
+export interface PluginPackageDownloadResult {
+  package: PluginPackage
+  cache_path: string
+  sha256: string
+  size_bytes: number
+  cached_at: string
+}
+
+export interface PluginPackageInstallation {
+  plugin_id: string
+  package_id: string
+  version: string
+  os: string
+  arch: string
+  cache_path: string
+  status: string
+  installed_at: string
+  updated_at: string
+}
+
+export interface LicenseEntitlement {
+  public_id: string
+  type: string
+  resource_key: string
+  status: string
+  starts_at: string
+  expires_at?: string
+}
+
+export interface OfficialLicenseStatus {
+  configured: boolean
+  license_id?: string
+  customer_id?: string
+  instance_id?: string
+  snapshot_version?: number
+  status: string
+  edition?: string
+  key_id?: string
+  envelope_sha256?: string
+  entitlements?: LicenseEntitlement[]
+  issued_at?: string
+  expires_at?: string
+  imported_at?: string
+  error?: string
+}
+
+export interface LicenseActivateRequest {
+  license_id: string
+  activation_secret: string
+  instance_id?: string
+  instance_fingerprint?: string
+  display_name?: string
+}
+
+export interface LicenseImportRequest {
+  envelope?: unknown
+  file_json?: unknown
+  activation_secret?: string
+}
+
+export interface PluginConfig {
+  plugin_id: string
+  settings: Record<string, string>
+  secret_hints: Record<string, string>
+  created_at: string
+  updated_at: string
+}
+
+export interface PluginConfigRequest {
+  settings: Record<string, string>
+  secrets: Record<string, string>
+}
+
+export interface PluginDeliveryAttempt {
+  id: string
+  plugin_id: string
+  alert_id: string
+  alert_type: string
+  alert_severity: string
+  status: string
+  target: string
+  http_status: number
+  error: string
+  created_at: string
+}
+
+export interface OfficialCatalogStatus {
+  mode: string
+  source_url: string
+  catalog_version: number
+  payload_sha256: string
+  key_id: string
+  plugin_count: number
+  advisory_count: number
+  status: string
+  error?: string
+  synced_at?: string
 }
 
 export interface PluginSummary {
@@ -367,20 +612,59 @@ export interface UsageModelSummary {
 }
 
 export interface UsageReport {
+ total_requests: number
+ error_requests: number
+ total_tokens: number
+ total_cost_cents: number
+  avg_latency_ms: number
+  by_model: UsageModelSummary[]
+  recent: UsageRecord[]
+}
+
+export type CostAllocationDimension = 'project' | 'application' | 'api_key' | 'model'
+
+export interface CostAllocationRow {
+  dimension: CostAllocationDimension
+  resource_id: string
+  resource_name: string
+  project_id: string
+  project_name: string
+  cost_center: string
+  application_id: string
+  application_name: string
+  api_key_id: string
+  api_key_name: string
+  api_fingerprint: string
+  model: string
+  requests: number
+  error_requests: number
+  total_tokens: number
+  total_cost_cents: number
+  avg_latency_ms: number
+  budget_cents: number
+  budget_used_percent: number
+  cost_share_percent: number
+}
+
+export interface CostAllocationReport {
+  dimension: CostAllocationDimension
   total_requests: number
   error_requests: number
   total_tokens: number
   total_cost_cents: number
   avg_latency_ms: number
-  by_model: UsageModelSummary[]
-  recent: UsageRecord[]
+  rows: CostAllocationRow[]
 }
 
 export interface RecordListQuery {
   limit?: number
   offset?: number
   q?: string
+  dimension?: CostAllocationDimension
+  api_key_id?: string
   model?: string
+  type?: string
+  severity?: string
   status?: string
   project_id?: string
   application_id?: string

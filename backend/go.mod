@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/gin-gonic/gin v1.9.1
+	github.com/gowebpki/jcs v1.0.1
 	github.com/lib/pq v1.10.9
 )
 

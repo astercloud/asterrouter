@@ -307,6 +307,8 @@ func gatewayPolicyErrorType(err error) string {
 		return "rate_limit_exceeded"
 	case errors.Is(err, controlplane.ErrGatewayQuotaExceeded):
 		return "quota_exceeded"
+	case errors.Is(err, controlplane.ErrGatewayBudgetExceeded):
+		return "budget_exceeded"
 	default:
 		return "policy_error"
 	}

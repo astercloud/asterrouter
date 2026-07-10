@@ -175,6 +175,71 @@ func TestEnforceGatewayPolicyRejectsMonthlyTokenQuota(t *testing.T) {
 	}
 }
 
+func TestEnforceGatewayPolicyRejectsMonthlyProjectBudget(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	project, err := svc.CreateProject(context.Background(), "tester", ProjectRequest{
+		Name:               "Budget Guard",
+		CostCenter:         "BUDGET",
+		MonthlyBudgetCents: 250,
+		Status:             ProjectStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateProject(): %v", err)
+	}
+	app, err := svc.CreateApplication(context.Background(), "tester", ApplicationRequest{
+		ProjectID:   project.ID,
+		Name:        "Budget App",
+		Environment: "prod",
+		Owner:       "platform",
+		Status:      ApplicationStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication(): %v", err)
+	}
+	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
+		ProjectID:         project.ID,
+		ApplicationID:     app.ID,
+		Name:              "Budget key",
+		ModelAllowlist:    []string{"gpt-4o-mini"},
+		QPSLimit:          0,
+		MonthlyTokenLimit: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(): %v", err)
+	}
+	auth, err := svc.AuthorizeGatewayModel(context.Background(), created.Key, "gpt-4o-mini")
+	if err != nil {
+		t.Fatalf("AuthorizeGatewayModel(): %v", err)
+	}
+	if err := svc.RecordGatewayUsage(context.Background(), auth, GatewayUsageInput{
+		Model:     "gpt-4o-mini",
+		Status:    "forwarded",
+		CostCents: 250,
+	}); err != nil {
+		t.Fatalf("RecordGatewayUsage(): %v", err)
+	}
+	if err := svc.EnforceGatewayPolicy(context.Background(), auth); !errors.Is(err, ErrGatewayBudgetExceeded) {
+		t.Fatalf("EnforceGatewayPolicy() err = %v", err)
+	}
+	projects, err := svc.ListProjects(context.Background())
+	if err != nil {
+		t.Fatalf("ListProjects(): %v", err)
+	}
+	var got Project
+	for _, item := range projects {
+		if item.ID == project.ID {
+			got = item
+			break
+		}
+	}
+	if got.ID == "" {
+		t.Fatalf("project not found in list: %+v", projects)
+	}
+	if got.CurrentMonthCostCents != 250 || got.BudgetRemainingCents != 0 || got.BudgetUsedPercent != 100 || got.BudgetStatus != "exceeded" {
+		t.Fatalf("budget summary mismatch: %+v", got)
+	}
+}
+
 func TestUsageReportQueryAggregatesBeyondCurrentPage(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1")
 	if err := svc.EnsureSeedData(context.Background()); err != nil {
@@ -230,6 +295,73 @@ func TestUsageReportQueryAggregatesBeyondCurrentPage(t *testing.T) {
 	}
 	if len(filtered.Recent) != 1 || filtered.TotalRequests != 2 || len(filtered.ByModel) != 1 || filtered.ByModel[0].Model != "model-b" {
 		t.Fatalf("filtered aggregate mismatch: %+v", filtered)
+	}
+}
+
+func TestModelPricingEstimatesGatewayUsageCost(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	if err := svc.EnsureSeedData(context.Background()); err != nil {
+		t.Fatalf("EnsureSeedData(): %v", err)
+	}
+	pricing, err := svc.CreateModelPricing(context.Background(), "tester", ModelPricingRequest{
+		Model:                       "priced-model",
+		Currency:                    "usd",
+		InputPriceCentsPer1MTokens:  200,
+		OutputPriceCentsPer1MTokens: 400,
+		Status:                      ModelPricingStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateModelPricing(): %v", err)
+	}
+	updated, err := svc.UpdateModelPricing(context.Background(), "tester", pricing.ID, ModelPricingRequest{
+		Model:                       "priced-model",
+		Currency:                    "USD",
+		InputPriceCentsPer1MTokens:  300,
+		OutputPriceCentsPer1MTokens: 600,
+		Status:                      ModelPricingStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("UpdateModelPricing(): %v", err)
+	}
+	if updated.InputPriceCentsPer1MTokens != 300 || updated.OutputPriceCentsPer1MTokens != 600 || updated.Currency != "USD" {
+		t.Fatalf("pricing update mismatch: %+v", updated)
+	}
+	if _, err := svc.CreateModelPricing(context.Background(), "tester", ModelPricingRequest{
+		Model:                       "priced-model",
+		InputPriceCentsPer1MTokens:  1,
+		OutputPriceCentsPer1MTokens: 1,
+	}); err == nil {
+		t.Fatal("expected duplicate model pricing error")
+	}
+
+	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
+		ProjectID:         "proj_platform",
+		ApplicationID:     "app_internal_sandbox",
+		Name:              "Priced usage key",
+		ModelAllowlist:    []string{"priced-model"},
+		MonthlyTokenLimit: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(): %v", err)
+	}
+	auth, err := svc.AuthorizeGatewayModel(context.Background(), created.Key, "priced-model")
+	if err != nil {
+		t.Fatalf("AuthorizeGatewayModel(): %v", err)
+	}
+	if err := svc.RecordGatewayUsage(context.Background(), auth, GatewayUsageInput{
+		Model:        "priced-model",
+		Status:       "forwarded",
+		InputTokens:  1_000_000,
+		OutputTokens: 500_000,
+	}); err != nil {
+		t.Fatalf("RecordGatewayUsage(): %v", err)
+	}
+	report, err := svc.UsageReportQuery(context.Background(), UsageQuery{Model: "priced-model"})
+	if err != nil {
+		t.Fatalf("UsageReportQuery(): %v", err)
+	}
+	if report.TotalCostCents != 600 {
+		t.Fatalf("estimated cost cents = %d, want 600; report=%+v", report.TotalCostCents, report)
 	}
 }
 

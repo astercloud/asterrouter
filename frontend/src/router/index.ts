@@ -3,10 +3,14 @@ import LoginView from '@/views/LoginView.vue'
 import SetupView from '@/views/SetupView.vue'
 import AdminShell from '@/views/admin/AdminShell.vue'
 import AdminApiKeysView from '@/views/admin/AdminApiKeysView.vue'
+import AdminAlertsView from '@/views/admin/AdminAlertsView.vue'
 import AdminAuditView from '@/views/admin/AdminAuditView.vue'
+import AdminCostAllocationView from '@/views/admin/AdminCostAllocationView.vue'
 import AdminDashboardView from '@/views/admin/AdminDashboardView.vue'
+import AdminDepartmentsView from '@/views/admin/AdminDepartmentsView.vue'
 import AdminExportJobsView from '@/views/admin/AdminExportJobsView.vue'
 import AdminGatewayTracesView from '@/views/admin/AdminGatewayTracesView.vue'
+import AdminModelPricingsView from '@/views/admin/AdminModelPricingsView.vue'
 import AdminPluginsView from '@/views/admin/AdminPluginsView.vue'
 import AdminProviderAccountsView from '@/views/admin/AdminProviderAccountsView.vue'
 import AdminProjectsView from '@/views/admin/AdminProjectsView.vue'
@@ -14,6 +18,7 @@ import AdminProvidersView from '@/views/admin/AdminProvidersView.vue'
 import AdminRoutingGroupsView from '@/views/admin/AdminRoutingGroupsView.vue'
 import AdminSettingsView from '@/views/admin/AdminSettingsView.vue'
 import AdminUsageView from '@/views/admin/AdminUsageView.vue'
+import AdminUsersView from '@/views/admin/AdminUsersView.vue'
 import PortalHomeView from '@/views/portal/PortalHomeView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
 
@@ -32,10 +37,15 @@ const router = createRouter({
         { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
         { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
         { path: 'provider-accounts', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
+        { path: 'model-pricings', component: AdminModelPricingsView, meta: { titleKey: 'admin.modelPricings', descriptionKey: 'modelPricings.subtitle' } },
+        { path: 'users', component: AdminUsersView, meta: { titleKey: 'admin.users', descriptionKey: 'users.subtitle' } },
+        { path: 'departments', component: AdminDepartmentsView, meta: { titleKey: 'admin.departments', descriptionKey: 'departments.subtitle' } },
         { path: 'projects', component: AdminProjectsView, meta: { titleKey: 'admin.projects', descriptionKey: 'projects.subtitle' } },
         { path: 'api-keys', component: AdminApiKeysView, meta: { titleKey: 'admin.apiKeys', descriptionKey: 'apiKeys.subtitle' } },
         { path: 'usage', component: AdminUsageView, meta: { titleKey: 'admin.usage', descriptionKey: 'usage.subtitle' } },
+        { path: 'cost-allocation', component: AdminCostAllocationView, meta: { titleKey: 'admin.costAllocation', descriptionKey: 'costAllocation.subtitle' } },
         { path: 'traces', component: AdminGatewayTracesView, meta: { titleKey: 'admin.traces', descriptionKey: 'traces.subtitle' } },
+        { path: 'alerts', component: AdminAlertsView, meta: { titleKey: 'admin.alerts', descriptionKey: 'alerts.subtitle' } },
         { path: 'exports', component: AdminExportJobsView, meta: { titleKey: 'admin.exports', descriptionKey: 'exports.subtitle' } },
         { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },

@@ -32,6 +32,9 @@ func New(opts Options) http.Handler {
 	if exportJobStore == nil {
 		exportJobStore = newCSVExportJobStore()
 	}
+	if opts.ControlService != nil && opts.PluginService != nil {
+		opts.ControlService.SetAlertDispatcher(opts.PluginService)
+	}
 
 	r.GET("/health", func(c *gin.Context) {
 		httpx.OK(c, gin.H{"status": "ok"})

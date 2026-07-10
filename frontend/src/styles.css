@@ -644,6 +644,21 @@ textarea:focus-visible {
   font-weight: 700;
 }
 
+.split-header {
+  justify-content: space-between;
+}
+
+.split-header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.split-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .panel-body {
   display: grid;
   min-width: 0;

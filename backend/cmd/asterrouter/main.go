@@ -68,15 +68,44 @@ func main() {
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatalf("seed control plane repository: %v", err)
 	}
-	pluginService := plugins.NewService(pluginRepo)
+	pluginService := plugins.NewServiceWithOptions(pluginRepo, plugins.ServiceOptions{
+		SecretKey: cfg.SecretKey,
+		OfficialCatalog: plugins.OfficialCatalogConfig{
+			Mode:            cfg.CatalogMode,
+			URL:             cfg.CatalogURL,
+			PublicKeyID:     cfg.CatalogKeyID,
+			PublicKeyBase64: cfg.CatalogPublicKey,
+		},
+		OfficialLicense: plugins.OfficialLicenseConfig{
+			URL:             cfg.LicenseURL,
+			PublicKeyID:     cfg.LicenseKeyID,
+			PublicKeyBase64: cfg.LicensePublicKey,
+			InstanceID:      cfg.InstanceID,
+			Fingerprint:     cfg.InstanceFingerprint,
+			DisplayName:     cfg.InstanceDisplayName,
+		},
+		PackageCacheDir: cfg.PluginCacheDir,
+		CoreVersion:     cfg.Version,
+	})
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatalf("seed plugin repository: %v", err)
 	}
+	officialCatalogURL := ""
+	officialCatalogKeyID := ""
+	officialCatalogPublicKey := ""
+	if cfg.CatalogMode == "online" {
+		officialCatalogURL = cfg.CatalogURL
+		officialCatalogKeyID = cfg.CatalogKeyID
+		officialCatalogPublicKey = cfg.CatalogPublicKey
+	}
 	systemService := system.NewService(system.Config{
-		Version:      cfg.Version,
-		BuildType:    cfg.BuildType,
-		ManifestURL:  cfg.UpdateManifestURL,
-		AllowRestart: cfg.AllowRestart,
+		Version:            cfg.Version,
+		BuildType:          cfg.BuildType,
+		ManifestURL:        cfg.UpdateManifestURL,
+		OfficialCatalogURL: officialCatalogURL,
+		OfficialKeyID:      officialCatalogKeyID,
+		OfficialPublicKey:  officialCatalogPublicKey,
+		AllowRestart:       cfg.AllowRestart,
 	})
 
 	router := server.New(server.Options{

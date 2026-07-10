@@ -20,14 +20,23 @@ type Repository interface {
 	SaveProviderHealthCheck(ctx context.Context, check ProviderHealthCheck) error
 	ListProjects(ctx context.Context) ([]Project, error)
 	SaveProject(ctx context.Context, project Project) error
+	ListDepartments(ctx context.Context) ([]Department, error)
+	SaveDepartment(ctx context.Context, department Department) error
 	ListApplications(ctx context.Context, projectID string) ([]Application, error)
 	SaveApplication(ctx context.Context, app Application) error
+	ListWorkspaceUsers(ctx context.Context) ([]WorkspaceUser, error)
+	SaveWorkspaceUser(ctx context.Context, user WorkspaceUser) error
+	ListRoleBindings(ctx context.Context) ([]RoleBinding, error)
+	SaveRoleBinding(ctx context.Context, binding RoleBinding) error
+	DeleteRoleBinding(ctx context.Context, id string) error
 	ListRoutingGroups(ctx context.Context) ([]RoutingGroup, error)
 	SaveRoutingGroup(ctx context.Context, group RoutingGroup) error
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error)
 	SaveProviderAccount(ctx context.Context, account ProviderAccount) error
 	ListLatestProviderAccountHealthChecks(ctx context.Context) ([]ProviderAccountHealthCheck, error)
 	SaveProviderAccountHealthCheck(ctx context.Context, check ProviderAccountHealthCheck) error
+	ListModelPricings(ctx context.Context) ([]ModelPricing, error)
+	SaveModelPricing(ctx context.Context, pricing ModelPricing) error
 	ListAPIKeys(ctx context.Context) ([]APIKeyRecord, error)
 	FindAPIKeyByHash(ctx context.Context, hash string) (APIKeyRecord, bool, error)
 	SaveAPIKey(ctx context.Context, key APIKeyRecord) error
@@ -39,6 +48,7 @@ type Repository interface {
 	SummarizeUsageRecords(ctx context.Context, query UsageQuery) (UsageAggregate, error)
 	SummarizeCostAllocation(ctx context.Context, dimension string, query UsageQuery) ([]CostAllocationRollup, error)
 	SumUsageTokensByAPIKeySince(ctx context.Context, apiKeyID string, since time.Time) (int, error)
+	SumUsageCostCentsByProjectSince(ctx context.Context, projectID string, since time.Time) (int, error)
 	SaveGatewayTrace(ctx context.Context, trace GatewayTrace) error
 	ListGatewayTraces(ctx context.Context, limit int) ([]GatewayTrace, error)
 	QueryGatewayTraces(ctx context.Context, query GatewayTraceQuery) ([]GatewayTrace, error)
@@ -47,6 +57,11 @@ type Repository interface {
 	QueryAuditLogs(ctx context.Context, query AuditLogQuery) ([]AuditLog, error)
 	SummarizeAuditLogs(ctx context.Context, query AuditLogQuery) (AuditLogSummary, error)
 	AddAuditLog(ctx context.Context, event AuditLog) error
+	QueryAlertEvents(ctx context.Context, query AlertQuery) ([]AlertEvent, error)
+	SummarizeAlertEvents(ctx context.Context, query AlertQuery) (AlertSummary, error)
+	FindAlertEvent(ctx context.Context, id string) (AlertEvent, bool, error)
+	FindAlertByDedupeKey(ctx context.Context, dedupeKey string) (AlertEvent, bool, error)
+	SaveAlertEvent(ctx context.Context, event AlertEvent) error
 	Health(ctx context.Context) error
 	Close() error
 }
@@ -67,14 +82,19 @@ type MemoryRepository struct {
 	providers           map[string]ProviderConnection
 	healthChecks        map[string]ProviderHealthCheck
 	projects            map[string]Project
+	departments         map[string]Department
 	applications        map[string]Application
+	workspaceUsers      map[string]WorkspaceUser
+	roleBindings        map[string]RoleBinding
 	groups              map[string]RoutingGroup
 	accounts            map[string]ProviderAccount
 	accountHealthChecks map[string]ProviderAccountHealthCheck
+	modelPricings       map[string]ModelPricing
 	apiKeys             map[string]APIKeyRecord
 	usageRecords        map[string]UsageRecord
 	gatewayTraces       map[string]GatewayTrace
 	auditLogs           map[string]AuditLog
+	alertEvents         map[string]AlertEvent
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -82,14 +102,19 @@ func NewMemoryRepository() *MemoryRepository {
 		providers:           map[string]ProviderConnection{},
 		healthChecks:        map[string]ProviderHealthCheck{},
 		projects:            map[string]Project{},
+		departments:         map[string]Department{},
 		applications:        map[string]Application{},
+		workspaceUsers:      map[string]WorkspaceUser{},
+		roleBindings:        map[string]RoleBinding{},
 		groups:              map[string]RoutingGroup{},
 		accounts:            map[string]ProviderAccount{},
 		accountHealthChecks: map[string]ProviderAccountHealthCheck{},
+		modelPricings:       map[string]ModelPricing{},
 		apiKeys:             map[string]APIKeyRecord{},
 		usageRecords:        map[string]UsageRecord{},
 		gatewayTraces:       map[string]GatewayTrace{},
 		auditLogs:           map[string]AuditLog{},
+		alertEvents:         map[string]AlertEvent{},
 	}
 }
 
@@ -237,6 +262,24 @@ func (r *MemoryRepository) SaveProviderAccountHealthCheck(_ context.Context, che
 	return nil
 }
 
+func (r *MemoryRepository) ListModelPricings(context.Context) ([]ModelPricing, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ModelPricing, 0, len(r.modelPricings))
+	for _, pricing := range r.modelPricings {
+		out = append(out, pricing)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Model < out[j].Model })
+	return out, nil
+}
+
+func (r *MemoryRepository) SaveModelPricing(_ context.Context, pricing ModelPricing) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.modelPricings[pricing.ID] = pricing
+	return nil
+}
+
 func (r *MemoryRepository) accountCountsForGroup(groupID string) (int, int) {
 	var total, active int
 	for _, account := range r.accounts {
@@ -356,6 +399,18 @@ func (r *MemoryRepository) SumUsageTokensByAPIKeySince(_ context.Context, apiKey
 	for _, record := range r.usageRecords {
 		if record.APIKeyID == apiKeyID && !record.CreatedAt.Before(since) {
 			total += record.InputTokens + record.OutputTokens
+		}
+	}
+	return total, nil
+}
+
+func (r *MemoryRepository) SumUsageCostCentsByProjectSince(_ context.Context, projectID string, since time.Time) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var total int
+	for _, record := range r.usageRecords {
+		if record.ProjectID == projectID && !record.CreatedAt.Before(since) {
+			total += record.CostCents
 		}
 	}
 	return total, nil
@@ -711,6 +766,24 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS departments (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  code TEXT NOT NULL UNIQUE,
+  parent_id TEXT NOT NULL DEFAULT '',
+  cost_center TEXT NOT NULL DEFAULT '',
+  monthly_budget_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS departments_parent_idx
+  ON departments(parent_id);
+
+CREATE INDEX IF NOT EXISTS departments_cost_center_idx
+  ON departments(cost_center);
+
 CREATE TABLE IF NOT EXISTS applications (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -721,6 +794,32 @@ CREATE TABLE IF NOT EXISTS applications (
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS workspace_users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active',
+  role TEXT NOT NULL DEFAULT 'developer',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS role_bindings (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES workspace_users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS role_bindings_unique_scope_idx
+  ON role_bindings(user_id, role, scope_type, scope_id);
+
+CREATE INDEX IF NOT EXISTS role_bindings_scope_idx
+  ON role_bindings(scope_type, scope_id);
 
 CREATE TABLE IF NOT EXISTS routing_groups (
   id TEXT PRIMARY KEY,
@@ -772,6 +871,17 @@ CREATE TABLE IF NOT EXISTS provider_account_health_checks (
 
 CREATE INDEX IF NOT EXISTS provider_account_health_checks_account_checked_idx
   ON provider_account_health_checks(account_id, checked_at DESC);
+
+CREATE TABLE IF NOT EXISTS model_pricings (
+  id TEXT PRIMARY KEY,
+  model TEXT NOT NULL UNIQUE,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  input_price_cents_per_1m_tokens INTEGER NOT NULL DEFAULT 0,
+  output_price_cents_per_1m_tokens INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS api_keys (
   id TEXT PRIMARY KEY,
@@ -850,6 +960,35 @@ CREATE INDEX IF NOT EXISTS gateway_traces_created_idx
 
 CREATE INDEX IF NOT EXISTS gateway_traces_route_idx
   ON gateway_traces(provider_id, provider_account_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  status TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  resource_type TEXT NOT NULL DEFAULT '',
+  resource_id TEXT NOT NULL DEFAULT '',
+  project_id TEXT NOT NULL DEFAULT '',
+  dedupe_key TEXT NOT NULL UNIQUE,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  first_seen_at TIMESTAMPTZ NOT NULL,
+  last_seen_at TIMESTAMPTZ NOT NULL,
+  acknowledged_at TIMESTAMPTZ,
+  acknowledged_by TEXT NOT NULL DEFAULT '',
+  resolved_at TIMESTAMPTZ,
+  resolved_by TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS alert_events_status_last_seen_idx
+  ON alert_events(status, last_seen_at DESC);
+
+CREATE INDEX IF NOT EXISTS alert_events_resource_idx
+  ON alert_events(resource_type, resource_id, last_seen_at DESC);
+
+CREATE INDEX IF NOT EXISTS alert_events_project_idx
+  ON alert_events(project_id, last_seen_at DESC);
 `)
 	return err
 }
@@ -1151,6 +1290,42 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8)
 	return err
 }
 
+func (r *PostgresRepository) ListModelPricings(ctx context.Context) ([]ModelPricing, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, model, currency, input_price_cents_per_1m_tokens, output_price_cents_per_1m_tokens, status, created_at, updated_at
+FROM model_pricings
+ORDER BY model ASC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ModelPricing
+	for rows.Next() {
+		var pricing ModelPricing
+		if err := rows.Scan(&pricing.ID, &pricing.Model, &pricing.Currency, &pricing.InputPriceCentsPer1MTokens, &pricing.OutputPriceCentsPer1MTokens, &pricing.Status, &pricing.CreatedAt, &pricing.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, pricing)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgresRepository) SaveModelPricing(ctx context.Context, pricing ModelPricing) error {
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO model_pricings(id, model, currency, input_price_cents_per_1m_tokens, output_price_cents_per_1m_tokens, status, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+ON CONFLICT(id) DO UPDATE SET
+  model = EXCLUDED.model,
+  currency = EXCLUDED.currency,
+  input_price_cents_per_1m_tokens = EXCLUDED.input_price_cents_per_1m_tokens,
+  output_price_cents_per_1m_tokens = EXCLUDED.output_price_cents_per_1m_tokens,
+  status = EXCLUDED.status,
+  updated_at = EXCLUDED.updated_at
+`, pricing.ID, pricing.Model, pricing.Currency, pricing.InputPriceCentsPer1MTokens, pricing.OutputPriceCentsPer1MTokens, pricing.Status, pricing.CreatedAt, pricing.UpdatedAt)
+	return err
+}
+
 func (r *PostgresRepository) routingGroupAccountCounts(ctx context.Context) (map[string]int, map[string]int, error) {
 	rows, err := r.db.QueryContext(ctx, `
 SELECT status, schedulable, group_ids
@@ -1372,6 +1547,19 @@ SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
 FROM usage_records
 WHERE api_key_id = $1 AND created_at >= $2
 `, apiKeyID, since)
+	var total int
+	if err := row.Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (r *PostgresRepository) SumUsageCostCentsByProjectSince(ctx context.Context, projectID string, since time.Time) (int, error) {
+	row := r.db.QueryRowContext(ctx, `
+SELECT COALESCE(SUM(cost_cents), 0)
+FROM usage_records
+WHERE project_id = $1 AND created_at >= $2
+`, projectID, since)
 	var total int
 	if err := row.Scan(&total); err != nil {
 		return 0, err

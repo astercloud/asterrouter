@@ -115,6 +115,7 @@ func writeSystemOperationError(c *gin.Context, err error, result system.ApplyRes
 		errors.Is(err, system.ErrUpdateUnsupported),
 		errors.Is(err, system.ErrNoCompatibleAsset),
 		errors.Is(err, system.ErrChecksumRequired),
+		errors.Is(err, system.ErrUpdateSignature),
 		errors.Is(err, system.ErrRestartUnsupported):
 		status = http.StatusConflict
 		code = 1604

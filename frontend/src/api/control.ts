@@ -6,17 +6,26 @@ import type {
   APIKeyUpdateRequest,
   Application,
   ApplicationRequest,
+  AlertEvent,
+  AlertSummary,
   AuditLog,
   AuditLogSummary,
+  CostAllocationReport,
+  Department,
+  DepartmentRequest,
   Dashboard,
   ExportJob,
   ExportJobKind,
   GatewayTrace,
   GatewayTraceSummary,
+  ModelPricing,
+  ModelPricingRequest,
   PortalWorkspace,
   Project,
   ProjectRequest,
   RecordListQuery,
+  RoleBinding,
+  RoleBindingRequest,
   ProviderAccount,
   ProviderAccountHealthCheck,
   ProviderAccountRequest,
@@ -25,7 +34,9 @@ import type {
   ProviderRequest,
   RoutingGroup,
   RoutingGroupRequest,
-  UsageReport
+  UsageReport,
+  WorkspaceUser,
+  WorkspaceUserRequest
 } from '@/types'
 
 export async function getDashboard(): Promise<Dashboard> {
@@ -73,6 +84,21 @@ export async function updateProject(id: string, payload: ProjectRequest): Promis
   return response.data
 }
 
+export async function getDepartments(): Promise<Department[]> {
+  const response = await apiClient.get<Department[]>('/admin/departments')
+  return response.data
+}
+
+export async function createDepartment(payload: DepartmentRequest): Promise<Department> {
+  const response = await apiClient.post<Department>('/admin/departments', payload)
+  return response.data
+}
+
+export async function updateDepartment(id: string, payload: DepartmentRequest): Promise<Department> {
+  const response = await apiClient.put<Department>(`/admin/departments/${id}`, payload)
+  return response.data
+}
+
 export async function getApplications(): Promise<Application[]> {
   const response = await apiClient.get<Application[]>('/admin/applications')
   return response.data
@@ -86,6 +112,35 @@ export async function createApplication(projectID: string, payload: ApplicationR
 export async function updateApplication(id: string, payload: ApplicationRequest): Promise<Application> {
   const response = await apiClient.put<Application>(`/admin/applications/${id}`, payload)
   return response.data
+}
+
+export async function getWorkspaceUsers(): Promise<WorkspaceUser[]> {
+  const response = await apiClient.get<WorkspaceUser[]>('/admin/users')
+  return response.data
+}
+
+export async function createWorkspaceUser(payload: WorkspaceUserRequest): Promise<WorkspaceUser> {
+  const response = await apiClient.post<WorkspaceUser>('/admin/users', payload)
+  return response.data
+}
+
+export async function updateWorkspaceUser(id: string, payload: WorkspaceUserRequest): Promise<WorkspaceUser> {
+  const response = await apiClient.put<WorkspaceUser>(`/admin/users/${id}`, payload)
+  return response.data
+}
+
+export async function getRoleBindings(): Promise<RoleBinding[]> {
+  const response = await apiClient.get<RoleBinding[]>('/admin/role-bindings')
+  return response.data
+}
+
+export async function createRoleBinding(payload: RoleBindingRequest): Promise<RoleBinding> {
+  const response = await apiClient.post<RoleBinding>('/admin/role-bindings', payload)
+  return response.data
+}
+
+export async function deleteRoleBinding(id: string): Promise<void> {
+  await apiClient.delete(`/admin/role-bindings/${id}`)
 }
 
 export async function getRoutingGroups(): Promise<RoutingGroup[]> {
@@ -128,6 +183,21 @@ export async function checkProviderAccount(id: string): Promise<ProviderAccountH
   return response.data
 }
 
+export async function getModelPricings(): Promise<ModelPricing[]> {
+  const response = await apiClient.get<ModelPricing[]>('/admin/model-pricings')
+  return response.data
+}
+
+export async function createModelPricing(payload: ModelPricingRequest): Promise<ModelPricing> {
+  const response = await apiClient.post<ModelPricing>('/admin/model-pricings', payload)
+  return response.data
+}
+
+export async function updateModelPricing(id: string, payload: ModelPricingRequest): Promise<ModelPricing> {
+  const response = await apiClient.put<ModelPricing>(`/admin/model-pricings/${id}`, payload)
+  return response.data
+}
+
 export async function getAPIKeys(): Promise<APIKeyRecord[]> {
   const response = await apiClient.get<APIKeyRecord[]>('/admin/api-keys')
   return response.data
@@ -162,6 +232,26 @@ export async function getAuditLogSummary(params?: RecordListQuery): Promise<Audi
   return response.data
 }
 
+export async function getAlerts(params?: RecordListQuery): Promise<AlertEvent[]> {
+  const response = await apiClient.get<AlertEvent[]>('/admin/alerts', { params })
+  return response.data
+}
+
+export async function getAlertSummary(params?: RecordListQuery): Promise<AlertSummary> {
+  const response = await apiClient.get<AlertSummary>('/admin/alerts/summary', { params })
+  return response.data
+}
+
+export async function acknowledgeAlert(id: string): Promise<AlertEvent> {
+  const response = await apiClient.post<AlertEvent>(`/admin/alerts/${id}/acknowledge`)
+  return response.data
+}
+
+export async function resolveAlert(id: string): Promise<AlertEvent> {
+  const response = await apiClient.post<AlertEvent>(`/admin/alerts/${id}/resolve`)
+  return response.data
+}
+
 export async function exportAuditLogsCSV(params?: RecordListQuery): Promise<void> {
   await downloadCSV('/admin/audit-logs/export', `audit-${Date.now()}.csv`, params)
 }
@@ -173,6 +263,15 @@ export async function getUsageReport(params?: RecordListQuery): Promise<UsageRep
 
 export async function exportUsageCSV(params?: RecordListQuery): Promise<void> {
   await downloadCSV('/admin/usage/export', `usage-${Date.now()}.csv`, params)
+}
+
+export async function getCostAllocationReport(params?: RecordListQuery): Promise<CostAllocationReport> {
+  const response = await apiClient.get<CostAllocationReport>('/admin/cost-allocation', { params })
+  return response.data
+}
+
+export async function exportCostAllocationCSV(params?: RecordListQuery): Promise<void> {
+  await downloadCSV('/admin/cost-allocation/export', `cost-allocation-${Date.now()}.csv`, params)
 }
 
 export async function getGatewayTraces(params?: RecordListQuery): Promise<GatewayTrace[]> {

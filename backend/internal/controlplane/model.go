@@ -22,6 +22,9 @@ const (
 
 	RoutingGroupStatusActive   = "active"
 	RoutingGroupStatusDisabled = "disabled"
+
+	ModelPricingStatusActive   = "active"
+	ModelPricingStatusDisabled = "disabled"
 )
 
 type ProviderConnection struct {
@@ -60,14 +63,18 @@ type ProviderRequest struct {
 }
 
 type Project struct {
-	ID                 string    `json:"id"`
-	Name               string    `json:"name"`
-	Description        string    `json:"description"`
-	CostCenter         string    `json:"cost_center"`
-	MonthlyBudgetCents int       `json:"monthly_budget_cents"`
-	Status             string    `json:"status"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Description           string    `json:"description"`
+	CostCenter            string    `json:"cost_center"`
+	MonthlyBudgetCents    int       `json:"monthly_budget_cents"`
+	CurrentMonthCostCents int       `json:"current_month_cost_cents"`
+	BudgetRemainingCents  int       `json:"budget_remaining_cents"`
+	BudgetUsedPercent     float64   `json:"budget_used_percent"`
+	BudgetStatus          string    `json:"budget_status"`
+	Status                string    `json:"status"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 type ProjectRequest struct {
@@ -168,6 +175,25 @@ type ProviderAccountHealthCheck struct {
 	Message    string    `json:"message"`
 	Models     []string  `json:"models"`
 	CheckedAt  time.Time `json:"checked_at"`
+}
+
+type ModelPricing struct {
+	ID                          string    `json:"id"`
+	Model                       string    `json:"model"`
+	Currency                    string    `json:"currency"`
+	InputPriceCentsPer1MTokens  int       `json:"input_price_cents_per_1m_tokens"`
+	OutputPriceCentsPer1MTokens int       `json:"output_price_cents_per_1m_tokens"`
+	Status                      string    `json:"status"`
+	CreatedAt                   time.Time `json:"created_at"`
+	UpdatedAt                   time.Time `json:"updated_at"`
+}
+
+type ModelPricingRequest struct {
+	Model                       string `json:"model"`
+	Currency                    string `json:"currency"`
+	InputPriceCentsPer1MTokens  int    `json:"input_price_cents_per_1m_tokens"`
+	OutputPriceCentsPer1MTokens int    `json:"output_price_cents_per_1m_tokens"`
+	Status                      string `json:"status"`
 }
 
 type APIKeyRecord struct {

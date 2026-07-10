@@ -2,8 +2,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Boxes, Edit3, Plus, RefreshCw, Save, Search, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { createApplication, createProject, getApplications, getProjects, updateApplication, updateProject } from '@/api/control'
-import type { Application, ApplicationRequest, Project, ProjectRequest } from '@/types'
+import { createApplication, createProject, getApplications, getDepartments, getProjects, updateApplication, updateProject } from '@/api/control'
+import type { Application, ApplicationRequest, Department, Project, ProjectRequest } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -12,6 +12,7 @@ const error = ref('')
 const message = ref('')
 const projects = ref<Project[]>([])
 const applications = ref<Application[]>([])
+const departments = ref<Department[]>([])
 const query = ref('')
 const statusFilter = ref('')
 const modal = ref<'project' | 'application' | ''>('')
@@ -48,6 +49,21 @@ const filteredProjects = computed(() => {
     if (!keyword) return true
     return [project.name, project.description, project.cost_center].some((value) => value.toLowerCase().includes(keyword))
   })
+})
+
+const costCenterOptions = computed(() => {
+  const values = new Set<string>()
+  for (const department of departments.value) {
+    if (department.status === 'active' && department.cost_center) {
+      values.add(department.cost_center)
+    }
+  }
+  for (const project of projects.value) {
+    if (project.cost_center) {
+      values.add(project.cost_center)
+    }
+  }
+  return Array.from(values).sort()
 })
 
 const summary = computed(() => ({
@@ -129,13 +145,32 @@ function closeModal() {
   editingApplication.value = null
 }
 
+function formatCost(cents: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2
+  }).format(cents / 100)
+}
+
+function formatPercent(value: number): string {
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value)}%`
+}
+
+function budgetStatusClass(status: string): string {
+  if (status === 'ok' || status === 'unlimited') return 'status-success'
+  if (status === 'exceeded') return 'status-danger'
+  return 'status-warning'
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [projectData, appData] = await Promise.all([getProjects(), getApplications()])
+    const [projectData, appData, departmentData] = await Promise.all([getProjects(), getApplications(), getDepartments()])
     projects.value = projectData
     applications.value = appData
+    departments.value = departmentData
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -251,7 +286,18 @@ onMounted(load)
                 <span>{{ project.description || '-' }}</span>
               </td>
               <td>{{ project.cost_center || '-' }}</td>
-              <td>{{ (project.monthly_budget_cents / 100).toFixed(2) }}</td>
+              <td>
+                <strong>{{ project.monthly_budget_cents ? formatCost(project.monthly_budget_cents) : t('apiKeys.unlimited') }}</strong>
+                <span>{{ t('projects.budgetUsed') }} {{ formatCost(project.current_month_cost_cents || 0) }}</span>
+                <span>
+                  {{ t('projects.budgetRemaining') }}
+                  {{ project.monthly_budget_cents ? formatCost(project.budget_remaining_cents || 0) : t('apiKeys.unlimited') }}
+                </span>
+                <span class="pill" :class="budgetStatusClass(project.budget_status)">
+                  {{ project.budget_status || 'unlimited' }}
+                  <template v-if="project.monthly_budget_cents"> / {{ formatPercent(project.budget_used_percent || 0) }}</template>
+                </span>
+              </td>
               <td><span class="pill" :class="project.status === 'active' ? 'status-success' : 'status-warning'">{{ project.status }}</span></td>
               <td>
                 <div class="chip-list">
@@ -297,7 +343,10 @@ onMounted(load)
           </div>
           <div class="field">
             <label>{{ t('projects.costCenter') }}</label>
-            <input v-model="projectForm.cost_center" />
+            <input v-model="projectForm.cost_center" list="project-cost-center-options" autocomplete="off" />
+            <datalist id="project-cost-center-options">
+              <option v-for="costCenter in costCenterOptions" :key="costCenter" :value="costCenter"></option>
+            </datalist>
           </div>
           <div class="field form-span-2">
             <label>{{ t('projects.description') }}</label>

@@ -57,6 +57,14 @@ const updateState = computed(() => {
   return t('settings.upToDate')
 })
 
+const updateSourceLabel = computed(() => {
+  const source = updateInfo.value?.source
+  if (!source || source === 'none') return ''
+  if (source === 'official_catalog') return t('settings.signedCatalog')
+  if (source === 'manifest') return t('settings.updateManifest')
+  return source
+})
+
 function assignSettings(data: AdminSettings) {
   Object.assign(form, data)
 }
@@ -278,6 +286,8 @@ onMounted(async () => {
             <span class="pill">{{ updateState }}</span>
             <span class="pill">{{ updateInfo?.build_type || '-' }}</span>
             <span class="pill">{{ updateInfo?.platform || '-' }}</span>
+            <span v-if="updateSourceLabel" class="pill">{{ updateSourceLabel }}</span>
+            <span v-if="updateInfo?.signed_metadata" class="pill">{{ t('settings.signedMetadata') }}</span>
           </div>
           <div class="field">
             <label>{{ t('settings.latestVersion') }}</label>

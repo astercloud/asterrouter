@@ -33,14 +33,20 @@ var (
 	ErrGatewayRouteUnavailable = errors.New("no schedulable gateway route is available for this model")
 	ErrGatewayRateLimited      = errors.New("gateway api key qps limit exceeded")
 	ErrGatewayQuotaExceeded    = errors.New("gateway api key monthly token quota exceeded")
+	ErrGatewayBudgetExceeded   = errors.New("project monthly budget exceeded")
 )
 
 type Service struct {
-	repo        Repository
-	gatewayPath string
-	secretKey   string
-	rateMu      sync.Mutex
-	rateWindows map[string][]time.Time
+	repo            Repository
+	gatewayPath     string
+	secretKey       string
+	alertDispatcher AlertDispatcher
+	rateMu          sync.Mutex
+	rateWindows     map[string][]time.Time
+}
+
+type AlertDispatcher interface {
+	DispatchAlert(ctx context.Context, event AlertEvent) error
 }
 
 func NewService(repo Repository, gatewayPath string, secretKey ...string) *Service {
@@ -52,6 +58,10 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 		key = strings.TrimSpace(secretKey[0])
 	}
 	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, rateWindows: map[string][]time.Time{}}
+}
+
+func (s *Service) SetAlertDispatcher(dispatcher AlertDispatcher) {
+	s.alertDispatcher = dispatcher
 }
 
 func (s *Service) EnsureSeedData(ctx context.Context) error {
@@ -287,6 +297,9 @@ func (s *Service) CheckProvider(ctx context.Context, actor string, id string) (P
 	if err := s.repo.SaveProviderHealthCheck(ctx, result); err != nil {
 		return ProviderHealthCheck{}, err
 	}
+	if err := s.syncProviderHealthAlert(ctx, provider, result); err != nil {
+		return ProviderHealthCheck{}, err
+	}
 	_ = s.audit(ctx, actor, "check", "provider", provider.ID, fmt.Sprintf("Checked provider %s: %s", provider.Name, message))
 	return result, nil
 }
@@ -394,7 +407,11 @@ func parseOpenAICompatibleModels(body []byte) ([]string, error) {
 }
 
 func (s *Service) ListProjects(ctx context.Context) ([]Project, error) {
-	return s.repo.ListProjects(ctx)
+	projects, err := s.repo.ListProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichProjectBudgets(ctx, projects)
 }
 
 func (s *Service) CreateProject(ctx context.Context, actor string, req ProjectRequest) (Project, error) {
@@ -675,6 +692,9 @@ func (s *Service) CheckProviderAccount(ctx context.Context, actor string, id str
 	if err := s.repo.SaveProviderAccountHealthCheck(ctx, result); err != nil {
 		return ProviderAccountHealthCheck{}, err
 	}
+	if err := s.syncProviderAccountHealthAlert(ctx, account, provider, result); err != nil {
+		return ProviderAccountHealthCheck{}, err
+	}
 	_ = s.audit(ctx, actor, "check", "provider_account", account.ID, fmt.Sprintf("Checked provider account %s: %s", account.Name, message))
 	return result, nil
 }
@@ -896,13 +916,24 @@ func (s *Service) AuthorizeGatewayModel(ctx context.Context, rawKey string, mode
 }
 
 func (s *Service) EnforceGatewayPolicy(ctx context.Context, auth GatewayAuthContext) error {
+	currentMonth := monthStart(time.Now().UTC())
 	if auth.APIKey.MonthlyTokenLimit > 0 {
-		used, err := s.repo.SumUsageTokensByAPIKeySince(ctx, auth.APIKey.ID, monthStart(time.Now().UTC()))
+		used, err := s.repo.SumUsageTokensByAPIKeySince(ctx, auth.APIKey.ID, currentMonth)
 		if err != nil {
 			return err
 		}
 		if used >= auth.APIKey.MonthlyTokenLimit {
+			_ = s.syncAPIKeyQuotaAlert(ctx, auth, used)
 			return ErrGatewayQuotaExceeded
+		}
+	}
+	if auth.Project.MonthlyBudgetCents > 0 {
+		used, err := s.repo.SumUsageCostCentsByProjectSince(ctx, auth.Project.ID, currentMonth)
+		if err != nil {
+			return err
+		}
+		if used >= auth.Project.MonthlyBudgetCents {
+			return ErrGatewayBudgetExceeded
 		}
 	}
 	if auth.APIKey.QPSLimit > 0 && !s.allowGatewayRequest(auth.APIKey.ID, auth.APIKey.QPSLimit, time.Now().UTC()) {
@@ -991,7 +1022,13 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 	if status == "" {
 		status = "accepted"
 	}
-	return s.repo.SaveUsageRecord(ctx, UsageRecord{
+	costCents := nonNegative(in.CostCents)
+	if costCents == 0 && (in.InputTokens > 0 || in.OutputTokens > 0) {
+		if estimated, ok, err := s.EstimateModelUsageCostCents(ctx, in.Model, in.InputTokens, in.OutputTokens); err == nil && ok {
+			costCents = estimated
+		}
+	}
+	if err := s.repo.SaveUsageRecord(ctx, UsageRecord{
 		ID:                "usage_" + randomID(12),
 		ProjectID:         auth.Project.ID,
 		ApplicationID:     auth.Application.ID,
@@ -1005,9 +1042,19 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 		LatencyMS:         in.LatencyMS,
 		InputTokens:       nonNegative(in.InputTokens),
 		OutputTokens:      nonNegative(in.OutputTokens),
-		CostCents:         nonNegative(in.CostCents),
+		CostCents:         costCents,
 		CreatedAt:         time.Now().UTC(),
-	})
+	}); err != nil {
+		return err
+	}
+	if costCents > 0 {
+		_ = s.refreshProjectBudgetAlert(ctx, auth.Project.ID)
+	}
+	if auth.APIKey.MonthlyTokenLimit > 0 && (in.InputTokens > 0 || in.OutputTokens > 0) {
+		_ = s.syncAPIKeyQuotaAlertForAuth(ctx, auth)
+	}
+	_ = s.syncGatewayErrorRateAlert(ctx, auth)
+	return nil
 }
 
 func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContext, in GatewayTraceInput) error {
@@ -1297,7 +1344,7 @@ func (s *Service) gatewayProviderConnectionForModel(ctx context.Context, model s
 }
 
 func (s *Service) PortalWorkspace(ctx context.Context) (PortalWorkspace, error) {
-	projects, err := s.repo.ListProjects(ctx)
+	projects, err := s.ListProjects(ctx)
 	if err != nil {
 		return PortalWorkspace{}, err
 	}
@@ -1339,6 +1386,40 @@ func (s *Service) audit(ctx context.Context, actor, action, resourceType, resour
 		Summary:      summary,
 		CreatedAt:    time.Now().UTC(),
 	})
+}
+
+func (s *Service) enrichProjectBudgets(ctx context.Context, projects []Project) ([]Project, error) {
+	month := monthStart(time.Now().UTC())
+	out := append([]Project(nil), projects...)
+	for i := range out {
+		used, err := s.repo.SumUsageCostCentsByProjectSince(ctx, out[i].ID, month)
+		if err != nil {
+			return nil, err
+		}
+		out[i].CurrentMonthCostCents = used
+		out[i].BudgetRemainingCents = out[i].MonthlyBudgetCents - used
+		out[i].BudgetStatus = projectBudgetStatus(out[i].MonthlyBudgetCents, used)
+		if out[i].MonthlyBudgetCents > 0 {
+			out[i].BudgetUsedPercent = percent(used, out[i].MonthlyBudgetCents)
+		}
+		if err := s.syncProjectBudgetAlert(ctx, out[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func projectBudgetStatus(budgetCents int, usedCents int) string {
+	if budgetCents <= 0 {
+		return "unlimited"
+	}
+	if usedCents >= budgetCents {
+		return "exceeded"
+	}
+	if percent(usedCents, budgetCents) >= 80 {
+		return "warning"
+	}
+	return "ok"
 }
 
 func (s *Service) projectExists(ctx context.Context, id string) error {
