@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Boxes, CheckCircle2, Download, Eye, FileClock, LockKeyhole, Plug, RefreshCw, Search, Settings2, Upload, X, XCircle } from '@lucide/vue'
+import { Boxes, CheckCircle2, Download, FileClock, LockKeyhole, Plug, RefreshCw, Search, Settings2, Upload, X, XCircle } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import {
   activateOfficialLicense,
@@ -131,6 +131,30 @@ const categoryOptions = computed(() => Array.from(new Set(catalog.value.plugins.
 const tierOptions = computed(() => Array.from(new Set(catalog.value.plugins.map((item) => item.tier))).filter(Boolean).sort())
 const statusOptions = computed(() => Array.from(new Set(catalog.value.plugins.map((item) => item.status))).filter(Boolean).sort())
 const activeConfigSchema = computed(() => notificationConfigSchema(configPlugin.value))
+const canSyncOfficialCatalog = computed(() => ['online', 'private_mirror'].includes(officialCatalogStatus.value?.mode || ''))
+const pluginTree = computed(() => {
+  const groups = new Map<string, Plugin[]>()
+  for (const plugin of filteredPlugins.value) {
+    const key = plugin.category || t('plugins.uncategorized')
+    const items = groups.get(key) || []
+    items.push(plugin)
+    groups.set(key, items)
+  }
+  return Array.from(groups.entries())
+    .map(([category, plugins]) => ({
+      category,
+      plugins: plugins.slice().sort((left, right) => left.name.localeCompare(right.name))
+    }))
+    .sort((left, right) => left.category.localeCompare(right.category))
+})
+const activePlugin = computed(() => {
+  const selectedID = selectedPlugin.value?.id
+  if (selectedID) {
+    const matched = filteredPlugins.value.find((plugin) => plugin.id === selectedID)
+    if (matched) return matched
+  }
+  return filteredPlugins.value[0] || null
+})
 
 async function load() {
   loading.value = true
@@ -568,7 +592,7 @@ onMounted(load)
           <h2>{{ t('plugins.officialCatalog') }}</h2>
           <p>{{ t('plugins.officialCatalogSubtitle') }}</p>
         </div>
-        <button class="button secondary" type="button" :disabled="catalogSyncing || catalogStatusLoading || officialCatalogStatus?.mode !== 'online'" @click="syncCatalog">
+        <button class="button secondary" type="button" :disabled="catalogSyncing || catalogStatusLoading || !canSyncOfficialCatalog" @click="syncCatalog">
           <RefreshCw :size="15" />
           {{ catalogSyncing ? t('plugins.syncingCatalog') : t('plugins.syncCatalog') }}
         </button>
@@ -603,12 +627,28 @@ onMounted(load)
           <p>{{ officialCatalogStatus?.key_id || '-' }}</p>
         </div>
         <div>
+          <label>{{ t('plugins.catalogTrust') }}</label>
+          <p>
+            <span class="pill" :class="officialCatalogStatus?.trust_configured ? 'status-success' : 'status-warning'">
+              {{ officialCatalogStatus?.trust_configured ? t('plugins.trustConfigured') : t('plugins.trustMissing') }}
+            </span>
+          </p>
+        </div>
+        <div>
           <label>{{ t('plugins.catalogSyncedAt') }}</label>
           <p>{{ formatOptionalTime(officialCatalogStatus?.synced_at) }}</p>
         </div>
         <div class="form-span-2">
+          <label>{{ t('plugins.catalogBootstrap') }}</label>
+          <p>{{ officialCatalogStatus?.bootstrap_url || '-' }}</p>
+        </div>
+        <div class="form-span-2">
           <label>{{ t('plugins.catalogSource') }}</label>
           <p>{{ officialCatalogStatus?.source_url || '-' }}</p>
+        </div>
+        <div class="form-span-2">
+          <label>{{ t('plugins.catalogLicenseURL') }}</label>
+          <p>{{ officialCatalogStatus?.license_url || '-' }}</p>
         </div>
         <div class="form-span-2">
           <label>{{ t('plugins.catalogPayload') }}</label>
@@ -674,245 +714,164 @@ onMounted(load)
       </div>
     </section>
 
-    <section class="table-toolbar">
-      <label class="search-box">
-        <Search :size="17" />
-        <input v-model="query" :placeholder="t('plugins.searchPlaceholder')" />
-      </label>
-      <select v-model="categoryFilter">
-        <option value="">{{ t('plugins.allCategories') }}</option>
-        <option v-for="category in categoryOptions" :key="category" :value="category">{{ category }}</option>
-      </select>
-      <select v-model="tierFilter">
-        <option value="">{{ t('plugins.allTiers') }}</option>
-        <option v-for="tier in tierOptions" :key="tier" :value="tier">{{ tier }}</option>
-      </select>
-      <select v-model="statusFilter">
-        <option value="">{{ t('providers.allStatuses') }}</option>
-        <option v-for="status in statusOptions" :key="status" :value="status">{{ status }}</option>
-      </select>
-    </section>
-
-    <section class="panel table-panel content-fit">
-      <div class="panel-body table-scroll">
-        <table class="data-table crud-table">
-          <thead>
-            <tr>
-              <th>{{ t('plugins.plugin') }}</th>
-              <th>{{ t('plugins.category') }}</th>
-              <th>{{ t('plugins.tier') }}</th>
-              <th>{{ t('plugins.entitlement') }}</th>
-              <th>{{ t('plugins.packages') }}</th>
-              <th>{{ t('plugins.status') }}</th>
-              <th>{{ t('plugins.surfaces') }}</th>
-              <th>{{ t('plugins.actions') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="plugin in filteredPlugins" :key="plugin.id">
-              <td>
+    <section class="plugin-workbench section-gap">
+      <aside class="plugin-tree-panel">
+        <div class="plugin-filter-bar">
+          <label class="search-box compact-search">
+            <Search :size="17" />
+            <input v-model="query" :placeholder="t('plugins.searchPlaceholder')" />
+          </label>
+          <div class="plugin-filter-grid">
+            <select v-model="categoryFilter">
+              <option value="">{{ t('plugins.allCategories') }}</option>
+              <option v-for="category in categoryOptions" :key="category" :value="category">{{ category }}</option>
+            </select>
+            <select v-model="tierFilter">
+              <option value="">{{ t('plugins.allTiers') }}</option>
+              <option v-for="tier in tierOptions" :key="tier" :value="tier">{{ tier }}</option>
+            </select>
+            <select v-model="statusFilter">
+              <option value="">{{ t('providers.allStatuses') }}</option>
+              <option v-for="status in statusOptions" :key="status" :value="status">{{ status }}</option>
+            </select>
+          </div>
+        </div>
+        <nav class="plugin-tree">
+          <div v-for="group in pluginTree" :key="group.category" class="plugin-tree-group">
+            <div class="plugin-tree-heading">
+              <span>{{ group.category }}</span>
+              <strong>{{ group.plugins.length }}</strong>
+            </div>
+            <button
+              v-for="plugin in group.plugins"
+              :key="plugin.id"
+              class="plugin-tree-item"
+              :class="{ active: activePlugin?.id === plugin.id }"
+              type="button"
+              @click="selectedPlugin = plugin"
+            >
+              <span class="tree-branch" />
+              <span class="plugin-tree-main">
                 <strong>{{ plugin.name }}</strong>
-                <span>{{ plugin.description }}</span>
-                <span>{{ plugin.plugin_id }} · v{{ plugin.version }} · {{ plugin.vendor }}</span>
-              </td>
-              <td><span class="pill">{{ plugin.category }}</span></td>
-              <td><span class="pill">{{ plugin.tier }}</span></td>
-              <td><span class="pill">{{ plugin.entitlement_status }}</span></td>
-              <td><span class="pill">{{ pluginPackages(plugin).length }}</span></td>
-              <td><span class="pill" :class="statusClass(plugin.status)">{{ plugin.status }}</span></td>
-              <td>
-                <div class="chip-list">
-                  <span v-for="surface in plugin.surfaces" :key="surface" class="pill">{{ surface }}</span>
-                </div>
-              </td>
-              <td>
-                <div class="row-actions">
-                  <button class="button secondary" type="button" @click="selectedPlugin = plugin">
-                    <Eye :size="15" />
-                    {{ t('common.details') }}
-                  </button>
-                  <button class="button secondary" type="button" :disabled="!canConfigure(plugin)" @click="openConfig(plugin)">
-                    <Settings2 :size="15" />
-                    {{ t('plugins.configure') }}
-                  </button>
-                  <button class="button secondary" type="button" :disabled="plugin.category !== 'notification'" @click="openDeliveries(plugin)">
-                    <FileClock :size="15" />
-                    {{ t('plugins.deliveries') }}
-                  </button>
-                  <button v-if="pluginPackages(plugin).length" class="button secondary" type="button" :disabled="packageDownloadingID === bestPackage(plugin)?.package_id || !canDownloadPackage(bestPackage(plugin))" @click="cachePackage(plugin, bestPackage(plugin))">
-                    <Download :size="15" />
-                    {{ packageDownloadingID === bestPackage(plugin)?.package_id ? t('common.loading') : t('plugins.downloadPackage') }}
-                  </button>
-                  <button v-if="pluginPackages(plugin).length" class="button secondary" type="button" :disabled="packageImportingID === bestPackage(plugin)?.package_id || !canImportPackage(bestPackage(plugin))" @click="openPackageImport(plugin, bestPackage(plugin))">
-                    <Upload :size="15" />
-                    {{ packageImportingID === bestPackage(plugin)?.package_id ? t('common.loading') : t('plugins.importPackage') }}
-                  </button>
-                  <button v-if="pluginPackages(plugin).length" class="button secondary" type="button" :disabled="packageInstallingID === bestPackage(plugin)?.package_id || !canInstallPackage(bestPackage(plugin))" @click="installPackage(plugin, bestPackage(plugin))">
-                    <CheckCircle2 :size="15" />
-                    {{ packageInstallingID === bestPackage(plugin)?.package_id ? t('common.loading') : t('plugins.installPackage') }}
-                  </button>
-                  <button v-if="pluginPackages(plugin).length" class="button danger" type="button" :disabled="packageInstallingID === bestPackage(plugin)?.package_id || !canUninstallPackage(bestPackage(plugin))" @click="uninstallPackage(plugin, bestPackage(plugin))">
-                    <XCircle :size="15" />
-                    {{ packageInstallingID === bestPackage(plugin)?.package_id ? t('common.loading') : t('plugins.uninstallPackage') }}
-                  </button>
-                  <button class="button secondary" type="button" :disabled="actionID === plugin.id || !canEnable(plugin)" @click="setEnabled(plugin, true)">
-                    <CheckCircle2 :size="15" />
-                    {{ t('plugins.enable') }}
-                  </button>
-                  <button class="button danger" type="button" :disabled="actionID === plugin.id || !canDisable(plugin)" @click="setEnabled(plugin, false)">
-                    <XCircle :size="15" />
-                    {{ t('plugins.disable') }}
-                  </button>
-                </div>
-              </td>
-            </tr>
-            <tr v-if="!filteredPlugins.length">
-              <td colspan="8" class="empty-cell">{{ loading ? t('common.loading') : t('plugins.empty') }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+                <small>{{ plugin.plugin_id }} · v{{ plugin.version }}</small>
+              </span>
+              <span class="pill" :class="statusClass(plugin.status)">{{ plugin.status }}</span>
+            </button>
+          </div>
+          <div v-if="!filteredPlugins.length" class="plugin-tree-empty">
+            {{ loading ? t('common.loading') : t('plugins.empty') }}
+          </div>
+        </nav>
+      </aside>
 
-    <div v-if="selectedPlugin" class="modal-backdrop" @click.self="selectedPlugin = null">
-      <section class="modal-card">
-        <header class="modal-header">
+      <section v-if="activePlugin" class="plugin-detail-panel">
+        <header class="plugin-detail-header">
           <div>
-            <h2>{{ selectedPlugin.name }}</h2>
-            <p>{{ selectedPlugin.plugin_id }} · v{{ selectedPlugin.version }} · {{ selectedPlugin.vendor }}</p>
+            <span class="pill">{{ activePlugin.category }}</span>
+            <h2>{{ activePlugin.name }}</h2>
+            <p>{{ activePlugin.description }}</p>
           </div>
-          <button class="icon-button" type="button" @click="selectedPlugin = null"><X :size="19" /></button>
+          <div class="row-actions">
+            <button class="button secondary" type="button" :disabled="!canConfigure(activePlugin)" @click="openConfig(activePlugin)">
+              <Settings2 :size="15" />
+              {{ t('plugins.configure') }}
+            </button>
+            <button class="button secondary" type="button" :disabled="activePlugin.category !== 'notification'" @click="openDeliveries(activePlugin)">
+              <FileClock :size="15" />
+              {{ t('plugins.deliveries') }}
+            </button>
+            <button class="button secondary" type="button" :disabled="actionID === activePlugin.id || !canEnable(activePlugin)" @click="setEnabled(activePlugin, true)">
+              <CheckCircle2 :size="15" />
+              {{ t('plugins.enable') }}
+            </button>
+            <button class="button danger" type="button" :disabled="actionID === activePlugin.id || !canDisable(activePlugin)" @click="setEnabled(activePlugin, false)">
+              <XCircle :size="15" />
+              {{ t('plugins.disable') }}
+            </button>
+          </div>
         </header>
-        <div class="modal-body detail-grid">
+
+        <div class="plugin-detail-meta">
           <div>
-            <label>{{ t('plugins.description') }}</label>
-            <p>{{ selectedPlugin.description }}</p>
-          </div>
-          <div>
-            <label>{{ t('plugins.category') }}</label>
-            <p>{{ selectedPlugin.category }} / {{ selectedPlugin.type }}</p>
+            <label>{{ t('plugins.status') }}</label>
+            <span class="pill" :class="statusClass(activePlugin.status)">{{ activePlugin.status }}</span>
           </div>
           <div>
             <label>{{ t('plugins.tier') }}</label>
-            <p>{{ selectedPlugin.tier }}</p>
+            <span class="pill">{{ activePlugin.tier }}</span>
           </div>
           <div>
             <label>{{ t('plugins.entitlement') }}</label>
-            <p>{{ selectedPlugin.entitlement_status }}</p>
+            <span class="pill">{{ activePlugin.entitlement_status }}</span>
+          </div>
+          <div>
+            <label>{{ t('plugins.packages') }}</label>
+            <span class="pill">{{ pluginPackages(activePlugin).length }}</span>
+          </div>
+          <div>
+            <label>{{ t('plugins.vendor') }}</label>
+            <p>{{ activePlugin.vendor }}</p>
           </div>
           <div>
             <label>{{ t('plugins.entryPoint') }}</label>
-            <p>{{ selectedPlugin.entry_point || '-' }}</p>
-          </div>
-          <div>
-            <label>{{ t('plugins.configurable') }}</label>
-            <p>{{ selectedPlugin.configurable ? t('common.yes') : t('common.no') }}</p>
-          </div>
-          <div v-if="canConfigure(selectedPlugin)">
-            <label>{{ t('plugins.configuration') }}</label>
-            <p>{{ t('plugins.notificationConfig') }}</p>
-          </div>
-          <div class="form-span-2">
-            <label>{{ t('plugins.surfaces') }}</label>
-            <div class="chip-list">
-              <span v-for="surface in selectedPlugin.surfaces" :key="surface" class="pill">{{ surface }}</span>
-            </div>
-          </div>
-          <div class="form-span-2">
-            <label>{{ t('plugins.packages') }}</label>
-            <div v-if="pluginPackages(selectedPlugin).length" class="table-scroll compact-table">
-              <table class="data-table crud-table">
-                <thead>
-                  <tr>
-                    <th>{{ t('plugins.packageTarget') }}</th>
-                    <th>{{ t('plugins.packageSize') }}</th>
-                    <th>{{ t('plugins.packageHash') }}</th>
-                    <th>{{ t('plugins.status') }}</th>
-                    <th>{{ t('plugins.actions') }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="pkg in pluginPackages(selectedPlugin)" :key="pkg.package_id">
-                    <td>
-                      <strong>{{ pkg.version }}</strong>
-                      <span>{{ pkg.os }}/{{ pkg.arch }} · {{ pkg.channel || '-' }}</span>
-                    </td>
-                    <td>{{ formatSize(pkg.size_bytes) }}</td>
-                    <td>{{ shortHash(pkg.sha256) }}</td>
-                    <td>
-                      <div class="chip-list">
-                        <span class="pill" :class="packageStatusClass(pkg)">
-                          {{ packageStatusLabel(pkg) }}
-                        </span>
-                        <span v-if="pkg.advisory_id" class="pill status-danger">{{ pkg.advisory_id }}</span>
-                        <span v-if="pkg.compatibility_error" class="pill status-danger">{{ pkg.compatibility_error }}</span>
-                        <span v-if="pkg.installed_at" class="pill">{{ formatOptionalTime(pkg.installed_at) }}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="row-actions">
-                        <button class="button secondary" type="button" :disabled="packageDownloadingID === pkg.package_id || !canDownloadPackage(pkg)" @click="cachePackage(selectedPlugin, pkg)">
-                          <Download :size="15" />
-                          {{ packageDownloadingID === pkg.package_id ? t('common.loading') : t('plugins.downloadPackage') }}
-                        </button>
-                        <button class="button secondary" type="button" :disabled="packageImportingID === pkg.package_id || !canImportPackage(pkg)" @click="openPackageImport(selectedPlugin, pkg)">
-                          <Upload :size="15" />
-                          {{ packageImportingID === pkg.package_id ? t('common.loading') : t('plugins.importPackage') }}
-                        </button>
-                        <button class="button secondary" type="button" :disabled="packageInstallingID === pkg.package_id || !canInstallPackage(pkg)" @click="installPackage(selectedPlugin, pkg)">
-                          <CheckCircle2 :size="15" />
-                          {{ packageInstallingID === pkg.package_id ? t('common.loading') : t('plugins.installPackage') }}
-                        </button>
-                        <button class="button danger" type="button" :disabled="packageInstallingID === pkg.package_id || !canUninstallPackage(pkg)" @click="uninstallPackage(selectedPlugin, pkg)">
-                          <XCircle :size="15" />
-                          {{ packageInstallingID === pkg.package_id ? t('common.loading') : t('plugins.uninstallPackage') }}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <p v-else>{{ t('plugins.noPackages') }}</p>
+            <p>{{ activePlugin.entry_point || '-' }}</p>
           </div>
         </div>
-        <footer class="modal-footer">
-          <button class="button secondary" type="button" @click="selectedPlugin = null">{{ t('common.cancel') }}</button>
-          <button class="button secondary" type="button" :disabled="!canConfigure(selectedPlugin)" @click="openConfig(selectedPlugin)">
-            <Settings2 :size="17" />
-            {{ t('plugins.configure') }}
-          </button>
-          <button class="button secondary" type="button" :disabled="selectedPlugin.category !== 'notification'" @click="openDeliveries(selectedPlugin)">
-            <FileClock :size="17" />
-            {{ t('plugins.deliveries') }}
-          </button>
-          <button v-if="pluginPackages(selectedPlugin).length" class="button secondary" type="button" :disabled="packageDownloadingID === bestPackage(selectedPlugin)?.package_id || !canDownloadPackage(bestPackage(selectedPlugin))" @click="cachePackage(selectedPlugin, bestPackage(selectedPlugin))">
-            <Download :size="17" />
-            {{ packageDownloadingID === bestPackage(selectedPlugin)?.package_id ? t('common.loading') : t('plugins.downloadPackage') }}
-          </button>
-          <button v-if="pluginPackages(selectedPlugin).length" class="button secondary" type="button" :disabled="packageImportingID === bestPackage(selectedPlugin)?.package_id || !canImportPackage(bestPackage(selectedPlugin))" @click="openPackageImport(selectedPlugin, bestPackage(selectedPlugin))">
-            <Upload :size="17" />
-            {{ packageImportingID === bestPackage(selectedPlugin)?.package_id ? t('common.loading') : t('plugins.importPackage') }}
-          </button>
-          <button v-if="pluginPackages(selectedPlugin).length" class="button secondary" type="button" :disabled="packageInstallingID === bestPackage(selectedPlugin)?.package_id || !canInstallPackage(bestPackage(selectedPlugin))" @click="installPackage(selectedPlugin, bestPackage(selectedPlugin))">
-            <CheckCircle2 :size="17" />
-            {{ packageInstallingID === bestPackage(selectedPlugin)?.package_id ? t('common.loading') : t('plugins.installPackage') }}
-          </button>
-          <button v-if="pluginPackages(selectedPlugin).length" class="button danger" type="button" :disabled="packageInstallingID === bestPackage(selectedPlugin)?.package_id || !canUninstallPackage(bestPackage(selectedPlugin))" @click="uninstallPackage(selectedPlugin, bestPackage(selectedPlugin))">
-            <XCircle :size="17" />
-            {{ packageInstallingID === bestPackage(selectedPlugin)?.package_id ? t('common.loading') : t('plugins.uninstallPackage') }}
-          </button>
-          <button class="button secondary" type="button" :disabled="actionID === selectedPlugin.id || !canEnable(selectedPlugin)" @click="setEnabled(selectedPlugin, true)">
-            <CheckCircle2 :size="17" />
-            {{ t('plugins.enable') }}
-          </button>
-          <button class="button danger" type="button" :disabled="actionID === selectedPlugin.id || !canDisable(selectedPlugin)" @click="setEnabled(selectedPlugin, false)">
-            <XCircle :size="17" />
-            {{ t('plugins.disable') }}
-          </button>
-        </footer>
+
+        <section class="plugin-detail-section">
+          <div class="plugin-section-title">
+            <h3>{{ t('plugins.surfaces') }}</h3>
+          </div>
+          <div class="chip-list">
+            <span v-for="surface in activePlugin.surfaces" :key="surface" class="pill">{{ surface }}</span>
+          </div>
+        </section>
+
+        <section class="plugin-detail-section">
+          <div class="plugin-section-title">
+            <h3>{{ t('plugins.packages') }}</h3>
+          </div>
+          <div v-if="pluginPackages(activePlugin).length" class="package-list">
+            <article v-for="pkg in pluginPackages(activePlugin)" :key="pkg.package_id" class="package-row">
+              <div class="package-main">
+                <strong>{{ pkg.version }}</strong>
+                <span>{{ pkg.os }}/{{ pkg.arch }} · {{ pkg.channel || '-' }} · {{ formatSize(pkg.size_bytes) }}</span>
+                <small>{{ shortHash(pkg.sha256) }}</small>
+              </div>
+              <div class="package-state">
+                <span class="pill" :class="packageStatusClass(pkg)">{{ packageStatusLabel(pkg) }}</span>
+                <span v-if="pkg.advisory_id" class="pill status-danger">{{ pkg.advisory_id }}</span>
+                <span v-if="pkg.compatibility_error" class="pill status-danger">{{ pkg.compatibility_error }}</span>
+                <span v-if="pkg.installed_at" class="pill">{{ formatOptionalTime(pkg.installed_at) }}</span>
+              </div>
+              <div class="row-actions package-actions">
+                <button class="button secondary" type="button" :disabled="packageDownloadingID === pkg.package_id || !canDownloadPackage(pkg)" @click="cachePackage(activePlugin, pkg)">
+                  <Download :size="15" />
+                  {{ packageDownloadingID === pkg.package_id ? t('common.loading') : t('plugins.downloadPackage') }}
+                </button>
+                <button class="button secondary" type="button" :disabled="packageImportingID === pkg.package_id || !canImportPackage(pkg)" @click="openPackageImport(activePlugin, pkg)">
+                  <Upload :size="15" />
+                  {{ packageImportingID === pkg.package_id ? t('common.loading') : t('plugins.importPackage') }}
+                </button>
+                <button class="button secondary" type="button" :disabled="packageInstallingID === pkg.package_id || !canInstallPackage(pkg)" @click="installPackage(activePlugin, pkg)">
+                  <CheckCircle2 :size="15" />
+                  {{ packageInstallingID === pkg.package_id ? t('common.loading') : t('plugins.installPackage') }}
+                </button>
+                <button class="button danger" type="button" :disabled="packageInstallingID === pkg.package_id || !canUninstallPackage(pkg)" @click="uninstallPackage(activePlugin, pkg)">
+                  <XCircle :size="15" />
+                  {{ packageInstallingID === pkg.package_id ? t('common.loading') : t('plugins.uninstallPackage') }}
+                </button>
+              </div>
+            </article>
+          </div>
+          <p v-else class="empty-inline">{{ t('plugins.noPackages') }}</p>
+        </section>
       </section>
-    </div>
+
+      <section v-else class="plugin-detail-panel empty-state">
+        {{ loading ? t('common.loading') : t('plugins.empty') }}
+      </section>
+    </section>
 
     <div v-if="packageImportTarget" class="modal-backdrop" @click.self="packageImportTarget = null">
       <section class="modal-card">

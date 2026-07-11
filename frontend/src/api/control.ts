@@ -18,6 +18,8 @@ import type {
   ExportJobKind,
   GatewayTrace,
   GatewayTraceSummary,
+  GovernancePolicy,
+  GovernancePolicyRequest,
   ModelPricing,
   ModelPricingRequest,
   PortalWorkspace,
@@ -39,19 +41,65 @@ import type {
   WorkspaceUserRequest
 } from '@/types'
 
+type NullableList<T> = T[] | null | undefined
+type ProviderConnectionPayload = Omit<ProviderConnection, 'models'> & { models?: string[] | null }
+type ProviderHealthCheckPayload = Omit<ProviderHealthCheck, 'models'> & { models?: string[] | null }
+type ProviderAccountPayload = Omit<ProviderAccount, 'models' | 'group_ids'> & {
+  models?: string[] | null
+  group_ids?: string[] | null
+}
+type ProviderAccountHealthCheckPayload = Omit<ProviderAccountHealthCheck, 'models'> & { models?: string[] | null }
+
+function listOrEmpty<T>(value: NullableList<T>): T[] {
+  return Array.isArray(value) ? value : []
+}
+
+function stringListOrEmpty(value: NullableList<string>): string[] {
+  return listOrEmpty(value).filter((item): item is string => typeof item === 'string')
+}
+
+function normalizeProvider(provider: ProviderConnectionPayload): ProviderConnection {
+  return {
+    ...provider,
+    models: stringListOrEmpty(provider.models)
+  }
+}
+
+function normalizeProviderHealthCheck(check: ProviderHealthCheckPayload): ProviderHealthCheck {
+  return {
+    ...check,
+    models: stringListOrEmpty(check.models)
+  }
+}
+
+function normalizeProviderAccount(account: ProviderAccountPayload): ProviderAccount {
+  return {
+    ...account,
+    models: stringListOrEmpty(account.models),
+    group_ids: stringListOrEmpty(account.group_ids)
+  }
+}
+
+function normalizeProviderAccountHealthCheck(check: ProviderAccountHealthCheckPayload): ProviderAccountHealthCheck {
+  return {
+    ...check,
+    models: stringListOrEmpty(check.models)
+  }
+}
+
 export async function getDashboard(): Promise<Dashboard> {
   const response = await apiClient.get<Dashboard>('/admin/dashboard')
   return response.data
 }
 
 export async function getProviders(): Promise<ProviderConnection[]> {
-  const response = await apiClient.get<ProviderConnection[]>('/admin/providers')
-  return response.data
+  const response = await apiClient.get<ProviderConnectionPayload[] | null>('/admin/providers')
+  return listOrEmpty(response.data).map(normalizeProvider)
 }
 
 export async function getProviderHealthChecks(): Promise<ProviderHealthCheck[]> {
-  const response = await apiClient.get<ProviderHealthCheck[]>('/admin/provider-health-checks')
-  return response.data
+  const response = await apiClient.get<ProviderHealthCheckPayload[] | null>('/admin/provider-health-checks')
+  return listOrEmpty(response.data).map(normalizeProviderHealthCheck)
 }
 
 export async function createProvider(payload: ProviderRequest): Promise<ProviderConnection> {
@@ -96,6 +144,21 @@ export async function createDepartment(payload: DepartmentRequest): Promise<Depa
 
 export async function updateDepartment(id: string, payload: DepartmentRequest): Promise<Department> {
   const response = await apiClient.put<Department>(`/admin/departments/${id}`, payload)
+  return response.data
+}
+
+export async function getGovernancePolicies(): Promise<GovernancePolicy[]> {
+  const response = await apiClient.get<GovernancePolicy[]>('/admin/policies')
+  return response.data
+}
+
+export async function createGovernancePolicy(payload: GovernancePolicyRequest): Promise<GovernancePolicy> {
+  const response = await apiClient.post<GovernancePolicy>('/admin/policies', payload)
+  return response.data
+}
+
+export async function updateGovernancePolicy(id: string, payload: GovernancePolicyRequest): Promise<GovernancePolicy> {
+  const response = await apiClient.put<GovernancePolicy>(`/admin/policies/${id}`, payload)
   return response.data
 }
 
@@ -144,8 +207,8 @@ export async function deleteRoleBinding(id: string): Promise<void> {
 }
 
 export async function getRoutingGroups(): Promise<RoutingGroup[]> {
-  const response = await apiClient.get<RoutingGroup[]>('/admin/routing-groups')
-  return response.data
+  const response = await apiClient.get<RoutingGroup[] | null>('/admin/routing-groups')
+  return listOrEmpty(response.data)
 }
 
 export async function createRoutingGroup(payload: RoutingGroupRequest): Promise<RoutingGroup> {
@@ -159,13 +222,13 @@ export async function updateRoutingGroup(id: string, payload: RoutingGroupReques
 }
 
 export async function getProviderAccounts(): Promise<ProviderAccount[]> {
-  const response = await apiClient.get<ProviderAccount[]>('/admin/provider-accounts')
-  return response.data
+  const response = await apiClient.get<ProviderAccountPayload[] | null>('/admin/provider-accounts')
+  return listOrEmpty(response.data).map(normalizeProviderAccount)
 }
 
 export async function getProviderAccountHealthChecks(): Promise<ProviderAccountHealthCheck[]> {
-  const response = await apiClient.get<ProviderAccountHealthCheck[]>('/admin/provider-account-health-checks')
-  return response.data
+  const response = await apiClient.get<ProviderAccountHealthCheckPayload[] | null>('/admin/provider-account-health-checks')
+  return listOrEmpty(response.data).map(normalizeProviderAccountHealthCheck)
 }
 
 export async function createProviderAccount(payload: ProviderAccountRequest): Promise<ProviderAccount> {
@@ -310,6 +373,20 @@ export async function downloadExportJob(job: ExportJob): Promise<void> {
 export async function getPortalWorkspace(): Promise<PortalWorkspace> {
   const response = await apiClient.get<PortalWorkspace>('/portal/workspace')
   return response.data
+}
+
+export async function createPortalAPIKey(payload: APIKeyCreateRequest): Promise<APIKeyCreateResponse> {
+  const response = await apiClient.post<APIKeyCreateResponse>('/portal/api-keys', payload)
+  return response.data
+}
+
+export async function rotatePortalAPIKey(id: string): Promise<APIKeyCreateResponse> {
+  const response = await apiClient.post<APIKeyCreateResponse>(`/portal/api-keys/${id}/rotate`)
+  return response.data
+}
+
+export async function disablePortalAPIKey(id: string): Promise<void> {
+  await apiClient.post(`/portal/api-keys/${id}/disable`)
 }
 
 async function downloadCSV(path: string, filename: string, params?: RecordListQuery): Promise<void> {

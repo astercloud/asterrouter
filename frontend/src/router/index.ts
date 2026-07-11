@@ -12,6 +12,7 @@ import AdminExportJobsView from '@/views/admin/AdminExportJobsView.vue'
 import AdminGatewayTracesView from '@/views/admin/AdminGatewayTracesView.vue'
 import AdminModelPricingsView from '@/views/admin/AdminModelPricingsView.vue'
 import AdminPluginsView from '@/views/admin/AdminPluginsView.vue'
+import AdminPoliciesView from '@/views/admin/AdminPoliciesView.vue'
 import AdminProviderAccountsView from '@/views/admin/AdminProviderAccountsView.vue'
 import AdminProjectsView from '@/views/admin/AdminProjectsView.vue'
 import AdminProvidersView from '@/views/admin/AdminProvidersView.vue'
@@ -40,6 +41,7 @@ const router = createRouter({
         { path: 'model-pricings', component: AdminModelPricingsView, meta: { titleKey: 'admin.modelPricings', descriptionKey: 'modelPricings.subtitle' } },
         { path: 'users', component: AdminUsersView, meta: { titleKey: 'admin.users', descriptionKey: 'users.subtitle' } },
         { path: 'departments', component: AdminDepartmentsView, meta: { titleKey: 'admin.departments', descriptionKey: 'departments.subtitle' } },
+        { path: 'policies', component: AdminPoliciesView, meta: { titleKey: 'admin.policies', descriptionKey: 'policies.subtitle' } },
         { path: 'projects', component: AdminProjectsView, meta: { titleKey: 'admin.projects', descriptionKey: 'projects.subtitle' } },
         { path: 'api-keys', component: AdminApiKeysView, meta: { titleKey: 'admin.apiKeys', descriptionKey: 'apiKeys.subtitle' } },
         { path: 'usage', component: AdminUsageView, meta: { titleKey: 'admin.usage', descriptionKey: 'usage.subtitle' } },

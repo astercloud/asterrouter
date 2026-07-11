@@ -420,6 +420,9 @@ func (s *Service) CreateProject(ctx context.Context, actor string, req ProjectRe
 	if err != nil {
 		return Project{}, err
 	}
+	if err := s.validateGovernancePolicyReference(ctx, project.PolicyID); err != nil {
+		return Project{}, err
+	}
 	project.ID = "proj_" + randomID(10)
 	if err := s.repo.SaveProject(ctx, project); err != nil {
 		return Project{}, err
@@ -442,6 +445,9 @@ func (s *Service) UpdateProject(ctx context.Context, actor string, id string, re
 	project.ID = existing.ID
 	project.CreatedAt = existing.CreatedAt
 	project.UpdatedAt = time.Now().UTC()
+	if err := s.validateGovernancePolicyReference(ctx, project.PolicyID); err != nil {
+		return Project{}, err
+	}
 	if err := s.repo.SaveProject(ctx, project); err != nil {
 		return Project{}, err
 	}
@@ -743,6 +749,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCrea
 	if req.QPSLimit < 0 || req.MonthlyTokenLimit < 0 {
 		return APIKeyCreateResponse{}, errors.New("limits must be greater than or equal to 0")
 	}
+	if err := s.validateGovernancePolicyReference(ctx, req.PolicyID); err != nil {
+		return APIKeyCreateResponse{}, err
+	}
 	expiresAt, err := parseOptionalDate(req.ExpiresAt)
 	if err != nil {
 		return APIKeyCreateResponse{}, err
@@ -760,6 +769,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCrea
 		Fingerprint:       fingerprint(hash),
 		Prefix:            prefix(rawKey, 10),
 		Status:            APIKeyStatusActive,
+		PolicyID:          strings.TrimSpace(req.PolicyID),
 		ModelAllowlist:    models,
 		QPSLimit:          req.QPSLimit,
 		MonthlyTokenLimit: req.MonthlyTokenLimit,
@@ -792,6 +802,9 @@ func (s *Service) UpdateAPIKey(ctx context.Context, actor string, id string, req
 	if req.QPSLimit < 0 || req.MonthlyTokenLimit < 0 {
 		return APIKeyRecord{}, errors.New("limits must be greater than or equal to 0")
 	}
+	if err := s.validateGovernancePolicyReference(ctx, req.PolicyID); err != nil {
+		return APIKeyRecord{}, err
+	}
 	status := req.Status
 	if status == "" {
 		status = key.Status
@@ -804,6 +817,7 @@ func (s *Service) UpdateAPIKey(ctx context.Context, actor string, id string, req
 		return APIKeyRecord{}, err
 	}
 	key.Name = name
+	key.PolicyID = strings.TrimSpace(req.PolicyID)
 	key.ModelAllowlist = models
 	key.QPSLimit = req.QPSLimit
 	key.MonthlyTokenLimit = req.MonthlyTokenLimit
@@ -900,7 +914,11 @@ func (s *Service) AuthenticateGatewayKey(ctx context.Context, rawKey string) (Ga
 	}
 	key.LastUsedAt = &now
 	key.UpdatedAt = now
-	return GatewayAuthContext{APIKey: key, Project: project, Application: app}, nil
+	policy, policySource, err := s.effectiveGatewayPolicy(ctx, key, project)
+	if err != nil {
+		return GatewayAuthContext{}, err
+	}
+	return GatewayAuthContext{APIKey: key, Project: project, Application: app, Policy: policy, PolicySource: policySource}, nil
 }
 
 func (s *Service) AuthorizeGatewayModel(ctx context.Context, rawKey string, model string) (GatewayAuthContext, error) {
@@ -909,7 +927,7 @@ func (s *Service) AuthorizeGatewayModel(ctx context.Context, rawKey string, mode
 		return GatewayAuthContext{}, err
 	}
 	model = strings.TrimSpace(model)
-	if model == "" || !contains(auth.APIKey.ModelAllowlist, model) {
+	if model == "" || !s.gatewayModelAllowed(auth, model) {
 		return GatewayAuthContext{}, ErrGatewayForbidden
 	}
 	return auth, nil
@@ -917,27 +935,36 @@ func (s *Service) AuthorizeGatewayModel(ctx context.Context, rawKey string, mode
 
 func (s *Service) EnforceGatewayPolicy(ctx context.Context, auth GatewayAuthContext) error {
 	currentMonth := monthStart(time.Now().UTC())
-	if auth.APIKey.MonthlyTokenLimit > 0 {
+	monthlyTokenLimit := auth.effectiveMonthlyTokenLimit()
+	if monthlyTokenLimit > 0 {
 		used, err := s.repo.SumUsageTokensByAPIKeySince(ctx, auth.APIKey.ID, currentMonth)
 		if err != nil {
 			return err
 		}
-		if used >= auth.APIKey.MonthlyTokenLimit {
+		if used >= monthlyTokenLimit {
 			_ = s.syncAPIKeyQuotaAlert(ctx, auth, used)
-			return ErrGatewayQuotaExceeded
+			if auth.shouldBlockOverage() {
+				return ErrGatewayQuotaExceeded
+			}
 		}
 	}
-	if auth.Project.MonthlyBudgetCents > 0 {
+	monthlyBudgetCents := auth.effectiveMonthlyBudgetCents()
+	if monthlyBudgetCents > 0 {
 		used, err := s.repo.SumUsageCostCentsByProjectSince(ctx, auth.Project.ID, currentMonth)
 		if err != nil {
 			return err
 		}
-		if used >= auth.Project.MonthlyBudgetCents {
-			return ErrGatewayBudgetExceeded
+		if used >= monthlyBudgetCents {
+			if auth.shouldBlockOverage() {
+				return ErrGatewayBudgetExceeded
+			}
 		}
 	}
-	if auth.APIKey.QPSLimit > 0 && !s.allowGatewayRequest(auth.APIKey.ID, auth.APIKey.QPSLimit, time.Now().UTC()) {
-		return ErrGatewayRateLimited
+	qpsLimit := auth.effectiveQPSLimit()
+	if qpsLimit > 0 && !s.allowGatewayRequest(auth.APIKey.ID, qpsLimit, time.Now().UTC()) {
+		if auth.shouldBlockOverage() {
+			return ErrGatewayRateLimited
+		}
 	}
 	return nil
 }
@@ -1062,6 +1089,7 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 	if status == "" {
 		status = "accepted"
 	}
+	policyID, policyName, policySource, policySnapshot := gatewayTracePolicyEvidence(auth)
 	return s.repo.SaveGatewayTrace(ctx, GatewayTrace{
 		ID:                "trace_" + randomID(12),
 		ProjectID:         auth.Project.ID,
@@ -1075,6 +1103,10 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 		ProviderAccountID: strings.TrimSpace(in.ProviderAccountID),
 		RouteSource:       strings.TrimSpace(in.RouteSource),
 		RouteReason:       strings.TrimSpace(in.RouteReason),
+		PolicyID:          policyID,
+		PolicyName:        policyName,
+		PolicySource:      policySource,
+		PolicySnapshot:    policySnapshot,
 		Status:            status,
 		HTTPStatus:        nonNegative(in.HTTPStatus),
 		ErrorType:         strings.TrimSpace(in.ErrorType),
@@ -1085,6 +1117,44 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 		ResponseSummary:   strings.TrimSpace(in.ResponseSummary),
 		CreatedAt:         time.Now().UTC(),
 	})
+}
+
+type gatewayTracePolicySnapshot struct {
+	QPSLimit            int    `json:"qps_limit"`
+	MonthlyTokenLimit   int    `json:"monthly_token_limit"`
+	MonthlyBudgetCents  int    `json:"monthly_budget_cents"`
+	OverageAction       string `json:"overage_action"`
+	PromptLoggingMode   string `json:"prompt_logging_mode"`
+	RetentionDays       int    `json:"retention_days"`
+	ModelAllowlistCount int    `json:"model_allowlist_count"`
+	ModelDenylistCount  int    `json:"model_denylist_count"`
+	ToolCallAllowed     bool   `json:"tool_call_allowed"`
+	ImageInputAllowed   bool   `json:"image_input_allowed"`
+	WebAccessAllowed    bool   `json:"web_access_allowed"`
+}
+
+func gatewayTracePolicyEvidence(auth GatewayAuthContext) (string, string, string, string) {
+	if auth.Policy == nil {
+		return "", "", "", ""
+	}
+	snapshot := gatewayTracePolicySnapshot{
+		QPSLimit:            auth.effectiveQPSLimit(),
+		MonthlyTokenLimit:   auth.effectiveMonthlyTokenLimit(),
+		MonthlyBudgetCents:  auth.effectiveMonthlyBudgetCents(),
+		OverageAction:       strings.TrimSpace(auth.Policy.OverageAction),
+		PromptLoggingMode:   strings.TrimSpace(auth.Policy.PromptLoggingMode),
+		RetentionDays:       nonNegative(auth.Policy.RetentionDays),
+		ModelAllowlistCount: len(auth.Policy.ModelAllowlist),
+		ModelDenylistCount:  len(auth.Policy.ModelDenylist),
+		ToolCallAllowed:     auth.Policy.ToolCallAllowed,
+		ImageInputAllowed:   auth.Policy.ImageInputAllowed,
+		WebAccessAllowed:    auth.Policy.WebAccessAllowed,
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return auth.Policy.ID, auth.Policy.Name, auth.PolicySource, ""
+	}
+	return auth.Policy.ID, auth.Policy.Name, auth.PolicySource, string(data)
 }
 
 func (s *Service) ListGatewayTraces(ctx context.Context, limit int) ([]GatewayTrace, error) {
@@ -1341,32 +1411,6 @@ func (s *Service) gatewayProviderConnectionForModel(ctx context.Context, model s
 		}, true, nil
 	}
 	return GatewayProvider{}, false, nil
-}
-
-func (s *Service) PortalWorkspace(ctx context.Context) (PortalWorkspace, error) {
-	projects, err := s.ListProjects(ctx)
-	if err != nil {
-		return PortalWorkspace{}, err
-	}
-	apps, err := s.repo.ListApplications(ctx, "")
-	if err != nil {
-		return PortalWorkspace{}, err
-	}
-	keys, err := s.repo.ListAPIKeys(ctx)
-	if err != nil {
-		return PortalWorkspace{}, err
-	}
-	models, err := s.GatewayModels(ctx)
-	if err != nil {
-		return PortalWorkspace{}, err
-	}
-	return PortalWorkspace{
-		Projects:     projects,
-		Applications: apps,
-		APIKeys:      keys,
-		Models:       models,
-		GatewayPath:  s.gatewayPath,
-	}, nil
 }
 
 func (s *Service) Health(ctx context.Context) error {
@@ -1644,6 +1688,7 @@ func projectFromRequest(req ProjectRequest, now time.Time) (Project, error) {
 		Description:        strings.TrimSpace(req.Description),
 		CostCenter:         strings.TrimSpace(req.CostCenter),
 		MonthlyBudgetCents: req.MonthlyBudgetCents,
+		PolicyID:           strings.TrimSpace(req.PolicyID),
 		Status:             status,
 		CreatedAt:          now,
 		UpdatedAt:          now,

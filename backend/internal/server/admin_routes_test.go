@@ -94,6 +94,62 @@ func TestAdminModelPricingEndpoints(t *testing.T) {
 	}
 }
 
+func TestAdminGovernancePolicyEndpoints(t *testing.T) {
+	handler := newTestHandler(t, config.Config{})
+
+	createBody := bytes.NewBufferString(`{"name":"Platform policy","scope_type":"global","model_allowlist":["gpt-4o-mini"],"model_denylist":[],"qps_limit":10,"monthly_token_limit":1000000,"monthly_budget_cents":50000,"overage_action":"block","prompt_logging_mode":"metadata_only","retention_days":30,"tool_call_allowed":true,"image_input_allowed":true,"web_access_allowed":false,"status":"active"}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/policies", createBody)
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create policy status = %d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var createResp struct {
+		Data controlplane.GovernancePolicy `json:"data"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("decode create policy: %v", err)
+	}
+	if createResp.Data.ID == "" || createResp.Data.Name != "Platform policy" || createResp.Data.QPSLimit != 10 {
+		t.Fatalf("created policy mismatch: %+v", createResp.Data)
+	}
+
+	updateBody := bytes.NewBufferString(`{"name":"Platform policy updated","scope_type":"global","model_allowlist":[],"model_denylist":["legacy-model"],"qps_limit":0,"monthly_token_limit":0,"monthly_budget_cents":0,"overage_action":"warn","prompt_logging_mode":"disabled","retention_days":0,"tool_call_allowed":false,"image_input_allowed":true,"web_access_allowed":false,"status":"disabled"}`)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/policies/"+createResp.Data.ID, updateBody)
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	handler.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update policy status = %d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	var updateResp struct {
+		Data controlplane.GovernancePolicy `json:"data"`
+	}
+	if err := json.Unmarshal(updateRec.Body.Bytes(), &updateResp); err != nil {
+		t.Fatalf("decode update policy: %v", err)
+	}
+	if updateResp.Data.Status != controlplane.GovernancePolicyStatusDisabled || updateResp.Data.OverageAction != controlplane.GovernancePolicyOverageWarn {
+		t.Fatalf("updated policy mismatch: %+v", updateResp.Data)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/policies", nil)
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list policy status = %d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listResp struct {
+		Data []controlplane.GovernancePolicy `json:"data"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("decode list policy: %v", err)
+	}
+	if len(listResp.Data) != 1 || listResp.Data[0].ID != createResp.Data.ID {
+		t.Fatalf("list policy mismatch: %+v", listResp.Data)
+	}
+}
+
 func TestAdminProjectAndApplicationUpdateEndpoints(t *testing.T) {
 	handler := newTestHandler(t, config.Config{})
 

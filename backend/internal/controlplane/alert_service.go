@@ -184,7 +184,7 @@ func (s *Service) syncProjectBudgetAlert(ctx context.Context, project Project) e
 
 func (s *Service) syncAPIKeyQuotaAlert(ctx context.Context, auth GatewayAuthContext, usedTokens int) error {
 	dedupeKey := apiKeyQuotaAlertDedupeKey(auth.APIKey.ID, time.Now().UTC())
-	limit := auth.APIKey.MonthlyTokenLimit
+	limit := auth.effectiveMonthlyTokenLimit()
 	if limit <= 0 {
 		return s.resolveAlertByDedupeKey(ctx, systemActor, dedupeKey, fmt.Sprintf("API key %s has no monthly token quota.", auth.APIKey.Name))
 	}
@@ -223,7 +223,7 @@ func (s *Service) syncAPIKeyQuotaAlert(ctx context.Context, auth GatewayAuthCont
 }
 
 func (s *Service) syncAPIKeyQuotaAlertForAuth(ctx context.Context, auth GatewayAuthContext) error {
-	if auth.APIKey.MonthlyTokenLimit <= 0 {
+	if auth.effectiveMonthlyTokenLimit() <= 0 {
 		return nil
 	}
 	used, err := s.repo.SumUsageTokensByAPIKeySince(ctx, auth.APIKey.ID, monthStart(time.Now().UTC()))

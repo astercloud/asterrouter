@@ -137,6 +137,7 @@ func New(opts Options) http.Handler {
 
 	admin := api.Group("/admin")
 	admin.Use(requireAdminAuth(opts.Config.AdminToken, opts.AuthService))
+	admin.Use(requireRBAC(opts.ControlService))
 	registerAdminRoutes(admin, opts.ControlService, exportJobStore)
 	registerPluginRoutes(admin.Group("/plugins"), opts.PluginService, opts.ControlService)
 	registerSystemRoutes(admin.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
@@ -163,6 +164,7 @@ func New(opts Options) http.Handler {
 	})
 
 	portal := api.Group("/portal")
+	portal.Use(requireAdminAuth(opts.Config.AdminToken, opts.AuthService))
 	registerPortalRoutes(portal, opts.ControlService)
 
 	registerGatewayRoutes(r, opts.ControlService)

@@ -72,7 +72,9 @@ func main() {
 		SecretKey: cfg.SecretKey,
 		OfficialCatalog: plugins.OfficialCatalogConfig{
 			Mode:            cfg.CatalogMode,
+			BootstrapURL:    cfg.CatalogBootstrapURL,
 			URL:             cfg.CatalogURL,
+			LicenseURL:      cfg.LicenseURL,
 			PublicKeyID:     cfg.CatalogKeyID,
 			PublicKeyBase64: cfg.CatalogPublicKey,
 		},
@@ -95,6 +97,9 @@ func main() {
 	officialCatalogPublicKey := ""
 	if cfg.CatalogMode == "online" {
 		officialCatalogURL = cfg.CatalogURL
+		if officialCatalogURL == "" {
+			officialCatalogURL = cfg.CatalogBootstrapURL
+		}
 		officialCatalogKeyID = cfg.CatalogKeyID
 		officialCatalogPublicKey = cfg.CatalogPublicKey
 	}

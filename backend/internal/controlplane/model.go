@@ -68,6 +68,7 @@ type Project struct {
 	Description           string    `json:"description"`
 	CostCenter            string    `json:"cost_center"`
 	MonthlyBudgetCents    int       `json:"monthly_budget_cents"`
+	PolicyID              string    `json:"policy_id"`
 	CurrentMonthCostCents int       `json:"current_month_cost_cents"`
 	BudgetRemainingCents  int       `json:"budget_remaining_cents"`
 	BudgetUsedPercent     float64   `json:"budget_used_percent"`
@@ -82,6 +83,7 @@ type ProjectRequest struct {
 	Description        string `json:"description"`
 	CostCenter         string `json:"cost_center"`
 	MonthlyBudgetCents int    `json:"monthly_budget_cents"`
+	PolicyID           string `json:"policy_id"`
 	Status             string `json:"status"`
 }
 
@@ -205,6 +207,7 @@ type APIKeyRecord struct {
 	Fingerprint       string     `json:"fingerprint"`
 	Prefix            string     `json:"prefix"`
 	Status            string     `json:"status"`
+	PolicyID          string     `json:"policy_id"`
 	ModelAllowlist    []string   `json:"model_allowlist"`
 	QPSLimit          int        `json:"qps_limit"`
 	MonthlyTokenLimit int        `json:"monthly_token_limit"`
@@ -218,6 +221,7 @@ type APIKeyCreateRequest struct {
 	ProjectID         string   `json:"project_id"`
 	ApplicationID     string   `json:"application_id"`
 	Name              string   `json:"name"`
+	PolicyID          string   `json:"policy_id"`
 	ModelAllowlist    []string `json:"model_allowlist"`
 	QPSLimit          int      `json:"qps_limit"`
 	MonthlyTokenLimit int      `json:"monthly_token_limit"`
@@ -226,6 +230,7 @@ type APIKeyCreateRequest struct {
 
 type APIKeyUpdateRequest struct {
 	Name              string   `json:"name"`
+	PolicyID          string   `json:"policy_id"`
 	ModelAllowlist    []string `json:"model_allowlist"`
 	QPSLimit          int      `json:"qps_limit"`
 	MonthlyTokenLimit int      `json:"monthly_token_limit"`
@@ -378,6 +383,10 @@ type GatewayTrace struct {
 	ProviderAccountID string    `json:"provider_account_id"`
 	RouteSource       string    `json:"route_source"`
 	RouteReason       string    `json:"route_reason"`
+	PolicyID          string    `json:"policy_id"`
+	PolicyName        string    `json:"policy_name"`
+	PolicySource      string    `json:"policy_source"`
+	PolicySnapshot    string    `json:"policy_snapshot"`
 	Status            string    `json:"status"`
 	HTTPStatus        int       `json:"http_status"`
 	ErrorType         string    `json:"error_type"`
@@ -428,17 +437,24 @@ type AuditLogSummary struct {
 }
 
 type PortalWorkspace struct {
-	Projects     []Project      `json:"projects"`
-	Applications []Application  `json:"applications"`
-	APIKeys      []APIKeyRecord `json:"api_keys"`
-	Models       []string       `json:"models"`
-	GatewayPath  string         `json:"gateway_path"`
+	Projects      []Project      `json:"projects"`
+	Applications  []Application  `json:"applications"`
+	APIKeys       []APIKeyRecord `json:"api_keys"`
+	Usage         UsageReport    `json:"usage"`
+	RecentTraces  []GatewayTrace `json:"recent_traces"`
+	Alerts        []AlertEvent   `json:"alerts"`
+	Models        []string       `json:"models"`
+	GatewayPath   string         `json:"gateway_path"`
+	CanManageKeys bool           `json:"can_manage_keys"`
+	Principal     string         `json:"principal"`
 }
 
 type GatewayAuthContext struct {
-	APIKey      APIKeyRecord `json:"api_key"`
-	Project     Project      `json:"project"`
-	Application Application  `json:"application"`
+	APIKey       APIKeyRecord      `json:"api_key"`
+	Project      Project           `json:"project"`
+	Application  Application       `json:"application"`
+	Policy       *GovernancePolicy `json:"policy,omitempty"`
+	PolicySource string            `json:"policy_source,omitempty"`
 }
 
 type GatewayProvider struct {

@@ -39,6 +39,12 @@ func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
 
 func newAuthTestHandler(t *testing.T) http.Handler {
 	t.Helper()
+	handler, _ := newAuthTestRuntime(t)
+	return handler
+}
+
+func newAuthTestRuntime(t *testing.T) (http.Handler, *controlplane.Service) {
+	t.Helper()
 	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
@@ -55,7 +61,7 @@ func newAuthTestHandler(t *testing.T) http.Handler {
 		ControlService:  controlService,
 		PluginService:   pluginService,
 		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
-	})
+	}), controlService
 }
 
 func TestPublicSettingsEndpoint(t *testing.T) {

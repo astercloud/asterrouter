@@ -2,10 +2,12 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestEnsureSeedDataCreatesProductBaselineResources(t *testing.T) {
@@ -114,6 +116,71 @@ func TestProjectAndApplicationUpdateLifecycle(t *testing.T) {
 	}
 }
 
+func TestGovernancePolicyLifecycleValidatesScope(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	project, err := svc.CreateProject(context.Background(), "tester", ProjectRequest{
+		Name:               "Policy Project",
+		CostCenter:         "POLICY",
+		MonthlyBudgetCents: 10000,
+		Status:             ProjectStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateProject(): %v", err)
+	}
+
+	policy, err := svc.CreateGovernancePolicy(context.Background(), "tester", GovernancePolicyRequest{
+		Name:               "Default policy",
+		ScopeType:          GovernancePolicyScopeProject,
+		ScopeID:            project.ID,
+		ModelAllowlist:     []string{"gpt-4o-mini", "gpt-4o-mini", ""},
+		QPSLimit:           10,
+		MonthlyTokenLimit:  1000000,
+		MonthlyBudgetCents: 50000,
+		OverageAction:      GovernancePolicyOverageBlock,
+		PromptLoggingMode:  GovernancePolicyPromptLoggingMetadataOnly,
+		RetentionDays:      30,
+		ToolCallAllowed:    true,
+		ImageInputAllowed:  true,
+		Status:             GovernancePolicyStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateGovernancePolicy(): %v", err)
+	}
+	if policy.ID == "" || policy.ScopeID != project.ID || len(policy.ModelAllowlist) != 1 {
+		t.Fatalf("policy mismatch: %+v", policy)
+	}
+
+	updated, err := svc.UpdateGovernancePolicy(context.Background(), "tester", policy.ID, GovernancePolicyRequest{
+		Name:               "Default policy updated",
+		ScopeType:          GovernancePolicyScopeGlobal,
+		ModelDenylist:      []string{"legacy-model"},
+		QPSLimit:           20,
+		MonthlyTokenLimit:  2000000,
+		MonthlyBudgetCents: 0,
+		OverageAction:      GovernancePolicyOverageWarn,
+		PromptLoggingMode:  GovernancePolicyPromptLoggingDisabled,
+		RetentionDays:      0,
+		ToolCallAllowed:    false,
+		ImageInputAllowed:  true,
+		WebAccessAllowed:   false,
+		Status:             GovernancePolicyStatusDisabled,
+	})
+	if err != nil {
+		t.Fatalf("UpdateGovernancePolicy(): %v", err)
+	}
+	if updated.ID != policy.ID || updated.ScopeType != GovernancePolicyScopeGlobal || updated.ScopeID != "" || updated.Status != GovernancePolicyStatusDisabled {
+		t.Fatalf("updated policy mismatch: %+v", updated)
+	}
+
+	if _, err := svc.CreateGovernancePolicy(context.Background(), "tester", GovernancePolicyRequest{
+		Name:      "Missing project",
+		ScopeType: GovernancePolicyScopeProject,
+		ScopeID:   "proj_missing",
+	}); err == nil {
+		t.Fatal("CreateGovernancePolicy() accepted missing project scope")
+	}
+}
+
 func TestEnforceGatewayPolicyRejectsQPSLimit(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1")
 	if err := svc.EnsureSeedData(context.Background()); err != nil {
@@ -139,6 +206,94 @@ func TestEnforceGatewayPolicyRejectsQPSLimit(t *testing.T) {
 	}
 	if err := svc.EnforceGatewayPolicy(context.Background(), auth); !errors.Is(err, ErrGatewayRateLimited) {
 		t.Fatalf("second EnforceGatewayPolicy() err = %v", err)
+	}
+}
+
+func TestGatewayPolicyReferenceOverridesAPIKeyLimitsAndModels(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	if err := svc.EnsureSeedData(context.Background()); err != nil {
+		t.Fatalf("EnsureSeedData(): %v", err)
+	}
+	policy, err := svc.CreateGovernancePolicy(context.Background(), "tester", GovernancePolicyRequest{
+		Name:              "Strict gateway policy",
+		ScopeType:         GovernancePolicyScopeGlobal,
+		ModelAllowlist:    []string{"policy-model"},
+		ModelDenylist:     []string{"blocked-model"},
+		QPSLimit:          1,
+		MonthlyTokenLimit: 3,
+		OverageAction:     GovernancePolicyOverageBlock,
+		Status:            GovernancePolicyStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateGovernancePolicy(): %v", err)
+	}
+	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
+		ProjectID:         "proj_platform",
+		ApplicationID:     "app_internal_sandbox",
+		Name:              "Policy key",
+		PolicyID:          policy.ID,
+		ModelAllowlist:    []string{"legacy-model", "policy-model", "blocked-model"},
+		QPSLimit:          0,
+		MonthlyTokenLimit: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(): %v", err)
+	}
+	if _, err := svc.AuthorizeGatewayModel(context.Background(), created.Key, "legacy-model"); !errors.Is(err, ErrGatewayForbidden) {
+		t.Fatalf("legacy model should be rejected by policy allowlist, err=%v", err)
+	}
+	if _, err := svc.AuthorizeGatewayModel(context.Background(), created.Key, "blocked-model"); !errors.Is(err, ErrGatewayForbidden) {
+		t.Fatalf("blocked model should be rejected by policy denylist, err=%v", err)
+	}
+	auth, err := svc.AuthorizeGatewayModel(context.Background(), created.Key, "policy-model")
+	if err != nil {
+		t.Fatalf("AuthorizeGatewayModel(): %v", err)
+	}
+	if auth.Policy == nil || auth.Policy.ID != policy.ID {
+		t.Fatalf("effective policy not attached: %+v", auth.Policy)
+	}
+	if auth.PolicySource != GatewayPolicySourceAPIKeyExplicit {
+		t.Fatalf("policy source = %q", auth.PolicySource)
+	}
+	if err := svc.EnforceGatewayPolicy(context.Background(), auth); err != nil {
+		t.Fatalf("first EnforceGatewayPolicy(): %v", err)
+	}
+	if err := svc.EnforceGatewayPolicy(context.Background(), auth); !errors.Is(err, ErrGatewayRateLimited) {
+		t.Fatalf("second EnforceGatewayPolicy() err = %v", err)
+	}
+	if err := svc.RecordGatewayUsage(context.Background(), auth, GatewayUsageInput{
+		Model:        "policy-model",
+		Status:       "forwarded",
+		InputTokens:  2,
+		OutputTokens: 1,
+	}); err != nil {
+		t.Fatalf("RecordGatewayUsage(): %v", err)
+	}
+	if err := svc.RecordGatewayTrace(context.Background(), auth, GatewayTraceInput{
+		Model:           "policy-model",
+		Status:          "forwarded",
+		RouteSource:     "provider_connection",
+		ResponseSummary: "ok",
+	}); err != nil {
+		t.Fatalf("RecordGatewayTrace(): %v", err)
+	}
+	traces, err := svc.ListGatewayTraces(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListGatewayTraces(): %v", err)
+	}
+	if len(traces) != 1 || traces[0].PolicyID != policy.ID || traces[0].PolicyName != policy.Name || traces[0].PolicySource != GatewayPolicySourceAPIKeyExplicit {
+		t.Fatalf("trace policy evidence mismatch: %+v", traces)
+	}
+	var snapshot gatewayTracePolicySnapshot
+	if err := json.Unmarshal([]byte(traces[0].PolicySnapshot), &snapshot); err != nil {
+		t.Fatalf("policy snapshot json: %v snapshot=%q", err, traces[0].PolicySnapshot)
+	}
+	if snapshot.QPSLimit != 1 || snapshot.MonthlyTokenLimit != 3 || snapshot.OverageAction != GovernancePolicyOverageBlock || snapshot.ModelAllowlistCount != 1 || snapshot.ModelDenylistCount != 1 {
+		t.Fatalf("policy snapshot mismatch: %+v", snapshot)
+	}
+	svc.rateWindows = map[string][]time.Time{}
+	if err := svc.EnforceGatewayPolicy(context.Background(), auth); !errors.Is(err, ErrGatewayQuotaExceeded) {
+		t.Fatalf("policy monthly token quota err = %v", err)
 	}
 }
 

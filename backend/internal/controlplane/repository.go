@@ -22,6 +22,8 @@ type Repository interface {
 	SaveProject(ctx context.Context, project Project) error
 	ListDepartments(ctx context.Context) ([]Department, error)
 	SaveDepartment(ctx context.Context, department Department) error
+	ListGovernancePolicies(ctx context.Context) ([]GovernancePolicy, error)
+	SaveGovernancePolicy(ctx context.Context, policy GovernancePolicy) error
 	ListApplications(ctx context.Context, projectID string) ([]Application, error)
 	SaveApplication(ctx context.Context, app Application) error
 	ListWorkspaceUsers(ctx context.Context) ([]WorkspaceUser, error)
@@ -83,6 +85,7 @@ type MemoryRepository struct {
 	healthChecks        map[string]ProviderHealthCheck
 	projects            map[string]Project
 	departments         map[string]Department
+	governancePolicies  map[string]GovernancePolicy
 	applications        map[string]Application
 	workspaceUsers      map[string]WorkspaceUser
 	roleBindings        map[string]RoleBinding
@@ -103,6 +106,7 @@ func NewMemoryRepository() *MemoryRepository {
 		healthChecks:        map[string]ProviderHealthCheck{},
 		projects:            map[string]Project{},
 		departments:         map[string]Department{},
+		governancePolicies:  map[string]GovernancePolicy{},
 		applications:        map[string]Application{},
 		workspaceUsers:      map[string]WorkspaceUser{},
 		roleBindings:        map[string]RoleBinding{},
@@ -596,7 +600,7 @@ func memoryGatewayTraceMatches(trace GatewayTrace, query GatewayTraceQuery) bool
 	if keyword == "" {
 		return true
 	}
-	return anyContains(keyword, trace.Model, trace.Status, trace.ErrorType, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.APIKeyID, trace.APIFingerprint, trace.ProjectID, trace.ApplicationID, trace.RequestSummary, trace.ResponseSummary)
+	return anyContains(keyword, trace.Model, trace.Status, trace.ErrorType, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicySnapshot, trace.APIKeyID, trace.APIFingerprint, trace.ProjectID, trace.ApplicationID, trace.RequestSummary, trace.ResponseSummary)
 }
 
 func memoryAuditLogMatches(event AuditLog, query AuditLogQuery) bool {
@@ -677,7 +681,7 @@ func appendGatewayTraceFilters(clauses *[]string, args *[]any, query GatewayTrac
 	appendExactFilter(clauses, args, "application_id", query.ApplicationID)
 	appendTimeFilter(clauses, args, "created_at", ">=", query.CreatedFrom)
 	appendTimeFilter(clauses, args, "created_at", "<=", query.CreatedTo)
-	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "route_source", "route_reason", "api_key_id", "api_fingerprint", "project_id", "application_id", "request_summary", "response_summary"})
+	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_snapshot", "api_key_id", "api_fingerprint", "project_id", "application_id", "request_summary", "response_summary"})
 }
 
 func appendAuditLogFilters(clauses *[]string, args *[]any, query AuditLogQuery) {
@@ -761,10 +765,13 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT NOT NULL DEFAULT '',
   cost_center TEXT NOT NULL DEFAULT '',
   monthly_budget_cents INTEGER NOT NULL DEFAULT 0,
+  policy_id TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS departments (
   id TEXT PRIMARY KEY,
@@ -883,6 +890,34 @@ CREATE TABLE IF NOT EXISTS model_pricings (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS governance_policies (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  scope_type TEXT NOT NULL DEFAULT 'global',
+  scope_id TEXT NOT NULL DEFAULT '',
+  model_allowlist TEXT NOT NULL DEFAULT '[]',
+  model_denylist TEXT NOT NULL DEFAULT '[]',
+  qps_limit INTEGER NOT NULL DEFAULT 0,
+  monthly_token_limit INTEGER NOT NULL DEFAULT 0,
+  monthly_budget_cents INTEGER NOT NULL DEFAULT 0,
+  overage_action TEXT NOT NULL DEFAULT 'block',
+  prompt_logging_mode TEXT NOT NULL DEFAULT 'metadata_only',
+  retention_days INTEGER NOT NULL DEFAULT 30,
+  tool_call_allowed BOOLEAN NOT NULL DEFAULT true,
+  image_input_allowed BOOLEAN NOT NULL DEFAULT true,
+  web_access_allowed BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS governance_policies_scope_idx
+  ON governance_policies(scope_type, scope_id);
+
+CREATE INDEX IF NOT EXISTS governance_policies_status_idx
+  ON governance_policies(status);
+
 CREATE TABLE IF NOT EXISTS api_keys (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -892,6 +927,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   fingerprint TEXT NOT NULL,
   prefix TEXT NOT NULL,
   status TEXT NOT NULL,
+  policy_id TEXT NOT NULL DEFAULT '',
   model_allowlist TEXT NOT NULL DEFAULT '[]',
   qps_limit INTEGER NOT NULL DEFAULT 0,
   monthly_token_limit INTEGER NOT NULL DEFAULT 0,
@@ -900,6 +936,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
@@ -944,6 +982,10 @@ CREATE TABLE IF NOT EXISTS gateway_traces (
   provider_account_id TEXT NOT NULL DEFAULT '',
   route_source TEXT NOT NULL DEFAULT '',
   route_reason TEXT NOT NULL DEFAULT '',
+  policy_id TEXT NOT NULL DEFAULT '',
+  policy_name TEXT NOT NULL DEFAULT '',
+  policy_source TEXT NOT NULL DEFAULT '',
+  policy_snapshot TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL,
   http_status INTEGER NOT NULL DEFAULT 0,
   error_type TEXT NOT NULL DEFAULT '',
@@ -955,11 +997,19 @@ CREATE TABLE IF NOT EXISTS gateway_traces (
   created_at TIMESTAMPTZ NOT NULL
 );
 
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_snapshot TEXT NOT NULL DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS gateway_traces_created_idx
   ON gateway_traces(created_at DESC);
 
 CREATE INDEX IF NOT EXISTS gateway_traces_route_idx
   ON gateway_traces(provider_id, provider_account_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS gateway_traces_policy_idx
+  ON gateway_traces(policy_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS alert_events (
   id TEXT PRIMARY KEY,
@@ -1071,7 +1121,7 @@ VALUES($1,$2,$3,$4,$5,$6,$7)
 
 func (r *PostgresRepository) ListProjects(ctx context.Context) ([]Project, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, description, cost_center, monthly_budget_cents, status, created_at, updated_at
+SELECT id, name, description, cost_center, monthly_budget_cents, policy_id, status, created_at, updated_at
 FROM projects
 ORDER BY created_at ASC
 `)
@@ -1082,7 +1132,7 @@ ORDER BY created_at ASC
 	var out []Project
 	for rows.Next() {
 		var project Project
-		if err := rows.Scan(&project.ID, &project.Name, &project.Description, &project.CostCenter, &project.MonthlyBudgetCents, &project.Status, &project.CreatedAt, &project.UpdatedAt); err != nil {
+		if err := rows.Scan(&project.ID, &project.Name, &project.Description, &project.CostCenter, &project.MonthlyBudgetCents, &project.PolicyID, &project.Status, &project.CreatedAt, &project.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, project)
@@ -1092,16 +1142,17 @@ ORDER BY created_at ASC
 
 func (r *PostgresRepository) SaveProject(ctx context.Context, project Project) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO projects(id, name, description, cost_center, monthly_budget_cents, status, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+INSERT INTO projects(id, name, description, cost_center, monthly_budget_cents, policy_id, status, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
 ON CONFLICT(id) DO UPDATE SET
   name = EXCLUDED.name,
   description = EXCLUDED.description,
   cost_center = EXCLUDED.cost_center,
   monthly_budget_cents = EXCLUDED.monthly_budget_cents,
+  policy_id = EXCLUDED.policy_id,
   status = EXCLUDED.status,
   updated_at = EXCLUDED.updated_at
-`, project.ID, project.Name, project.Description, project.CostCenter, project.MonthlyBudgetCents, project.Status, project.CreatedAt, project.UpdatedAt)
+`, project.ID, project.Name, project.Description, project.CostCenter, project.MonthlyBudgetCents, project.PolicyID, project.Status, project.CreatedAt, project.UpdatedAt)
 	return err
 }
 
@@ -1356,7 +1407,7 @@ FROM provider_accounts
 
 func (r *PostgresRepository) ListAPIKeys(ctx context.Context) ([]APIKeyRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, project_id, application_id, name, key_hash, fingerprint, prefix, status, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at
+SELECT id, project_id, application_id, name, key_hash, fingerprint, prefix, status, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at
 FROM api_keys
 ORDER BY created_at DESC
 `)
@@ -1369,7 +1420,7 @@ ORDER BY created_at DESC
 		var key APIKeyRecord
 		var allowlist string
 		var expiresAt, lastUsedAt sql.NullTime
-		if err := rows.Scan(&key.ID, &key.ProjectID, &key.ApplicationID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &allowlist, &key.QPSLimit, &key.MonthlyTokenLimit, &expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt); err != nil {
+		if err := rows.Scan(&key.ID, &key.ProjectID, &key.ApplicationID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.PolicyID, &allowlist, &key.QPSLimit, &key.MonthlyTokenLimit, &expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt); err != nil {
 			return nil, err
 		}
 		key.ModelAllowlist = parseStringList(allowlist)
@@ -1386,14 +1437,14 @@ ORDER BY created_at DESC
 
 func (r *PostgresRepository) FindAPIKeyByHash(ctx context.Context, hash string) (APIKeyRecord, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
-SELECT id, project_id, application_id, name, key_hash, fingerprint, prefix, status, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at
+SELECT id, project_id, application_id, name, key_hash, fingerprint, prefix, status, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at
 FROM api_keys
 WHERE key_hash = $1
 `, hash)
 	var key APIKeyRecord
 	var allowlist string
 	var expiresAt, lastUsedAt sql.NullTime
-	if err := row.Scan(&key.ID, &key.ProjectID, &key.ApplicationID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &allowlist, &key.QPSLimit, &key.MonthlyTokenLimit, &expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt); err != nil {
+	if err := row.Scan(&key.ID, &key.ProjectID, &key.ApplicationID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.PolicyID, &allowlist, &key.QPSLimit, &key.MonthlyTokenLimit, &expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return APIKeyRecord{}, false, nil
 		}
@@ -1412,21 +1463,22 @@ WHERE key_hash = $1
 func (r *PostgresRepository) SaveAPIKey(ctx context.Context, key APIKeyRecord) error {
 	allowlist := marshalStringList(key.ModelAllowlist)
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO api_keys(id, project_id, application_id, name, key_hash, fingerprint, prefix, status, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+INSERT INTO api_keys(id, project_id, application_id, name, key_hash, fingerprint, prefix, status, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 ON CONFLICT(id) DO UPDATE SET
   name = EXCLUDED.name,
   key_hash = EXCLUDED.key_hash,
   fingerprint = EXCLUDED.fingerprint,
   prefix = EXCLUDED.prefix,
   status = EXCLUDED.status,
+  policy_id = EXCLUDED.policy_id,
   model_allowlist = EXCLUDED.model_allowlist,
   qps_limit = EXCLUDED.qps_limit,
   monthly_token_limit = EXCLUDED.monthly_token_limit,
   expires_at = EXCLUDED.expires_at,
   last_used_at = EXCLUDED.last_used_at,
   updated_at = EXCLUDED.updated_at
-`, key.ID, key.ProjectID, key.ApplicationID, key.Name, key.KeyHash, key.Fingerprint, key.Prefix, key.Status, allowlist, key.QPSLimit, key.MonthlyTokenLimit, key.ExpiresAt, key.LastUsedAt, key.CreatedAt, key.UpdatedAt)
+`, key.ID, key.ProjectID, key.ApplicationID, key.Name, key.KeyHash, key.Fingerprint, key.Prefix, key.Status, key.PolicyID, allowlist, key.QPSLimit, key.MonthlyTokenLimit, key.ExpiresAt, key.LastUsedAt, key.CreatedAt, key.UpdatedAt)
 	return err
 }
 
@@ -1569,9 +1621,9 @@ WHERE project_id = $1 AND created_at >= $2
 
 func (r *PostgresRepository) SaveGatewayTrace(ctx context.Context, trace GatewayTrace) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO gateway_traces(id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-`, trace.ID, trace.ProjectID, trace.ApplicationID, trace.APIKeyID, trace.APIFingerprint, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, trace.CreatedAt)
+INSERT INTO gateway_traces(id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+`, trace.ID, trace.ProjectID, trace.ApplicationID, trace.APIKeyID, trace.APIFingerprint, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, trace.CreatedAt)
 	return err
 }
 
@@ -1585,7 +1637,7 @@ func (r *PostgresRepository) QueryGatewayTraces(ctx context.Context, query Gatew
 	args := []any{}
 	appendGatewayTraceFilters(&clauses, &args, query)
 	sqlText := `
-SELECT id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at
+SELECT id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at
 FROM gateway_traces`
 	if len(clauses) > 0 {
 		sqlText += " WHERE " + strings.Join(clauses, " AND ")
@@ -1600,7 +1652,7 @@ FROM gateway_traces`
 	var out []GatewayTrace
 	for rows.Next() {
 		var trace GatewayTrace
-		if err := rows.Scan(&trace.ID, &trace.ProjectID, &trace.ApplicationID, &trace.APIKeyID, &trace.APIFingerprint, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.RouteSource, &trace.RouteReason, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.CreatedAt); err != nil {
+		if err := rows.Scan(&trace.ID, &trace.ProjectID, &trace.ApplicationID, &trace.APIKeyID, &trace.APIFingerprint, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, trace)

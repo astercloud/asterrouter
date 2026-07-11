@@ -43,7 +43,10 @@ func (s *Service) Packages(ctx context.Context, pluginID string) ([]Package, err
 }
 
 func (s *Service) DownloadPackage(ctx context.Context, pluginID string, packageID string, request PackageDownloadRequest) (PackageDownloadResult, error) {
-	cfg := normalizeOfficialCatalogConfig(s.catalogConfig)
+	cfg, err := s.effectiveCatalogConfig(ctx)
+	if err != nil {
+		return PackageDownloadResult{}, err
+	}
 	if cfg.Mode == CatalogModeDisabled {
 		return PackageDownloadResult{}, ErrCatalogSyncDisabled
 	}

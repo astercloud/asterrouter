@@ -8,12 +8,13 @@ import {
   getAPIKeys,
   getApplications,
   getGatewayTraces,
+  getGovernancePolicies,
   getProjects,
   getUsageReport,
   rotateAPIKey,
   updateAPIKey
 } from '@/api/control'
-import type { APIKeyCreateRequest, APIKeyRecord, Application, GatewayTrace, Project, UsageReport } from '@/types'
+import type { APIKeyCreateRequest, APIKeyRecord, Application, GatewayTrace, GovernancePolicy, Project, UsageReport } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -31,6 +32,7 @@ const oneTimeKey = ref('')
 const apiKeys = ref<APIKeyRecord[]>([])
 const projects = ref<Project[]>([])
 const applications = ref<Application[]>([])
+const policies = ref<GovernancePolicy[]>([])
 const query = ref('')
 const statusFilter = ref('')
 const modelsText = ref('gpt-4o-mini')
@@ -39,6 +41,7 @@ const form = reactive<APIKeyCreateRequest>({
   project_id: '',
   application_id: '',
   name: '',
+  policy_id: '',
   model_allowlist: [],
   qps_limit: 10,
   monthly_token_limit: 1000000,
@@ -48,6 +51,8 @@ const form = reactive<APIKeyCreateRequest>({
 const filteredApplications = computed(() => applications.value.filter((app) => app.project_id === form.project_id))
 const projectByID = computed(() => new Map(projects.value.map((item) => [item.id, item])))
 const appByID = computed(() => new Map(applications.value.map((item) => [item.id, item])))
+const policyByID = computed(() => new Map(policies.value.map((item) => [item.id, item])))
+const activePolicies = computed(() => policies.value.filter((item) => item.status === 'active'))
 
 const filteredKeys = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -92,6 +97,7 @@ function openCreate() {
     project_id: projects.value[0]?.id || '',
     application_id: '',
     name: '',
+    policy_id: '',
     model_allowlist: [],
     qps_limit: 10,
     monthly_token_limit: 1000000,
@@ -109,6 +115,7 @@ function openEdit(key: APIKeyRecord) {
     project_id: key.project_id,
     application_id: key.application_id,
     name: key.name,
+    policy_id: key.policy_id || '',
     model_allowlist: [...key.model_allowlist],
     qps_limit: key.qps_limit,
     monthly_token_limit: key.monthly_token_limit,
@@ -141,10 +148,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [projectData, appData, keyData] = await Promise.all([getProjects(), getApplications(), getAPIKeys()])
+    const [projectData, appData, keyData, policyData] = await Promise.all([
+      getProjects(),
+      getApplications(),
+      getAPIKeys(),
+      getGovernancePolicies()
+    ])
     projects.value = projectData
     applications.value = appData
     apiKeys.value = keyData
+    policies.value = policyData
     syncDefaults()
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
@@ -162,6 +175,7 @@ async function save() {
     if (editing.value) {
       await updateAPIKey(editing.value.id, {
         name: form.name,
+        policy_id: form.policy_id,
         model_allowlist,
         qps_limit: form.qps_limit,
         monthly_token_limit: form.monthly_token_limit,
@@ -288,6 +302,7 @@ onMounted(load)
               <th>{{ t('projects.application') }}</th>
               <th>{{ t('apiKeys.fingerprint') }}</th>
               <th>{{ t('providers.status') }}</th>
+              <th>{{ t('policies.policy') }}</th>
               <th>{{ t('apiKeys.models') }}</th>
               <th>{{ t('apiKeys.monthlyTokens') }}</th>
               <th>{{ t('apiKeys.lastUsed') }}</th>
@@ -304,6 +319,10 @@ onMounted(load)
               <td>{{ appByID.get(key.application_id)?.name || '-' }}</td>
               <td>{{ key.fingerprint }}</td>
               <td><span class="pill" :class="key.status === 'active' ? 'status-success' : 'status-danger'">{{ key.status }}</span></td>
+              <td>
+                <strong>{{ key.policy_id ? policyByID.get(key.policy_id)?.name || key.policy_id : t('policies.inherit') }}</strong>
+                <span>{{ key.policy_id ? t('policies.explicitBinding') : t('policies.scopeFallback') }}</span>
+              </td>
               <td>
                 <div class="chip-list">
                   <span v-for="model in key.model_allowlist.slice(0, 3)" :key="model" class="pill">{{ model }}</span>
@@ -334,7 +353,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="!filteredKeys.length">
-              <td colspan="9" class="empty-cell">{{ loading ? t('common.loading') : t('apiKeys.empty') }}</td>
+              <td colspan="10" class="empty-cell">{{ loading ? t('common.loading') : t('apiKeys.empty') }}</td>
             </tr>
           </tbody>
         </table>
@@ -367,6 +386,13 @@ onMounted(load)
           <div class="field form-span-2">
             <label>{{ t('apiKeys.name') }}</label>
             <input v-model="form.name" />
+          </div>
+          <div class="field form-span-2">
+            <label>{{ t('policies.policy') }}</label>
+            <select v-model="form.policy_id">
+              <option value="">{{ t('policies.inherit') }}</option>
+              <option v-for="policy in activePolicies" :key="policy.id" :value="policy.id">{{ policy.name }}</option>
+            </select>
           </div>
           <div class="field form-span-2">
             <label>{{ t('apiKeys.models') }}</label>
@@ -431,6 +457,10 @@ onMounted(load)
             <div>
               <label>{{ t('apiKeys.monthlyTokens') }}</label>
               <p>{{ selectedKey.monthly_token_limit ? formatTokens(selectedKey.monthly_token_limit) : t('apiKeys.unlimited') }}</p>
+            </div>
+            <div>
+              <label>{{ t('policies.policy') }}</label>
+              <p>{{ selectedKey.policy_id ? policyByID.get(selectedKey.policy_id)?.name || selectedKey.policy_id : t('policies.inherit') }}</p>
             </div>
             <div>
               <label>{{ t('apiKeys.lastUsed') }}</label>

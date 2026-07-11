@@ -256,6 +256,8 @@ onMounted(load)
       </button>
     </section>
 
+    <div class="notice">{{ t('providerAccounts.advancedNotice') }}</div>
+
     <div class="crud-summary">
       <span><strong>{{ summary.total }}</strong>{{ t('providerAccounts.accounts') }}</span>
       <span><strong>{{ summary.active }}</strong>{{ t('dashboard.active') }}</span>

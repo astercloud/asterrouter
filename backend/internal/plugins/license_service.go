@@ -83,7 +83,7 @@ func (s *Service) LicenseStatus(ctx context.Context) (LicenseStatus, error) {
 	}
 	if !ok {
 		return LicenseStatus{
-			Configured: s.licenseTrustConfigured(),
+			Configured: s.licenseTrustConfigured(ctx),
 			Status:     "not_imported",
 		}, nil
 	}
@@ -95,7 +95,10 @@ func (s *Service) LicenseStatus(ctx context.Context) (LicenseStatus, error) {
 }
 
 func (s *Service) ActivateLicense(ctx context.Context, request LicenseActivateRequest) (LicenseStatus, error) {
-	cfg := normalizeOfficialLicenseConfig(s.licenseConfig, s.catalogConfig)
+	cfg, err := s.effectiveLicenseConfig(ctx)
+	if err != nil {
+		return LicenseStatus{}, err
+	}
 	if cfg.URL == "" || cfg.PublicKeyID == "" || cfg.PublicKeyBase64 == "" {
 		return LicenseStatus{}, ErrLicenseNotConfigured
 	}
@@ -153,7 +156,7 @@ func (s *Service) ImportLicense(ctx context.Context, request LicenseImportReques
 }
 
 func (s *Service) saveLicenseEnvelope(ctx context.Context, envelope catalogEnvelope, activationSecret string) (LicenseStatus, error) {
-	payload, rawEnvelope, err := s.verifyLicenseEnvelope(envelope)
+	payload, rawEnvelope, err := s.verifyLicenseEnvelope(ctx, envelope)
 	if err != nil {
 		return LicenseStatus{}, err
 	}
@@ -196,8 +199,11 @@ func (s *Service) saveLicenseEnvelope(ctx context.Context, envelope catalogEnvel
 	return licenseStatusFromRecord(record), nil
 }
 
-func (s *Service) verifyLicenseEnvelope(envelope catalogEnvelope) (licenseSnapshotPayload, []byte, error) {
-	cfg := normalizeOfficialLicenseConfig(s.licenseConfig, s.catalogConfig)
+func (s *Service) verifyLicenseEnvelope(ctx context.Context, envelope catalogEnvelope) (licenseSnapshotPayload, []byte, error) {
+	cfg, err := s.effectiveLicenseConfig(ctx)
+	if err != nil {
+		return licenseSnapshotPayload{}, nil, err
+	}
 	if cfg.PublicKeyID == "" || cfg.PublicKeyBase64 == "" {
 		return licenseSnapshotPayload{}, nil, ErrLicenseNotConfigured
 	}
@@ -429,6 +435,9 @@ func decodeLicenseEnvelopeBytes(raw []byte) (catalogEnvelope, error) {
 func normalizeOfficialLicenseConfig(cfg OfficialLicenseConfig, catalog OfficialCatalogConfig) OfficialLicenseConfig {
 	cfg.URL = strings.TrimSpace(cfg.URL)
 	if cfg.URL == "" {
+		cfg.URL = strings.TrimSpace(catalog.LicenseURL)
+	}
+	if cfg.URL == "" {
 		cfg.URL = deriveLicenseURL(catalog.URL)
 	}
 	cfg.PublicKeyID = strings.TrimSpace(cfg.PublicKeyID)
@@ -451,8 +460,11 @@ func normalizeOfficialLicenseConfig(cfg OfficialLicenseConfig, catalog OfficialC
 	return cfg
 }
 
-func (s *Service) licenseTrustConfigured() bool {
-	cfg := normalizeOfficialLicenseConfig(s.licenseConfig, s.catalogConfig)
+func (s *Service) licenseTrustConfigured(ctx context.Context) bool {
+	cfg, err := s.effectiveLicenseConfig(ctx)
+	if err != nil {
+		cfg = normalizeOfficialLicenseConfig(s.licenseConfig, s.catalogConfig)
+	}
 	return cfg.PublicKeyID != "" && cfg.PublicKeyBase64 != ""
 }
 

@@ -17,6 +17,7 @@ func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, 
 	registerProjectAdminRoutes(admin, control)
 	registerIdentityAdminRoutes(admin, control)
 	registerDepartmentAdminRoutes(admin, control)
+	registerGovernancePolicyAdminRoutes(admin, control)
 	registerRoutingAdminRoutes(admin, control)
 	registerAPIKeyAdminRoutes(admin, control)
 	registerModelPricingAdminRoutes(admin, control)

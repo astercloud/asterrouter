@@ -1,12 +1,13 @@
 {
   "name": "asterrouter-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc --noEmit",
+    "check:enterprise-surface": "node scripts/check-enterprise-surface.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

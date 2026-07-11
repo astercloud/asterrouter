@@ -24,6 +24,7 @@ type Config struct {
 	BuildType           string
 	UpdateManifestURL   string
 	CatalogMode         string
+	CatalogBootstrapURL string
 	CatalogURL          string
 	CatalogKeyID        string
 	CatalogPublicKey    string
@@ -52,6 +53,7 @@ func Load() Config {
 		BuildType:           getEnv("ASTER_BUILD_TYPE", buildinfo.BuildType),
 		UpdateManifestURL:   strings.TrimSpace(os.Getenv("ASTER_UPDATE_MANIFEST_URL")),
 		CatalogMode:         getEnv("ASTER_CATALOG_MODE", "disabled"),
+		CatalogBootstrapURL: strings.TrimSpace(os.Getenv("ASTER_CATALOG_BOOTSTRAP_URL")),
 		CatalogURL:          strings.TrimSpace(os.Getenv("ASTER_CATALOG_URL")),
 		CatalogKeyID:        strings.TrimSpace(os.Getenv("ASTER_CATALOG_KEY_ID")),
 		CatalogPublicKey:    strings.TrimSpace(os.Getenv("ASTER_CATALOG_PUBLIC_KEY")),
@@ -81,11 +83,13 @@ func ValidateRuntime(cfg Config) error {
 	}
 	switch strings.TrimSpace(cfg.CatalogMode) {
 	case "online", "private_mirror":
-		if strings.TrimSpace(cfg.CatalogURL) == "" {
-			return errors.New("ASTER_CATALOG_URL is required when ASTER_CATALOG_MODE=online or private_mirror")
-		}
-		if strings.TrimSpace(cfg.CatalogKeyID) == "" || strings.TrimSpace(cfg.CatalogPublicKey) == "" {
-			return errors.New("ASTER_CATALOG_KEY_ID and ASTER_CATALOG_PUBLIC_KEY are required when ASTER_CATALOG_MODE=online or private_mirror")
+		if strings.TrimSpace(cfg.CatalogBootstrapURL) == "" {
+			if strings.TrimSpace(cfg.CatalogURL) == "" {
+				return errors.New("ASTER_CATALOG_URL or ASTER_CATALOG_BOOTSTRAP_URL is required when ASTER_CATALOG_MODE=online or private_mirror")
+			}
+			if strings.TrimSpace(cfg.CatalogKeyID) == "" || strings.TrimSpace(cfg.CatalogPublicKey) == "" {
+				return errors.New("ASTER_CATALOG_KEY_ID and ASTER_CATALOG_PUBLIC_KEY are required when ASTER_CATALOG_BOOTSTRAP_URL is not set")
+			}
 		}
 		if (strings.TrimSpace(cfg.LicenseKeyID) == "") != (strings.TrimSpace(cfg.LicensePublicKey) == "") {
 			return errors.New("ASTER_LICENSE_KEY_ID and ASTER_LICENSE_PUBLIC_KEY must be set together")

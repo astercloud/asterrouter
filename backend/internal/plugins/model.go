@@ -171,7 +171,9 @@ type Catalog struct {
 
 type OfficialCatalogConfig struct {
 	Mode            string
+	BootstrapURL    string
 	URL             string
+	LicenseURL      string
 	PublicKeyID     string
 	PublicKeyBase64 string
 }
@@ -186,16 +188,19 @@ type OfficialLicenseConfig struct {
 }
 
 type OfficialCatalogStatus struct {
-	Mode           string    `json:"mode"`
-	SourceURL      string    `json:"source_url"`
-	CatalogVersion int64     `json:"catalog_version"`
-	PayloadSHA256  string    `json:"payload_sha256"`
-	KeyID          string    `json:"key_id"`
-	PluginCount    int       `json:"plugin_count"`
-	AdvisoryCount  int       `json:"advisory_count"`
-	Status         string    `json:"status"`
-	Error          string    `json:"error,omitempty"`
-	SyncedAt       time.Time `json:"synced_at,omitempty"`
+	Mode            string    `json:"mode"`
+	BootstrapURL    string    `json:"bootstrap_url,omitempty"`
+	SourceURL       string    `json:"source_url"`
+	LicenseURL      string    `json:"license_url,omitempty"`
+	TrustConfigured bool      `json:"trust_configured"`
+	CatalogVersion  int64     `json:"catalog_version"`
+	PayloadSHA256   string    `json:"payload_sha256"`
+	KeyID           string    `json:"key_id"`
+	PluginCount     int       `json:"plugin_count"`
+	AdvisoryCount   int       `json:"advisory_count"`
+	Status          string    `json:"status"`
+	Error           string    `json:"error,omitempty"`
+	SyncedAt        time.Time `json:"synced_at,omitempty"`
 }
 
 type LicenseStatus struct {

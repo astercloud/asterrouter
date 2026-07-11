@@ -134,6 +134,8 @@ onMounted(load)
       </button>
     </section>
 
+    <div class="notice">{{ t('routingGroups.advancedNotice') }}</div>
+
     <div class="crud-summary">
       <span><strong>{{ summary.total }}</strong>{{ t('routingGroups.groups') }}</span>
       <span><strong>{{ summary.active }}</strong>{{ t('dashboard.active') }}</span>

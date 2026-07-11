@@ -2,8 +2,17 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Boxes, Edit3, Plus, RefreshCw, Save, Search, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { createApplication, createProject, getApplications, getDepartments, getProjects, updateApplication, updateProject } from '@/api/control'
-import type { Application, ApplicationRequest, Department, Project, ProjectRequest } from '@/types'
+import {
+  createApplication,
+  createProject,
+  getApplications,
+  getDepartments,
+  getGovernancePolicies,
+  getProjects,
+  updateApplication,
+  updateProject
+} from '@/api/control'
+import type { Application, ApplicationRequest, Department, GovernancePolicy, Project, ProjectRequest } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -13,6 +22,7 @@ const message = ref('')
 const projects = ref<Project[]>([])
 const applications = ref<Application[]>([])
 const departments = ref<Department[]>([])
+const policies = ref<GovernancePolicy[]>([])
 const query = ref('')
 const statusFilter = ref('')
 const modal = ref<'project' | 'application' | ''>('')
@@ -24,6 +34,7 @@ const projectForm = reactive<ProjectRequest>({
   description: '',
   cost_center: '',
   monthly_budget_cents: 50000,
+  policy_id: '',
   status: 'active'
 })
 const appForm = reactive<ApplicationRequest>({
@@ -66,6 +77,9 @@ const costCenterOptions = computed(() => {
   return Array.from(values).sort()
 })
 
+const policyByID = computed(() => new Map(policies.value.map((item) => [item.id, item])))
+const activePolicies = computed(() => policies.value.filter((item) => item.status === 'active'))
+
 const summary = computed(() => ({
   projects: projects.value.length,
   apps: applications.value.length,
@@ -89,6 +103,7 @@ function resetProjectForm() {
     description: '',
     cost_center: '',
     monthly_budget_cents: 50000,
+    policy_id: '',
     status: 'active'
   })
 }
@@ -116,6 +131,7 @@ function openProjectEdit(project: Project) {
     description: project.description,
     cost_center: project.cost_center,
     monthly_budget_cents: project.monthly_budget_cents,
+    policy_id: project.policy_id || '',
     status: project.status
   })
   modal.value = 'project'
@@ -167,10 +183,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [projectData, appData, departmentData] = await Promise.all([getProjects(), getApplications(), getDepartments()])
+    const [projectData, appData, departmentData, policyData] = await Promise.all([
+      getProjects(),
+      getApplications(),
+      getDepartments(),
+      getGovernancePolicies()
+    ])
     projects.value = projectData
     applications.value = appData
     departments.value = departmentData
+    policies.value = policyData
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -274,6 +296,7 @@ onMounted(load)
               <th>{{ t('projects.name') }}</th>
               <th>{{ t('projects.costCenter') }}</th>
               <th>{{ t('projects.monthlyBudget') }}</th>
+              <th>{{ t('policies.policy') }}</th>
               <th>{{ t('providers.status') }}</th>
               <th>{{ t('projects.applications') }}</th>
               <th>{{ t('common.actions') }}</th>
@@ -298,6 +321,10 @@ onMounted(load)
                   <template v-if="project.monthly_budget_cents"> / {{ formatPercent(project.budget_used_percent || 0) }}</template>
                 </span>
               </td>
+              <td>
+                <strong>{{ project.policy_id ? policyByID.get(project.policy_id)?.name || project.policy_id : t('policies.inherit') }}</strong>
+                <span>{{ project.policy_id ? t('policies.explicitBinding') : t('policies.scopeFallback') }}</span>
+              </td>
               <td><span class="pill" :class="project.status === 'active' ? 'status-success' : 'status-warning'">{{ project.status }}</span></td>
               <td>
                 <div class="chip-list">
@@ -319,7 +346,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="!filteredProjects.length">
-              <td colspan="6" class="empty-cell">{{ loading ? t('common.loading') : t('projects.empty') }}</td>
+              <td colspan="7" class="empty-cell">{{ loading ? t('common.loading') : t('projects.empty') }}</td>
             </tr>
           </tbody>
         </table>
@@ -355,6 +382,13 @@ onMounted(load)
           <div class="field">
             <label>{{ t('projects.monthlyBudget') }}</label>
             <input v-model.number="projectForm.monthly_budget_cents" type="number" min="0" step="100" />
+          </div>
+          <div class="field">
+            <label>{{ t('policies.policy') }}</label>
+            <select v-model="projectForm.policy_id">
+              <option value="">{{ t('policies.inherit') }}</option>
+              <option v-for="policy in activePolicies" :key="policy.id" :value="policy.id">{{ policy.name }}</option>
+            </select>
           </div>
           <div class="field">
             <label>{{ t('providers.status') }}</label>

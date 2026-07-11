@@ -128,50 +128,73 @@ func (s *Service) OfficialCatalogStatus(ctx context.Context) (OfficialCatalogSta
 		return OfficialCatalogStatus{}, err
 	}
 	if !ok {
-		cfg := normalizeOfficialCatalogConfig(s.catalogConfig)
+		cfg, err := s.effectiveCatalogConfig(ctx)
+		if err != nil {
+			cfg = normalizeOfficialCatalogConfig(s.catalogConfig)
+		}
 		return OfficialCatalogStatus{
-			Mode:      cfg.Mode,
-			SourceURL: cfg.URL,
-			Status:    initialCatalogStatus(cfg),
+			Mode:            cfg.Mode,
+			BootstrapURL:    cfg.BootstrapURL,
+			SourceURL:       cfg.URL,
+			LicenseURL:      catalogLicenseURL(cfg),
+			TrustConfigured: catalogTrustConfigured(cfg),
+			Status:          initialCatalogStatus(cfg),
 		}, nil
 	}
-	return record.OfficialStatus(), nil
+	status := record.OfficialStatus()
+	cfg, err := s.effectiveCatalogConfig(ctx)
+	if err != nil {
+		cfg = normalizeOfficialCatalogConfig(s.catalogConfig)
+	}
+	status.BootstrapURL = cfg.BootstrapURL
+	if status.SourceURL == "" {
+		status.SourceURL = cfg.URL
+	}
+	status.LicenseURL = catalogLicenseURL(cfg)
+	status.TrustConfigured = catalogTrustConfigured(cfg)
+	return status, nil
 }
 
 func (s *Service) SyncOfficialCatalog(ctx context.Context) (OfficialCatalogStatus, error) {
-	cfg := normalizeOfficialCatalogConfig(s.catalogConfig)
+	cfg, err := s.effectiveCatalogConfig(ctx)
+	if err != nil {
+		fallback := normalizeOfficialCatalogConfig(s.catalogConfig)
+		status := OfficialCatalogStatus{Mode: fallback.Mode, BootstrapURL: fallback.BootstrapURL, SourceURL: fallback.URL, LicenseURL: catalogLicenseURL(fallback), TrustConfigured: catalogTrustConfigured(fallback), Status: catalogSyncFailed, Error: err.Error(), SyncedAt: s.now().UTC()}
+		_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, "", ""))
+		return status, err
+	}
 	if cfg.Mode == CatalogModeDisabled {
-		status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncDisabled}
+		status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncDisabled}
 		return status, ErrCatalogSyncDisabled
 	}
 	if cfg.Mode != CatalogModeOnline && cfg.Mode != CatalogModePrivateMirror {
 		return s.OfficialCatalogStatus(ctx)
 	}
 	if cfg.URL == "" || cfg.PublicKeyID == "" || cfg.PublicKeyBase64 == "" {
-		status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: ErrCatalogNotConfigured.Error(), SyncedAt: s.now().UTC()}
+		status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: ErrCatalogNotConfigured.Error(), SyncedAt: s.now().UTC()}
 		_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, "", ""))
 		return status, ErrCatalogNotConfigured
 	}
 	envelope, rawPayload, err := s.fetchCatalogEnvelope(ctx, cfg.URL)
 	if err != nil {
-		status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: err.Error(), SyncedAt: s.now().UTC()}
+		status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: err.Error(), SyncedAt: s.now().UTC()}
 		_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, "", ""))
 		return status, err
 	}
 	if err := verifyCatalogEnvelope(envelope, cfg, s.now().UTC()); err != nil {
-		status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
+		status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
 		_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, string(rawPayload), envelope.Signature))
 		return status, err
 	}
 	var index remoteCatalogIndex
 	if err := json.Unmarshal(rawPayload, &index); err != nil {
-		status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: "decode catalog payload: " + err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
+		status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: "decode catalog payload: " + err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
 		_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, string(rawPayload), envelope.Signature))
 		return status, err
 	}
 	if strings.TrimSpace(index.SchemaVersion) != catalogIndexSchema || index.CatalogVersion <= 0 {
 		err := fmt.Errorf("invalid official catalog schema")
-		status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
+		status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
 		_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, string(rawPayload), envelope.Signature))
 		return status, err
 	}
@@ -179,42 +202,45 @@ func (s *Service) SyncOfficialCatalog(ctx context.Context) (OfficialCatalogStatu
 	packages := mapRemoteCatalogPackages(index, s.now().UTC())
 	advisories, err := mapVerifiedRemoteAdvisories(index, cfg, s.now().UTC())
 	if err != nil {
-		status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
+		status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
 		_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, string(rawPayload), envelope.Signature))
 		return status, err
 	}
 	for _, plugin := range plugins {
 		if err := s.saveRemotePlugin(ctx, plugin); err != nil {
-			status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
+			status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
 			_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, string(rawPayload), envelope.Signature))
 			return status, err
 		}
 	}
 	for _, record := range packages {
 		if err := s.repo.SavePackage(ctx, record); err != nil {
-			status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
+			status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
 			_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, string(rawPayload), envelope.Signature))
 			return status, err
 		}
 	}
 	for _, record := range advisories {
 		if err := s.repo.SaveAdvisory(ctx, record); err != nil {
-			status := OfficialCatalogStatus{Mode: cfg.Mode, SourceURL: cfg.URL, Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
+			status := OfficialCatalogStatus{Mode: cfg.Mode, BootstrapURL: cfg.BootstrapURL, SourceURL: cfg.URL, LicenseURL: catalogLicenseURL(cfg), TrustConfigured: catalogTrustConfigured(cfg), Status: catalogSyncFailed, Error: err.Error(), KeyID: envelope.KeyID, SyncedAt: s.now().UTC()}
 			_ = s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, string(rawPayload), envelope.Signature))
 			return status, err
 		}
 	}
 	payloadHash := sha256.Sum256(rawPayload)
 	status := OfficialCatalogStatus{
-		Mode:           cfg.Mode,
-		SourceURL:      cfg.URL,
-		CatalogVersion: index.CatalogVersion,
-		PayloadSHA256:  hex.EncodeToString(payloadHash[:]),
-		KeyID:          envelope.KeyID,
-		PluginCount:    len(plugins),
-		AdvisoryCount:  len(advisories),
-		Status:         catalogSyncSucceeded,
-		SyncedAt:       s.now().UTC(),
+		Mode:            cfg.Mode,
+		BootstrapURL:    cfg.BootstrapURL,
+		SourceURL:       cfg.URL,
+		LicenseURL:      catalogLicenseURL(cfg),
+		TrustConfigured: catalogTrustConfigured(cfg),
+		CatalogVersion:  index.CatalogVersion,
+		PayloadSHA256:   hex.EncodeToString(payloadHash[:]),
+		KeyID:           envelope.KeyID,
+		PluginCount:     len(plugins),
+		AdvisoryCount:   len(advisories),
+		Status:          catalogSyncSucceeded,
+		SyncedAt:        s.now().UTC(),
 	}
 	if err := s.repo.SaveCatalogSnapshot(ctx, snapshotFromStatus(status, string(rawPayload), envelope.Signature)); err != nil {
 		return OfficialCatalogStatus{}, err
@@ -407,7 +433,9 @@ func normalizeOfficialCatalogConfig(cfg OfficialCatalogConfig) OfficialCatalogCo
 	default:
 		cfg.Mode = CatalogModeDisabled
 	}
+	cfg.BootstrapURL = normalizeBootstrapURL(cfg.BootstrapURL)
 	cfg.URL = strings.TrimSpace(cfg.URL)
+	cfg.LicenseURL = strings.TrimSpace(cfg.LicenseURL)
 	cfg.PublicKeyID = strings.TrimSpace(cfg.PublicKeyID)
 	cfg.PublicKeyBase64 = strings.TrimSpace(cfg.PublicKeyBase64)
 	return cfg
@@ -436,6 +464,17 @@ func snapshotFromStatus(status OfficialCatalogStatus, payloadJSON string, signat
 		PayloadJSON:    payloadJSON,
 		SyncedAt:       status.SyncedAt,
 	}
+}
+
+func catalogLicenseURL(cfg OfficialCatalogConfig) string {
+	if strings.TrimSpace(cfg.LicenseURL) != "" {
+		return strings.TrimSpace(cfg.LicenseURL)
+	}
+	return deriveLicenseURL(cfg.URL)
+}
+
+func catalogTrustConfigured(cfg OfficialCatalogConfig) bool {
+	return strings.TrimSpace(cfg.PublicKeyID) != "" && strings.TrimSpace(cfg.PublicKeyBase64) != ""
 }
 
 func (r catalogSnapshotRecord) OfficialStatus() OfficialCatalogStatus {

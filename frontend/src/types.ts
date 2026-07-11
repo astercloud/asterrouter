@@ -89,6 +89,7 @@ export interface Project {
   description: string
   cost_center: string
   monthly_budget_cents: number
+  policy_id: string
   current_month_cost_cents: number
   budget_remaining_cents: number
   budget_used_percent: number
@@ -103,6 +104,7 @@ export interface ProjectRequest {
   description: string
   cost_center: string
   monthly_budget_cents: number
+  policy_id: string
   status: string
 }
 
@@ -124,6 +126,47 @@ export interface DepartmentRequest {
   parent_id: string
   cost_center: string
   monthly_budget_cents: number
+  status: string
+}
+
+export interface GovernancePolicy {
+  id: string
+  name: string
+  description: string
+  scope_type: string
+  scope_id: string
+  model_allowlist: string[]
+  model_denylist: string[]
+  qps_limit: number
+  monthly_token_limit: number
+  monthly_budget_cents: number
+  overage_action: string
+  prompt_logging_mode: string
+  retention_days: number
+  tool_call_allowed: boolean
+  image_input_allowed: boolean
+  web_access_allowed: boolean
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GovernancePolicyRequest {
+  name: string
+  description: string
+  scope_type: string
+  scope_id: string
+  model_allowlist: string[]
+  model_denylist: string[]
+  qps_limit: number
+  monthly_token_limit: number
+  monthly_budget_cents: number
+  overage_action: string
+  prompt_logging_mode: string
+  retention_days: number
+  tool_call_allowed: boolean
+  image_input_allowed: boolean
+  web_access_allowed: boolean
   status: string
 }
 
@@ -280,6 +323,7 @@ export interface APIKeyRecord {
   fingerprint: string
   prefix: string
   status: string
+  policy_id: string
   model_allowlist: string[]
   qps_limit: number
   monthly_token_limit: number
@@ -293,6 +337,7 @@ export interface APIKeyCreateRequest {
   project_id: string
   application_id: string
   name: string
+  policy_id: string
   model_allowlist: string[]
   qps_limit: number
   monthly_token_limit: number
@@ -301,6 +346,7 @@ export interface APIKeyCreateRequest {
 
 export interface APIKeyUpdateRequest {
   name: string
+  policy_id: string
   model_allowlist: string[]
   qps_limit: number
   monthly_token_limit: number
@@ -367,8 +413,13 @@ export interface PortalWorkspace {
   projects: Project[]
   applications: Application[]
   api_keys: APIKeyRecord[]
+  usage: UsageReport
+  recent_traces: GatewayTrace[]
+  alerts: AlertEvent[]
   models: string[]
   gateway_path: string
+  can_manage_keys: boolean
+  principal: string
 }
 
 export interface SystemUpdateAsset {
@@ -560,7 +611,10 @@ export interface PluginDeliveryAttempt {
 
 export interface OfficialCatalogStatus {
   mode: string
+  bootstrap_url?: string
   source_url: string
+  license_url?: string
+  trust_configured: boolean
   catalog_version: number
   payload_sha256: string
   key_id: string
@@ -695,6 +749,10 @@ export interface GatewayTrace {
   provider_account_id: string
   route_source: string
   route_reason: string
+  policy_id: string
+  policy_name: string
+  policy_source: string
+  policy_snapshot: string
   status: string
   http_status: number
   error_type: string

@@ -33,6 +33,10 @@ const filteredTraces = computed(() => {
       trace.provider_account_id,
       trace.route_source,
       trace.route_reason,
+      trace.policy_id,
+      trace.policy_name,
+      trace.policy_source,
+      trace.policy_snapshot,
       trace.api_fingerprint,
       trace.project_id,
       trace.application_id,
@@ -118,6 +122,10 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat().format(value)
 }
 
+function formatPolicySource(source: string): string {
+  return source ? source.replace(/_/g, ' ') : '-'
+}
+
 onMounted(load)
 </script>
 
@@ -181,6 +189,7 @@ onMounted(load)
               <th>{{ t('audit.time') }}</th>
               <th>{{ t('usage.model') }}</th>
               <th>{{ t('usage.route') }}</th>
+              <th>{{ t('traces.policy') }}</th>
               <th>{{ t('providers.status') }}</th>
               <th>{{ t('traces.http') }}</th>
               <th>{{ t('usage.tokens') }}</th>
@@ -200,6 +209,10 @@ onMounted(load)
                 <span>{{ trace.provider_account_id || trace.route_source || '-' }}</span>
               </td>
               <td>
+                <strong>{{ trace.policy_name || trace.policy_id || '-' }}</strong>
+                <span>{{ formatPolicySource(trace.policy_source) }}</span>
+              </td>
+              <td>
                 <span class="pill" :class="statusClass(trace.status)">{{ trace.status }}</span>
                 <span>{{ trace.error_type || '-' }}</span>
               </td>
@@ -212,7 +225,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="!filteredTraces.length">
-              <td colspan="8" class="empty-cell">{{ loading ? t('common.loading') : t('traces.empty') }}</td>
+              <td colspan="9" class="empty-cell">{{ loading ? t('common.loading') : t('traces.empty') }}</td>
             </tr>
           </tbody>
         </table>

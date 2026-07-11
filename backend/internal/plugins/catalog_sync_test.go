@@ -165,6 +165,200 @@ func TestServiceDownloadOfficialPackageVerifiesAndCaches(t *testing.T) {
 	}
 }
 
+func TestServiceBootstrapOnlySyncDownloadAndActivateLicense(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey(): %v", err)
+	}
+	now := time.Date(2026, 7, 11, 6, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(24 * time.Hour)
+	content := []byte("bootstrap provider package")
+	checksumBytes := sha256.Sum256(content)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	packageID := "pkg_bootstrap_provider_darwin_arm64"
+	packageSignature := signedPackageEnvelope(t, privateKey, "catalog-key-v1", packageSignaturePayload{
+		SchemaVersion: packagePayloadSchema,
+		Plugin:        "provider-intelligence",
+		Version:       "1.2.3",
+		OS:            "darwin",
+		Arch:          "arm64",
+		SHA256:        checksum,
+		SizeBytes:     int64(len(content)),
+		URI:           "object://provider-intelligence/1.2.3/darwin-arm64.pkg",
+	}, now)
+	catalogEnvelope := signedCatalogEnvelope(t, privateKey, "catalog-key-v1", remoteCatalogIndex{
+		SchemaVersion:  catalogIndexSchema,
+		CatalogVersion: 13,
+		GeneratedAt:    now,
+		Plugins: []remoteCatalogPlugin{
+			{
+				PublicID:   "plg_provider",
+				Slug:       "provider-intelligence",
+				Name:       "Provider Intelligence",
+				Summary:    "Signed provider intelligence plugin.",
+				Category:   "official",
+				VendorName: "AsterCloud",
+				Tier:       "free",
+				Versions: []remoteCatalogVersion{
+					{
+						PublicID:            "plgv_provider",
+						Version:             "1.2.3",
+						Channel:             "stable",
+						Status:              "published",
+						MinCoreVersion:      "1.0.0",
+						RequiredEntitlement: false,
+						Compatibility: []remoteCompatibility{
+							{CoreVersionRange: ">=1.0.0 <2.0.0", OS: "darwin", Arch: "arm64", Result: "compatible"},
+						},
+						Packages: []remoteCatalogPackage{
+							{
+								PublicID:  packageID,
+								OS:        "darwin",
+								Arch:      "arm64",
+								SHA256:    checksum,
+								SizeBytes: int64(len(content)),
+								Signature: packageSignature,
+							},
+						},
+					},
+				},
+			},
+		},
+	}, now)
+	licenseEnvelope := signedLicenseEnvelope(t, privateKey, "catalog-key-v1", licenseSnapshotPayload{
+		SchemaVersion:   licenseSnapshotSchema,
+		SnapshotID:      "lss_bootstrap",
+		SnapshotVersion: 1,
+		License: snapshotLicense{
+			PublicID:  "lic_bootstrap",
+			Edition:   "enterprise",
+			Status:    LicenseStatusActive,
+			Seats:     5,
+			StartsAt:  now.Add(-time.Hour),
+			ExpiresAt: &expiresAt,
+		},
+		Customer: snapshotCustomer{PublicID: "cus_bootstrap"},
+		SKU:      snapshotSKU{PublicID: "sku_bootstrap", Code: "ASTER-ENT", Features: json.RawMessage(`{}`), Limits: json.RawMessage(`{}`)},
+		Instance: snapshotInstance{
+			PublicID:         "inst_bootstrap",
+			Fingerprint:      "sha256:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+			DisplayName:      "router-bootstrap",
+			FirstActivatedAt: now,
+		},
+		Entitlements: []Entitlement{
+			{PublicID: "ent_bootstrap", Type: "plugin", ResourceKey: "provider-intelligence", Status: LicenseStatusActive, StartsAt: now.Add(-time.Hour), ExpiresAt: &expiresAt},
+		},
+		IssuedAt:  now,
+		ExpiresAt: expiresAt,
+	}, now, expiresAt)
+
+	var serverURL string
+	licenseActivationHit := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/official/v1/catalog/bootstrap":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": catalogBootstrap{
+					SchemaVersion: catalogBootstrapSchema,
+					CatalogURL:    serverURL + "/official/v1/catalog/index",
+					LicenseURL:    serverURL + "/custom/licenses/activate",
+					SigningKeys: []catalogBootstrapKey{
+						{
+							KeyID:     "catalog-key-v1",
+							Purpose:   "*",
+							Algorithm: "Ed25519",
+							Status:    "active",
+							PublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
+							Encoding:  "base64url",
+							NotBefore: now.Add(-time.Hour),
+						},
+					},
+					GeneratedAt: now,
+				},
+			})
+		case "/official/v1/catalog/index":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(wrappedCatalogEnvelope(t, catalogEnvelope))
+		case "/official/v1/packages/" + packageID + "/download":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": packageDownloadGrant{
+					ID:              "dgr_bootstrap",
+					PublicID:        "dgr_bootstrap_public",
+					PackageID:       "internal-package-id",
+					PackagePublicID: packageID,
+					DownloadURL:     serverURL + "/objects/provider.pkg",
+					Headers:         map[string]string{"X-Test-Download": "bootstrap"},
+					SHA256:          checksum,
+					Signature:       packageSignature,
+					ExpiresAt:       now.Add(10 * time.Minute),
+					CreatedAt:       now,
+				},
+			})
+		case "/objects/provider.pkg":
+			if r.Header.Get("X-Test-Download") != "bootstrap" {
+				t.Fatalf("download grant headers were not forwarded")
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(content)
+		case "/custom/licenses/activate":
+			licenseActivationHit = true
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": activationResponse{Envelope: licenseEnvelope},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	serverURL = server.URL
+
+	svc := NewServiceWithOptions(NewMemoryRepository(), ServiceOptions{
+		SecretKey: "test-secret",
+		OfficialCatalog: OfficialCatalogConfig{
+			Mode:         CatalogModeOnline,
+			BootstrapURL: server.URL + "/official/v1/catalog/bootstrap",
+		},
+		PackageCacheDir: t.TempDir(),
+		CoreVersion:     "1.2.0",
+		TargetOS:        "darwin",
+		TargetArch:      "arm64",
+		Now:             func() time.Time { return now },
+	})
+
+	status, err := svc.SyncOfficialCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("SyncOfficialCatalog(): %v", err)
+	}
+	if status.Status != catalogSyncSucceeded || status.SourceURL != server.URL+"/official/v1/catalog/index" || !status.TrustConfigured || status.LicenseURL != server.URL+"/custom/licenses/activate" {
+		t.Fatalf("unexpected bootstrap status: %+v", status)
+	}
+	result, err := svc.DownloadPackage(context.Background(), "com.astercloud.catalog.provider-intelligence", packageID, PackageDownloadRequest{})
+	if err != nil {
+		t.Fatalf("DownloadPackage(): %v", err)
+	}
+	cached, err := os.ReadFile(result.CachePath)
+	if err != nil {
+		t.Fatalf("ReadFile(cache): %v", err)
+	}
+	if string(cached) != string(content) {
+		t.Fatalf("cached content = %q, want %q", cached, content)
+	}
+	licenseStatus, err := svc.ActivateLicense(context.Background(), LicenseActivateRequest{
+		LicenseID:        "lic_bootstrap",
+		ActivationSecret: "activation-secret",
+		InstanceID:       "inst_bootstrap",
+	})
+	if err != nil {
+		t.Fatalf("ActivateLicense(): %v", err)
+	}
+	if !licenseActivationHit || licenseStatus.LicenseID != "lic_bootstrap" || licenseStatus.Status != LicenseStatusActive {
+		t.Fatalf("license activation mismatch: hit=%v status=%+v", licenseActivationHit, licenseStatus)
+	}
+}
+
 func TestServiceInstallPackageRequiresCachedPackage(t *testing.T) {
 	svc, _, packageID, _ := newPackageDownloadTestService(t, []byte("signed plugin package"), false)
 
