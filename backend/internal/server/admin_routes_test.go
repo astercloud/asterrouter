@@ -815,6 +815,71 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 	}
 }
 
+func TestAdminProviderAccountClearCooldownEndpoint(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{})
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name:    "Cooldown provider",
+		Type:    "openai_compatible",
+		BaseURL: "https://provider.example/v1",
+		Status:  "active",
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+	schedulable := true
+	account, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+		ProviderID:     provider.ID,
+		Name:           "Cooldown account",
+		Platform:       "openai_compatible",
+		AuthType:       "api_key",
+		Status:         controlplane.AccountStatusActive,
+		Schedulable:    &schedulable,
+		Priority:       10,
+		Concurrency:    3,
+		RateMultiplier: 1,
+		Models:         []string{"gpt-4o-mini"},
+		Secret:         "account-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount(): %v", err)
+	}
+	if err := control.RecordProviderAccountFailure(context.Background(), account.ID, http.StatusInternalServerError, "upstream broke"); err != nil {
+		t.Fatalf("RecordProviderAccountFailure(): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-accounts/"+account.ID+"/clear-cooldown", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data controlplane.ProviderAccount `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Data.CooldownUntil != nil {
+		t.Fatalf("expected cooldown cleared: %+v", resp.Data)
+	}
+
+	audit, err := control.ListAuditLogs(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListAuditLogs(): %v", err)
+	}
+	var found bool
+	for _, event := range audit {
+		if event.ResourceType == "provider_account" && event.Action == "clear_cooldown" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("clear_cooldown audit event not found: %+v", audit)
+	}
+}
+
 func TestAdminSystemCheckUpdatesEndpoint(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 

@@ -22,8 +22,11 @@ import AdminSettingsView from '@/views/admin/AdminSettingsView.vue'
 import AdminUsageView from '@/views/admin/AdminUsageView.vue'
 import AdminUsersView from '@/views/admin/AdminUsersView.vue'
 import ConsoleHomeView from '@/views/console/ConsoleHomeView.vue'
+import ConsoleShell from '@/views/console/ConsoleShell.vue'
 import OperatorHomeView from '@/views/operator/OperatorHomeView.vue'
+import OperatorShell from '@/views/operator/OperatorShell.vue'
 import PortalHomeView from '@/views/portal/PortalHomeView.vue'
+import PortalShell from '@/views/portal/PortalShell.vue'
 import type { PublicSettings } from '@/types'
 
 let publicSettingsCache: PublicSettings | null = null
@@ -48,8 +51,8 @@ async function loadPublicSettings(): Promise<PublicSettings | null> {
 }
 
 function profileRoute(profile: string): string {
-  if (profile === 'personal') return '/console'
-  if (profile === 'relay_operator') return '/operator'
+  if (profile === 'personal') return '/console/overview'
+  if (profile === 'relay_operator') return '/operator/overview'
   return '/admin/dashboard'
 }
 
@@ -66,7 +69,6 @@ function surfaceAllowed(path: string, settings: PublicSettings | null): boolean 
   if (path.startsWith('/console')) return settings.enabled_profiles.includes('personal')
   if (path.startsWith('/operator')) return settings.enabled_profiles.includes('relay_operator')
   if (path.startsWith('/portal')) return settings.enabled_profiles.includes('enterprise')
-  if (path.startsWith('/admin/settings')) return true
   if (path.startsWith('/admin')) return settings.enabled_profiles.includes('enterprise')
   return true
 }
@@ -77,8 +79,32 @@ const router = createRouter({
     { path: '/', component: EntryRedirectView },
     { path: '/login', component: LoginView, meta: { titleKey: 'auth.signIn', descriptionKey: 'auth.signInToAccount' } },
     { path: '/setup', component: SetupView, meta: { titleKey: 'setup.title', descriptionKey: 'setup.subtitle' } },
-    { path: '/console', component: ConsoleHomeView, meta: { titleKey: 'console.title', descriptionKey: 'console.subtitle' } },
-    { path: '/operator', component: OperatorHomeView, meta: { titleKey: 'operator.title', descriptionKey: 'operator.subtitle' } },
+    {
+      path: '/console',
+      component: ConsoleShell,
+      children: [
+        { path: '', redirect: '/console/overview' },
+        { path: 'overview', component: ConsoleHomeView, meta: { titleKey: 'console.overview', descriptionKey: 'console.subtitle', consolePanel: 'overview' } },
+        { path: 'keys', component: ConsoleHomeView, meta: { titleKey: 'console.keys', descriptionKey: 'console.keySummary', consolePanel: 'keys' } },
+        { path: 'usage', component: ConsoleHomeView, meta: { titleKey: 'console.usage', descriptionKey: 'console.usageHelp', consolePanel: 'usage' } },
+        { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
+        { path: ':pathMatch(.*)*', redirect: '/console/overview' }
+      ]
+    },
+    {
+      path: '/operator',
+      component: OperatorShell,
+      children: [
+        { path: '', redirect: '/operator/overview' },
+        { path: 'overview', component: OperatorHomeView, meta: { titleKey: 'operator.overview', descriptionKey: 'operator.subtitle', operatorPanel: 'overview' } },
+        { path: 'routing-groups', component: OperatorHomeView, meta: { titleKey: 'operator.groupList', descriptionKey: 'operator.groupSummary', operatorPanel: 'routing-groups' } },
+        { path: 'resources', component: OperatorHomeView, meta: { titleKey: 'operator.resourceList', descriptionKey: 'operator.resourceSummary', operatorPanel: 'resources' } },
+        { path: 'keys', component: OperatorHomeView, meta: { titleKey: 'operator.keyList', descriptionKey: 'operator.keySummary', operatorPanel: 'keys' } },
+        { path: 'usage', component: OperatorHomeView, meta: { titleKey: 'operator.traffic', descriptionKey: 'operator.trafficHelp', operatorPanel: 'usage' } },
+        { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
+        { path: ':pathMatch(.*)*', redirect: '/operator/overview' }
+      ]
+    },
     {
       path: '/admin',
       component: AdminShell,
@@ -104,7 +130,20 @@ const router = createRouter({
         { path: ':pathMatch(.*)*', redirect: '/admin/dashboard' }
       ]
     },
-    { path: '/portal', component: PortalHomeView, meta: { titleKey: 'portal.title', descriptionKey: 'portal.subtitle' } },
+    {
+      path: '/portal',
+      component: PortalShell,
+      children: [
+        { path: '', redirect: '/portal/overview' },
+        { path: 'overview', component: PortalHomeView, meta: { titleKey: 'portal.overview', descriptionKey: 'portal.subtitle', portalPanel: 'overview' } },
+        { path: 'integration', component: PortalHomeView, meta: { titleKey: 'portal.integrationGuide', descriptionKey: 'portal.gatewayHelp', portalPanel: 'integration' } },
+        { path: 'keys', component: PortalHomeView, meta: { titleKey: 'portal.myKeys', descriptionKey: 'portal.keySummary', portalPanel: 'keys' } },
+        { path: 'usage', component: PortalHomeView, meta: { titleKey: 'portal.usage', descriptionKey: 'portal.usageHelp', portalPanel: 'usage' } },
+        { path: 'alerts', component: PortalHomeView, meta: { titleKey: 'portal.alerts', descriptionKey: 'portal.alertsHelp', portalPanel: 'alerts' } },
+        { path: 'traces', component: PortalHomeView, meta: { titleKey: 'portal.recentTraces', descriptionKey: 'portal.traceHelp', portalPanel: 'traces' } },
+        { path: ':pathMatch(.*)*', redirect: '/portal/overview' }
+      ]
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' }
   ]
 })
@@ -119,7 +158,13 @@ router.beforeEach(async (to) => {
   if (to.path === '/login' && token) {
     return entry
   }
-  if (to.path === '/login' || to.path === '/setup') {
+  if (to.path === '/setup') {
+    if (settings?.setup_completed) {
+      return entry
+    }
+    return true
+  }
+  if (to.path === '/login') {
     return true
   }
   if (!settings?.setup_completed) {

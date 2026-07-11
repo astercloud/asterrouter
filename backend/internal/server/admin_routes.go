@@ -255,6 +255,14 @@ func registerRoutingAdminRoutes(admin *gin.RouterGroup, control *controlplane.Se
 		}
 		httpx.OK(c, data)
 	})
+	admin.POST("/provider-accounts/:id/clear-cooldown", func(c *gin.Context) {
+		data, err := control.ClearProviderAccountCooldown(c.Request.Context(), actor(c), c.Param("id"))
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1514, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
 }
 
 func registerAPIKeyAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {

@@ -48,6 +48,8 @@ type Service struct {
 	alertDispatcher AlertDispatcher
 	rateMu          sync.Mutex
 	rateWindows     map[string][]time.Time
+	slotMu          sync.Mutex
+	accountSlots    map[string]int
 }
 
 type AlertDispatcher interface {
@@ -62,7 +64,46 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 	if len(secretKey) > 0 && strings.TrimSpace(secretKey[0]) != "" {
 		key = strings.TrimSpace(secretKey[0])
 	}
-	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, rateWindows: map[string][]time.Time{}}
+	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, rateWindows: map[string][]time.Time{}, accountSlots: map[string]int{}}
+}
+
+// TryAcquireProviderAccountSlot attempts to reserve one in-process concurrency
+// slot for accountID. limit<=0 means unlimited. The caller must invoke the
+// returned release function exactly once when the slot is no longer needed
+// (successful or failed forward, stream completion, or early abort), even on
+// error paths. This tracker is process-local by design: it mirrors the
+// existing single-instance in-memory QPS limiter and does not depend on
+// Redis-compatible cache, which has not yet entered the core path.
+func (s *Service) TryAcquireProviderAccountSlot(accountID string, limit int) (release func(), ok bool) {
+	if limit <= 0 {
+		return func() {}, true
+	}
+	s.slotMu.Lock()
+	defer s.slotMu.Unlock()
+	if s.accountSlots[accountID] >= limit {
+		return func() {}, false
+	}
+	s.accountSlots[accountID]++
+	released := false
+	return func() {
+		s.slotMu.Lock()
+		defer s.slotMu.Unlock()
+		if released {
+			return
+		}
+		released = true
+		if s.accountSlots[accountID] > 0 {
+			s.accountSlots[accountID]--
+		}
+	}, true
+}
+
+// providerAccountSlotUsage returns the current in-process concurrency usage
+// for accountID, used to compute the load ratio during candidate ranking.
+func (s *Service) providerAccountSlotUsage(accountID string) int {
+	s.slotMu.Lock()
+	defer s.slotMu.Unlock()
+	return s.accountSlots[accountID]
 }
 
 func (s *Service) SetAlertDispatcher(dispatcher AlertDispatcher) {
@@ -618,6 +659,8 @@ func (s *Service) UpdateProviderAccount(ctx context.Context, actor string, id st
 	account.SecretCiphertext = existing.SecretCiphertext
 	account.ErrorMessage = existing.ErrorMessage
 	account.LastUsedAt = existing.LastUsedAt
+	account.CooldownUntil = existing.CooldownUntil
+	account.TempUnschedulableReason = existing.TempUnschedulableReason
 	if strings.TrimSpace(req.Secret) != "" {
 		ciphertext, err := encryptSecret(s.secretKey, req.Secret)
 		if err != nil {
@@ -1145,6 +1188,7 @@ type GatewayTraceInput struct {
 	OutputTokens      int
 	RequestSummary    string
 	ResponseSummary   string
+	RouteAttempts     string
 }
 
 func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContext, in GatewayUsageInput) error {
@@ -1219,6 +1263,7 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 		OutputTokens:      nonNegative(in.OutputTokens),
 		RequestSummary:    strings.TrimSpace(in.RequestSummary),
 		ResponseSummary:   strings.TrimSpace(in.ResponseSummary),
+		RouteAttempts:     strings.TrimSpace(in.RouteAttempts),
 		CreatedAt:         time.Now().UTC(),
 	})
 }
@@ -1412,39 +1457,113 @@ func (s *Service) GatewayModels(ctx context.Context) ([]string, error) {
 	return models, nil
 }
 
+// providerAccountFailureCooldown is the default cooldown applied to an
+// account after a request-level fallback triggers because that account
+// failed to serve a request. It exists to avoid immediately re-selecting a
+// just-failed account within the same burst of requests. Rule-based temporary
+// unschedulability (error code + keyword matching) can override this with a
+// longer, more specific duration.
+const providerAccountFailureCooldown = 30 * time.Second
+
 func (s *Service) GatewayProviderForModel(ctx context.Context, model string) (GatewayProvider, bool, error) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return GatewayProvider{}, false, nil
-	}
-	accountRoute, hasAccountPool, ok, err := s.gatewayProviderAccountForModel(ctx, model)
+	candidates, hasAccountPool, err := s.GatewayProviderCandidatesForModel(ctx, model)
 	if err != nil {
 		return GatewayProvider{}, false, err
 	}
-	if ok {
-		return accountRoute, true, nil
+	if len(candidates) == 0 {
+		if hasAccountPool {
+			return GatewayProvider{}, false, ErrGatewayRouteUnavailable
+		}
+		return GatewayProvider{}, false, nil
 	}
-	if hasAccountPool {
-		return GatewayProvider{}, false, ErrGatewayRouteUnavailable
+	selected := candidates[0]
+	if selected.AccountID != "" {
+		_ = s.TouchProviderAccountUsage(ctx, selected.AccountID)
 	}
-	return s.gatewayProviderConnectionForModel(ctx, model)
+	return selected, true, nil
 }
 
-func (s *Service) gatewayProviderAccountForModel(ctx context.Context, model string) (GatewayProvider, bool, bool, error) {
+// GatewayProviderCandidatesForModel returns the ordered list of routes that
+// the gateway should try for model, most preferred first. When a schedulable
+// provider account pool exists for the model, hasAccountPool is true and the
+// candidates are drawn exclusively from that pool (falling back to a direct
+// provider connection is intentionally not mixed in, matching the existing
+// "account pool takes over routing for this model" behavior). Callers are
+// expected to attempt each candidate in order until one succeeds, acquiring a
+// concurrency slot (via TryAcquireProviderAccountSlot) before forwarding and
+// calling RecordProviderAccountFailure on account-side failures so that the
+// next attempt (in this request or a later one) skips a just-failed account.
+func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model string) ([]GatewayProvider, bool, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil, false, nil
+	}
+	candidates, hasAccountPool, err := s.rankedProviderAccountCandidates(ctx, model)
+	if err != nil {
+		return nil, false, err
+	}
+	if hasAccountPool {
+		if len(candidates) == 0 {
+			return nil, true, nil
+		}
+		routes := make([]GatewayProvider, 0, len(candidates))
+		for _, entry := range candidates {
+			secret, err := decryptSecret(s.secretKey, entry.account.SecretCiphertext)
+			if err != nil {
+				return nil, true, err
+			}
+			routes = append(routes, GatewayProvider{
+				ID:              entry.provider.ID,
+				Name:            entry.provider.Name,
+				BaseURL:         entry.provider.BaseURL,
+				APIKey:          secret,
+				AccountID:       entry.account.ID,
+				AccountName:     entry.account.Name,
+				Concurrency:     entry.account.Concurrency,
+				Source:          "provider_account",
+				SelectionReason: fmt.Sprintf("selected account %s by priority=%d load_ratio=%.4g rate_multiplier=%.4g", entry.account.ID, entry.account.Priority, entry.loadRatio, entry.account.RateMultiplier),
+			})
+		}
+		return routes, true, nil
+	}
+	route, ok, err := s.gatewayProviderConnectionForModel(ctx, model)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	return []GatewayProvider{route}, false, nil
+}
+
+type rankedProviderAccountCandidate struct {
+	account   ProviderAccount
+	provider  ProviderConnection
+	loadRatio float64
+}
+
+// rankedProviderAccountCandidates returns the schedulable provider accounts
+// for model, ordered by priority ascending, then current load ratio
+// ascending (in-process concurrency usage / EffectiveLoadFactor), then
+// billing rate multiplier ascending, then name. hasAccountPool reports
+// whether any provider account exists at all (independent of eligibility),
+// which callers use to decide whether falling back to a direct provider
+// connection is allowed.
+func (s *Service) rankedProviderAccountCandidates(ctx context.Context, model string) ([]rankedProviderAccountCandidate, bool, error) {
 	accounts, err := s.repo.ListProviderAccounts(ctx)
 	if err != nil {
-		return GatewayProvider{}, false, false, err
+		return nil, false, err
 	}
 	if len(accounts) == 0 {
-		return GatewayProvider{}, false, false, nil
+		return nil, false, nil
 	}
 	providers, err := s.repo.ListProviders(ctx)
 	if err != nil {
-		return GatewayProvider{}, true, false, err
+		return nil, true, err
 	}
 	providersByID := providerByIDMap(providers)
 	now := time.Now().UTC()
-	candidates := make([]ProviderAccount, 0, len(accounts))
+	candidates := make([]rankedProviderAccountCandidate, 0, len(accounts))
 	for _, account := range accounts {
 		if !accountEligibleForRouting(account, model, now) {
 			continue
@@ -1453,43 +1572,112 @@ func (s *Service) gatewayProviderAccountForModel(ctx context.Context, model stri
 		if !ok || provider.Status == ProviderStatusDisabled || !validHTTPURL(provider.BaseURL) {
 			continue
 		}
-		candidates = append(candidates, account)
-	}
-	if len(candidates) == 0 {
-		return GatewayProvider{}, true, false, nil
+		usage := s.providerAccountSlotUsage(account.ID)
+		loadRatio := float64(usage) / float64(account.EffectiveLoadFactor())
+		candidates = append(candidates, rankedProviderAccountCandidate{account: account, provider: provider, loadRatio: loadRatio})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left := candidates[i]
 		right := candidates[j]
-		if left.Priority != right.Priority {
-			return left.Priority < right.Priority
+		if left.account.Priority != right.account.Priority {
+			return left.account.Priority < right.account.Priority
 		}
-		if left.RateMultiplier != right.RateMultiplier {
-			return left.RateMultiplier < right.RateMultiplier
+		if left.loadRatio != right.loadRatio {
+			return left.loadRatio < right.loadRatio
 		}
-		return left.Name < right.Name
+		if left.account.RateMultiplier != right.account.RateMultiplier {
+			return left.account.RateMultiplier < right.account.RateMultiplier
+		}
+		return left.account.Name < right.account.Name
 	})
-	selected := candidates[0]
-	provider := providersByID[selected.ProviderID]
-	secret, err := decryptSecret(s.secretKey, selected.SecretCiphertext)
+	return candidates, true, nil
+}
+
+// TouchProviderAccountUsage records that accountID was just selected to serve
+// a request, updating LastUsedAt for observability.
+func (s *Service) TouchProviderAccountUsage(ctx context.Context, accountID string) error {
+	account, err := s.providerAccountByID(ctx, accountID)
 	if err != nil {
-		return GatewayProvider{}, true, false, err
+		return err
 	}
-	selected.LastUsedAt = &now
-	selected.UpdatedAt = now
-	if err := s.repo.SaveProviderAccount(ctx, selected); err != nil {
-		return GatewayProvider{}, true, false, err
+	now := time.Now().UTC()
+	account.LastUsedAt = &now
+	account.UpdatedAt = now
+	return s.repo.SaveProviderAccount(ctx, account)
+}
+
+// RecordProviderAccountFailure applies a cooldown to accountID after a
+// request-level fallback determined the account failed to serve a request
+// (transport error, or an upstream status that indicates an account-side
+// problem such as 401/403/429/5xx). httpStatus is 0 for transport-level
+// failures (no upstream response was received). If any of the account's
+// admin-configured temp-unschedulable rules match httpStatus and a keyword
+// in responseBodyPreview, that rule's duration is used and the match is
+// recorded in TempUnschedulableReason; otherwise a fixed short default
+// cooldown is applied and any previous reason is cleared, since a bare
+// transport hiccup is not the same as a diagnosed rule match.
+func (s *Service) RecordProviderAccountFailure(ctx context.Context, accountID string, httpStatus int, responseBodyPreview string) error {
+	account, err := s.providerAccountByID(ctx, accountID)
+	if err != nil {
+		return err
 	}
-	return GatewayProvider{
-		ID:              provider.ID,
-		Name:            provider.Name,
-		BaseURL:         provider.BaseURL,
-		APIKey:          secret,
-		AccountID:       selected.ID,
-		AccountName:     selected.Name,
-		Source:          "provider_account",
-		SelectionReason: fmt.Sprintf("selected account %s by priority=%d rate_multiplier=%.4g", selected.ID, selected.Priority, selected.RateMultiplier),
-	}, true, true, nil
+	now := time.Now().UTC()
+	if rule, keyword, ok := matchTempUnschedulableRule(account.TempUnschedulableRules, httpStatus, responseBodyPreview); ok {
+		cooldownUntil := now.Add(time.Duration(rule.DurationMinutes) * time.Minute)
+		account.CooldownUntil = &cooldownUntil
+		account.TempUnschedulableReason = fmt.Sprintf("matched rule status_code=%d keyword=%q duration_minutes=%d", rule.StatusCode, keyword, rule.DurationMinutes)
+	} else {
+		cooldownUntil := now.Add(providerAccountFailureCooldown)
+		account.CooldownUntil = &cooldownUntil
+		account.TempUnschedulableReason = ""
+	}
+	account.UpdatedAt = now
+	return s.repo.SaveProviderAccount(ctx, account)
+}
+
+// matchTempUnschedulableRule returns the first configured rule whose
+// status code equals httpStatus and whose keyword list contains a
+// case-insensitive substring match in responseBodyPreview, along with the
+// matched keyword.
+func matchTempUnschedulableRule(rules []ProviderAccountTempUnschedulableRule, httpStatus int, responseBodyPreview string) (ProviderAccountTempUnschedulableRule, string, bool) {
+	if httpStatus == 0 || len(rules) == 0 {
+		return ProviderAccountTempUnschedulableRule{}, "", false
+	}
+	body := strings.ToLower(responseBodyPreview)
+	for _, rule := range rules {
+		if rule.StatusCode != httpStatus {
+			continue
+		}
+		for _, keyword := range rule.Keywords {
+			if keyword == "" {
+				continue
+			}
+			if strings.Contains(body, strings.ToLower(keyword)) {
+				return rule, keyword, true
+			}
+		}
+	}
+	return ProviderAccountTempUnschedulableRule{}, "", false
+}
+
+// ClearProviderAccountCooldown removes any active cooldown (default or
+// rule-matched) from accountID, making it immediately eligible for
+// scheduling again subject to its other eligibility checks.
+func (s *Service) ClearProviderAccountCooldown(ctx context.Context, actor string, accountID string) (ProviderAccount, error) {
+	account, err := s.providerAccountByID(ctx, accountID)
+	if err != nil {
+		return ProviderAccount{}, err
+	}
+	account.CooldownUntil = nil
+	account.TempUnschedulableReason = ""
+	account.UpdatedAt = time.Now().UTC()
+	if err := s.repo.SaveProviderAccount(ctx, account); err != nil {
+		return ProviderAccount{}, err
+	}
+	if err := s.audit(ctx, actor, "clear_cooldown", "provider_account", account.ID, fmt.Sprintf("Cleared cooldown for provider account %s", account.Name)); err != nil {
+		return ProviderAccount{}, err
+	}
+	return account, nil
 }
 
 func (s *Service) gatewayProviderConnectionForModel(ctx context.Context, model string) (GatewayProvider, bool, error) {
@@ -1689,6 +1877,9 @@ func accountEligibleForRouting(account ProviderAccount, model string, now time.T
 	if account.ExpiresAt != nil && now.After(*account.ExpiresAt) {
 		return false
 	}
+	if account.CooldownUntil != nil && now.Before(*account.CooldownUntil) {
+		return false
+	}
 	model = strings.TrimSpace(model)
 	if model != "" && !contains(account.Models, model) {
 		return false
@@ -1881,8 +2072,8 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 	if authType == "" {
 		authType = "api_key"
 	}
-	if !oneOf(authType, "api_key", "oauth", "session", "cookie", "service_account", "custom") {
-		return ProviderAccount{}, errors.New("auth_type must be api_key, oauth, session, cookie, service_account, or custom")
+	if !oneOf(authType, "api_key") {
+		return ProviderAccount{}, errors.New("auth_type must be api_key")
 	}
 	status := req.Status
 	if status == "" {
@@ -1897,6 +2088,16 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 	}
 	if concurrency < 0 {
 		return ProviderAccount{}, errors.New("concurrency must be greater than or equal to 0")
+	}
+	var loadFactor *int
+	if req.LoadFactor != nil {
+		if *req.LoadFactor < 0 {
+			return ProviderAccount{}, errors.New("load_factor must be greater than or equal to 0")
+		}
+		if *req.LoadFactor > 0 {
+			v := *req.LoadFactor
+			loadFactor = &v
+		}
 	}
 	priority := req.Priority
 	if priority <= 0 {
@@ -1917,28 +2118,64 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 	if err != nil {
 		return ProviderAccount{}, err
 	}
+	tempUnschedulableRules, err := cleanTempUnschedulableRules(req.TempUnschedulableRules)
+	if err != nil {
+		return ProviderAccount{}, err
+	}
 	schedulable := defaultSchedulable
 	if req.Schedulable != nil {
 		schedulable = *req.Schedulable
 	}
 	return ProviderAccount{
-		ProviderID:       providerID,
-		Name:             name,
-		Platform:         platform,
-		AuthType:         authType,
-		Status:           status,
-		Schedulable:      schedulable,
-		Priority:         priority,
-		Concurrency:      concurrency,
-		RateMultiplier:   rateMultiplier,
-		Models:           models,
-		GroupIDs:         cleanStringList(req.GroupIDs),
-		SecretConfigured: strings.TrimSpace(req.Secret) != "",
-		SecretHint:       maskSecret(req.Secret),
-		ExpiresAt:        expiresAt,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ProviderID:             providerID,
+		Name:                   name,
+		Platform:               platform,
+		AuthType:               authType,
+		Status:                 status,
+		Schedulable:            schedulable,
+		Priority:               priority,
+		Concurrency:            concurrency,
+		LoadFactor:             loadFactor,
+		RateMultiplier:         rateMultiplier,
+		Models:                 models,
+		GroupIDs:               cleanStringList(req.GroupIDs),
+		SecretConfigured:       strings.TrimSpace(req.Secret) != "",
+		SecretHint:             maskSecret(req.Secret),
+		ExpiresAt:              expiresAt,
+		TempUnschedulableRules: tempUnschedulableRules,
+		CreatedAt:              now,
+		UpdatedAt:              now,
 	}, nil
+}
+
+// cleanTempUnschedulableRules validates and normalizes admin-configured
+// temporary-unschedulability rules. Every rule must have a plausible HTTP
+// status code, at least one non-empty keyword, and a positive duration;
+// malformed rules are rejected outright rather than silently dropped so
+// admins get immediate feedback instead of a rule that quietly never fires.
+func cleanTempUnschedulableRules(rules []ProviderAccountTempUnschedulableRule) ([]ProviderAccountTempUnschedulableRule, error) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+	out := make([]ProviderAccountTempUnschedulableRule, 0, len(rules))
+	for _, rule := range rules {
+		if rule.StatusCode < 100 || rule.StatusCode > 599 {
+			return nil, errors.New("temp_unschedulable_rules status_code must be a valid HTTP status code")
+		}
+		if rule.DurationMinutes <= 0 {
+			return nil, errors.New("temp_unschedulable_rules duration_minutes must be greater than 0")
+		}
+		keywords := cleanStringList(rule.Keywords)
+		if len(keywords) == 0 {
+			return nil, errors.New("temp_unschedulable_rules keywords must not be empty")
+		}
+		out = append(out, ProviderAccountTempUnschedulableRule{
+			StatusCode:      rule.StatusCode,
+			Keywords:        keywords,
+			DurationMinutes: rule.DurationMinutes,
+		})
+	}
+	return out, nil
 }
 
 func cleanStringList(values []string) []string {

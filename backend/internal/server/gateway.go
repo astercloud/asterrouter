@@ -17,11 +17,18 @@ import (
 const (
 	gatewayRequestBodyLimit  = 16 << 20
 	gatewayUpstreamBodyLimit = 16 << 20
+	// failureBodyPreviewLimit bounds how much of a failed candidate's
+	// response body is read for temp-unschedulable keyword matching. The
+	// body is discarded either way (that candidate's response is never
+	// returned to the caller), so this only needs to be large enough to
+	// contain a typical error message.
+	failureBodyPreviewLimit = 4 << 10
 )
 
 var (
 	errGatewayRequestTooLarge   = errors.New("gateway request body is too large")
 	errUpstreamResponseTooLarge = errors.New("upstream response body is too large")
+	errNoSchedulableSlot        = errors.New("no schedulable provider account slot is available")
 )
 
 func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
@@ -75,11 +82,11 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 				ErrorType: errorType,
 				LatencyMS: time.Since(startedAt).Milliseconds(),
 			})
-			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "error", http.StatusTooManyRequests, errorType, time.Since(startedAt).Milliseconds(), 0, 0, err.Error()))
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "error", http.StatusTooManyRequests, errorType, time.Since(startedAt).Milliseconds(), 0, 0, err.Error(), ""))
 			writeGatewayError(c, err)
 			return
 		}
-		provider, ok, err := control.GatewayProviderForModel(c.Request.Context(), req.Model)
+		candidates, hasAccountPool, err := control.GatewayProviderCandidatesForModel(c.Request.Context(), req.Model)
 		if err != nil {
 			recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
 				Model:     req.Model,
@@ -87,14 +94,31 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 				ErrorType: "provider_selection_error",
 				LatencyMS: time.Since(startedAt).Milliseconds(),
 			})
-			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "error", 0, "provider_selection_error", time.Since(startedAt).Milliseconds(), 0, 0, err.Error()))
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "error", 0, "provider_selection_error", time.Since(startedAt).Milliseconds(), 0, 0, err.Error(), ""))
 			writeGatewayError(c, err)
 			return
 		}
-		if ok {
-			resp, err := forwardChatCompletion(c, provider, rawBody, req.Stream)
-			if err != nil {
-				_ = control.RecordGatewayCall(c.Request.Context(), auth, req.Model, "upstream_error", err.Error())
+		if len(candidates) == 0 && hasAccountPool {
+			routeErr := controlplane.ErrGatewayRouteUnavailable
+			_ = control.RecordGatewayCall(c.Request.Context(), auth, req.Model, "policy_rejected", routeErr.Error())
+			recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
+				Model:     req.Model,
+				Status:    "error",
+				ErrorType: "route_unavailable",
+				LatencyMS: time.Since(startedAt).Milliseconds(),
+			})
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "error", http.StatusServiceUnavailable, "route_unavailable", time.Since(startedAt).Milliseconds(), 0, 0, routeErr.Error(), ""))
+			writeGatewayError(c, routeErr)
+			return
+		}
+		if len(candidates) > 0 {
+			resp, provider, release, attempts, attemptErr := attemptGatewayCandidates(c, control, candidates, rawBody, req.Stream)
+			routeAttempts := marshalRouteAttempts(attempts)
+			if resp == nil {
+				if attemptErr == nil {
+					attemptErr = errNoSchedulableSlot
+				}
+				_ = control.RecordGatewayCall(c.Request.Context(), auth, req.Model, "upstream_error", attemptErr.Error())
 				recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
 					Model:             req.Model,
 					ProviderID:        provider.ID,
@@ -103,11 +127,12 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 					ErrorType:         "transport_error",
 					LatencyMS:         time.Since(startedAt).Milliseconds(),
 				})
-				recordGatewayTrace(control, c, auth, gatewayTraceInput(req, provider, "upstream_error", 0, "transport_error", time.Since(startedAt).Milliseconds(), 0, 0, err.Error()))
-				openAIError(c, http.StatusBadGateway, "upstream_error", err.Error())
+				recordGatewayTrace(control, c, auth, gatewayTraceInput(req, provider, "upstream_error", 0, "transport_error", time.Since(startedAt).Milliseconds(), 0, 0, attemptErr.Error(), routeAttempts))
+				openAIError(c, http.StatusBadGateway, "upstream_error", attemptErr.Error())
 				return
 			}
 			defer resp.Body.Close()
+			defer release()
 
 			status := "forwarded"
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -138,7 +163,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 					ErrorType:         errorType,
 					LatencyMS:         time.Since(startedAt).Milliseconds(),
 				})
-				recordGatewayTrace(control, c, auth, gatewayTraceInput(req, provider, usageStatus, resp.StatusCode, errorType, time.Since(startedAt).Milliseconds(), 0, 0, responseSummary))
+				recordGatewayTrace(control, c, auth, gatewayTraceInput(req, provider, usageStatus, resp.StatusCode, errorType, time.Since(startedAt).Milliseconds(), 0, 0, responseSummary, routeAttempts))
 				if streamErr != nil && !c.Writer.Written() {
 					openAIError(c, http.StatusBadGateway, "upstream_error", streamErr.Error())
 				}
@@ -156,7 +181,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 					ErrorType:         "response_read_error",
 					LatencyMS:         time.Since(startedAt).Milliseconds(),
 				})
-				recordGatewayTrace(control, c, auth, gatewayTraceInput(req, provider, "upstream_error", resp.StatusCode, "response_read_error", time.Since(startedAt).Milliseconds(), 0, 0, err.Error()))
+				recordGatewayTrace(control, c, auth, gatewayTraceInput(req, provider, "upstream_error", resp.StatusCode, "response_read_error", time.Since(startedAt).Milliseconds(), 0, 0, err.Error(), routeAttempts))
 				openAIError(c, http.StatusBadGateway, "upstream_error", err.Error())
 				return
 			}
@@ -179,7 +204,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 				InputTokens:       inputTokens,
 				OutputTokens:      outputTokens,
 			})
-			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, provider, status, resp.StatusCode, errorType, time.Since(startedAt).Milliseconds(), inputTokens, outputTokens, upstreamResponseSummary(resp.StatusCode, upstreamBody)))
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, provider, status, resp.StatusCode, errorType, time.Since(startedAt).Milliseconds(), inputTokens, outputTokens, upstreamResponseSummary(resp.StatusCode, upstreamBody), routeAttempts))
 			c.Data(resp.StatusCode, contentType, upstreamBody)
 			return
 		}
@@ -191,7 +216,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 				ErrorType: "unsupported_stream",
 				LatencyMS: time.Since(startedAt).Milliseconds(),
 			})
-			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "error", http.StatusNotImplemented, "unsupported_stream", time.Since(startedAt).Milliseconds(), 0, 0, "streaming request rejected without configured provider"))
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "error", http.StatusNotImplemented, "unsupported_stream", time.Since(startedAt).Milliseconds(), 0, 0, "streaming request rejected without configured provider", ""))
 			openAIError(c, http.StatusNotImplemented, "unsupported_feature", "streaming responses require a configured provider")
 			return
 		}
@@ -205,7 +230,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			Status:    "accepted",
 			LatencyMS: time.Since(startedAt).Milliseconds(),
 		})
-		recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "accepted", http.StatusOK, "", time.Since(startedAt).Milliseconds(), 0, 0, "local fallback response"))
+		recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "accepted", http.StatusOK, "", time.Since(startedAt).Milliseconds(), 0, 0, "local fallback response", ""))
 		now := time.Now().Unix()
 		c.JSON(http.StatusOK, gin.H{
 			"id":      "chatcmpl_" + time.Now().UTC().Format("20060102150405"),
@@ -254,6 +279,94 @@ func parseChatCompletionRequest(c *gin.Context) ([]byte, chatCompletionRequest, 
 	return rawBody, req, nil
 }
 
+// gatewayRouteAttempt records what happened when the gateway tried a single
+// candidate route while resolving a chat completion request. It is
+// serialized into GatewayTrace.RouteAttempts so operators can see which
+// candidates were skipped or failed, and why, without needing verbose logs.
+type gatewayRouteAttempt struct {
+	AccountID  string `json:"account_id,omitempty"`
+	ProviderID string `json:"provider_id,omitempty"`
+	Outcome    string `json:"outcome"`
+	Detail     string `json:"detail,omitempty"`
+}
+
+func marshalRouteAttempts(attempts []gatewayRouteAttempt) string {
+	if len(attempts) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(attempts)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// isProviderAccountFailureStatus reports whether an upstream HTTP status
+// indicates an account-side problem (auth revoked, rate limited, or upstream
+// server error) rather than a problem with the request itself. Candidates
+// that are not the last one tried are retried against the next candidate
+// when they return one of these statuses.
+func isProviderAccountFailureStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
+		return true
+	default:
+		return statusCode >= 500
+	}
+}
+
+// attemptGatewayCandidates tries each candidate route in order until one
+// produces a response the caller should use. A candidate is skipped without
+// being attempted if its concurrency slot is exhausted. A candidate that
+// fails at the transport level, or that is not the last candidate and
+// returns an account-side failure status, is recorded as a failure (cooling
+// the underlying provider account down) and the loop moves to the next
+// candidate. The last candidate's response is always accepted as-is, even on
+// a failure status, matching the existing behavior of passing upstream error
+// responses through to the caller when no better alternative exists.
+//
+// On success, the returned release func must be called by the caller once
+// the response body has been fully consumed (streamed or read). Losing
+// candidates' slots are released internally and must not be released again.
+func attemptGatewayCandidates(c *gin.Context, control *controlplane.Service, candidates []controlplane.GatewayProvider, rawBody []byte, stream bool) (resp *http.Response, provider controlplane.GatewayProvider, release func(), attempts []gatewayRouteAttempt, transportErr error) {
+	for i, candidate := range candidates {
+		slotRelease, acquired := control.TryAcquireProviderAccountSlot(candidate.AccountID, candidate.Concurrency)
+		if !acquired {
+			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, Outcome: "skipped", Detail: "at_capacity"})
+			continue
+		}
+		candidateResp, err := forwardChatCompletion(c, candidate, rawBody, stream)
+		if err != nil {
+			slotRelease()
+			if candidate.AccountID != "" {
+				_ = control.RecordProviderAccountFailure(c.Request.Context(), candidate.AccountID, 0, err.Error())
+			}
+			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, Outcome: "failed", Detail: err.Error()})
+			transportErr = err
+			continue
+		}
+		isLast := i == len(candidates)-1
+		if !isLast && isProviderAccountFailureStatus(candidateResp.StatusCode) {
+			bodyPreview, _ := io.ReadAll(io.LimitReader(candidateResp.Body, failureBodyPreviewLimit))
+			_ = candidateResp.Body.Close()
+			slotRelease()
+			if candidate.AccountID != "" {
+				_ = control.RecordProviderAccountFailure(c.Request.Context(), candidate.AccountID, candidateResp.StatusCode, string(bodyPreview))
+			}
+			detail := fmt.Sprintf("upstream http status %d", candidateResp.StatusCode)
+			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, Outcome: "failed", Detail: detail})
+			transportErr = errors.New(detail)
+			continue
+		}
+		if candidate.AccountID != "" {
+			_ = control.TouchProviderAccountUsage(c.Request.Context(), candidate.AccountID)
+		}
+		attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, Outcome: "selected"})
+		return candidateResp, candidate, slotRelease, attempts, nil
+	}
+	return nil, controlplane.GatewayProvider{}, nil, attempts, transportErr
+}
+
 func forwardChatCompletion(c *gin.Context, provider controlplane.GatewayProvider, rawBody []byte, stream bool) (*http.Response, error) {
 	endpoint := strings.TrimRight(provider.BaseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, endpoint, bytes.NewReader(rawBody))
@@ -281,7 +394,7 @@ func gatewayRouteSummary(model string, provider controlplane.GatewayProvider) st
 	return summary
 }
 
-func gatewayTraceInput(req chatCompletionRequest, provider controlplane.GatewayProvider, status string, httpStatus int, errorType string, latencyMS int64, inputTokens int, outputTokens int, responseSummary string) controlplane.GatewayTraceInput {
+func gatewayTraceInput(req chatCompletionRequest, provider controlplane.GatewayProvider, status string, httpStatus int, errorType string, latencyMS int64, inputTokens int, outputTokens int, responseSummary string, routeAttempts string) controlplane.GatewayTraceInput {
 	return controlplane.GatewayTraceInput{
 		Model:             req.Model,
 		Stream:            req.Stream,
@@ -298,6 +411,7 @@ func gatewayTraceInput(req chatCompletionRequest, provider controlplane.GatewayP
 		OutputTokens:      outputTokens,
 		RequestSummary:    fmt.Sprintf("chat.completions stream=%t messages=%d", req.Stream, len(req.Messages)),
 		ResponseSummary:   responseSummary,
+		RouteAttempts:     routeAttempts,
 	}
 }
 

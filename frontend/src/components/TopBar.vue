@@ -115,15 +115,15 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
             <strong>{{ auth.user.username }}</strong>
             <span>{{ auth.user.role }}</span>
           </div>
-          <button v-if="enabledProfiles.includes('personal')" type="button" @click="openSurface('/console')">
+          <button v-if="enabledProfiles.includes('personal')" type="button" @click="openSurface('/console/overview')">
             <Laptop :size="16" />
             {{ t('nav.console') }}
           </button>
-          <button v-if="enabledProfiles.includes('relay_operator')" type="button" @click="openSurface('/operator')">
+          <button v-if="enabledProfiles.includes('relay_operator')" type="button" @click="openSurface('/operator/overview')">
             <RadioTower :size="16" />
             {{ t('nav.operator') }}
           </button>
-          <button v-if="enabledProfiles.includes('enterprise')" type="button" @click="openSurface('/portal')">
+          <button v-if="enabledProfiles.includes('enterprise')" type="button" @click="openSurface('/portal/overview')">
             <PanelsTopLeft :size="16" />
             {{ t('nav.portal') }}
           </button>

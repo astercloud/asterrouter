@@ -2,17 +2,18 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Activity, Code2, KeyRound, Plus, RefreshCw, RotateCw, ShieldAlert, WalletCards } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import {
   createPortalAPIKey,
   disablePortalAPIKey,
   getPortalWorkspace,
   rotatePortalAPIKey
 } from '@/api/control'
-import TopBar from '@/components/TopBar.vue'
 import { useAppStore } from '@/stores/app'
 import type { APIKeyCreateRequest, APIKeyRecord, PortalWorkspace } from '@/types'
 
 const { t } = useI18n()
+const route = useRoute()
 const app = useAppStore()
 const loading = ref(false)
 const saving = ref(false)
@@ -45,6 +46,7 @@ const alerts = computed(() => workspace.value?.alerts || [])
 const canManageKeys = computed(() => Boolean(workspace.value?.can_manage_keys))
 const activeKeys = computed(() => apiKeys.value.filter((key) => key.status === 'active').length)
 const modelOptions = computed(() => workspace.value?.models || [])
+const activePanel = computed(() => (typeof route.meta.portalPanel === 'string' ? route.meta.portalPanel : 'overview'))
 
 async function load() {
   loading.value = true
@@ -152,9 +154,7 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="app-page">
-    <TopBar />
-    <main class="content crud-page">
+  <main class="content crud-page">
       <section class="page-header">
         <div>
           <h1>{{ t('portal.title') }}</h1>
@@ -165,7 +165,6 @@ onMounted(load)
             <RefreshCw :size="17" />
             {{ t('common.refresh') }}
           </button>
-          <RouterLink class="button secondary" to="/admin/dashboard">{{ t('nav.admin') }}</RouterLink>
         </div>
       </section>
 
@@ -176,7 +175,7 @@ onMounted(load)
         <span v-if="createdSecret" class="hint">{{ t('portal.secretOnce') }}</span>
       </div>
 
-      <section class="metric-grid">
+      <section v-if="activePanel === 'overview' || activePanel === 'usage' || activePanel === 'alerts'" class="metric-grid">
         <article class="metric-card">
           <span class="metric-icon"><KeyRound :size="18" /></span>
           <div>
@@ -211,7 +210,7 @@ onMounted(load)
         </article>
       </section>
 
-      <section class="panel section-gap">
+      <section v-if="activePanel === 'overview' || activePanel === 'integration'" class="panel section-gap">
         <div class="panel-header split-header">
           <div>
             <h2>{{ t('portal.integrationGuide') }}</h2>
@@ -231,7 +230,26 @@ onMounted(load)
         </div>
       </section>
 
-      <section class="grid section-gap">
+      <section v-if="activePanel === 'overview'" class="grid section-gap">
+        <section class="panel">
+          <div class="panel-header split-header">
+            <div>
+              <h2>{{ t('portal.next') }}</h2>
+              <p>{{ t('portal.nextHelp') }}</p>
+            </div>
+            <KeyRound :size="18" />
+          </div>
+          <div class="panel-body">
+            <div class="row-actions">
+              <RouterLink class="button secondary" to="/portal/keys">{{ t('portal.myKeys') }}</RouterLink>
+              <RouterLink class="button secondary" to="/portal/usage">{{ t('portal.usage') }}</RouterLink>
+              <RouterLink class="button secondary" to="/portal/alerts">{{ t('portal.alerts') }}</RouterLink>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section v-if="activePanel === 'keys'" class="grid section-gap">
         <section class="panel">
           <div class="panel-header split-header">
             <div>
@@ -281,7 +299,7 @@ onMounted(load)
         </section>
       </section>
 
-      <section class="panel section-gap">
+      <section v-if="activePanel === 'keys'" class="panel section-gap">
         <div class="panel-header split-header">
           <div>
             <h2>{{ t('portal.myKeys') }}</h2>
@@ -339,76 +357,74 @@ onMounted(load)
         </div>
       </section>
 
-      <section class="grid section-gap">
-        <section class="panel">
-          <div class="panel-header split-header">
-            <div>
-              <h2>{{ t('portal.usage') }}</h2>
-              <p>{{ t('portal.usageHelp') }}</p>
-            </div>
-            <Activity :size="18" />
+      <section v-if="activePanel === 'usage'" class="panel section-gap">
+        <div class="panel-header split-header">
+          <div>
+            <h2>{{ t('portal.usage') }}</h2>
+            <p>{{ t('portal.usageHelp') }}</p>
           </div>
-          <div class="panel-body table-scroll">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>{{ t('usage.model') }}</th>
-                  <th>{{ t('usage.requests') }}</th>
-                  <th>{{ t('usage.tokens') }}</th>
-                  <th>{{ t('usage.cost') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in usage?.by_model || []" :key="item.model">
-                  <td>{{ item.model }}</td>
-                  <td>{{ formatNumber(item.requests) }}</td>
-                  <td>{{ formatNumber(item.tokens) }}</td>
-                  <td>{{ formatCost(item.cost_cents) }}</td>
-                </tr>
-                <tr v-if="!(usage?.by_model || []).length">
-                  <td colspan="4" class="empty-cell">{{ loading ? t('common.loading') : t('portal.emptyUsage') }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header split-header">
-            <div>
-              <h2>{{ t('portal.alerts') }}</h2>
-              <p>{{ t('portal.alertsHelp') }}</p>
-            </div>
-            <ShieldAlert :size="18" />
-          </div>
-          <div class="panel-body table-scroll">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>{{ t('alerts.alert') }}</th>
-                  <th>{{ t('alerts.severity') }}</th>
-                  <th>{{ t('alerts.lastSeen') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="alert in alerts" :key="alert.id">
-                  <td>
-                    <strong>{{ alert.title }}</strong>
-                    <span>{{ alert.summary }}</span>
-                  </td>
-                  <td><span class="pill" :class="alert.severity === 'critical' ? 'status-danger' : 'status-warning'">{{ alert.severity }}</span></td>
-                  <td>{{ formatDate(alert.last_seen_at) }}</td>
-                </tr>
-                <tr v-if="!alerts.length">
-                  <td colspan="3" class="empty-cell">{{ loading ? t('common.loading') : t('portal.emptyAlerts') }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
+          <Activity :size="18" />
+        </div>
+        <div class="panel-body table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>{{ t('usage.model') }}</th>
+                <th>{{ t('usage.requests') }}</th>
+                <th>{{ t('usage.tokens') }}</th>
+                <th>{{ t('usage.cost') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in usage?.by_model || []" :key="item.model">
+                <td>{{ item.model }}</td>
+                <td>{{ formatNumber(item.requests) }}</td>
+                <td>{{ formatNumber(item.tokens) }}</td>
+                <td>{{ formatCost(item.cost_cents) }}</td>
+              </tr>
+              <tr v-if="!(usage?.by_model || []).length">
+                <td colspan="4" class="empty-cell">{{ loading ? t('common.loading') : t('portal.emptyUsage') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
-      <section class="panel section-gap">
+      <section v-if="activePanel === 'alerts'" class="panel section-gap">
+        <div class="panel-header split-header">
+          <div>
+            <h2>{{ t('portal.alerts') }}</h2>
+            <p>{{ t('portal.alertsHelp') }}</p>
+          </div>
+          <ShieldAlert :size="18" />
+        </div>
+        <div class="panel-body table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>{{ t('alerts.alert') }}</th>
+                <th>{{ t('alerts.severity') }}</th>
+                <th>{{ t('alerts.lastSeen') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="alert in alerts" :key="alert.id">
+                <td>
+                  <strong>{{ alert.title }}</strong>
+                  <span>{{ alert.summary }}</span>
+                </td>
+                <td><span class="pill" :class="alert.severity === 'critical' ? 'status-danger' : 'status-warning'">{{ alert.severity }}</span></td>
+                <td>{{ formatDate(alert.last_seen_at) }}</td>
+              </tr>
+              <tr v-if="!alerts.length">
+                <td colspan="3" class="empty-cell">{{ loading ? t('common.loading') : t('portal.emptyAlerts') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section v-if="activePanel === 'traces'" class="panel section-gap">
         <div class="panel-header split-header">
           <div>
             <h2>{{ t('portal.recentTraces') }}</h2>
@@ -451,6 +467,5 @@ onMounted(load)
           </table>
         </div>
       </section>
-    </main>
-  </div>
+  </main>
 </template>

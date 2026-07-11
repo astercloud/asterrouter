@@ -2,12 +2,13 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Activity, Code2, KeyRound, Plus, RefreshCw, RotateCw, Server, Settings, ShieldOff, WalletCards } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { createAPIKey, disableAPIKey, getAPIKeys, getProviders, getUsageReport, rotateAPIKey } from '@/api/control'
-import TopBar from '@/components/TopBar.vue'
 import { useAppStore } from '@/stores/app'
 import type { APIKeyCreateRequest, APIKeyRecord, ProviderConnection, UsageReport } from '@/types'
 
 const { t } = useI18n()
+const route = useRoute()
 const app = useAppStore()
 const loading = ref(false)
 const saving = ref(false)
@@ -37,6 +38,7 @@ const gatewayBaseUrl = computed(() => {
 
 const activeProviders = computed(() => providers.value.filter((item) => item.status === 'active').length)
 const activeKeys = computed(() => apiKeys.value.filter((item) => item.status === 'active').length)
+const activePanel = computed(() => (typeof route.meta.consolePanel === 'string' ? route.meta.consolePanel : 'overview'))
 const availableModels = computed(() => {
   const models = Array.from(new Set(providers.value.flatMap((item) => item.models || []).filter(Boolean))).slice(0, 12)
   return models.length ? models : ['gpt-4o-mini']
@@ -165,9 +167,7 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="app-page">
-    <TopBar />
-    <main class="content">
+  <main class="content">
       <section class="page-header">
         <div>
           <h1>{{ t('console.title') }}</h1>
@@ -178,10 +178,6 @@ onMounted(load)
             <RefreshCw :size="17" />
             {{ t('common.refresh') }}
           </button>
-          <RouterLink class="button secondary" to="/admin/settings">
-            <Settings :size="17" />
-            {{ t('admin.settings') }}
-          </RouterLink>
         </div>
       </section>
 
@@ -192,7 +188,7 @@ onMounted(load)
         <span v-if="createdSecret" class="hint">{{ t('console.secretOnce') }}</span>
       </div>
 
-      <section class="metric-grid">
+      <section v-if="activePanel === 'overview' || activePanel === 'usage'" class="metric-grid">
         <article class="metric-card">
           <span class="metric-icon"><Server :size="18" /></span>
           <div>
@@ -227,7 +223,7 @@ onMounted(load)
         </article>
       </section>
 
-      <section class="grid section-gap">
+      <section v-if="activePanel === 'overview'" class="grid section-gap">
         <section class="panel">
           <div class="panel-header split-header">
             <div>
@@ -251,12 +247,30 @@ onMounted(load)
         <section class="panel">
           <div class="panel-header split-header">
             <div>
-              <h2>{{ t('console.createKey') }}</h2>
-              <p>{{ t('console.createKeyHelp') }}</p>
+              <h2>{{ t('console.shortcuts') }}</h2>
+              <p>{{ t('console.shortcutsHelp') }}</p>
             </div>
-            <Plus :size="18" />
+            <Settings :size="18" />
           </div>
-          <form class="panel-body" @submit.prevent="createKey">
+          <div class="panel-body">
+            <div class="row-actions">
+              <RouterLink class="button secondary" to="/console/keys">{{ t('console.keys') }}</RouterLink>
+              <RouterLink class="button secondary" to="/console/usage">{{ t('console.usage') }}</RouterLink>
+              <RouterLink class="button secondary" to="/console/settings">{{ t('admin.settings') }}</RouterLink>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section v-if="activePanel === 'keys'" class="panel section-gap">
+        <div class="panel-header split-header">
+          <div>
+            <h2>{{ t('console.createKey') }}</h2>
+            <p>{{ t('console.createKeyHelp') }}</p>
+          </div>
+          <Plus :size="18" />
+        </div>
+        <form class="panel-body" @submit.prevent="createKey">
             <fieldset class="form-fieldset" :disabled="saving">
               <label class="field">
                 <span>{{ t('apiKeys.name') }}</span>
@@ -292,11 +306,10 @@ onMounted(load)
                 {{ saving ? t('common.saving') : t('console.createKey') }}
               </button>
             </fieldset>
-          </form>
-        </section>
+        </form>
       </section>
 
-      <section class="panel section-gap">
+      <section v-if="activePanel === 'keys'" class="panel section-gap">
         <div class="panel-header split-header">
           <div>
             <h2>{{ t('console.myKeys') }}</h2>
@@ -355,22 +368,76 @@ onMounted(load)
         </div>
       </section>
 
-      <section class="panel section-gap">
-        <div class="panel-header split-header">
-          <div>
-            <h2>{{ t('console.shortcuts') }}</h2>
-            <p>{{ t('console.shortcutsHelp') }}</p>
+      <section v-if="activePanel === 'usage'" class="grid section-gap">
+        <section class="panel">
+          <div class="panel-header split-header">
+            <div>
+              <h2>{{ t('usage.byModel') }}</h2>
+              <p>{{ t('console.usageHelp') }}</p>
+            </div>
+            <Activity :size="18" />
           </div>
-          <Settings :size="18" />
-        </div>
-        <div class="panel-body">
-          <div class="row-actions">
-            <RouterLink class="button secondary" to="/admin/providers">{{ t('admin.providers') }}</RouterLink>
-            <RouterLink class="button secondary" to="/admin/api-keys">{{ t('admin.apiKeys') }}</RouterLink>
-            <RouterLink class="button secondary" to="/admin/usage">{{ t('admin.usage') }}</RouterLink>
+          <div class="panel-body table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>{{ t('usage.model') }}</th>
+                  <th>{{ t('usage.requests') }}</th>
+                  <th>{{ t('usage.errors') }}</th>
+                  <th>{{ t('usage.tokens') }}</th>
+                  <th>{{ t('usage.cost') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in usage?.by_model || []" :key="item.model">
+                  <td><strong>{{ item.model }}</strong></td>
+                  <td>{{ formatNumber(item.requests) }}</td>
+                  <td>{{ formatNumber(item.errors) }}</td>
+                  <td>{{ formatNumber(item.tokens) }}</td>
+                  <td>{{ formatCost(item.cost_cents) }}</td>
+                </tr>
+                <tr v-if="!(usage?.by_model || []).length">
+                  <td colspan="5" class="empty-cell"></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header split-header">
+            <div>
+              <h2>{{ t('portal.recentTraces') }}</h2>
+              <p>{{ t('portal.traceHelp') }}</p>
+            </div>
+            <Code2 :size="18" />
+          </div>
+          <div class="panel-body table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>{{ t('usage.model') }}</th>
+                  <th>{{ t('providers.status') }}</th>
+                  <th>{{ t('usage.tokens') }}</th>
+                  <th>{{ t('usage.latency') }}</th>
+                  <th>{{ t('usage.createdAt') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in usage?.recent || []" :key="item.id">
+                  <td><strong>{{ item.model }}</strong></td>
+                  <td><span class="pill" :class="item.status === 'success' ? 'status-success' : 'status-danger'">{{ item.status }}</span></td>
+                  <td>{{ formatNumber(item.input_tokens + item.output_tokens) }}</td>
+                  <td>{{ item.latency_ms }}ms</td>
+                  <td>{{ formatDate(item.created_at) }}</td>
+                </tr>
+                <tr v-if="!(usage?.recent || []).length">
+                  <td colspan="5" class="empty-cell"></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </section>
-    </main>
-  </div>
+  </main>
 </template>

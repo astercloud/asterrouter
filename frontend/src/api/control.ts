@@ -41,9 +41,10 @@ import type {
 type NullableList<T> = T[] | null | undefined
 type ProviderConnectionPayload = Omit<ProviderConnection, 'models'> & { models?: string[] | null }
 type ProviderHealthCheckPayload = Omit<ProviderHealthCheck, 'models'> & { models?: string[] | null }
-type ProviderAccountPayload = Omit<ProviderAccount, 'models' | 'group_ids'> & {
+type ProviderAccountPayload = Omit<ProviderAccount, 'models' | 'group_ids' | 'temp_unschedulable_rules'> & {
   models?: string[] | null
   group_ids?: string[] | null
+  temp_unschedulable_rules?: ProviderAccount['temp_unschedulable_rules'] | null
 }
 type ProviderAccountHealthCheckPayload = Omit<ProviderAccountHealthCheck, 'models'> & { models?: string[] | null }
 
@@ -73,7 +74,8 @@ function normalizeProviderAccount(account: ProviderAccountPayload): ProviderAcco
   return {
     ...account,
     models: stringListOrEmpty(account.models),
-    group_ids: stringListOrEmpty(account.group_ids)
+    group_ids: stringListOrEmpty(account.group_ids),
+    temp_unschedulable_rules: listOrEmpty(account.temp_unschedulable_rules)
   }
 }
 
@@ -211,6 +213,11 @@ export async function updateProviderAccount(id: string, payload: ProviderAccount
 export async function checkProviderAccount(id: string): Promise<ProviderAccountHealthCheck> {
   const response = await apiClient.post<ProviderAccountHealthCheck>(`/admin/provider-accounts/${id}/check`)
   return response.data
+}
+
+export async function clearProviderAccountCooldown(id: string): Promise<ProviderAccount> {
+  const response = await apiClient.post<ProviderAccountPayload>(`/admin/provider-accounts/${id}/clear-cooldown`)
+  return normalizeProviderAccount(response.data)
 }
 
 export async function getModelPricings(): Promise<ModelPricing[]> {

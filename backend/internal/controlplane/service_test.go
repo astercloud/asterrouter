@@ -854,6 +854,36 @@ func TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts(t
 	}
 }
 
+func TestCreateProviderAccountRejectsLegacyAuthTypes(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
+		Name:    "Account provider",
+		Type:    "openai_compatible",
+		BaseURL: "https://provider.example/v1",
+		Status:  ProviderStatusActive,
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+
+	for _, legacyAuthType := range []string{"oauth", "session", "cookie", "service_account", "custom"} {
+		_, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+			ProviderID: provider.ID,
+			Name:       "Legacy auth account",
+			Platform:   "openai_compatible",
+			AuthType:   legacyAuthType,
+			Status:     AccountStatusActive,
+			Models:     []string{"gpt-4o-mini"},
+			Secret:     "account-secret",
+		})
+		if err == nil {
+			t.Fatalf("CreateProviderAccount() with auth_type %q: expected error, got none", legacyAuthType)
+		}
+	}
+}
+
 func TestGatewayProviderForModelPrefersSchedulableProviderAccount(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
 	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
@@ -987,5 +1017,315 @@ func TestCheckProviderAccountProbesModelsAndPersistsHealth(t *testing.T) {
 	}
 	if len(accounts) != 1 || !contains(accounts[0].Models, "manual-account-model") || !contains(accounts[0].Models, "gpt-account") {
 		t.Fatalf("account discovered models not merged: %+v", accounts)
+	}
+}
+
+func TestProviderAccountEffectiveLoadFactor(t *testing.T) {
+	loadFactor := 20
+	cases := []struct {
+		name    string
+		account ProviderAccount
+		want    int
+	}{
+		{name: "explicit load factor wins", account: ProviderAccount{LoadFactor: &loadFactor, Concurrency: 3}, want: 20},
+		{name: "falls back to concurrency", account: ProviderAccount{Concurrency: 5}, want: 5},
+		{name: "floors at one when concurrency is zero", account: ProviderAccount{Concurrency: 0}, want: 1},
+	}
+	for _, tc := range cases {
+		if got := tc.account.EffectiveLoadFactor(); got != tc.want {
+			t.Fatalf("%s: EffectiveLoadFactor() = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestTryAcquireProviderAccountSlot(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+
+	unlimitedRelease, ok := svc.TryAcquireProviderAccountSlot("acct_unlimited", 0)
+	if !ok {
+		t.Fatal("expected unlimited slot to be acquired")
+	}
+	unlimitedRelease()
+
+	release1, ok := svc.TryAcquireProviderAccountSlot("acct_limited", 1)
+	if !ok {
+		t.Fatal("expected first slot to be acquired")
+	}
+	if _, ok := svc.TryAcquireProviderAccountSlot("acct_limited", 1); ok {
+		t.Fatal("expected second slot to be rejected while first is held")
+	}
+	release1()
+	releaseAfterFirstRelease, ok := svc.TryAcquireProviderAccountSlot("acct_limited", 1)
+	if !ok {
+		t.Fatal("expected slot to be acquirable again after release")
+	}
+	releaseAfterFirstRelease()
+
+	// Releasing twice must not corrupt the counter for other callers.
+	release2, ok := svc.TryAcquireProviderAccountSlot("acct_limited", 1)
+	if !ok {
+		t.Fatal("expected slot to be acquired for double-release check")
+	}
+	release2()
+	release2()
+	if _, ok := svc.TryAcquireProviderAccountSlot("acct_limited", 1); !ok {
+		t.Fatal("expected slot to remain acquirable after double release")
+	}
+}
+
+func TestRankedProviderAccountCandidatesOrdersByPriorityThenLoadThenRate(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
+		Name:    "Ranking provider",
+		Type:    "openai_compatible",
+		BaseURL: "https://provider.example/v1",
+		Status:  ProviderStatusActive,
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+	schedulable := true
+
+	// Same priority, but "busy" has an occupied concurrency slot so its load
+	// ratio (1/1) is higher than "idle" (0/1) — idle must rank first.
+	idle, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+		ProviderID: provider.ID, Name: "idle", Platform: "openai_compatible", AuthType: "api_key",
+		Status: AccountStatusActive, Schedulable: &schedulable, Priority: 10, Concurrency: 1, RateMultiplier: 1,
+		Models: []string{"gpt-4o-mini"}, Secret: "idle-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount idle: %v", err)
+	}
+	busy, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+		ProviderID: provider.ID, Name: "busy", Platform: "openai_compatible", AuthType: "api_key",
+		Status: AccountStatusActive, Schedulable: &schedulable, Priority: 10, Concurrency: 1, RateMultiplier: 1,
+		Models: []string{"gpt-4o-mini"}, Secret: "busy-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount busy: %v", err)
+	}
+	release, ok := svc.TryAcquireProviderAccountSlot(busy.ID, busy.Concurrency)
+	if !ok {
+		t.Fatal("expected to occupy busy account's only slot")
+	}
+	defer release()
+
+	candidates, hasPool, err := svc.rankedProviderAccountCandidates(context.Background(), "gpt-4o-mini")
+	if err != nil {
+		t.Fatalf("rankedProviderAccountCandidates(): %v", err)
+	}
+	if !hasPool {
+		t.Fatal("expected provider account pool to be detected")
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("candidate count = %d, want 2: %+v", len(candidates), candidates)
+	}
+	if candidates[0].account.ID != idle.ID || candidates[1].account.ID != busy.ID {
+		t.Fatalf("unexpected candidate order: %+v", candidates)
+	}
+}
+
+func TestGatewayProviderCandidatesForModelSkipsCooldownAccounts(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
+		Name:    "Cooldown provider",
+		Type:    "openai_compatible",
+		BaseURL: "https://provider.example/v1",
+		Status:  ProviderStatusActive,
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+	schedulable := true
+	primary, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+		ProviderID: provider.ID, Name: "primary", Platform: "openai_compatible", AuthType: "api_key",
+		Status: AccountStatusActive, Schedulable: &schedulable, Priority: 10, Concurrency: 3, RateMultiplier: 1,
+		Models: []string{"gpt-4o-mini"}, Secret: "primary-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount primary: %v", err)
+	}
+	backup, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+		ProviderID: provider.ID, Name: "backup", Platform: "openai_compatible", AuthType: "api_key",
+		Status: AccountStatusActive, Schedulable: &schedulable, Priority: 20, Concurrency: 3, RateMultiplier: 1,
+		Models: []string{"gpt-4o-mini"}, Secret: "backup-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount backup: %v", err)
+	}
+
+	candidates, hasPool, err := svc.GatewayProviderCandidatesForModel(context.Background(), "gpt-4o-mini")
+	if err != nil {
+		t.Fatalf("GatewayProviderCandidatesForModel(): %v", err)
+	}
+	if !hasPool || len(candidates) != 2 || candidates[0].AccountID != primary.ID || candidates[1].AccountID != backup.ID {
+		t.Fatalf("unexpected candidates before cooldown: %+v hasPool=%v", candidates, hasPool)
+	}
+
+	if err := svc.RecordProviderAccountFailure(context.Background(), primary.ID, http.StatusInternalServerError, "upstream error"); err != nil {
+		t.Fatalf("RecordProviderAccountFailure(): %v", err)
+	}
+
+	candidates, hasPool, err = svc.GatewayProviderCandidatesForModel(context.Background(), "gpt-4o-mini")
+	if err != nil {
+		t.Fatalf("GatewayProviderCandidatesForModel() after cooldown: %v", err)
+	}
+	if !hasPool || len(candidates) != 1 || candidates[0].AccountID != backup.ID {
+		t.Fatalf("expected only backup candidate after primary cooldown: %+v hasPool=%v", candidates, hasPool)
+	}
+
+	updated, err := svc.providerAccountByID(context.Background(), primary.ID)
+	if err != nil {
+		t.Fatalf("providerAccountByID(): %v", err)
+	}
+	if updated.CooldownUntil == nil || !updated.CooldownUntil.After(time.Now().UTC()) {
+		t.Fatalf("expected primary account to have a future cooldown: %+v", updated)
+	}
+}
+
+func TestCreateProviderAccountValidatesTempUnschedulableRules(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
+		Name:    "Rule provider",
+		Type:    "openai_compatible",
+		BaseURL: "https://provider.example/v1",
+		Status:  ProviderStatusActive,
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		rules []ProviderAccountTempUnschedulableRule
+	}{
+		{name: "bad status code", rules: []ProviderAccountTempUnschedulableRule{{StatusCode: 0, Keywords: []string{"revoked"}, DurationMinutes: 10}}},
+		{name: "zero duration", rules: []ProviderAccountTempUnschedulableRule{{StatusCode: 401, Keywords: []string{"revoked"}, DurationMinutes: 0}}},
+		{name: "no keywords", rules: []ProviderAccountTempUnschedulableRule{{StatusCode: 401, Keywords: nil, DurationMinutes: 10}}},
+	}
+	for _, tc := range cases {
+		_, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+			ProviderID: provider.ID, Name: "Rule account", Platform: "openai_compatible", AuthType: "api_key",
+			Status: AccountStatusActive, Priority: 10, Concurrency: 3, RateMultiplier: 1,
+			Models: []string{"gpt-4o-mini"}, Secret: "rule-secret", TempUnschedulableRules: tc.rules,
+		})
+		if err == nil {
+			t.Fatalf("%s: expected validation error", tc.name)
+		}
+	}
+}
+
+func TestRecordProviderAccountFailureAppliesMatchingRuleDuration(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
+		Name:    "Rule match provider",
+		Type:    "openai_compatible",
+		BaseURL: "https://provider.example/v1",
+		Status:  ProviderStatusActive,
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+	account, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+		ProviderID: provider.ID, Name: "Rule account", Platform: "openai_compatible", AuthType: "api_key",
+		Status: AccountStatusActive, Priority: 10, Concurrency: 3, RateMultiplier: 1,
+		Models: []string{"gpt-4o-mini"}, Secret: "rule-secret",
+		TempUnschedulableRules: []ProviderAccountTempUnschedulableRule{
+			{StatusCode: 402, Keywords: []string{"insufficient balance"}, DurationMinutes: 120},
+			{StatusCode: 401, Keywords: []string{"key revoked", "unauthorized"}, DurationMinutes: 60},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount(): %v", err)
+	}
+
+	// A failure that matches the second rule (case-insensitive keyword
+	// match) should cool the account down by that rule's duration and
+	// record why, not fall back to the default short cooldown.
+	beforeMatch := time.Now().UTC()
+	if err := svc.RecordProviderAccountFailure(context.Background(), account.ID, 401, "Error: API Key Revoked for this account"); err != nil {
+		t.Fatalf("RecordProviderAccountFailure(): %v", err)
+	}
+	matched, err := svc.providerAccountByID(context.Background(), account.ID)
+	if err != nil {
+		t.Fatalf("providerAccountByID(): %v", err)
+	}
+	if matched.CooldownUntil == nil || matched.CooldownUntil.Before(beforeMatch.Add(59*time.Minute)) {
+		t.Fatalf("expected ~60 minute cooldown from matched rule: %+v", matched)
+	}
+	if matched.TempUnschedulableReason == "" {
+		t.Fatalf("expected a temp unschedulable reason to be recorded: %+v", matched)
+	}
+
+	if _, err := svc.ClearProviderAccountCooldown(context.Background(), "tester", account.ID); err != nil {
+		t.Fatalf("ClearProviderAccountCooldown(): %v", err)
+	}
+
+	// A failure that matches no configured rule falls back to the default
+	// short cooldown and clears any stale reason.
+	if err := svc.RecordProviderAccountFailure(context.Background(), account.ID, 500, "internal server error"); err != nil {
+		t.Fatalf("RecordProviderAccountFailure() unmatched: %v", err)
+	}
+	unmatched, err := svc.providerAccountByID(context.Background(), account.ID)
+	if err != nil {
+		t.Fatalf("providerAccountByID(): %v", err)
+	}
+	if unmatched.CooldownUntil == nil || unmatched.CooldownUntil.After(time.Now().UTC().Add(providerAccountFailureCooldown+time.Second)) {
+		t.Fatalf("expected default cooldown duration for unmatched failure: %+v", unmatched)
+	}
+	if unmatched.TempUnschedulableReason != "" {
+		t.Fatalf("expected reason to be cleared for unmatched failure: %+v", unmatched)
+	}
+}
+
+func TestClearProviderAccountCooldownMakesAccountImmediatelyEligible(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
+		Name:    "Clear cooldown provider",
+		Type:    "openai_compatible",
+		BaseURL: "https://provider.example/v1",
+		Status:  ProviderStatusActive,
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+	account, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+		ProviderID: provider.ID, Name: "Solo account", Platform: "openai_compatible", AuthType: "api_key",
+		Status: AccountStatusActive, Priority: 10, Concurrency: 3, RateMultiplier: 1,
+		Models: []string{"gpt-4o-mini"}, Secret: "solo-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount(): %v", err)
+	}
+	if err := svc.RecordProviderAccountFailure(context.Background(), account.ID, http.StatusInternalServerError, "boom"); err != nil {
+		t.Fatalf("RecordProviderAccountFailure(): %v", err)
+	}
+	if candidates, _, err := svc.GatewayProviderCandidatesForModel(context.Background(), "gpt-4o-mini"); err != nil || len(candidates) != 0 {
+		t.Fatalf("expected no candidates while cooling down: candidates=%+v err=%v", candidates, err)
+	}
+
+	cleared, err := svc.ClearProviderAccountCooldown(context.Background(), "tester", account.ID)
+	if err != nil {
+		t.Fatalf("ClearProviderAccountCooldown(): %v", err)
+	}
+	if cleared.CooldownUntil != nil || cleared.TempUnschedulableReason != "" {
+		t.Fatalf("expected cooldown and reason cleared: %+v", cleared)
+	}
+	candidates, _, err := svc.GatewayProviderCandidatesForModel(context.Background(), "gpt-4o-mini")
+	if err != nil {
+		t.Fatalf("GatewayProviderCandidatesForModel(): %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].AccountID != account.ID {
+		t.Fatalf("expected account to be schedulable again after clearing cooldown: %+v", candidates)
 	}
 }

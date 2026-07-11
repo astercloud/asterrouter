@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Activity, Edit3, Plus, RefreshCw, Save, Search, ShieldCheck, ShieldOff, X } from '@lucide/vue'
+import { Activity, Edit3, Plus, RefreshCw, Save, Search, ShieldCheck, ShieldOff, Trash2, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import {
   checkProviderAccount,
+  clearProviderAccountCooldown,
   createProviderAccount,
   getProviderAccountHealthChecks,
   getProviderAccounts,
@@ -11,13 +12,21 @@ import {
   getRoutingGroups,
   updateProviderAccount
 } from '@/api/control'
-import type { ProviderAccount, ProviderAccountHealthCheck, ProviderAccountRequest, ProviderConnection, RoutingGroup } from '@/types'
+import type {
+  ProviderAccount,
+  ProviderAccountHealthCheck,
+  ProviderAccountRequest,
+  ProviderAccountTempUnschedulableRule,
+  ProviderConnection,
+  RoutingGroup
+} from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
 const saving = ref(false)
 const togglingID = ref('')
 const checkingID = ref('')
+const clearingCooldownID = ref('')
 const error = ref('')
 const message = ref('')
 const accounts = ref<ProviderAccount[]>([])
@@ -41,11 +50,13 @@ const form = reactive<ProviderAccountRequest>({
   schedulable: true,
   priority: 50,
   concurrency: 3,
+  load_factor: null,
   rate_multiplier: 1,
   models: [],
   group_ids: [],
   secret: '',
-  expires_at: ''
+  expires_at: '',
+  temp_unschedulable_rules: []
 })
 
 const groupByID = computed(() => new Map(groups.value.map((item) => [item.id, item])))
@@ -83,6 +94,10 @@ function dateInputValue(value?: string): string {
   return value ? value.slice(0, 10) : ''
 }
 
+function cloneRules(rules: ProviderAccountTempUnschedulableRule[]): ProviderAccountTempUnschedulableRule[] {
+  return rules.map((rule) => ({ ...rule, keywords: [...rule.keywords] }))
+}
+
 function accountToRequest(account: ProviderAccount, status = account.status): ProviderAccountRequest {
   return {
     provider_id: account.provider_id,
@@ -93,11 +108,13 @@ function accountToRequest(account: ProviderAccount, status = account.status): Pr
     schedulable: account.schedulable,
     priority: account.priority,
     concurrency: account.concurrency,
+    load_factor: account.load_factor ?? null,
     rate_multiplier: account.rate_multiplier,
     models: [...account.models],
     group_ids: [...account.group_ids],
     secret: '',
-    expires_at: dateInputValue(account.expires_at)
+    expires_at: dateInputValue(account.expires_at),
+    temp_unschedulable_rules: cloneRules(account.temp_unschedulable_rules)
   }
 }
 
@@ -112,10 +129,12 @@ function resetForm() {
     schedulable: true,
     priority: 50,
     concurrency: 3,
+    load_factor: null,
     rate_multiplier: 1,
     models: [],
     group_ids: groups.value[0] ? [groups.value[0].id] : [],
     secret: '',
+    temp_unschedulable_rules: [],
     expires_at: ''
   })
   modelsText.value = 'gpt-4o-mini'
@@ -180,7 +199,11 @@ async function save() {
   error.value = ''
   message.value = ''
   try {
-    const payload = { ...form, models: splitModels(modelsText.value) }
+    const payload = {
+      ...form,
+      models: splitModels(modelsText.value),
+      load_factor: form.load_factor ? Number(form.load_factor) : null
+    }
     if (editing.value) {
       await updateProviderAccount(editing.value.id, payload)
       message.value = t('providerAccounts.updated')
@@ -229,6 +252,37 @@ async function runCheck(account: ProviderAccount) {
   }
 }
 
+async function clearCooldown(account: ProviderAccount) {
+  clearingCooldownID.value = account.id
+  error.value = ''
+  message.value = ''
+  try {
+    await clearProviderAccountCooldown(account.id)
+    message.value = t('providerAccounts.cooldownCleared')
+    await load()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    clearingCooldownID.value = ''
+  }
+}
+
+function addRule() {
+  form.temp_unschedulable_rules = [...form.temp_unschedulable_rules, { status_code: 429, keywords: [], duration_minutes: 30 }]
+}
+
+function removeRule(index: number) {
+  form.temp_unschedulable_rules = form.temp_unschedulable_rules.filter((_, i) => i !== index)
+}
+
+function ruleKeywordsText(rule: ProviderAccountTempUnschedulableRule): string {
+  return rule.keywords.join(', ')
+}
+
+function setRuleKeywords(rule: ProviderAccountTempUnschedulableRule, value: string) {
+  rule.keywords = splitModels(value)
+}
+
 function statusClass(status: string) {
   if (status === 'active' || status === 'ok') return 'status-success'
   if (status === 'error') return 'status-warning'
@@ -238,6 +292,13 @@ function statusClass(status: string) {
 function formatHealth(check: ProviderAccountHealthCheck): string {
   const time = new Date(check.checked_at).toLocaleString()
   return `${check.status} / ${check.latency_ms}ms / ${time}`
+}
+
+function activeCooldownUntil(account: ProviderAccount): string {
+  if (!account.cooldown_until) return ''
+  const until = new Date(account.cooldown_until)
+  if (until.getTime() <= Date.now()) return ''
+  return until.toLocaleTimeString()
 }
 
 onMounted(load)
@@ -344,6 +405,12 @@ onMounted(load)
               <td>
                 <strong>{{ account.concurrency }} / {{ account.priority }}</strong>
                 <span>{{ t('providerAccounts.multiplier') }} {{ account.rate_multiplier }}</span>
+                <span v-if="activeCooldownUntil(account)" class="pill status-warning">
+                  {{ t('providerAccounts.cooldownUntil') }} {{ activeCooldownUntil(account) }}
+                </span>
+                <span v-if="activeCooldownUntil(account) && account.temp_unschedulable_reason" class="hint">
+                  {{ account.temp_unschedulable_reason }}
+                </span>
               </td>
               <td>
                 <span class="pill" :class="account.secret_configured ? 'status-success' : 'status-warning'">
@@ -373,6 +440,16 @@ onMounted(load)
                     <ShieldCheck v-if="account.status === 'disabled'" :size="15" />
                     <ShieldOff v-else :size="15" />
                     {{ account.status === 'disabled' ? t('providerAccounts.enable') : t('providerAccounts.disable') }}
+                  </button>
+                  <button
+                    v-if="activeCooldownUntil(account)"
+                    class="button secondary"
+                    type="button"
+                    :disabled="clearingCooldownID === account.id"
+                    @click="clearCooldown(account)"
+                  >
+                    <ShieldCheck :size="15" />
+                    {{ clearingCooldownID === account.id ? t('common.loading') : t('providerAccounts.clearCooldown') }}
                   </button>
                 </div>
               </td>
@@ -421,11 +498,6 @@ onMounted(load)
             <label>{{ t('providerAccounts.authType') }}</label>
             <select v-model="form.auth_type">
               <option value="api_key">api_key</option>
-              <option value="oauth">oauth</option>
-              <option value="session">session</option>
-              <option value="cookie">cookie</option>
-              <option value="service_account">service_account</option>
-              <option value="custom">custom</option>
             </select>
           </div>
           <div class="field">
@@ -439,6 +511,10 @@ onMounted(load)
           <div class="field">
             <label>{{ t('providerAccounts.concurrency') }}</label>
             <input v-model.number="form.concurrency" type="number" min="0" />
+          </div>
+          <div class="field">
+            <label>{{ t('providerAccounts.loadFactor') }}</label>
+            <input v-model.number="form.load_factor" type="number" min="0" :placeholder="t('providerAccounts.loadFactorPlaceholder')" />
           </div>
           <div class="field">
             <label>{{ t('providers.priority') }}</label>
@@ -475,6 +551,38 @@ onMounted(load)
           <div class="field form-span-2">
             <label>{{ t('providers.models') }}</label>
             <textarea v-model="modelsText" rows="3" />
+          </div>
+          <div class="field form-span-2">
+            <label>{{ t('providerAccounts.tempUnschedulableRules') }}</label>
+            <p class="hint">{{ t('providerAccounts.tempUnschedulableRulesHelp') }}</p>
+            <div class="rule-row" v-for="(rule, index) in form.temp_unschedulable_rules" :key="index">
+              <input
+                v-model.number="rule.status_code"
+                type="number"
+                min="100"
+                max="599"
+                :placeholder="t('providerAccounts.ruleStatusCode')"
+              />
+              <input
+                :value="ruleKeywordsText(rule)"
+                type="text"
+                :placeholder="t('providerAccounts.ruleKeywords')"
+                @input="setRuleKeywords(rule, ($event.target as HTMLInputElement).value)"
+              />
+              <input
+                v-model.number="rule.duration_minutes"
+                type="number"
+                min="1"
+                :placeholder="t('providerAccounts.ruleDurationMinutes')"
+              />
+              <button class="icon-button" type="button" @click="removeRule(index)">
+                <Trash2 :size="15" />
+              </button>
+            </div>
+            <button class="button secondary" type="button" @click="addRule">
+              <Plus :size="15" />
+              {{ t('providerAccounts.addRule') }}
+            </button>
           </div>
           <div class="field form-span-2">
             <label>{{ t('providerAccounts.secret') }}</label>

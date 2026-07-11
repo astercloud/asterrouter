@@ -421,6 +421,234 @@ func TestGatewayChatCompletionRoutesThroughProviderAccountPool(t *testing.T) {
 	}
 }
 
+func TestGatewayChatCompletionFallsBackToNextAccountAfterUpstreamFailure(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_api_key","message":"revoked"}}`))
+	}))
+	defer failing.Close()
+	var healthyAuthorization string
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthyAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"upstream-2","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"fallback-ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer healthy.Close()
+
+	handler, control := newTestRuntime(t, config.Config{})
+	failingProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name:    "failing provider",
+		Type:    "openai_compatible",
+		BaseURL: failing.URL + "/v1",
+		Status:  "active",
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "failing-provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(failing): %v", err)
+	}
+	healthyProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name:    "healthy provider",
+		Type:    "openai_compatible",
+		BaseURL: healthy.URL + "/v1",
+		Status:  "active",
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "healthy-provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(healthy): %v", err)
+	}
+	schedulable := true
+	if _, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+		ProviderID:     failingProvider.ID,
+		Name:           "Primary account",
+		Platform:       "openai_compatible",
+		AuthType:       "api_key",
+		Status:         controlplane.AccountStatusActive,
+		Schedulable:    &schedulable,
+		Priority:       10,
+		Concurrency:    3,
+		RateMultiplier: 1,
+		Models:         []string{"gpt-4o-mini"},
+		Secret:         "failing-account-secret",
+	}); err != nil {
+		t.Fatalf("CreateProviderAccount(primary): %v", err)
+	}
+	if _, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+		ProviderID:     healthyProvider.ID,
+		Name:           "Backup account",
+		Platform:       "openai_compatible",
+		AuthType:       "api_key",
+		Status:         controlplane.AccountStatusActive,
+		Schedulable:    &schedulable,
+		Priority:       20,
+		Concurrency:    3,
+		RateMultiplier: 1,
+		Models:         []string{"gpt-4o-mini"},
+		Secret:         "healthy-account-secret",
+	}); err != nil {
+		t.Fatalf("CreateProviderAccount(backup): %v", err)
+	}
+	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
+		ProjectID:         "proj_platform",
+		ApplicationID:     "app_internal_sandbox",
+		Name:              "gateway",
+		ModelAllowlist:    []string{"gpt-4o-mini"},
+		QPSLimit:          2,
+		MonthlyTokenLimit: 1000,
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(): %v", err)
+	}
+
+	body := bytes.NewBufferString(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+created.Key)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if healthyAuthorization != "Bearer healthy-account-secret" {
+		t.Fatalf("expected fallback account to be used, got authorization = %q", healthyAuthorization)
+	}
+	if !strings.Contains(rec.Body.String(), "fallback-ok") {
+		t.Fatalf("fallback response not returned: %s", rec.Body.String())
+	}
+
+	traces, err := control.ListGatewayTraces(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListGatewayTraces(): %v", err)
+	}
+	if len(traces) != 1 {
+		t.Fatalf("trace count = %d traces=%+v", len(traces), traces)
+	}
+	if !strings.Contains(traces[0].RouteAttempts, `"outcome":"failed"`) || !strings.Contains(traces[0].RouteAttempts, `"outcome":"selected"`) {
+		t.Fatalf("expected route attempts to record both failure and selection: %s", traces[0].RouteAttempts)
+	}
+}
+
+func TestGatewayChatCompletionSkipsAccountAtConcurrencyCapacity(t *testing.T) {
+	var busyAuthorization, freeAuthorization string
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		busyAuthorization = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer busy.Close()
+	free := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		freeAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"upstream-3","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"free-ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer free.Close()
+
+	handler, control := newTestRuntime(t, config.Config{})
+	busyProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name:    "busy provider",
+		Type:    "openai_compatible",
+		BaseURL: busy.URL + "/v1",
+		Status:  "active",
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "busy-provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(busy): %v", err)
+	}
+	freeProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name:    "free provider",
+		Type:    "openai_compatible",
+		BaseURL: free.URL + "/v1",
+		Status:  "active",
+		Models:  []string{"gpt-4o-mini"},
+		APIKey:  "free-provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(free): %v", err)
+	}
+	schedulable := true
+	busyAccount, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+		ProviderID:     busyProvider.ID,
+		Name:           "Busy account",
+		Platform:       "openai_compatible",
+		AuthType:       "api_key",
+		Status:         controlplane.AccountStatusActive,
+		Schedulable:    &schedulable,
+		Priority:       10,
+		Concurrency:    1,
+		RateMultiplier: 1,
+		Models:         []string{"gpt-4o-mini"},
+		Secret:         "busy-account-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount(busy): %v", err)
+	}
+	if _, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+		ProviderID:     freeProvider.ID,
+		Name:           "Free account",
+		Platform:       "openai_compatible",
+		AuthType:       "api_key",
+		Status:         controlplane.AccountStatusActive,
+		Schedulable:    &schedulable,
+		Priority:       20,
+		Concurrency:    3,
+		RateMultiplier: 1,
+		Models:         []string{"gpt-4o-mini"},
+		Secret:         "free-account-secret",
+	}); err != nil {
+		t.Fatalf("CreateProviderAccount(free): %v", err)
+	}
+	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
+		ProjectID:         "proj_platform",
+		ApplicationID:     "app_internal_sandbox",
+		Name:              "gateway",
+		ModelAllowlist:    []string{"gpt-4o-mini"},
+		QPSLimit:          2,
+		MonthlyTokenLimit: 1000,
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(): %v", err)
+	}
+
+	// Occupy the busy account's only concurrency slot before sending the
+	// request, so the gateway must skip it without dialing the busy upstream
+	// at all and route to the free account instead.
+	release, ok := control.TryAcquireProviderAccountSlot(busyAccount.ID, busyAccount.Concurrency)
+	if !ok {
+		t.Fatal("expected to occupy busy account's only slot")
+	}
+	defer release()
+
+	body := bytes.NewBufferString(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"ping"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+created.Key)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if busyAuthorization != "" {
+		t.Fatalf("expected busy upstream to never be dialed, got authorization = %q", busyAuthorization)
+	}
+	if freeAuthorization != "Bearer free-account-secret" {
+		t.Fatalf("expected free account to be used, got authorization = %q", freeAuthorization)
+	}
+	if !strings.Contains(rec.Body.String(), "free-ok") {
+		t.Fatalf("free account response not returned: %s", rec.Body.String())
+	}
+
+	traces, err := control.ListGatewayTraces(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListGatewayTraces(): %v", err)
+	}
+	if len(traces) != 1 || !strings.Contains(traces[0].RouteAttempts, `"outcome":"skipped"`) {
+		t.Fatalf("expected route attempts to record a skipped candidate: %+v", traces)
+	}
+}
+
 func TestGatewayChatCompletionRejectsOversizedRequestBody(t *testing.T) {
 	handler := newTestHandler(t, config.Config{})
 

@@ -130,42 +130,73 @@ type RoutingGroupRequest struct {
 }
 
 type ProviderAccount struct {
-	ID               string     `json:"id"`
-	ProviderID       string     `json:"provider_id"`
-	Name             string     `json:"name"`
-	Platform         string     `json:"platform"`
-	AuthType         string     `json:"auth_type"`
-	Status           string     `json:"status"`
-	Schedulable      bool       `json:"schedulable"`
-	Priority         int        `json:"priority"`
-	Concurrency      int        `json:"concurrency"`
-	RateMultiplier   float64    `json:"rate_multiplier"`
-	Models           []string   `json:"models"`
-	GroupIDs         []string   `json:"group_ids"`
-	SecretConfigured bool       `json:"secret_configured"`
-	SecretHint       string     `json:"secret_hint"`
-	SecretCiphertext string     `json:"-"`
-	ErrorMessage     string     `json:"error_message"`
-	LastUsedAt       *time.Time `json:"last_used_at,omitempty"`
-	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID                      string                                 `json:"id"`
+	ProviderID              string                                 `json:"provider_id"`
+	Name                    string                                 `json:"name"`
+	Platform                string                                 `json:"platform"`
+	AuthType                string                                 `json:"auth_type"`
+	Status                  string                                 `json:"status"`
+	Schedulable             bool                                   `json:"schedulable"`
+	Priority                int                                    `json:"priority"`
+	Concurrency             int                                    `json:"concurrency"`
+	LoadFactor              *int                                   `json:"load_factor,omitempty"`
+	RateMultiplier          float64                                `json:"rate_multiplier"`
+	Models                  []string                               `json:"models"`
+	GroupIDs                []string                               `json:"group_ids"`
+	SecretConfigured        bool                                   `json:"secret_configured"`
+	SecretHint              string                                 `json:"secret_hint"`
+	SecretCiphertext        string                                 `json:"-"`
+	ErrorMessage            string                                 `json:"error_message"`
+	LastUsedAt              *time.Time                             `json:"last_used_at,omitempty"`
+	ExpiresAt               *time.Time                             `json:"expires_at,omitempty"`
+	CooldownUntil           *time.Time                             `json:"cooldown_until,omitempty"`
+	TempUnschedulableRules  []ProviderAccountTempUnschedulableRule `json:"temp_unschedulable_rules"`
+	TempUnschedulableReason string                                 `json:"temp_unschedulable_reason"`
+	CreatedAt               time.Time                              `json:"created_at"`
+	UpdatedAt               time.Time                              `json:"updated_at"`
+}
+
+// ProviderAccountTempUnschedulableRule lets an admin configure a duration to
+// cool an account down for when an upstream response matches a specific HTTP
+// status code and contains any of a set of keywords (e.g. "insufficient
+// balance", "key revoked"). This gives a more accurate cooldown than the
+// fixed default applied by RecordProviderAccountFailure for unmatched
+// failures.
+type ProviderAccountTempUnschedulableRule struct {
+	StatusCode      int      `json:"status_code"`
+	Keywords        []string `json:"keywords"`
+	DurationMinutes int      `json:"duration_minutes"`
+}
+
+// EffectiveLoadFactor returns the denominator used to compute an account's
+// scheduling load ratio: LoadFactor when explicitly set to a positive value,
+// otherwise Concurrency (floored at 1 to avoid division by zero).
+func (a ProviderAccount) EffectiveLoadFactor() int {
+	if a.LoadFactor != nil && *a.LoadFactor > 0 {
+		return *a.LoadFactor
+	}
+	if a.Concurrency > 0 {
+		return a.Concurrency
+	}
+	return 1
 }
 
 type ProviderAccountRequest struct {
-	ProviderID     string   `json:"provider_id"`
-	Name           string   `json:"name"`
-	Platform       string   `json:"platform"`
-	AuthType       string   `json:"auth_type"`
-	Status         string   `json:"status"`
-	Schedulable    *bool    `json:"schedulable"`
-	Priority       int      `json:"priority"`
-	Concurrency    int      `json:"concurrency"`
-	RateMultiplier float64  `json:"rate_multiplier"`
-	Models         []string `json:"models"`
-	GroupIDs       []string `json:"group_ids"`
-	Secret         string   `json:"secret"`
-	ExpiresAt      string   `json:"expires_at"`
+	ProviderID             string                                 `json:"provider_id"`
+	Name                   string                                 `json:"name"`
+	Platform               string                                 `json:"platform"`
+	AuthType               string                                 `json:"auth_type"`
+	Status                 string                                 `json:"status"`
+	Schedulable            *bool                                  `json:"schedulable"`
+	Priority               int                                    `json:"priority"`
+	Concurrency            int                                    `json:"concurrency"`
+	LoadFactor             *int                                   `json:"load_factor"`
+	RateMultiplier         float64                                `json:"rate_multiplier"`
+	Models                 []string                               `json:"models"`
+	GroupIDs               []string                               `json:"group_ids"`
+	Secret                 string                                 `json:"secret"`
+	ExpiresAt              string                                 `json:"expires_at"`
+	TempUnschedulableRules []ProviderAccountTempUnschedulableRule `json:"temp_unschedulable_rules"`
 }
 
 type ProviderAccountHealthCheck struct {
@@ -396,6 +427,7 @@ type GatewayTrace struct {
 	OutputTokens      int       `json:"output_tokens"`
 	RequestSummary    string    `json:"request_summary"`
 	ResponseSummary   string    `json:"response_summary"`
+	RouteAttempts     string    `json:"route_attempts"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 
@@ -465,6 +497,7 @@ type GatewayProvider struct {
 	APIKey          string
 	AccountID       string
 	AccountName     string
+	Concurrency     int
 	Source          string
 	SelectionReason string
 }

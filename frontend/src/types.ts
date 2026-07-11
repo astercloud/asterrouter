@@ -273,6 +273,12 @@ export interface RoutingGroupRequest {
   sort_order: number
 }
 
+export interface ProviderAccountTempUnschedulableRule {
+  status_code: number
+  keywords: string[]
+  duration_minutes: number
+}
+
 export interface ProviderAccount {
   id: string
   provider_id: string
@@ -283,6 +289,7 @@ export interface ProviderAccount {
   schedulable: boolean
   priority: number
   concurrency: number
+  load_factor?: number
   rate_multiplier: number
   models: string[]
   group_ids: string[]
@@ -291,6 +298,9 @@ export interface ProviderAccount {
   error_message: string
   last_used_at?: string
   expires_at?: string
+  cooldown_until?: string
+  temp_unschedulable_rules: ProviderAccountTempUnschedulableRule[]
+  temp_unschedulable_reason: string
   created_at: string
   updated_at: string
 }
@@ -304,11 +314,13 @@ export interface ProviderAccountRequest {
   schedulable: boolean
   priority: number
   concurrency: number
+  load_factor?: number | null
   rate_multiplier: number
   models: string[]
   group_ids: string[]
   secret: string
   expires_at: string
+  temp_unschedulable_rules: ProviderAccountTempUnschedulableRule[]
 }
 
 export interface ProviderAccountHealthCheck {

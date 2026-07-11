@@ -299,7 +299,7 @@ func writeCostAllocationError(c *gin.Context, err error) {
 }
 
 func gatewayTraceCSVRows(traces []controlplane.GatewayTrace) [][]string {
-	rows := [][]string{{"time", "project_id", "application_id", "api_key_id", "api_fingerprint", "model", "stream", "message_count", "provider_id", "provider_account_id", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_version", "policy_snapshot", "status", "http_status", "error_type", "input_tokens", "output_tokens", "latency_ms", "request_summary", "response_summary"}}
+	rows := [][]string{{"time", "project_id", "application_id", "api_key_id", "api_fingerprint", "model", "stream", "message_count", "provider_id", "provider_account_id", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_version", "policy_snapshot", "status", "http_status", "error_type", "input_tokens", "output_tokens", "latency_ms", "request_summary", "response_summary", "route_attempts"}}
 	for _, trace := range traces {
 		rows = append(rows, []string{
 			trace.CreatedAt.Format(time.RFC3339),
@@ -327,6 +327,7 @@ func gatewayTraceCSVRows(traces []controlplane.GatewayTrace) [][]string {
 			strconv.FormatInt(trace.LatencyMS, 10),
 			trace.RequestSummary,
 			trace.ResponseSummary,
+			trace.RouteAttempts,
 		})
 	}
 	return rows

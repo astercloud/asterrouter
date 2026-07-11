@@ -850,6 +850,7 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   schedulable BOOLEAN NOT NULL DEFAULT true,
   priority INTEGER NOT NULL DEFAULT 50,
   concurrency INTEGER NOT NULL DEFAULT 3,
+  load_factor INTEGER,
   rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
   models TEXT NOT NULL DEFAULT '[]',
   group_ids TEXT NOT NULL DEFAULT '[]',
@@ -859,11 +860,18 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   error_message TEXT NOT NULL DEFAULT '',
   last_used_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,
+  cooldown_until TIMESTAMPTZ,
+  temp_unschedulable_rules TEXT NOT NULL DEFAULT '[]',
+  temp_unschedulable_reason TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
 
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS load_factor INTEGER;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMPTZ;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS temp_unschedulable_rules TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS temp_unschedulable_reason TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS provider_account_health_checks (
   id TEXT PRIMARY KEY,
@@ -1000,6 +1008,7 @@ CREATE TABLE IF NOT EXISTS gateway_traces (
   output_tokens INTEGER NOT NULL DEFAULT 0,
   request_summary TEXT NOT NULL DEFAULT '',
   response_summary TEXT NOT NULL DEFAULT '',
+  route_attempts TEXT NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ NOT NULL
 );
 
@@ -1008,6 +1017,7 @@ ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_name TEXT NOT NULL DE
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_source TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_snapshot TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS route_attempts TEXT NOT NULL DEFAULT '[]';
 
 CREATE INDEX IF NOT EXISTS gateway_traces_created_idx
   ON gateway_traces(created_at DESC);
@@ -1256,7 +1266,7 @@ ON CONFLICT(id) DO UPDATE SET
 
 func (r *PostgresRepository) ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, provider_id, name, platform, auth_type, status, schedulable, priority, concurrency, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, created_at, updated_at
+SELECT id, provider_id, name, platform, auth_type, status, schedulable, priority, concurrency, load_factor, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at
 FROM provider_accounts
 ORDER BY priority ASC, name ASC
 `)
@@ -1268,18 +1278,27 @@ ORDER BY priority ASC, name ASC
 	var out []ProviderAccount
 	for rows.Next() {
 		var account ProviderAccount
-		var models, groupIDs string
-		var lastUsedAt, expiresAt sql.NullTime
-		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Name, &account.Platform, &account.AuthType, &account.Status, &account.Schedulable, &account.Priority, &account.Concurrency, &account.RateMultiplier, &models, &groupIDs, &account.SecretConfigured, &account.SecretHint, &account.SecretCiphertext, &account.ErrorMessage, &lastUsedAt, &expiresAt, &account.CreatedAt, &account.UpdatedAt); err != nil {
+		var models, groupIDs, tempUnschedulableRules string
+		var loadFactor sql.NullInt64
+		var lastUsedAt, expiresAt, cooldownUntil sql.NullTime
+		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Name, &account.Platform, &account.AuthType, &account.Status, &account.Schedulable, &account.Priority, &account.Concurrency, &loadFactor, &account.RateMultiplier, &models, &groupIDs, &account.SecretConfigured, &account.SecretHint, &account.SecretCiphertext, &account.ErrorMessage, &lastUsedAt, &expiresAt, &cooldownUntil, &tempUnschedulableRules, &account.TempUnschedulableReason, &account.CreatedAt, &account.UpdatedAt); err != nil {
 			return nil, err
 		}
 		account.Models = parseStringList(models)
 		account.GroupIDs = parseStringList(groupIDs)
+		account.TempUnschedulableRules = parseTempUnschedulableRules(tempUnschedulableRules)
+		if loadFactor.Valid {
+			v := int(loadFactor.Int64)
+			account.LoadFactor = &v
+		}
 		if lastUsedAt.Valid {
 			account.LastUsedAt = &lastUsedAt.Time
 		}
 		if expiresAt.Valid {
 			account.ExpiresAt = &expiresAt.Time
+		}
+		if cooldownUntil.Valid {
+			account.CooldownUntil = &cooldownUntil.Time
 		}
 		out = append(out, account)
 	}
@@ -1289,9 +1308,14 @@ ORDER BY priority ASC, name ASC
 func (r *PostgresRepository) SaveProviderAccount(ctx context.Context, account ProviderAccount) error {
 	models := marshalStringList(account.Models)
 	groupIDs := marshalStringList(account.GroupIDs)
+	tempUnschedulableRules := marshalTempUnschedulableRules(account.TempUnschedulableRules)
+	var loadFactor sql.NullInt64
+	if account.LoadFactor != nil {
+		loadFactor = sql.NullInt64{Int64: int64(*account.LoadFactor), Valid: true}
+	}
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO provider_accounts(id, provider_id, name, platform, auth_type, status, schedulable, priority, concurrency, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+INSERT INTO provider_accounts(id, provider_id, name, platform, auth_type, status, schedulable, priority, concurrency, load_factor, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
 ON CONFLICT(id) DO UPDATE SET
   provider_id = EXCLUDED.provider_id,
   name = EXCLUDED.name,
@@ -1301,6 +1325,7 @@ ON CONFLICT(id) DO UPDATE SET
   schedulable = EXCLUDED.schedulable,
   priority = EXCLUDED.priority,
   concurrency = EXCLUDED.concurrency,
+  load_factor = EXCLUDED.load_factor,
   rate_multiplier = EXCLUDED.rate_multiplier,
   models = EXCLUDED.models,
   group_ids = EXCLUDED.group_ids,
@@ -1310,8 +1335,11 @@ ON CONFLICT(id) DO UPDATE SET
   error_message = EXCLUDED.error_message,
   last_used_at = EXCLUDED.last_used_at,
   expires_at = EXCLUDED.expires_at,
+  cooldown_until = EXCLUDED.cooldown_until,
+  temp_unschedulable_rules = EXCLUDED.temp_unschedulable_rules,
+  temp_unschedulable_reason = EXCLUDED.temp_unschedulable_reason,
   updated_at = EXCLUDED.updated_at
-`, account.ID, account.ProviderID, account.Name, account.Platform, account.AuthType, account.Status, account.Schedulable, account.Priority, account.Concurrency, account.RateMultiplier, models, groupIDs, account.SecretConfigured, account.SecretHint, account.SecretCiphertext, account.ErrorMessage, account.LastUsedAt, account.ExpiresAt, account.CreatedAt, account.UpdatedAt)
+`, account.ID, account.ProviderID, account.Name, account.Platform, account.AuthType, account.Status, account.Schedulable, account.Priority, account.Concurrency, loadFactor, account.RateMultiplier, models, groupIDs, account.SecretConfigured, account.SecretHint, account.SecretCiphertext, account.ErrorMessage, account.LastUsedAt, account.ExpiresAt, account.CooldownUntil, tempUnschedulableRules, account.TempUnschedulableReason, account.CreatedAt, account.UpdatedAt)
 	return err
 }
 
@@ -1628,10 +1656,17 @@ WHERE project_id = $1 AND created_at >= $2
 
 func (r *PostgresRepository) SaveGatewayTrace(ctx context.Context, trace GatewayTrace) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO gateway_traces(id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
-`, trace.ID, trace.ProjectID, trace.ApplicationID, trace.APIKeyID, trace.APIFingerprint, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicyVersion, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, trace.CreatedAt)
+INSERT INTO gateway_traces(id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+`, trace.ID, trace.ProjectID, trace.ApplicationID, trace.APIKeyID, trace.APIFingerprint, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicyVersion, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, defaultJSONArray(trace.RouteAttempts), trace.CreatedAt)
 	return err
+}
+
+func defaultJSONArray(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "[]"
+	}
+	return value
 }
 
 func (r *PostgresRepository) ListGatewayTraces(ctx context.Context, limit int) ([]GatewayTrace, error) {
@@ -1644,7 +1679,7 @@ func (r *PostgresRepository) QueryGatewayTraces(ctx context.Context, query Gatew
 	args := []any{}
 	appendGatewayTraceFilters(&clauses, &args, query)
 	sqlText := `
-SELECT id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at
+SELECT id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at
 FROM gateway_traces`
 	if len(clauses) > 0 {
 		sqlText += " WHERE " + strings.Join(clauses, " AND ")
@@ -1659,7 +1694,7 @@ FROM gateway_traces`
 	var out []GatewayTrace
 	for rows.Next() {
 		var trace GatewayTrace
-		if err := rows.Scan(&trace.ID, &trace.ProjectID, &trace.ApplicationID, &trace.APIKeyID, &trace.APIFingerprint, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicyVersion, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.CreatedAt); err != nil {
+		if err := rows.Scan(&trace.ID, &trace.ProjectID, &trace.ApplicationID, &trace.APIKeyID, &trace.APIFingerprint, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicyVersion, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.RouteAttempts, &trace.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, trace)
@@ -1780,6 +1815,22 @@ func parseStringList(value string) []string {
 	var out []string
 	if err := json.Unmarshal([]byte(value), &out); err != nil {
 		return []string{}
+	}
+	return out
+}
+
+func marshalTempUnschedulableRules(rules []ProviderAccountTempUnschedulableRule) string {
+	raw, err := json.Marshal(rules)
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
+}
+
+func parseTempUnschedulableRules(value string) []ProviderAccountTempUnschedulableRule {
+	var out []ProviderAccountTempUnschedulableRule
+	if err := json.Unmarshal([]byte(value), &out); err != nil {
+		return []ProviderAccountTempUnschedulableRule{}
 	}
 	return out
 }
