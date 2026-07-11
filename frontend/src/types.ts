@@ -133,6 +133,8 @@ export interface GovernancePolicy {
   id: string
   name: string
   description: string
+  version: number
+  last_updated_by: string
   scope_type: string
   scope_id: string
   model_allowlist: string[]
@@ -149,6 +151,29 @@ export interface GovernancePolicy {
   status: string
   created_at: string
   updated_at: string
+}
+
+export interface GatewayPolicyCandidate {
+  policy_id: string
+  policy_name: string
+  policy_version: number
+  source: string
+  scope_type: string
+  scope_id: string
+  status: string
+  matched: boolean
+  selected: boolean
+  reason: string
+}
+
+export interface GatewayPolicyExplanation {
+  api_key_id: string
+  project_id: string
+  selected_policy_id: string
+  selected_policy_name: string
+  selected_policy_version: number
+  selected_source: string
+  candidates: GatewayPolicyCandidate[]
 }
 
 export interface GovernancePolicyRequest {
@@ -752,6 +777,7 @@ export interface GatewayTrace {
   policy_id: string
   policy_name: string
   policy_source: string
+  policy_version: number
   policy_snapshot: string
   status: string
   http_status: number

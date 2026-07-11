@@ -16,6 +16,7 @@ import type {
   Dashboard,
   ExportJob,
   ExportJobKind,
+  GatewayPolicyExplanation,
   GatewayTrace,
   GatewayTraceSummary,
   GovernancePolicy,
@@ -263,6 +264,11 @@ export async function updateModelPricing(id: string, payload: ModelPricingReques
 
 export async function getAPIKeys(): Promise<APIKeyRecord[]> {
   const response = await apiClient.get<APIKeyRecord[]>('/admin/api-keys')
+  return response.data
+}
+
+export async function getAPIKeyPolicyExplanation(id: string): Promise<GatewayPolicyExplanation> {
+  const response = await apiClient.get<GatewayPolicyExplanation>(`/admin/api-keys/${id}/policy-explanation`)
   return response.data
 }
 

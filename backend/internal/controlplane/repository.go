@@ -908,9 +908,14 @@ CREATE TABLE IF NOT EXISTS governance_policies (
   image_input_allowed BOOLEAN NOT NULL DEFAULT true,
   web_access_allowed BOOLEAN NOT NULL DEFAULT false,
   status TEXT NOT NULL DEFAULT 'active',
+  version INTEGER NOT NULL DEFAULT 1,
+  last_updated_by TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE governance_policies ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE governance_policies ADD COLUMN IF NOT EXISTS last_updated_by TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS governance_policies_scope_idx
   ON governance_policies(scope_type, scope_id);
@@ -985,6 +990,7 @@ CREATE TABLE IF NOT EXISTS gateway_traces (
   policy_id TEXT NOT NULL DEFAULT '',
   policy_name TEXT NOT NULL DEFAULT '',
   policy_source TEXT NOT NULL DEFAULT '',
+  policy_version INTEGER NOT NULL DEFAULT 0,
   policy_snapshot TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL,
   http_status INTEGER NOT NULL DEFAULT 0,
@@ -1000,6 +1006,7 @@ CREATE TABLE IF NOT EXISTS gateway_traces (
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_snapshot TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS gateway_traces_created_idx
@@ -1621,9 +1628,9 @@ WHERE project_id = $1 AND created_at >= $2
 
 func (r *PostgresRepository) SaveGatewayTrace(ctx context.Context, trace GatewayTrace) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO gateway_traces(id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
-`, trace.ID, trace.ProjectID, trace.ApplicationID, trace.APIKeyID, trace.APIFingerprint, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, trace.CreatedAt)
+INSERT INTO gateway_traces(id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+`, trace.ID, trace.ProjectID, trace.ApplicationID, trace.APIKeyID, trace.APIFingerprint, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicyVersion, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, trace.CreatedAt)
 	return err
 }
 
@@ -1637,7 +1644,7 @@ func (r *PostgresRepository) QueryGatewayTraces(ctx context.Context, query Gatew
 	args := []any{}
 	appendGatewayTraceFilters(&clauses, &args, query)
 	sqlText := `
-SELECT id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at
+SELECT id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, created_at
 FROM gateway_traces`
 	if len(clauses) > 0 {
 		sqlText += " WHERE " + strings.Join(clauses, " AND ")
@@ -1652,7 +1659,7 @@ FROM gateway_traces`
 	var out []GatewayTrace
 	for rows.Next() {
 		var trace GatewayTrace
-		if err := rows.Scan(&trace.ID, &trace.ProjectID, &trace.ApplicationID, &trace.APIKeyID, &trace.APIFingerprint, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.CreatedAt); err != nil {
+		if err := rows.Scan(&trace.ID, &trace.ProjectID, &trace.ApplicationID, &trace.APIKeyID, &trace.APIFingerprint, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicyVersion, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, trace)

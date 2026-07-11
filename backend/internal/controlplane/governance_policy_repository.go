@@ -32,7 +32,7 @@ func (r *PostgresRepository) ListGovernancePolicies(ctx context.Context) ([]Gove
 	rows, err := r.db.QueryContext(ctx, `
 SELECT id, name, description, scope_type, scope_id, model_allowlist, model_denylist, qps_limit,
   monthly_token_limit, monthly_budget_cents, overage_action, prompt_logging_mode, retention_days,
-  tool_call_allowed, image_input_allowed, web_access_allowed, status, created_at, updated_at
+  tool_call_allowed, image_input_allowed, web_access_allowed, status, version, last_updated_by, created_at, updated_at
 FROM governance_policies
 ORDER BY status ASC, name ASC
 `)
@@ -62,6 +62,8 @@ ORDER BY status ASC, name ASC
 			&policy.ImageInputAllowed,
 			&policy.WebAccessAllowed,
 			&policy.Status,
+			&policy.Version,
+			&policy.LastUpdatedBy,
 			&policy.CreatedAt,
 			&policy.UpdatedAt,
 		); err != nil {
@@ -81,8 +83,8 @@ func (r *PostgresRepository) SaveGovernancePolicy(ctx context.Context, policy Go
 INSERT INTO governance_policies(
   id, name, description, scope_type, scope_id, model_allowlist, model_denylist, qps_limit,
   monthly_token_limit, monthly_budget_cents, overage_action, prompt_logging_mode, retention_days,
-  tool_call_allowed, image_input_allowed, web_access_allowed, status, created_at, updated_at
-) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+  tool_call_allowed, image_input_allowed, web_access_allowed, status, version, last_updated_by, created_at, updated_at
+) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 ON CONFLICT(id) DO UPDATE SET
   name = EXCLUDED.name,
   description = EXCLUDED.description,
@@ -100,7 +102,9 @@ ON CONFLICT(id) DO UPDATE SET
   image_input_allowed = EXCLUDED.image_input_allowed,
   web_access_allowed = EXCLUDED.web_access_allowed,
   status = EXCLUDED.status,
+  version = EXCLUDED.version,
+  last_updated_by = EXCLUDED.last_updated_by,
   updated_at = EXCLUDED.updated_at
-`, policy.ID, policy.Name, policy.Description, policy.ScopeType, policy.ScopeID, allowlist, denylist, policy.QPSLimit, policy.MonthlyTokenLimit, policy.MonthlyBudgetCents, policy.OverageAction, policy.PromptLoggingMode, policy.RetentionDays, policy.ToolCallAllowed, policy.ImageInputAllowed, policy.WebAccessAllowed, policy.Status, policy.CreatedAt, policy.UpdatedAt)
+`, policy.ID, policy.Name, policy.Description, policy.ScopeType, policy.ScopeID, allowlist, denylist, policy.QPSLimit, policy.MonthlyTokenLimit, policy.MonthlyBudgetCents, policy.OverageAction, policy.PromptLoggingMode, policy.RetentionDays, policy.ToolCallAllowed, policy.ImageInputAllowed, policy.WebAccessAllowed, policy.Status, governancePolicyVersion(policy), policy.LastUpdatedBy, policy.CreatedAt, policy.UpdatedAt)
 	return err
 }

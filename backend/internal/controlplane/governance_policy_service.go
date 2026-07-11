@@ -22,6 +22,8 @@ func (s *Service) CreateGovernancePolicy(ctx context.Context, actor string, req 
 		return GovernancePolicy{}, err
 	}
 	policy.ID = "pol_" + randomID(10)
+	policy.Version = 1
+	policy.LastUpdatedBy = actorOrSystem(actor)
 	if err := s.repo.SaveGovernancePolicy(ctx, policy); err != nil {
 		return GovernancePolicy{}, err
 	}
@@ -44,6 +46,8 @@ func (s *Service) UpdateGovernancePolicy(ctx context.Context, actor string, id s
 		return GovernancePolicy{}, err
 	}
 	policy.ID = existing.ID
+	policy.Version = nonNegative(existing.Version) + 1
+	policy.LastUpdatedBy = actorOrSystem(actor)
 	policy.CreatedAt = existing.CreatedAt
 	policy.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveGovernancePolicy(ctx, policy); err != nil {
@@ -53,6 +57,25 @@ func (s *Service) UpdateGovernancePolicy(ctx context.Context, actor string, id s
 		return GovernancePolicy{}, err
 	}
 	return policy, nil
+}
+
+func (s *Service) ExplainGatewayPolicyForAPIKey(ctx context.Context, apiKeyID string) (GatewayPolicyExplanation, error) {
+	key, err := s.apiKeyByID(ctx, apiKeyID)
+	if err != nil {
+		return GatewayPolicyExplanation{}, err
+	}
+	project, err := s.projectByID(ctx, key.ProjectID)
+	if err != nil {
+		return GatewayPolicyExplanation{}, err
+	}
+	policies, err := s.repo.ListGovernancePolicies(ctx)
+	if err != nil {
+		return GatewayPolicyExplanation{}, err
+	}
+	explanation := explainGatewayPolicy(policies, key, project)
+	explanation.APIKeyID = key.ID
+	explanation.ProjectID = project.ID
+	return explanation, nil
 }
 
 func governancePolicyFromRequest(req GovernancePolicyRequest, createdAt time.Time) (GovernancePolicy, error) {
@@ -182,4 +205,12 @@ func normalizeStringSet(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func actorOrSystem(actor string) string {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return systemActor
+	}
+	return actor
 }

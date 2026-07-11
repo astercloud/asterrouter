@@ -111,7 +111,7 @@ func TestAdminGovernancePolicyEndpoints(t *testing.T) {
 	if err := json.Unmarshal(createRec.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("decode create policy: %v", err)
 	}
-	if createResp.Data.ID == "" || createResp.Data.Name != "Platform policy" || createResp.Data.QPSLimit != 10 {
+	if createResp.Data.ID == "" || createResp.Data.Name != "Platform policy" || createResp.Data.QPSLimit != 10 || createResp.Data.Version != 1 {
 		t.Fatalf("created policy mismatch: %+v", createResp.Data)
 	}
 
@@ -129,7 +129,7 @@ func TestAdminGovernancePolicyEndpoints(t *testing.T) {
 	if err := json.Unmarshal(updateRec.Body.Bytes(), &updateResp); err != nil {
 		t.Fatalf("decode update policy: %v", err)
 	}
-	if updateResp.Data.Status != controlplane.GovernancePolicyStatusDisabled || updateResp.Data.OverageAction != controlplane.GovernancePolicyOverageWarn {
+	if updateResp.Data.Status != controlplane.GovernancePolicyStatusDisabled || updateResp.Data.OverageAction != controlplane.GovernancePolicyOverageWarn || updateResp.Data.Version != 2 {
 		t.Fatalf("updated policy mismatch: %+v", updateResp.Data)
 	}
 
@@ -566,6 +566,59 @@ func TestCreateAPIKeyEndpoint(t *testing.T) {
 	}
 	if resp.Data.Key == "" || resp.Data.Record.Fingerprint == "" {
 		t.Fatalf("api key response incomplete: %+v", resp.Data)
+	}
+}
+
+func TestAPIKeyPolicyExplanationEndpoint(t *testing.T) {
+	handler := newTestHandler(t, config.Config{})
+
+	policyBody := bytes.NewBufferString(`{"name":"Platform policy","scope_type":"global","model_allowlist":["gpt-4o-mini"],"qps_limit":5,"monthly_token_limit":1000,"overage_action":"block","prompt_logging_mode":"metadata_only","retention_days":30,"tool_call_allowed":true,"image_input_allowed":true,"web_access_allowed":false,"status":"active"}`)
+	policyReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/policies", policyBody)
+	policyReq.Header.Set("Content-Type", "application/json")
+	policyRec := httptest.NewRecorder()
+	handler.ServeHTTP(policyRec, policyReq)
+	if policyRec.Code != http.StatusOK {
+		t.Fatalf("create policy status = %d body=%s", policyRec.Code, policyRec.Body.String())
+	}
+	var policyResp struct {
+		Data controlplane.GovernancePolicy `json:"data"`
+	}
+	if err := json.Unmarshal(policyRec.Body.Bytes(), &policyResp); err != nil {
+		t.Fatalf("decode policy: %v", err)
+	}
+
+	keyBody := bytes.NewBufferString(`{"project_id":"proj_platform","application_id":"app_internal_sandbox","name":"demo","policy_id":"` + policyResp.Data.ID + `","model_allowlist":["gpt-4o-mini"],"qps_limit":2,"monthly_token_limit":1000}`)
+	keyReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys", keyBody)
+	keyReq.Header.Set("Content-Type", "application/json")
+	keyRec := httptest.NewRecorder()
+	handler.ServeHTTP(keyRec, keyReq)
+	if keyRec.Code != http.StatusOK {
+		t.Fatalf("create key status = %d body=%s", keyRec.Code, keyRec.Body.String())
+	}
+	var keyResp struct {
+		Data controlplane.APIKeyCreateResponse `json:"data"`
+	}
+	if err := json.Unmarshal(keyRec.Body.Bytes(), &keyResp); err != nil {
+		t.Fatalf("decode key: %v", err)
+	}
+
+	explainReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/api-keys/"+keyResp.Data.Record.ID+"/policy-explanation", nil)
+	explainRec := httptest.NewRecorder()
+	handler.ServeHTTP(explainRec, explainReq)
+	if explainRec.Code != http.StatusOK {
+		t.Fatalf("explain status = %d body=%s", explainRec.Code, explainRec.Body.String())
+	}
+	var explainResp struct {
+		Data controlplane.GatewayPolicyExplanation `json:"data"`
+	}
+	if err := json.Unmarshal(explainRec.Body.Bytes(), &explainResp); err != nil {
+		t.Fatalf("decode explanation: %v", err)
+	}
+	if explainResp.Data.SelectedPolicyID != policyResp.Data.ID || explainResp.Data.SelectedPolicyVersion != 1 || explainResp.Data.SelectedSource != controlplane.GatewayPolicySourceAPIKeyExplicit {
+		t.Fatalf("explanation mismatch: %+v", explainResp.Data)
+	}
+	if len(explainResp.Data.Candidates) == 0 || !explainResp.Data.Candidates[0].Selected {
+		t.Fatalf("explanation candidates mismatch: %+v", explainResp.Data.Candidates)
 	}
 }
 

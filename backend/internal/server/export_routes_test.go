@@ -62,7 +62,7 @@ func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 	traceRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceRec, traceReq)
 	traceRows := readCSVRows(t, traceRec)
-	if len(traceRows) != 2 || traceRows[0][5] != "model" || traceRows[0][16] != "status" || traceRows[1][5] != "model-b" || traceRows[1][16] != "error" {
+	if len(traceRows) != 2 || traceRows[0][5] != "model" || traceRows[0][16] != "policy_snapshot" || traceRows[0][17] != "status" || traceRows[1][5] != "model-b" || traceRows[1][17] != "error" {
 		t.Fatalf("trace export query not applied: %+v", traceRows)
 	}
 	if strings.Contains(traceRec.Body.String(), "provider-a") {

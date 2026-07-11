@@ -23,6 +23,11 @@ import (
 const systemActor = "system"
 
 const (
+	defaultWorkspaceProjectID     = "proj_platform"
+	defaultWorkspaceApplicationID = "app_internal_sandbox"
+)
+
+const (
 	providerProbeTimeout   = 15 * time.Second
 	providerProbeBodyLimit = 2 << 20
 )
@@ -92,21 +97,21 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 		UpdatedAt:        now,
 	}
 	project := Project{
-		ID:                 "proj_platform",
-		Name:               "Platform Engineering",
-		Description:        "Default project for product validation.",
-		CostCenter:         "IT-PLATFORM",
+		ID:                 defaultWorkspaceProjectID,
+		Name:               "Workspace Default",
+		Description:        "Hidden default boundary for workspace keys.",
+		CostCenter:         "WORKSPACE",
 		MonthlyBudgetCents: 50000,
 		Status:             ProjectStatusActive,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
 	app := Application{
-		ID:          "app_internal_sandbox",
+		ID:          defaultWorkspaceApplicationID,
 		ProjectID:   project.ID,
-		Name:        "Internal AI Sandbox",
-		Environment: "dev",
-		Owner:       "platform",
+		Name:        "Workspace Gateway",
+		Environment: "default",
+		Owner:       "workspace",
 		Status:      ApplicationStatusActive,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -732,10 +737,8 @@ func (s *Service) ListAPIKeys(ctx context.Context) ([]APIKeyRecord, error) {
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCreateRequest) (APIKeyCreateResponse, error) {
-	if err := s.projectExists(ctx, req.ProjectID); err != nil {
-		return APIKeyCreateResponse{}, err
-	}
-	if err := s.applicationExists(ctx, req.ApplicationID); err != nil {
+	projectID, applicationID, err := s.resolveAPIKeyBoundary(ctx, actor, req.ProjectID, req.ApplicationID)
+	if err != nil {
 		return APIKeyCreateResponse{}, err
 	}
 	name := strings.TrimSpace(req.Name)
@@ -762,8 +765,8 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCrea
 	now := time.Now().UTC()
 	record := APIKeyRecord{
 		ID:                "key_" + randomID(10),
-		ProjectID:         req.ProjectID,
-		ApplicationID:     req.ApplicationID,
+		ProjectID:         projectID,
+		ApplicationID:     applicationID,
 		Name:              name,
 		KeyHash:           hash,
 		Fingerprint:       fingerprint(hash),
@@ -831,6 +834,58 @@ func (s *Service) UpdateAPIKey(ctx context.Context, actor string, id string, req
 		return APIKeyRecord{}, err
 	}
 	return key, nil
+}
+
+func (s *Service) resolveAPIKeyBoundary(ctx context.Context, actor string, projectID string, applicationID string) (string, string, error) {
+	projectID = strings.TrimSpace(projectID)
+	applicationID = strings.TrimSpace(applicationID)
+	if projectID == "" && applicationID == "" {
+		return s.ensureDefaultWorkspaceBoundary(ctx, actor)
+	}
+	if err := s.projectExists(ctx, projectID); err != nil {
+		return "", "", err
+	}
+	if err := s.applicationExists(ctx, applicationID); err != nil {
+		return "", "", err
+	}
+	return projectID, applicationID, nil
+}
+
+func (s *Service) ensureDefaultWorkspaceBoundary(ctx context.Context, actor string) (string, string, error) {
+	now := time.Now().UTC()
+	if _, err := s.projectByID(ctx, defaultWorkspaceProjectID); err != nil {
+		project := Project{
+			ID:                 defaultWorkspaceProjectID,
+			Name:               "Workspace Default",
+			Description:        "Hidden default boundary for workspace keys.",
+			CostCenter:         "WORKSPACE",
+			MonthlyBudgetCents: 0,
+			Status:             ProjectStatusActive,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		if err := s.repo.SaveProject(ctx, project); err != nil {
+			return "", "", err
+		}
+		_ = s.audit(ctx, actorOrSystem(actor), "seed", "project", project.ID, "Created hidden workspace default project")
+	}
+	if _, err := s.applicationByID(ctx, defaultWorkspaceApplicationID); err != nil {
+		app := Application{
+			ID:          defaultWorkspaceApplicationID,
+			ProjectID:   defaultWorkspaceProjectID,
+			Name:        "Workspace Gateway",
+			Environment: "default",
+			Owner:       "workspace",
+			Status:      ApplicationStatusActive,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := s.repo.SaveApplication(ctx, app); err != nil {
+			return "", "", err
+		}
+		_ = s.audit(ctx, actorOrSystem(actor), "seed", "application", app.ID, "Created hidden workspace default application")
+	}
+	return defaultWorkspaceProjectID, defaultWorkspaceApplicationID, nil
 }
 
 func (s *Service) RotateAPIKey(ctx context.Context, actor string, id string) (APIKeyCreateResponse, error) {
@@ -1089,7 +1144,7 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 	if status == "" {
 		status = "accepted"
 	}
-	policyID, policyName, policySource, policySnapshot := gatewayTracePolicyEvidence(auth)
+	policyID, policyName, policySource, policyVersion, policySnapshot := gatewayTracePolicyEvidence(auth)
 	return s.repo.SaveGatewayTrace(ctx, GatewayTrace{
 		ID:                "trace_" + randomID(12),
 		ProjectID:         auth.Project.ID,
@@ -1106,6 +1161,7 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 		PolicyID:          policyID,
 		PolicyName:        policyName,
 		PolicySource:      policySource,
+		PolicyVersion:     policyVersion,
 		PolicySnapshot:    policySnapshot,
 		Status:            status,
 		HTTPStatus:        nonNegative(in.HTTPStatus),
@@ -1120,6 +1176,7 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 }
 
 type gatewayTracePolicySnapshot struct {
+	Version             int    `json:"version"`
 	QPSLimit            int    `json:"qps_limit"`
 	MonthlyTokenLimit   int    `json:"monthly_token_limit"`
 	MonthlyBudgetCents  int    `json:"monthly_budget_cents"`
@@ -1133,11 +1190,13 @@ type gatewayTracePolicySnapshot struct {
 	WebAccessAllowed    bool   `json:"web_access_allowed"`
 }
 
-func gatewayTracePolicyEvidence(auth GatewayAuthContext) (string, string, string, string) {
+func gatewayTracePolicyEvidence(auth GatewayAuthContext) (string, string, string, int, string) {
 	if auth.Policy == nil {
-		return "", "", "", ""
+		return "", "", "", 0, ""
 	}
+	version := governancePolicyVersion(*auth.Policy)
 	snapshot := gatewayTracePolicySnapshot{
+		Version:             version,
 		QPSLimit:            auth.effectiveQPSLimit(),
 		MonthlyTokenLimit:   auth.effectiveMonthlyTokenLimit(),
 		MonthlyBudgetCents:  auth.effectiveMonthlyBudgetCents(),
@@ -1152,9 +1211,9 @@ func gatewayTracePolicyEvidence(auth GatewayAuthContext) (string, string, string
 	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
-		return auth.Policy.ID, auth.Policy.Name, auth.PolicySource, ""
+		return auth.Policy.ID, auth.Policy.Name, auth.PolicySource, version, ""
 	}
-	return auth.Policy.ID, auth.Policy.Name, auth.PolicySource, string(data)
+	return auth.Policy.ID, auth.Policy.Name, auth.PolicySource, version, string(data)
 }
 
 func (s *Service) ListGatewayTraces(ctx context.Context, limit int) ([]GatewayTrace, error) {

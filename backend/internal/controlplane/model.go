@@ -386,6 +386,7 @@ type GatewayTrace struct {
 	PolicyID          string    `json:"policy_id"`
 	PolicyName        string    `json:"policy_name"`
 	PolicySource      string    `json:"policy_source"`
+	PolicyVersion     int       `json:"policy_version"`
 	PolicySnapshot    string    `json:"policy_snapshot"`
 	Status            string    `json:"status"`
 	HTTPStatus        int       `json:"http_status"`

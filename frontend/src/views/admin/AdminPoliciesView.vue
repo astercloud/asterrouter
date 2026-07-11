@@ -130,6 +130,10 @@ function statusClass(status: string): string {
   return status === 'active' ? 'status-success' : 'status-danger'
 }
 
+function formatDate(value: string): string {
+  return value ? new Date(value).toLocaleString() : '-'
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -227,6 +231,7 @@ onMounted(load)
               <th>{{ t('policies.scope') }}</th>
               <th>{{ t('policies.limits') }}</th>
               <th>{{ t('policies.modelRules') }}</th>
+              <th>{{ t('common.version') }}</th>
               <th>{{ t('providers.status') }}</th>
               <th>{{ t('common.actions') }}</th>
             </tr>
@@ -249,6 +254,10 @@ onMounted(load)
                 <strong>{{ policy.overage_action }} · {{ policy.prompt_logging_mode }}</strong>
                 <span>{{ policy.model_allowlist.length }} allow · {{ policy.model_denylist.length }} deny</span>
               </td>
+              <td>
+                <strong>v{{ policy.version || 1 }}</strong>
+                <span>{{ policy.last_updated_by || '-' }} · {{ formatDate(policy.updated_at) }}</span>
+              </td>
               <td><span class="pill" :class="statusClass(policy.status)">{{ policy.status }}</span></td>
               <td>
                 <button class="button secondary" type="button" @click="openEdit(policy)">
@@ -258,7 +267,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="!filteredPolicies.length">
-              <td colspan="6" class="empty-cell">{{ loading ? t('common.loading') : t('policies.empty') }}</td>
+              <td colspan="7" class="empty-cell">{{ loading ? t('common.loading') : t('policies.empty') }}</td>
             </tr>
           </tbody>
         </table>

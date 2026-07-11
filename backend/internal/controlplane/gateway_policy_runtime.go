@@ -19,22 +19,8 @@ func (s *Service) effectiveGatewayPolicy(ctx context.Context, key APIKeyRecord, 
 	if err != nil {
 		return nil, "", err
 	}
-	if policy, ok := activePolicyByID(policies, key.PolicyID); ok {
-		return &policy, GatewayPolicySourceAPIKeyExplicit, nil
-	}
-	if policy, ok := activePolicyByScope(policies, GovernancePolicyScopeAPIKey, key.ID); ok {
-		return &policy, GatewayPolicySourceAPIKeyScope, nil
-	}
-	if policy, ok := activePolicyByID(policies, project.PolicyID); ok {
-		return &policy, GatewayPolicySourceProjectExplicit, nil
-	}
-	if policy, ok := activePolicyByScope(policies, GovernancePolicyScopeProject, project.ID); ok {
-		return &policy, GatewayPolicySourceProjectScope, nil
-	}
-	if policy, ok := activePolicyByScope(policies, GovernancePolicyScopeGlobal, ""); ok {
-		return &policy, GatewayPolicySourceGlobalScope, nil
-	}
-	return nil, "", nil
+	policy, source := effectiveGatewayPolicyFromPolicies(policies, key, project)
+	return policy, source, nil
 }
 
 func (s *Service) gatewayModelAllowed(auth GatewayAuthContext, model string) bool {
@@ -101,4 +87,102 @@ func activePolicyByScope(policies []GovernancePolicy, scopeType string, scopeID 
 		}
 	}
 	return GovernancePolicy{}, false
+}
+
+func effectiveGatewayPolicyFromPolicies(policies []GovernancePolicy, key APIKeyRecord, project Project) (*GovernancePolicy, string) {
+	explanation := explainGatewayPolicy(policies, key, project)
+	if explanation.SelectedPolicyID == "" {
+		return nil, ""
+	}
+	for _, policy := range policies {
+		if policy.ID == explanation.SelectedPolicyID {
+			selected := policy
+			return &selected, explanation.SelectedSource
+		}
+	}
+	return nil, ""
+}
+
+func explainGatewayPolicy(policies []GovernancePolicy, key APIKeyRecord, project Project) GatewayPolicyExplanation {
+	explanation := GatewayPolicyExplanation{
+		APIKeyID:  key.ID,
+		ProjectID: project.ID,
+	}
+	sources := []gatewayPolicyCandidateSource{
+		{Source: GatewayPolicySourceAPIKeyExplicit, ExplicitPolicyID: key.PolicyID, MissingReason: "api key explicit policy reference not found"},
+		{Source: GatewayPolicySourceAPIKeyScope, ScopeType: GovernancePolicyScopeAPIKey, ScopeID: key.ID},
+		{Source: GatewayPolicySourceProjectExplicit, ExplicitPolicyID: project.PolicyID, MissingReason: "project explicit policy reference not found"},
+		{Source: GatewayPolicySourceProjectScope, ScopeType: GovernancePolicyScopeProject, ScopeID: project.ID},
+		{Source: GatewayPolicySourceGlobalScope, ScopeType: GovernancePolicyScopeGlobal, ScopeID: ""},
+	}
+	for _, source := range sources {
+		candidates := gatewayPolicyCandidatesForSource(policies, source)
+		if len(candidates) == 0 && strings.TrimSpace(source.ExplicitPolicyID) != "" {
+			explanation.Candidates = append(explanation.Candidates, GatewayPolicyCandidate{
+				PolicyID: strings.TrimSpace(source.ExplicitPolicyID),
+				Source:   source.Source,
+				Matched:  false,
+				Reason:   source.MissingReason,
+			})
+			continue
+		}
+		for _, candidate := range candidates {
+			if explanation.SelectedPolicyID == "" && candidate.Status == GovernancePolicyStatusActive {
+				candidate.Selected = true
+				candidate.Reason = "selected by " + strings.ReplaceAll(source.Source, "_", " ")
+				explanation.SelectedPolicyID = candidate.PolicyID
+				explanation.SelectedPolicyName = candidate.PolicyName
+				explanation.SelectedPolicyVersion = candidate.PolicyVersion
+				explanation.SelectedSource = candidate.Source
+			} else if candidate.Status != GovernancePolicyStatusActive {
+				candidate.Reason = "policy disabled"
+			} else if explanation.SelectedSource == candidate.Source {
+				candidate.Reason = "matched same source but another policy was selected first"
+			} else {
+				candidate.Reason = "matched but lower priority than " + strings.ReplaceAll(explanation.SelectedSource, "_", " ")
+			}
+			explanation.Candidates = append(explanation.Candidates, candidate)
+		}
+	}
+	return explanation
+}
+
+type gatewayPolicyCandidateSource struct {
+	Source           string
+	ExplicitPolicyID string
+	ScopeType        string
+	ScopeID          string
+	MissingReason    string
+}
+
+func gatewayPolicyCandidatesForSource(policies []GovernancePolicy, source gatewayPolicyCandidateSource) []GatewayPolicyCandidate {
+	out := []GatewayPolicyCandidate{}
+	explicitPolicyID := strings.TrimSpace(source.ExplicitPolicyID)
+	for _, policy := range policies {
+		if explicitPolicyID != "" {
+			if policy.ID != explicitPolicyID {
+				continue
+			}
+		} else if policy.ScopeType != source.ScopeType || policy.ScopeID != source.ScopeID {
+			continue
+		}
+		out = append(out, GatewayPolicyCandidate{
+			PolicyID:      policy.ID,
+			PolicyName:    policy.Name,
+			PolicyVersion: governancePolicyVersion(policy),
+			Source:        source.Source,
+			ScopeType:     policy.ScopeType,
+			ScopeID:       policy.ScopeID,
+			Status:        policy.Status,
+			Matched:       true,
+		})
+	}
+	return out
+}
+
+func governancePolicyVersion(policy GovernancePolicy) int {
+	if policy.Version <= 0 {
+		return 1
+	}
+	return policy.Version
 }

@@ -30,6 +30,8 @@ type GovernancePolicy struct {
 	ID                 string    `json:"id"`
 	Name               string    `json:"name"`
 	Description        string    `json:"description"`
+	Version            int       `json:"version"`
+	LastUpdatedBy      string    `json:"last_updated_by"`
 	ScopeType          string    `json:"scope_type"`
 	ScopeID            string    `json:"scope_id"`
 	ModelAllowlist     []string  `json:"model_allowlist"`
@@ -46,6 +48,29 @@ type GovernancePolicy struct {
 	Status             string    `json:"status"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+type GatewayPolicyExplanation struct {
+	APIKeyID              string                   `json:"api_key_id"`
+	ProjectID             string                   `json:"project_id"`
+	SelectedPolicyID      string                   `json:"selected_policy_id"`
+	SelectedPolicyName    string                   `json:"selected_policy_name"`
+	SelectedPolicyVersion int                      `json:"selected_policy_version"`
+	SelectedSource        string                   `json:"selected_source"`
+	Candidates            []GatewayPolicyCandidate `json:"candidates"`
+}
+
+type GatewayPolicyCandidate struct {
+	PolicyID      string `json:"policy_id"`
+	PolicyName    string `json:"policy_name"`
+	PolicyVersion int    `json:"policy_version"`
+	Source        string `json:"source"`
+	ScopeType     string `json:"scope_type"`
+	ScopeID       string `json:"scope_id"`
+	Status        string `json:"status"`
+	Matched       bool   `json:"matched"`
+	Selected      bool   `json:"selected"`
+	Reason        string `json:"reason"`
 }
 
 type GovernancePolicyRequest struct {

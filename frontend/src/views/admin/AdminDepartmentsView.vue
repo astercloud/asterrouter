@@ -94,12 +94,20 @@ function formatCost(cents: number): string {
   }).format(cents / 100)
 }
 
+function isEmptyListError(err: unknown): boolean {
+  return err instanceof Error && err.message.trim().toLowerCase() === 'not found'
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
     departments.value = await getDepartments()
   } catch (err) {
+    if (isEmptyListError(err)) {
+      departments.value = []
+      return
+    }
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
     loading.value = false

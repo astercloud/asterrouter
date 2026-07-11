@@ -6,6 +6,7 @@ import {
   createAPIKey,
   disableAPIKey,
   getAPIKeys,
+  getAPIKeyPolicyExplanation,
   getApplications,
   getGatewayTraces,
   getGovernancePolicies,
@@ -14,7 +15,7 @@ import {
   rotateAPIKey,
   updateAPIKey
 } from '@/api/control'
-import type { APIKeyCreateRequest, APIKeyRecord, Application, GatewayTrace, GovernancePolicy, Project, UsageReport } from '@/types'
+import type { APIKeyCreateRequest, APIKeyRecord, Application, GatewayPolicyExplanation, GatewayTrace, GovernancePolicy, Project, UsageReport } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -28,6 +29,7 @@ const detailLoading = ref(false)
 const detailError = ref('')
 const detailUsage = ref<UsageReport | null>(null)
 const detailTraces = ref<GatewayTrace[]>([])
+const detailPolicyExplanation = ref<GatewayPolicyExplanation | null>(null)
 const oneTimeKey = ref('')
 const apiKeys = ref<APIKeyRecord[]>([])
 const projects = ref<Project[]>([])
@@ -132,11 +134,13 @@ async function openDetails(key: APIKeyRecord) {
   detailError.value = ''
   detailUsage.value = null
   detailTraces.value = []
+  detailPolicyExplanation.value = null
   try {
     const params = { api_key_id: key.id, limit: 5 }
-    const [usage, traces] = await Promise.all([getUsageReport(params), getGatewayTraces(params)])
+    const [usage, traces, explanation] = await Promise.all([getUsageReport(params), getGatewayTraces(params), getAPIKeyPolicyExplanation(key.id)])
     detailUsage.value = usage
     detailTraces.value = traces
+    detailPolicyExplanation.value = explanation
   } catch (err) {
     detailError.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -244,6 +248,10 @@ function statusClass(status: string): string {
   if (status === 'forwarded' || status === 'accepted') return 'status-success'
   if (status === 'error' || status === 'upstream_error') return 'status-danger'
   return 'status-warning'
+}
+
+function formatPolicySource(source: string): string {
+  return source ? source.replace(/_/g, ' ') : '-'
 }
 
 onMounted(load)
@@ -475,6 +483,50 @@ onMounted(load)
               <p>{{ selectedKey.model_allowlist.join(', ') }}</p>
             </div>
           </div>
+
+          <section class="panel table-panel">
+            <header class="panel-header">
+              <div>
+                <h2>{{ t('apiKeys.policyExplanation') }}</h2>
+                <p>{{ detailPolicyExplanation?.selected_policy_name || t('policies.inherit') }} · {{ formatPolicySource(detailPolicyExplanation?.selected_source || '') }}</p>
+              </div>
+            </header>
+            <div class="panel-body table-scroll">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('policies.policy') }}</th>
+                    <th>{{ t('traces.policySource') }}</th>
+                    <th>{{ t('common.version') }}</th>
+                    <th>{{ t('providers.status') }}</th>
+                    <th>{{ t('apiKeys.policyReason') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="candidate in detailPolicyExplanation?.candidates || []" :key="`${candidate.source}-${candidate.policy_id}`">
+                    <td>
+                      <strong>{{ candidate.policy_name || candidate.policy_id || '-' }}</strong>
+                      <span>{{ candidate.scope_type || '-' }} · {{ candidate.scope_id || '-' }}</span>
+                    </td>
+                    <td>{{ formatPolicySource(candidate.source) }}</td>
+                    <td>v{{ candidate.policy_version || 0 }}</td>
+                    <td>
+                      <span class="pill" :class="candidate.selected ? 'status-success' : candidate.status === 'disabled' ? 'status-danger' : 'status-warning'">
+                        {{ candidate.selected ? t('apiKeys.selectedPolicy') : candidate.status || '-' }}
+                      </span>
+                    </td>
+                    <td>{{ candidate.reason || '-' }}</td>
+                  </tr>
+                  <tr v-if="!detailLoading && !(detailPolicyExplanation?.candidates || []).length">
+                    <td colspan="5" class="empty-cell">{{ t('apiKeys.noPolicyExplanation') }}</td>
+                  </tr>
+                  <tr v-if="detailLoading">
+                    <td colspan="5" class="empty-cell">{{ t('common.loading') }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
 
           <section class="metric-grid">
             <article class="metric-card">

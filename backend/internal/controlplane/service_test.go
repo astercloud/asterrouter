@@ -149,6 +149,9 @@ func TestGovernancePolicyLifecycleValidatesScope(t *testing.T) {
 	if policy.ID == "" || policy.ScopeID != project.ID || len(policy.ModelAllowlist) != 1 {
 		t.Fatalf("policy mismatch: %+v", policy)
 	}
+	if policy.Version != 1 || policy.LastUpdatedBy != "tester" {
+		t.Fatalf("policy version audit mismatch: %+v", policy)
+	}
 
 	updated, err := svc.UpdateGovernancePolicy(context.Background(), "tester", policy.ID, GovernancePolicyRequest{
 		Name:               "Default policy updated",
@@ -170,6 +173,9 @@ func TestGovernancePolicyLifecycleValidatesScope(t *testing.T) {
 	}
 	if updated.ID != policy.ID || updated.ScopeType != GovernancePolicyScopeGlobal || updated.ScopeID != "" || updated.Status != GovernancePolicyStatusDisabled {
 		t.Fatalf("updated policy mismatch: %+v", updated)
+	}
+	if updated.Version != 2 || updated.LastUpdatedBy != "tester" {
+		t.Fatalf("updated policy version audit mismatch: %+v", updated)
 	}
 
 	if _, err := svc.CreateGovernancePolicy(context.Background(), "tester", GovernancePolicyRequest{
@@ -284,12 +290,25 @@ func TestGatewayPolicyReferenceOverridesAPIKeyLimitsAndModels(t *testing.T) {
 	if len(traces) != 1 || traces[0].PolicyID != policy.ID || traces[0].PolicyName != policy.Name || traces[0].PolicySource != GatewayPolicySourceAPIKeyExplicit {
 		t.Fatalf("trace policy evidence mismatch: %+v", traces)
 	}
+	if traces[0].PolicyVersion != policy.Version {
+		t.Fatalf("trace policy version mismatch: trace=%d policy=%d", traces[0].PolicyVersion, policy.Version)
+	}
 	var snapshot gatewayTracePolicySnapshot
 	if err := json.Unmarshal([]byte(traces[0].PolicySnapshot), &snapshot); err != nil {
 		t.Fatalf("policy snapshot json: %v snapshot=%q", err, traces[0].PolicySnapshot)
 	}
-	if snapshot.QPSLimit != 1 || snapshot.MonthlyTokenLimit != 3 || snapshot.OverageAction != GovernancePolicyOverageBlock || snapshot.ModelAllowlistCount != 1 || snapshot.ModelDenylistCount != 1 {
+	if snapshot.Version != policy.Version || snapshot.QPSLimit != 1 || snapshot.MonthlyTokenLimit != 3 || snapshot.OverageAction != GovernancePolicyOverageBlock || snapshot.ModelAllowlistCount != 1 || snapshot.ModelDenylistCount != 1 {
 		t.Fatalf("policy snapshot mismatch: %+v", snapshot)
+	}
+	explanation, err := svc.ExplainGatewayPolicyForAPIKey(context.Background(), created.Record.ID)
+	if err != nil {
+		t.Fatalf("ExplainGatewayPolicyForAPIKey(): %v", err)
+	}
+	if explanation.SelectedPolicyID != policy.ID || explanation.SelectedPolicyVersion != policy.Version || explanation.SelectedSource != GatewayPolicySourceAPIKeyExplicit {
+		t.Fatalf("policy explanation mismatch: %+v", explanation)
+	}
+	if len(explanation.Candidates) == 0 || !explanation.Candidates[0].Selected {
+		t.Fatalf("policy explanation candidates mismatch: %+v", explanation.Candidates)
 	}
 	svc.rateWindows = map[string][]time.Time{}
 	if err := svc.EnforceGatewayPolicy(context.Background(), auth); !errors.Is(err, ErrGatewayQuotaExceeded) {

@@ -266,6 +266,14 @@ func registerAPIKeyAdminRoutes(admin *gin.RouterGroup, control *controlplane.Ser
 		}
 		httpx.OK(c, data)
 	})
+	admin.GET("/api-keys/:id/policy-explanation", func(c *gin.Context) {
+		data, err := control.ExplainGatewayPolicyForAPIKey(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1507, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
 	admin.POST("/api-keys", func(c *gin.Context) {
 		var req controlplane.APIKeyCreateRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
