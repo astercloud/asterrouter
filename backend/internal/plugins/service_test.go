@@ -33,6 +33,29 @@ func TestServiceSeedsBuiltinPluginCatalog(t *testing.T) {
 	}
 }
 
+func TestServiceFiltersCatalogAndActionsBySurface(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository())
+	if err := svc.EnsureSeedData(ctx); err != nil {
+		t.Fatalf("EnsureSeedData(): %v", err)
+	}
+	personal, err := svc.CatalogForSurface(ctx, "personal")
+	if err != nil {
+		t.Fatalf("CatalogForSurface(personal): %v", err)
+	}
+	for _, plugin := range personal.Plugins {
+		if plugin.ID == "com.asterrouter.enterprise.audit-baseline" {
+			t.Fatal("enterprise-only plugin leaked into personal catalog")
+		}
+	}
+	if err := svc.RequireSurface(ctx, "com.asterrouter.enterprise.audit-baseline", "personal"); !errors.Is(err, ErrPluginSurface) {
+		t.Fatalf("RequireSurface(personal) = %v, want ErrPluginSurface", err)
+	}
+	if err := svc.RequireSurface(ctx, "com.asterrouter.enterprise.audit-baseline", "enterprise"); err != nil {
+		t.Fatalf("RequireSurface(enterprise): %v", err)
+	}
+}
+
 func TestServiceEnablesFreeCorePlugin(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	if err := svc.EnsureSeedData(context.Background()); err != nil {
@@ -116,7 +139,7 @@ func TestServiceConfigEncryptsSecretsAndDispatchesWebhookAlert(t *testing.T) {
 	config, err := svc.UpdateConfig(ctx, "com.asterrouter.notification.webhook", ConfigRequest{
 		Settings: map[string]string{
 			"min_severity": "warning",
-			"alert_types":  "project_budget,api_key_quota",
+			"alert_types":  "api_key_quota,api_key_quota",
 		},
 		Secrets: map[string]string{
 			"webhook_url":  webhook.URL,
@@ -139,14 +162,14 @@ func TestServiceConfigEncryptsSecretsAndDispatchesWebhookAlert(t *testing.T) {
 
 	event := controlplane.AlertEvent{
 		ID:           "alert_test",
-		Type:         controlplane.AlertTypeProjectBudget,
+		Type:         controlplane.AlertTypeAPIKeyQuota,
 		Severity:     controlplane.AlertSeverityWarning,
 		Status:       controlplane.AlertStatusActive,
 		Title:        "Budget warning",
 		Summary:      "Budget warning summary",
 		ResourceType: "project",
 		ResourceID:   "proj_test",
-		DedupeKey:    "project_budget:proj_test:2026-07",
+		DedupeKey:    "api_key_quota:proj_test:2026-07",
 		FirstSeenAt:  time.Now().UTC(),
 		LastSeenAt:   time.Now().UTC(),
 	}
@@ -316,14 +339,14 @@ func testAlertEvent() controlplane.AlertEvent {
 	now := time.Now().UTC()
 	return controlplane.AlertEvent{
 		ID:           "alert_test",
-		Type:         controlplane.AlertTypeProjectBudget,
+		Type:         controlplane.AlertTypeAPIKeyQuota,
 		Severity:     controlplane.AlertSeverityWarning,
 		Status:       controlplane.AlertStatusActive,
 		Title:        "Budget warning",
 		Summary:      "Budget warning summary",
 		ResourceType: "project",
 		ResourceID:   "proj_test",
-		DedupeKey:    "project_budget:proj_test:2026-07",
+		DedupeKey:    "api_key_quota:proj_test:2026-07",
 		FirstSeenAt:  now,
 		LastSeenAt:   now,
 	}

@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"sort"
 	"strings"
 )
 
@@ -20,7 +19,6 @@ type PrincipalAccess struct {
 	Actor        string   `json:"actor"`
 	Role         string   `json:"role"`
 	Global       bool     `json:"global"`
-	ProjectIDs   []string `json:"project_ids"`
 	Permissions  []string `json:"permissions"`
 	ResolvedFrom string   `json:"resolved_from"`
 }
@@ -50,6 +48,7 @@ func (s *Service) PrincipalAccess(ctx context.Context, actor string) (PrincipalA
 	access := PrincipalAccess{
 		Actor:        actor,
 		Role:         user.Role,
+		Global:       true,
 		Permissions:  permissionsForRole(user.Role),
 		ResolvedFrom: "workspace_user",
 	}
@@ -57,7 +56,6 @@ func (s *Service) PrincipalAccess(ctx context.Context, actor string) (PrincipalA
 	if err != nil {
 		return PrincipalAccess{}, err
 	}
-	projects := map[string]struct{}{}
 	for _, binding := range bindings {
 		if binding.UserID != user.ID {
 			continue
@@ -69,11 +67,7 @@ func (s *Service) PrincipalAccess(ctx context.Context, actor string) (PrincipalA
 		if binding.ScopeType == RoleScopeGlobal {
 			access.Global = true
 		}
-		if binding.ScopeType == RoleScopeProject && strings.TrimSpace(binding.ScopeID) != "" {
-			projects[binding.ScopeID] = struct{}{}
-		}
 	}
-	access.ProjectIDs = sortedProjectIDs(projects)
 	return access, nil
 }
 
@@ -109,7 +103,7 @@ func permissionsForRole(role string) []string {
 			PermissionExportManage,
 			PermissionSettingsManage,
 		}
-	case RoleProjectAdmin:
+	case RoleKeyManager:
 		return []string{PermissionAdminRead, PermissionExportManage}
 	case RoleReadOnlyAuditor:
 		return []string{PermissionAdminRead, PermissionAdminAudit, PermissionExportManage}
@@ -139,7 +133,7 @@ func roleRank(role string) int {
 		return 5
 	case RolePlatformAdmin:
 		return 4
-	case RoleProjectAdmin:
+	case RoleKeyManager:
 		return 3
 	case RoleReadOnlyAuditor:
 		return 2
@@ -148,13 +142,4 @@ func roleRank(role string) int {
 	default:
 		return 0
 	}
-}
-
-func sortedProjectIDs(projects map[string]struct{}) []string {
-	out := make([]string, 0, len(projects))
-	for id := range projects {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out
 }

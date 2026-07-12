@@ -17,8 +17,6 @@ import (
 func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "export key",
 		ModelAllowlist:    []string{"model-a", "model-b"},
 		QPSLimit:          0,
@@ -51,7 +49,7 @@ func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 	usageRec := httptest.NewRecorder()
 	handler.ServeHTTP(usageRec, usageReq)
 	usageRows := readCSVRows(t, usageRec)
-	if len(usageRows) != 2 || usageRows[0][5] != "model" || usageRows[1][5] != "model-b" || usageRows[1][8] != "error" {
+	if len(usageRows) != 2 || usageRows[0][3] != "model" || usageRows[0][4] != "upstream_model" || usageRows[1][3] != "model-b" || usageRows[1][7] != "error" {
 		t.Fatalf("usage export query not applied: %+v", usageRows)
 	}
 	if strings.Contains(usageRec.Body.String(), "model-a") {
@@ -62,7 +60,7 @@ func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 	traceRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceRec, traceReq)
 	traceRows := readCSVRows(t, traceRec)
-	if len(traceRows) != 2 || traceRows[0][5] != "model" || traceRows[0][16] != "policy_snapshot" || traceRows[0][17] != "status" || traceRows[1][5] != "model-b" || traceRows[1][17] != "error" {
+	if len(traceRows) != 2 || traceRows[0][3] != "model" || traceRows[0][11] != "upstream_model" || traceRows[0][18] != "policy_snapshot" || traceRows[0][19] != "status" || traceRows[1][3] != "model-b" || traceRows[1][19] != "error" {
 		t.Fatalf("trace export query not applied: %+v", traceRows)
 	}
 	if strings.Contains(traceRec.Body.String(), "provider-a") {
@@ -81,8 +79,6 @@ func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 func TestAdminAsyncExportJobLifecycle(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "async export key",
 		ModelAllowlist:    []string{"model-a"},
 		QPSLimit:          0,

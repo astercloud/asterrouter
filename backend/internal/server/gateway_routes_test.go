@@ -27,9 +27,10 @@ func TestGatewayModelsRequiresAPIKey(t *testing.T) {
 
 func TestGatewayModelsUsesAPIKeyAllowlist(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
+	if _, err := control.CreateGatewayModel(context.Background(), "tester", controlplane.GatewayModelRequest{ModelID: "gpt-4o-mini", Name: "GPT", Status: controlplane.GatewayModelStatusActive}); err != nil {
+		t.Fatalf("CreateGatewayModel(): %v", err)
+	}
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -63,8 +64,6 @@ func TestGatewayModelsUsesAPIKeyAllowlist(t *testing.T) {
 func TestGatewayChatCompletionAuthorizesModelAndAudits(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -81,7 +80,7 @@ func TestGatewayChatCompletionAuthorizesModelAndAudits(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	audit, err := control.ListAuditLogs(context.Background(), 10)
@@ -99,8 +98,6 @@ func TestGatewayChatCompletionAuthorizesModelAndAudits(t *testing.T) {
 func TestGatewayChatCompletionEnforcesQPSLimitAndRecordsTrace(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway limited",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          1,
@@ -117,7 +114,7 @@ func TestGatewayChatCompletionEnforcesQPSLimitAndRecordsTrace(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+created.Key)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if i == 0 && rec.Code != http.StatusOK {
+		if i == 0 && rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("first status = %d body=%s", rec.Code, rec.Body.String())
 		}
 		if i == 1 {
@@ -156,21 +153,21 @@ func TestGatewayChatCompletionEnforcesQPSLimitAndRecordsTrace(t *testing.T) {
 	t.Fatalf("rate limited trace not found: %+v", traces)
 }
 
-func TestGatewayChatCompletionEnforcesProjectBudgetAndRecordsTrace(t *testing.T) {
+func TestGatewayChatCompletionEnforcesWorkspaceKeyBudgetAndRecordsTrace(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
-	if _, err := control.UpdateProject(context.Background(), "tester", "proj_platform", controlplane.ProjectRequest{
-		Name:               "Platform Engineering",
-		Description:        "Budget guarded project",
-		CostCenter:         "IT-PLATFORM",
+	policy, err := control.CreateGovernancePolicy(context.Background(), "tester", controlplane.GovernancePolicyRequest{
+		Name:               "Workspace key budget",
+		ScopeType:          controlplane.GovernancePolicyScopeGlobal,
 		MonthlyBudgetCents: 100,
-		Status:             controlplane.ProjectStatusActive,
-	}); err != nil {
-		t.Fatalf("UpdateProject(): %v", err)
+		OverageAction:      controlplane.GovernancePolicyOverageBlock,
+		Status:             controlplane.GovernancePolicyStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateGovernancePolicy(): %v", err)
 	}
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway budget limited",
+		PolicyID:          policy.ID,
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          0,
 		MonthlyTokenLimit: 0,
@@ -199,7 +196,7 @@ func TestGatewayChatCompletionEnforcesProjectBudgetAndRecordsTrace(t *testing.T)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("budget status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "project monthly budget exceeded") {
+	if !strings.Contains(rec.Body.String(), "workspace key monthly budget exceeded") {
 		t.Fatalf("budget error not returned: %s", rec.Body.String())
 	}
 
@@ -232,8 +229,6 @@ func TestGatewayChatCompletionEnforcesProjectBudgetAndRecordsTrace(t *testing.T)
 func TestGatewayChatCompletionRejectsDisallowedModel(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -257,31 +252,39 @@ func TestGatewayChatCompletionRejectsDisallowedModel(t *testing.T) {
 
 func TestGatewayChatCompletionForwardsToConfiguredProvider(t *testing.T) {
 	var gotAuthorization string
+	var gotModel string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("upstream path = %s", r.URL.Path)
 		}
 		gotAuthorization = r.Header.Get("Authorization")
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		gotModel = payload.Model
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"upstream-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"upstream-ok"},"finish_reason":"stop"}]}`))
 	}))
 	defer upstream.Close()
 
 	handler, control := newTestRuntime(t, config.Config{})
-	_, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name:    "test provider",
 		Type:    "openai_compatible",
 		BaseURL: upstream.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
+		Models:  []string{"upstream-gpt"},
 		APIKey:  "upstream-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
 	}
+	account := createGatewayTestAccount(t, control, provider, "upstream-gpt", "upstream-secret", 10, 3)
+	createGatewayTestModelAndRoutes(t, control, "gpt-4o-mini", "default", []gatewayTestRoute{{account: account, upstreamModel: "upstream-gpt", priority: 10}})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -303,6 +306,9 @@ func TestGatewayChatCompletionForwardsToConfiguredProvider(t *testing.T) {
 	}
 	if gotAuthorization != "Bearer upstream-secret" {
 		t.Fatalf("upstream authorization = %q", gotAuthorization)
+	}
+	if gotModel != "upstream-gpt" {
+		t.Fatalf("upstream model = %q", gotModel)
 	}
 	if !strings.Contains(rec.Body.String(), "upstream-ok") {
 		t.Fatalf("upstream response not returned: %s", rec.Body.String())
@@ -350,9 +356,8 @@ func TestGatewayChatCompletionRoutesThroughProviderAccountPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProviderAccount(): %v", err)
 	}
+	createGatewayTestModelAndRoutes(t, control, "gpt-4o-mini", "default", []gatewayTestRoute{{account: account, upstreamModel: "gpt-4o-mini", priority: 10}})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -397,7 +402,7 @@ func TestGatewayChatCompletionRoutesThroughProviderAccountPool(t *testing.T) {
 		t.Fatalf("trace count = %d traces=%+v", len(traces), traces)
 	}
 	trace := traces[0]
-	if trace.ProviderID != provider.ID || trace.ProviderAccountID != account.ID || trace.RouteSource != "provider_account" {
+	if trace.ProviderID != provider.ID || trace.ProviderAccountID != account.ID || trace.RouteSource != "model_route" {
 		t.Fatalf("trace route metadata not recorded: %+v", trace)
 	}
 	if trace.Status != "forwarded" || trace.HTTPStatus != http.StatusOK || trace.InputTokens != 7 || trace.OutputTokens != 11 {
@@ -459,7 +464,7 @@ func TestGatewayChatCompletionFallsBackToNextAccountAfterUpstreamFailure(t *test
 		t.Fatalf("CreateProvider(healthy): %v", err)
 	}
 	schedulable := true
-	if _, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+	primaryAccount, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
 		ProviderID:     failingProvider.ID,
 		Name:           "Primary account",
 		Platform:       "openai_compatible",
@@ -471,10 +476,11 @@ func TestGatewayChatCompletionFallsBackToNextAccountAfterUpstreamFailure(t *test
 		RateMultiplier: 1,
 		Models:         []string{"gpt-4o-mini"},
 		Secret:         "failing-account-secret",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateProviderAccount(primary): %v", err)
 	}
-	if _, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+	backupAccount, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
 		ProviderID:     healthyProvider.ID,
 		Name:           "Backup account",
 		Platform:       "openai_compatible",
@@ -486,12 +492,15 @@ func TestGatewayChatCompletionFallsBackToNextAccountAfterUpstreamFailure(t *test
 		RateMultiplier: 1,
 		Models:         []string{"gpt-4o-mini"},
 		Secret:         "healthy-account-secret",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateProviderAccount(backup): %v", err)
 	}
+	createGatewayTestModelAndRoutes(t, control, "gpt-4o-mini", "default", []gatewayTestRoute{
+		{account: primaryAccount, upstreamModel: "gpt-4o-mini", priority: 10},
+		{account: backupAccount, upstreamModel: "gpt-4o-mini", priority: 20},
+	})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -584,7 +593,7 @@ func TestGatewayChatCompletionSkipsAccountAtConcurrencyCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProviderAccount(busy): %v", err)
 	}
-	if _, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+	freeAccount, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
 		ProviderID:     freeProvider.ID,
 		Name:           "Free account",
 		Platform:       "openai_compatible",
@@ -596,12 +605,15 @@ func TestGatewayChatCompletionSkipsAccountAtConcurrencyCapacity(t *testing.T) {
 		RateMultiplier: 1,
 		Models:         []string{"gpt-4o-mini"},
 		Secret:         "free-account-secret",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateProviderAccount(free): %v", err)
 	}
+	createGatewayTestModelAndRoutes(t, control, "gpt-4o-mini", "default", []gatewayTestRoute{
+		{account: busyAccount, upstreamModel: "gpt-4o-mini", priority: 10},
+		{account: freeAccount, upstreamModel: "gpt-4o-mini", priority: 20},
+	})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -662,6 +674,14 @@ func TestGatewayChatCompletionRejectsOversizedRequestBody(t *testing.T) {
 	}
 }
 
+func TestEstimateGatewayRequestTokensIncludesCompletionLimit(t *testing.T) {
+	body := []byte(`{"model":"test","max_completion_tokens":250}`)
+	got := estimateGatewayRequestTokens(body)
+	if got < 250+(len(body)+3)/4 {
+		t.Fatalf("estimated tokens = %d", got)
+	}
+}
+
 func TestGatewayChatCompletionPassesThroughUpstreamError(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -671,7 +691,7 @@ func TestGatewayChatCompletionPassesThroughUpstreamError(t *testing.T) {
 	defer upstream.Close()
 
 	handler, control := newTestRuntime(t, config.Config{})
-	_, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name:    "limited provider",
 		Type:    "openai_compatible",
 		BaseURL: upstream.URL + "/v1",
@@ -682,9 +702,9 @@ func TestGatewayChatCompletionPassesThroughUpstreamError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
 	}
+	account := createGatewayTestAccount(t, control, provider, "gpt-4o-mini", "upstream-secret", 10, 3)
+	createGatewayTestModelAndRoutes(t, control, "gpt-4o-mini", "default", []gatewayTestRoute{{account: account, upstreamModel: "gpt-4o-mini", priority: 10}})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -723,7 +743,7 @@ func TestGatewayChatCompletionStreamsConfiguredProvider(t *testing.T) {
 	defer upstream.Close()
 
 	handler, control := newTestRuntime(t, config.Config{})
-	_, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name:    "stream provider",
 		Type:    "openai_compatible",
 		BaseURL: upstream.URL + "/v1",
@@ -734,9 +754,9 @@ func TestGatewayChatCompletionStreamsConfiguredProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
 	}
+	account := createGatewayTestAccount(t, control, provider, "gpt-4o-mini", "upstream-secret", 10, 3)
+	createGatewayTestModelAndRoutes(t, control, "gpt-4o-mini", "default", []gatewayTestRoute{{account: account, upstreamModel: "gpt-4o-mini", priority: 10}})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -770,8 +790,6 @@ func TestGatewayChatCompletionStreamsConfiguredProvider(t *testing.T) {
 func TestGatewayChatCompletionRejectsStreamingWithoutProvider(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "gateway",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          2,
@@ -788,7 +806,46 @@ func TestGatewayChatCompletionRejectsStreamingWithoutProvider(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotImplemented {
+	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+type gatewayTestRoute struct {
+	account       controlplane.ProviderAccount
+	upstreamModel string
+	priority      int
+}
+
+func createGatewayTestAccount(t *testing.T, control *controlplane.Service, provider controlplane.ProviderConnection, model string, secret string, priority int, concurrency int) controlplane.ProviderAccount {
+	t.Helper()
+	schedulable := true
+	account, err := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+		ProviderID: provider.ID, Name: provider.Name + " account", Platform: "openai_compatible", AuthType: "api_key",
+		Status: controlplane.AccountStatusActive, Schedulable: &schedulable, Priority: priority,
+		Concurrency: concurrency, RateMultiplier: 1, Models: []string{model}, Secret: secret,
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount(%s): %v", provider.ID, err)
+	}
+	return account
+}
+
+func createGatewayTestModelAndRoutes(t *testing.T, control *controlplane.Service, modelID string, routeGroup string, routes []gatewayTestRoute) controlplane.GatewayModel {
+	t.Helper()
+	model, err := control.CreateGatewayModel(context.Background(), "tester", controlplane.GatewayModelRequest{
+		ModelID: modelID, Name: modelID, DefaultRouteGroup: routeGroup, Status: controlplane.GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateGatewayModel(%s): %v", modelID, err)
+	}
+	for _, route := range routes {
+		if _, err := control.CreateModelRoute(context.Background(), "tester", controlplane.ModelRouteRequest{
+			GatewayModelID: model.ID, RouteGroup: routeGroup, ProviderAccountID: route.account.ID,
+			UpstreamModel: route.upstreamModel, Priority: route.priority, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+		}); err != nil {
+			t.Fatalf("CreateModelRoute(%s, %s): %v", modelID, route.account.ID, err)
+		}
+	}
+	return model
 }

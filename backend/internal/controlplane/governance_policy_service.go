@@ -64,17 +64,12 @@ func (s *Service) ExplainGatewayPolicyForAPIKey(ctx context.Context, apiKeyID st
 	if err != nil {
 		return GatewayPolicyExplanation{}, err
 	}
-	project, err := s.projectByID(ctx, key.ProjectID)
-	if err != nil {
-		return GatewayPolicyExplanation{}, err
-	}
 	policies, err := s.repo.ListGovernancePolicies(ctx)
 	if err != nil {
 		return GatewayPolicyExplanation{}, err
 	}
-	explanation := explainGatewayPolicy(policies, key, project)
+	explanation := explainGatewayPolicy(policies, key)
 	explanation.APIKeyID = key.ID
-	explanation.ProjectID = project.ID
 	return explanation, nil
 }
 
@@ -88,8 +83,8 @@ func governancePolicyFromRequest(req GovernancePolicyRequest, createdAt time.Tim
 	if scopeType == "" {
 		scopeType = GovernancePolicyScopeGlobal
 	}
-	if !oneOf(scopeType, GovernancePolicyScopeGlobal, GovernancePolicyScopeDepartment, GovernancePolicyScopeProject, GovernancePolicyScopeAPIKey) {
-		return GovernancePolicy{}, errors.New("scope_type must be global, department, project, or api_key")
+	if !oneOf(scopeType, GovernancePolicyScopeGlobal, GovernancePolicyScopeAPIKey) {
+		return GovernancePolicy{}, errors.New("scope_type must be global or api_key")
 	}
 	scopeID := strings.TrimSpace(req.ScopeID)
 	if scopeType == GovernancePolicyScopeGlobal {
@@ -176,12 +171,6 @@ func (s *Service) validateGovernancePolicyScope(ctx context.Context, scopeType s
 	switch scopeType {
 	case GovernancePolicyScopeGlobal:
 		return nil
-	case GovernancePolicyScopeDepartment:
-		_, err := s.departmentByID(ctx, scopeID)
-		return err
-	case GovernancePolicyScopeProject:
-		_, err := s.projectByID(ctx, scopeID)
-		return err
 	case GovernancePolicyScopeAPIKey:
 		_, err := s.apiKeyByID(ctx, scopeID)
 		return err

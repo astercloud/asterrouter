@@ -187,8 +187,8 @@ onMounted(load)
             <tr>
               <th>{{ t('departments.department') }}</th>
               <th>{{ t('departments.parent') }}</th>
-              <th>{{ t('projects.costCenter') }}</th>
-              <th>{{ t('projects.monthlyBudget') }}</th>
+              <th>{{ t('departments.costCenter') }}</th>
+              <th>{{ t('departments.monthlyBudget') }}</th>
               <th>{{ t('providers.status') }}</th>
               <th>{{ t('common.actions') }}</th>
             </tr>
@@ -246,11 +246,11 @@ onMounted(load)
             </select>
           </div>
           <div class="field">
-            <label>{{ t('projects.costCenter') }}</label>
+            <label>{{ t('departments.costCenter') }}</label>
             <input v-model="departmentForm.cost_center" autocomplete="off" />
           </div>
           <div class="field">
-            <label>{{ t('projects.monthlyBudget') }}</label>
+            <label>{{ t('departments.monthlyBudget') }}</label>
             <input v-model.number="departmentForm.monthly_budget_cents" type="number" min="0" step="100" />
           </div>
           <div class="field">

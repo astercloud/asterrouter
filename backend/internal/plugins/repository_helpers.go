@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"database/sql"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -39,6 +40,18 @@ type packageInstallationRecordScanner interface {
 }
 
 type licenseRecordScanner interface {
+	Scan(dest ...any) error
+}
+
+type pluginAPITokenScanner interface {
+	Scan(dest ...any) error
+}
+
+type officialFeedScanner interface {
+	Scan(dest ...any) error
+}
+
+type officialFeedSyncRunScanner interface {
 	Scan(dest ...any) error
 }
 
@@ -118,6 +131,69 @@ func scanLicenseRecord(scanner licenseRecordScanner) (licenseRecord, error) {
 	var record licenseRecord
 	if err := scanner.Scan(&record.LicenseID, &record.CustomerID, &record.InstanceID, &record.SnapshotVersion, &record.Status, &record.Edition, &record.KeyID, &record.EnvelopeSHA256, &record.EnvelopeJSON, &record.ActivationSecretCiphertext, &record.ActivationSecretHint, &record.EntitlementsJSON, &record.IssuedAt, &record.ExpiresAt, &record.ImportedAt, &record.UpdatedAt, &record.Error); err != nil {
 		return licenseRecord{}, err
+	}
+	return record, nil
+}
+
+func scanPluginAPITokenRecord(scanner pluginAPITokenScanner) (pluginAPITokenRecord, error) {
+	var record pluginAPITokenRecord
+	var scopes string
+	var surfaces string
+	var expiresAt sql.NullTime
+	var lastUsedAt sql.NullTime
+	if err := scanner.Scan(&record.ID, &record.Name, &record.PluginID, &record.TokenPrefix, &record.TokenHash, &scopes, &surfaces, &record.Status, &expiresAt, &lastUsedAt, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		return pluginAPITokenRecord{}, err
+	}
+	record.Scopes = parseStringList(scopes)
+	record.Surfaces = parseStringList(surfaces)
+	if expiresAt.Valid {
+		record.ExpiresAt = &expiresAt.Time
+	}
+	if lastUsedAt.Valid {
+		record.LastUsedAt = &lastUsedAt.Time
+	}
+	return record, nil
+}
+
+func scanOfficialFeedRecord(scanner officialFeedScanner) (officialFeedRecord, error) {
+	var record officialFeedRecord
+	if err := scanner.Scan(
+		&record.ServiceKey,
+		&record.FeedID,
+		&record.FeedVersion,
+		&record.DataSchemaVersion,
+		&record.Status,
+		&record.SignatureVerified,
+		&record.PayloadSHA256,
+		&record.SizeBytes,
+		&record.PayloadCiphertext,
+		&record.EnvelopeJSON,
+		&record.IssuedAt,
+		&record.ExpiresAt,
+		&record.ImportedAt,
+		&record.UpdatedAt,
+	); err != nil {
+		return officialFeedRecord{}, err
+	}
+	return record, nil
+}
+
+func scanOfficialFeedSyncRunRecord(scanner officialFeedSyncRunScanner) (officialFeedSyncRunRecord, error) {
+	var record officialFeedSyncRunRecord
+	if err := scanner.Scan(
+		&record.ID,
+		&record.ServiceKey,
+		&record.FeedID,
+		&record.Mode,
+		&record.Status,
+		&record.RequestID,
+		&record.SourceURL,
+		&record.ErrorCode,
+		&record.Error,
+		&record.StartedAt,
+		&record.FinishedAt,
+	); err != nil {
+		return officialFeedSyncRunRecord{}, err
 	}
 	return record, nil
 }

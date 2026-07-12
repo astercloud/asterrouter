@@ -22,8 +22,6 @@ const notice = ref('')
 const workspace = ref<PortalWorkspace | null>(null)
 const createdSecret = ref('')
 const form = reactive<APIKeyCreateRequest>({
-  project_id: '',
-  application_id: '',
   name: '',
   policy_id: '',
   model_allowlist: [],
@@ -88,8 +86,6 @@ function toggleModel(model: string) {
 }
 
 function resetForm() {
-  form.project_id = ''
-  form.application_id = ''
   form.name = ''
   form.policy_id = ''
   form.qps_limit = 0

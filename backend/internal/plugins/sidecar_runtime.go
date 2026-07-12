@@ -206,6 +206,9 @@ func (s *Service) startSidecar(ctx context.Context, installation packageInstalla
 		"ASTER_PLUGIN_ADDR="+addr,
 		"ASTER_PLUGIN_TOKEN="+token,
 	)
+	if s.pluginHostURL != "" {
+		cmd.Env = append(cmd.Env, "ASTER_PLUGIN_HOST_URL="+s.pluginHostURL)
+	}
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

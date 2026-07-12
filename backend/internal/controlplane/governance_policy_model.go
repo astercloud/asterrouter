@@ -6,10 +6,8 @@ const (
 	GovernancePolicyStatusActive   = "active"
 	GovernancePolicyStatusDisabled = "disabled"
 
-	GovernancePolicyScopeGlobal     = "global"
-	GovernancePolicyScopeDepartment = "department"
-	GovernancePolicyScopeProject    = "project"
-	GovernancePolicyScopeAPIKey     = "api_key"
+	GovernancePolicyScopeGlobal = "global"
+	GovernancePolicyScopeAPIKey = "api_key"
 
 	GovernancePolicyOverageBlock    = "block"
 	GovernancePolicyOverageWarn     = "warn"
@@ -19,11 +17,9 @@ const (
 	GovernancePolicyPromptLoggingMetadataOnly = "metadata_only"
 	GovernancePolicyPromptLoggingRedacted     = "redacted"
 
-	GatewayPolicySourceAPIKeyExplicit  = "api_key_explicit"
-	GatewayPolicySourceAPIKeyScope     = "api_key_scope"
-	GatewayPolicySourceProjectExplicit = "project_explicit"
-	GatewayPolicySourceProjectScope    = "project_scope"
-	GatewayPolicySourceGlobalScope     = "global_scope"
+	GatewayPolicySourceAPIKeyExplicit = "api_key_explicit"
+	GatewayPolicySourceAPIKeyScope    = "api_key_scope"
+	GatewayPolicySourceGlobalScope    = "global_scope"
 )
 
 type GovernancePolicy struct {
@@ -52,7 +48,6 @@ type GovernancePolicy struct {
 
 type GatewayPolicyExplanation struct {
 	APIKeyID              string                   `json:"api_key_id"`
-	ProjectID             string                   `json:"project_id"`
 	SelectedPolicyID      string                   `json:"selected_policy_id"`
 	SelectedPolicyName    string                   `json:"selected_policy_name"`
 	SelectedPolicyVersion int                      `json:"selected_policy_version"`

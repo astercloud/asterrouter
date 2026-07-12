@@ -92,7 +92,7 @@ func (r *PostgresRepository) QueryAlertEvents(ctx context.Context, query AlertQu
 	args := []any{}
 	appendAlertEventFilters(&clauses, &args, query)
 	sqlText := `
-SELECT id, type, severity, status, title, summary, resource_type, resource_id, project_id, dedupe_key,
+SELECT id, type, severity, status, title, summary, resource_type, resource_id, dedupe_key,
        metadata_json, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, resolved_at, resolved_by
 FROM alert_events`
 	if len(clauses) > 0 {
@@ -151,7 +151,7 @@ func (r *PostgresRepository) FindAlertEvent(ctx context.Context, id string) (Ale
 		return AlertEvent{}, false, nil
 	}
 	row := r.db.QueryRowContext(ctx, `
-SELECT id, type, severity, status, title, summary, resource_type, resource_id, project_id, dedupe_key,
+SELECT id, type, severity, status, title, summary, resource_type, resource_id, dedupe_key,
        metadata_json, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, resolved_at, resolved_by
 FROM alert_events
 WHERE id = $1
@@ -172,7 +172,7 @@ func (r *PostgresRepository) FindAlertByDedupeKey(ctx context.Context, dedupeKey
 		return AlertEvent{}, false, nil
 	}
 	row := r.db.QueryRowContext(ctx, `
-SELECT id, type, severity, status, title, summary, resource_type, resource_id, project_id, dedupe_key,
+SELECT id, type, severity, status, title, summary, resource_type, resource_id, dedupe_key,
        metadata_json, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, resolved_at, resolved_by
 FROM alert_events
 WHERE dedupe_key = $1
@@ -191,10 +191,10 @@ func (r *PostgresRepository) SaveAlertEvent(ctx context.Context, event AlertEven
 	metadata := marshalAlertMetadata(event.Metadata)
 	_, err := r.db.ExecContext(ctx, `
 INSERT INTO alert_events(
-  id, type, severity, status, title, summary, resource_type, resource_id, project_id, dedupe_key,
+  id, type, severity, status, title, summary, resource_type, resource_id, dedupe_key,
   metadata_json, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, resolved_at, resolved_by
 )
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16)
 ON CONFLICT (dedupe_key) DO UPDATE SET
   type = EXCLUDED.type,
   severity = EXCLUDED.severity,
@@ -203,7 +203,6 @@ ON CONFLICT (dedupe_key) DO UPDATE SET
   summary = EXCLUDED.summary,
   resource_type = EXCLUDED.resource_type,
   resource_id = EXCLUDED.resource_id,
-  project_id = EXCLUDED.project_id,
   dedupe_key = EXCLUDED.dedupe_key,
   metadata_json = EXCLUDED.metadata_json,
   first_seen_at = EXCLUDED.first_seen_at,
@@ -212,7 +211,7 @@ ON CONFLICT (dedupe_key) DO UPDATE SET
   acknowledged_by = EXCLUDED.acknowledged_by,
   resolved_at = EXCLUDED.resolved_at,
   resolved_by = EXCLUDED.resolved_by
-`, event.ID, event.Type, event.Severity, event.Status, event.Title, event.Summary, event.ResourceType, event.ResourceID, event.ProjectID, event.DedupeKey, metadata, event.FirstSeenAt, event.LastSeenAt, event.AcknowledgedAt, event.AcknowledgedBy, event.ResolvedAt, event.ResolvedBy)
+`, event.ID, event.Type, event.Severity, event.Status, event.Title, event.Summary, event.ResourceType, event.ResourceID, event.DedupeKey, metadata, event.FirstSeenAt, event.LastSeenAt, event.AcknowledgedAt, event.AcknowledgedBy, event.ResolvedAt, event.ResolvedBy)
 	return err
 }
 
@@ -234,7 +233,6 @@ func scanAlertEvent(scanner alertEventScanner) (AlertEvent, error) {
 		&event.Summary,
 		&event.ResourceType,
 		&event.ResourceID,
-		&event.ProjectID,
 		&event.DedupeKey,
 		&metadataRaw,
 		&event.FirstSeenAt,
@@ -261,10 +259,9 @@ func appendAlertEventFilters(clauses *[]string, args *[]any, query AlertQuery) {
 	appendExactFilter(clauses, args, "severity", query.Severity)
 	appendExactFilter(clauses, args, "status", query.Status)
 	appendExactFilter(clauses, args, "resource_type", query.ResourceType)
-	appendExactFilter(clauses, args, "project_id", query.ProjectID)
 	appendTimeFilter(clauses, args, "last_seen_at", ">=", query.CreatedFrom)
 	appendTimeFilter(clauses, args, "last_seen_at", "<=", query.CreatedTo)
-	appendSearchFilter(clauses, args, query.Search, []string{"type", "severity", "status", "title", "summary", "resource_type", "resource_id", "project_id", "dedupe_key"})
+	appendSearchFilter(clauses, args, query.Search, []string{"type", "severity", "status", "title", "summary", "resource_type", "resource_id", "dedupe_key"})
 }
 
 func memoryAlertEventMatches(event AlertEvent, query AlertQuery) bool {
@@ -280,9 +277,6 @@ func memoryAlertEventMatches(event AlertEvent, query AlertQuery) bool {
 	if query.ResourceType != "" && event.ResourceType != query.ResourceType {
 		return false
 	}
-	if query.ProjectID != "" && event.ProjectID != query.ProjectID {
-		return false
-	}
 	if !query.CreatedFrom.IsZero() && event.LastSeenAt.Before(query.CreatedFrom) {
 		return false
 	}
@@ -293,7 +287,7 @@ func memoryAlertEventMatches(event AlertEvent, query AlertQuery) bool {
 	if keyword == "" {
 		return true
 	}
-	values := []string{event.Type, event.Severity, event.Status, event.Title, event.Summary, event.ResourceType, event.ResourceID, event.ProjectID, event.DedupeKey}
+	values := []string{event.Type, event.Severity, event.Status, event.Title, event.Summary, event.ResourceType, event.ResourceID, event.DedupeKey}
 	for key, value := range event.Metadata {
 		values = append(values, key, value)
 	}

@@ -36,8 +36,6 @@ const statusFilter = ref('')
 const modelsText = ref('gpt-4o-mini')
 const keyStatus = ref('active')
 const form = reactive<APIKeyCreateRequest>({
-  project_id: '',
-  application_id: '',
   name: '',
   policy_id: '',
   model_allowlist: [],
@@ -79,8 +77,6 @@ function dateInputValue(value?: string): string {
 function openCreate() {
   editing.value = null
   Object.assign(form, {
-    project_id: '',
-    application_id: '',
     name: '',
     policy_id: '',
     model_allowlist: [],
@@ -96,8 +92,6 @@ function openCreate() {
 function openEdit(key: APIKeyRecord) {
   editing.value = key
   Object.assign(form, {
-    project_id: key.project_id,
-    application_id: key.application_id,
     name: key.name,
     policy_id: key.policy_id || '',
     model_allowlist: [...key.model_allowlist],

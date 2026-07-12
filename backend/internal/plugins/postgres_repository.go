@@ -220,6 +220,65 @@ CREATE TABLE IF NOT EXISTS official_license_snapshots (
 
 CREATE INDEX IF NOT EXISTS official_license_snapshots_imported_idx
   ON official_license_snapshots(imported_at DESC);
+
+CREATE TABLE IF NOT EXISTS plugin_api_tokens (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  plugin_id TEXT NOT NULL DEFAULT '',
+  token_prefix TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  scopes_json TEXT NOT NULL DEFAULT '[]',
+  surfaces_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL,
+  expires_at TIMESTAMPTZ,
+  last_used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS plugin_api_tokens_plugin_idx
+  ON plugin_api_tokens(plugin_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS plugin_api_tokens_status_idx
+  ON plugin_api_tokens(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS official_feed_snapshots (
+  service_key TEXT NOT NULL,
+  feed_id TEXT NOT NULL,
+  feed_version TEXT NOT NULL,
+  data_schema_version TEXT NOT NULL,
+  status TEXT NOT NULL,
+  signature_verified BOOLEAN NOT NULL DEFAULT false,
+  payload_sha256 TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  payload_ciphertext TEXT NOT NULL,
+  envelope_json TEXT NOT NULL,
+  issued_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  imported_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY(service_key, feed_id)
+);
+
+CREATE INDEX IF NOT EXISTS official_feed_snapshots_service_idx
+  ON official_feed_snapshots(service_key, imported_at DESC);
+
+CREATE TABLE IF NOT EXISTS official_feed_sync_runs (
+  id TEXT PRIMARY KEY,
+  service_key TEXT NOT NULL,
+  feed_id TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL,
+  status TEXT NOT NULL,
+  request_id TEXT NOT NULL DEFAULT '',
+  source_url TEXT NOT NULL DEFAULT '',
+  error_code TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  started_at TIMESTAMPTZ NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS official_feed_sync_runs_service_idx
+  ON official_feed_sync_runs(service_key, started_at DESC);
 `)
 	return err
 }
@@ -632,6 +691,194 @@ LIMIT 1
 		return licenseRecord{}, false, err
 	}
 	return record, true, nil
+}
+
+func (r *PostgresRepository) SavePluginAPIToken(ctx context.Context, record pluginAPITokenRecord) error {
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO plugin_api_tokens(
+  id, name, plugin_id, token_prefix, token_hash, scopes_json, surfaces_json,
+  status, expires_at, last_used_at, created_at, updated_at
+)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+`, record.ID, record.Name, record.PluginID, record.TokenPrefix, record.TokenHash, marshalStringList(record.Scopes), marshalStringList(record.Surfaces), record.Status, record.ExpiresAt, record.LastUsedAt, record.CreatedAt, record.UpdatedAt)
+	return err
+}
+
+func (r *PostgresRepository) ListPluginAPITokens(ctx context.Context, pluginID string) ([]pluginAPITokenRecord, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, name, plugin_id, token_prefix, token_hash, scopes_json, surfaces_json,
+       status, expires_at, last_used_at, created_at, updated_at
+FROM plugin_api_tokens
+WHERE ($1 = '' OR plugin_id = $1)
+ORDER BY created_at DESC
+`, strings.TrimSpace(pluginID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []pluginAPITokenRecord{}
+	for rows.Next() {
+		record, err := scanPluginAPITokenRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgresRepository) FindPluginAPIToken(ctx context.Context, tokenHash string) (pluginAPITokenRecord, bool, error) {
+	row := r.db.QueryRowContext(ctx, `
+SELECT id, name, plugin_id, token_prefix, token_hash, scopes_json, surfaces_json,
+       status, expires_at, last_used_at, created_at, updated_at
+FROM plugin_api_tokens
+WHERE token_hash = $1
+`, strings.TrimSpace(tokenHash))
+	record, err := scanPluginAPITokenRecord(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return pluginAPITokenRecord{}, false, nil
+		}
+		return pluginAPITokenRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func (r *PostgresRepository) RevokePluginAPIToken(ctx context.Context, id string, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE plugin_api_tokens SET status = $1, updated_at = $2 WHERE id = $3`, PluginAPITokenRevoked, updatedAt, strings.TrimSpace(id))
+	return err
+}
+
+func (r *PostgresRepository) TouchPluginAPIToken(ctx context.Context, id string, usedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE plugin_api_tokens SET last_used_at = $1 WHERE id = $2`, usedAt, strings.TrimSpace(id))
+	return err
+}
+
+func (r *PostgresRepository) SaveOfficialFeed(ctx context.Context, record officialFeedRecord) error {
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO official_feed_snapshots(
+  service_key, feed_id, feed_version, data_schema_version, status, signature_verified,
+  payload_sha256, size_bytes, payload_ciphertext, envelope_json,
+  issued_at, expires_at, imported_at, updated_at
+)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+ON CONFLICT(service_key, feed_id) DO UPDATE SET
+  feed_version = EXCLUDED.feed_version,
+  data_schema_version = EXCLUDED.data_schema_version,
+  status = EXCLUDED.status,
+  signature_verified = EXCLUDED.signature_verified,
+  payload_sha256 = EXCLUDED.payload_sha256,
+  size_bytes = EXCLUDED.size_bytes,
+  payload_ciphertext = EXCLUDED.payload_ciphertext,
+  envelope_json = EXCLUDED.envelope_json,
+  issued_at = EXCLUDED.issued_at,
+  expires_at = EXCLUDED.expires_at,
+  imported_at = EXCLUDED.imported_at,
+  updated_at = EXCLUDED.updated_at
+`, record.ServiceKey, record.FeedID, record.FeedVersion, record.DataSchemaVersion, record.Status, record.SignatureVerified, record.PayloadSHA256, record.SizeBytes, record.PayloadCiphertext, record.EnvelopeJSON, record.IssuedAt, record.ExpiresAt, record.ImportedAt, record.UpdatedAt)
+	return err
+}
+
+func (r *PostgresRepository) ListOfficialFeeds(ctx context.Context, serviceKey string) ([]officialFeedRecord, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT service_key, feed_id, feed_version, data_schema_version, status, signature_verified,
+       payload_sha256, size_bytes, payload_ciphertext, envelope_json,
+       issued_at, expires_at, imported_at, updated_at
+FROM official_feed_snapshots
+WHERE ($1 = '' OR service_key = $1)
+ORDER BY imported_at DESC
+`, strings.TrimSpace(serviceKey))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []officialFeedRecord{}
+	for rows.Next() {
+		record, err := scanOfficialFeedRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgresRepository) LatestOfficialFeed(ctx context.Context, serviceKey string) (officialFeedRecord, bool, error) {
+	row := r.db.QueryRowContext(ctx, `
+SELECT service_key, feed_id, feed_version, data_schema_version, status, signature_verified,
+       payload_sha256, size_bytes, payload_ciphertext, envelope_json,
+       issued_at, expires_at, imported_at, updated_at
+FROM official_feed_snapshots
+WHERE service_key = $1
+ORDER BY imported_at DESC
+LIMIT 1
+`, strings.TrimSpace(serviceKey))
+	record, err := scanOfficialFeedRecord(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return officialFeedRecord{}, false, nil
+		}
+		return officialFeedRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func (r *PostgresRepository) UpdateOfficialFeedStatus(ctx context.Context, serviceKey string, feedID string, status string, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+UPDATE official_feed_snapshots
+SET status = $1, updated_at = $2
+WHERE service_key = $3 AND feed_id = $4
+`, strings.TrimSpace(status), updatedAt, strings.TrimSpace(serviceKey), strings.TrimSpace(feedID))
+	return err
+}
+
+func (r *PostgresRepository) SaveOfficialFeedSyncRun(ctx context.Context, record officialFeedSyncRunRecord) error {
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO official_feed_sync_runs(
+  id, service_key, feed_id, mode, status, request_id, source_url,
+  error_code, error, started_at, finished_at
+)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+ON CONFLICT(id) DO UPDATE SET
+  service_key = EXCLUDED.service_key,
+  feed_id = EXCLUDED.feed_id,
+  mode = EXCLUDED.mode,
+  status = EXCLUDED.status,
+  request_id = EXCLUDED.request_id,
+  source_url = EXCLUDED.source_url,
+  error_code = EXCLUDED.error_code,
+  error = EXCLUDED.error,
+  started_at = EXCLUDED.started_at,
+  finished_at = EXCLUDED.finished_at
+`, record.ID, record.ServiceKey, record.FeedID, record.Mode, record.Status, record.RequestID, record.SourceURL, record.ErrorCode, record.Error, record.StartedAt, record.FinishedAt)
+	return err
+}
+
+func (r *PostgresRepository) ListOfficialFeedSyncRuns(ctx context.Context, serviceKey string, limit int) ([]officialFeedSyncRunRecord, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, service_key, feed_id, mode, status, request_id, source_url,
+       error_code, error, started_at, finished_at
+FROM official_feed_sync_runs
+WHERE ($1 = '' OR service_key = $1)
+ORDER BY started_at DESC
+LIMIT $2
+`, strings.TrimSpace(serviceKey), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []officialFeedSyncRunRecord{}
+	for rows.Next() {
+		record, err := scanOfficialFeedSyncRunRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
 }
 
 func (r *PostgresRepository) Health(ctx context.Context) error {

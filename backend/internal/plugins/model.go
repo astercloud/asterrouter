@@ -36,6 +36,9 @@ const (
 	CatalogModeOnline        = "online"
 	CatalogModePrivateMirror = "private_mirror"
 	CatalogModeOffline       = "offline"
+
+	PluginAPITokenActive  = "active"
+	PluginAPITokenRevoked = "revoked"
 )
 
 type Plugin struct {
@@ -126,6 +129,108 @@ type ConfigRequest struct {
 	Secrets  map[string]string `json:"secrets"`
 }
 
+type PluginAPIToken struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	PluginID    string     `json:"plugin_id,omitempty"`
+	TokenPrefix string     `json:"token_prefix"`
+	Scopes      []string   `json:"scopes"`
+	Surfaces    []string   `json:"surfaces"`
+	Status      string     `json:"status"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+type PluginAPITokenCreateRequest struct {
+	Name      string     `json:"name"`
+	PluginID  string     `json:"plugin_id"`
+	Scopes    []string   `json:"scopes"`
+	Surfaces  []string   `json:"surfaces"`
+	ExpiresAt *time.Time `json:"expires_at"`
+}
+
+type PluginAPITokenCreateResult struct {
+	Token  PluginAPIToken `json:"token"`
+	Secret string         `json:"secret"`
+}
+
+type OfficialFeedStatus struct {
+	ServiceKey        string    `json:"service_key"`
+	FeedID            string    `json:"feed_id"`
+	FeedVersion       string    `json:"feed_version"`
+	DataSchemaVersion string    `json:"data_schema_version"`
+	Status            string    `json:"status"`
+	SignatureVerified bool      `json:"signature_verified"`
+	PayloadSHA256     string    `json:"payload_sha256"`
+	SizeBytes         int64     `json:"size_bytes"`
+	IssuedAt          time.Time `json:"issued_at"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	ImportedAt        time.Time `json:"imported_at"`
+}
+
+type OfficialFeedClientInfo struct {
+	InstanceID          string `json:"instance_id"`
+	LicenseID           string `json:"license_id"`
+	EncryptionAlgorithm string `json:"encryption_algorithm"`
+	EncryptionPublicKey string `json:"encryption_public_key"`
+}
+
+type OfficialFeedImportRequest struct {
+	Envelope json.RawMessage `json:"envelope"`
+	FileJSON json.RawMessage `json:"file_json"`
+}
+
+type OfficialFeedSyncRequest struct {
+	ServiceKey string `json:"service_key"`
+}
+
+type OfficialFeedSyncRun struct {
+	ID         string    `json:"id"`
+	ServiceKey string    `json:"service_key"`
+	FeedID     string    `json:"feed_id,omitempty"`
+	Mode       string    `json:"mode"`
+	Status     string    `json:"status"`
+	RequestID  string    `json:"request_id,omitempty"`
+	SourceURL  string    `json:"source_url,omitempty"`
+	ErrorCode  string    `json:"error_code,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
+type OfficialFeedSyncResult struct {
+	Feed OfficialFeedStatus  `json:"feed"`
+	Run  OfficialFeedSyncRun `json:"run"`
+}
+
+type pluginAPITokenRecord struct {
+	PluginAPIToken
+	TokenHash string
+}
+
+type officialFeedRecord struct {
+	ServiceKey        string
+	FeedID            string
+	FeedVersion       string
+	DataSchemaVersion string
+	Status            string
+	SignatureVerified bool
+	PayloadSHA256     string
+	SizeBytes         int64
+	PayloadCiphertext string
+	EnvelopeJSON      string
+	IssuedAt          time.Time
+	ExpiresAt         time.Time
+	ImportedAt        time.Time
+	UpdatedAt         time.Time
+}
+
+type officialFeedSyncRunRecord struct {
+	OfficialFeedSyncRun
+}
+
 type DeliveryAttempt struct {
 	ID            string    `json:"id"`
 	PluginID      string    `json:"plugin_id"`
@@ -173,13 +278,16 @@ type OfficialCatalogConfig struct {
 	Mode            string
 	BootstrapURL    string
 	URL             string
+	ServicesURL     string
 	LicenseURL      string
+	RedeemURL       string
 	PublicKeyID     string
 	PublicKeyBase64 string
 }
 
 type OfficialLicenseConfig struct {
 	URL             string
+	RedeemURL       string
 	PublicKeyID     string
 	PublicKeyBase64 string
 	InstanceID      string
@@ -192,6 +300,7 @@ type OfficialCatalogStatus struct {
 	BootstrapURL    string    `json:"bootstrap_url,omitempty"`
 	SourceURL       string    `json:"source_url"`
 	LicenseURL      string    `json:"license_url,omitempty"`
+	RedeemURL       string    `json:"redeem_url,omitempty"`
 	TrustConfigured bool      `json:"trust_configured"`
 	CatalogVersion  int64     `json:"catalog_version"`
 	PayloadSHA256   string    `json:"payload_sha256"`
@@ -235,6 +344,13 @@ type LicenseActivateRequest struct {
 	InstanceID       string `json:"instance_id"`
 	Fingerprint      string `json:"instance_fingerprint"`
 	DisplayName      string `json:"display_name"`
+}
+
+type LicenseRedeemRequest struct {
+	Code        string `json:"code"`
+	InstanceID  string `json:"instance_id"`
+	Fingerprint string `json:"instance_fingerprint"`
+	DisplayName string `json:"display_name"`
 }
 
 type LicenseImportRequest struct {

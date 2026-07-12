@@ -49,7 +49,7 @@ func TestAdminRBACAllowsGlobalAuditorReadAndBlocksWrites(t *testing.T) {
 	}
 }
 
-func TestAdminRBACBlocksProjectDeveloperButPortalStillWorks(t *testing.T) {
+func TestAdminRBACBlocksDeveloperButPortalStillWorks(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{AdminToken: "secret"})
 	user, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{
 		Email:  "dev@example.com",
@@ -62,8 +62,7 @@ func TestAdminRBACBlocksProjectDeveloperButPortalStillWorks(t *testing.T) {
 	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
 		UserID:    user.ID,
 		Role:      controlplane.RoleDeveloper,
-		ScopeType: controlplane.RoleScopeProject,
-		ScopeID:   "proj_platform",
+		ScopeType: controlplane.RoleScopeGlobal,
 	}); err != nil {
 		t.Fatalf("CreateRoleBinding(): %v", err)
 	}

@@ -39,7 +39,7 @@ func TestPortalWorkspaceAndAPIKeyRoutes(t *testing.T) {
 	if err := json.Unmarshal(workspaceRec.Body.Bytes(), &workspaceResp); err != nil {
 		t.Fatalf("decode workspace: %v", err)
 	}
-	if !workspaceResp.Data.CanManageKeys || len(workspaceResp.Data.Projects) == 0 || workspaceResp.Data.GatewayPath != "/v1" {
+	if !workspaceResp.Data.CanManageKeys || workspaceResp.Data.GatewayPath != "/v1" {
 		t.Fatalf("workspace mismatch: %+v", workspaceResp.Data)
 	}
 
@@ -60,9 +60,6 @@ func TestPortalWorkspaceAndAPIKeyRoutes(t *testing.T) {
 	}
 	if createResp.Data.Key == "" || createResp.Data.Record.ID == "" {
 		t.Fatalf("create key mismatch: %+v", createResp.Data)
-	}
-	if createResp.Data.Record.ProjectID != "proj_platform" || createResp.Data.Record.ApplicationID != "app_internal_sandbox" {
-		t.Fatalf("workspace default boundary mismatch: %+v", createResp.Data.Record)
 	}
 
 	rotateReq := httptest.NewRequest(http.MethodPost, "/api/v1/portal/api-keys/"+createResp.Data.Record.ID+"/rotate", nil)

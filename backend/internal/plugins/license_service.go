@@ -29,6 +29,8 @@ var (
 	ErrLicenseSignature     = errors.New("license signature verification failed")
 	ErrLicenseInvalid       = errors.New("license snapshot is invalid")
 	ErrLicenseActivation    = errors.New("official license activation failed")
+	ErrLicenseRedeem        = errors.New("official license redemption failed")
+	ErrLicenseBinding       = errors.New("license snapshot is bound to another instance")
 )
 
 type licenseSnapshotPayload struct {
@@ -144,7 +146,74 @@ func (s *Service) ActivateLicense(ctx context.Context, request LicenseActivateRe
 	if err != nil {
 		return LicenseStatus{}, err
 	}
-	return s.saveLicenseEnvelope(ctx, envelope, secret)
+	return s.saveLicenseEnvelope(ctx, envelope, secret, s.requestLicenseBinding(request.InstanceID, request.Fingerprint))
+}
+
+// RedeemLicense sends a one-time code to the official service. The local
+// instance never interprets or stores the code; it only accepts a signed,
+// instance-bound license envelope in response.
+func (s *Service) RedeemLicense(ctx context.Context, request LicenseRedeemRequest) (LicenseStatus, error) {
+	cfg, err := s.effectiveLicenseConfig(ctx)
+	if err != nil {
+		return LicenseStatus{}, err
+	}
+	if strings.TrimSpace(cfg.RedeemURL) == "" || cfg.PublicKeyID == "" || cfg.PublicKeyBase64 == "" {
+		return LicenseStatus{}, ErrLicenseNotConfigured
+	}
+	code := strings.TrimSpace(request.Code)
+	if code == "" {
+		return LicenseStatus{}, fmt.Errorf("%w: code is required", ErrLicenseRedeem)
+	}
+	instanceID := defaultString(strings.TrimSpace(request.InstanceID), cfg.InstanceID)
+	fingerprint := defaultString(strings.TrimSpace(request.Fingerprint), cfg.Fingerprint)
+	endpoint, err := licenseRedeemURL(cfg.RedeemURL)
+	if err != nil {
+		return LicenseStatus{}, err
+	}
+	body, err := json.Marshal(map[string]string{
+		"code":                 code,
+		"instance_id":          instanceID,
+		"instance_fingerprint": fingerprint,
+		"display_name":         defaultString(strings.TrimSpace(request.DisplayName), cfg.DisplayName),
+	})
+	if err != nil {
+		return LicenseStatus{}, err
+	}
+	hash := sha256.Sum256([]byte(instanceID + "|" + code))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return LicenseStatus{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Aster-Idempotency-Key", hex.EncodeToString(hash[:]))
+	httpReq.Header.Set("X-Aster-Core-Version", s.coreVersion)
+	response, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return LicenseStatus{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return LicenseStatus{}, fmt.Errorf("%w: status %d", ErrLicenseRedeem, response.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxLicenseBytes+1))
+	if err != nil {
+		return LicenseStatus{}, err
+	}
+	if len(raw) > maxLicenseBytes {
+		return LicenseStatus{}, fmt.Errorf("license redemption response exceeds maximum size")
+	}
+	envelope, err := decodeActivationEnvelope(raw)
+	if err != nil {
+		return LicenseStatus{}, err
+	}
+	return s.saveLicenseEnvelope(ctx, envelope, "", s.requestLicenseBinding(request.InstanceID, request.Fingerprint))
+}
+
+func (s *Service) requestLicenseBinding(instanceID string, fingerprint string) licenseBinding {
+	return licenseBinding{
+		InstanceID:  defaultString(strings.TrimSpace(instanceID), s.licenseInstanceID),
+		Fingerprint: defaultString(strings.TrimSpace(fingerprint), s.licenseFingerprint),
+	}
 }
 
 func (s *Service) ImportLicense(ctx context.Context, request LicenseImportRequest) (LicenseStatus, error) {
@@ -152,11 +221,16 @@ func (s *Service) ImportLicense(ctx context.Context, request LicenseImportReques
 	if err != nil {
 		return LicenseStatus{}, err
 	}
-	return s.saveLicenseEnvelope(ctx, envelope, strings.TrimSpace(request.ActivationSecret))
+	return s.saveLicenseEnvelope(ctx, envelope, strings.TrimSpace(request.ActivationSecret), licenseBinding{})
 }
 
-func (s *Service) saveLicenseEnvelope(ctx context.Context, envelope catalogEnvelope, activationSecret string) (LicenseStatus, error) {
-	payload, rawEnvelope, err := s.verifyLicenseEnvelope(ctx, envelope)
+type licenseBinding struct {
+	InstanceID  string
+	Fingerprint string
+}
+
+func (s *Service) saveLicenseEnvelope(ctx context.Context, envelope catalogEnvelope, activationSecret string, binding licenseBinding) (LicenseStatus, error) {
+	payload, rawEnvelope, err := s.verifyLicenseEnvelope(ctx, envelope, binding)
 	if err != nil {
 		return LicenseStatus{}, err
 	}
@@ -199,7 +273,7 @@ func (s *Service) saveLicenseEnvelope(ctx context.Context, envelope catalogEnvel
 	return licenseStatusFromRecord(record), nil
 }
 
-func (s *Service) verifyLicenseEnvelope(ctx context.Context, envelope catalogEnvelope) (licenseSnapshotPayload, []byte, error) {
+func (s *Service) verifyLicenseEnvelope(ctx context.Context, envelope catalogEnvelope, binding licenseBinding) (licenseSnapshotPayload, []byte, error) {
 	cfg, err := s.effectiveLicenseConfig(ctx)
 	if err != nil {
 		return licenseSnapshotPayload{}, nil, err
@@ -228,6 +302,12 @@ func (s *Service) verifyLicenseEnvelope(ctx context.Context, envelope catalogEnv
 		(payload.License.ExpiresAt != nil && !payload.License.ExpiresAt.After(now)) ||
 		!payload.ExpiresAt.After(now) {
 		return licenseSnapshotPayload{}, nil, ErrLicenseInvalid
+	}
+	if instanceID := strings.TrimSpace(binding.InstanceID); instanceID != "" && payload.Instance.PublicID != instanceID {
+		return licenseSnapshotPayload{}, nil, ErrLicenseBinding
+	}
+	if fingerprint := strings.TrimSpace(binding.Fingerprint); fingerprint != "" && payload.Instance.Fingerprint != fingerprint {
+		return licenseSnapshotPayload{}, nil, ErrLicenseBinding
 	}
 	rawEnvelope, err := json.Marshal(envelope)
 	if err != nil {
@@ -440,6 +520,13 @@ func normalizeOfficialLicenseConfig(cfg OfficialLicenseConfig, catalog OfficialC
 	if cfg.URL == "" {
 		cfg.URL = deriveLicenseURL(catalog.URL)
 	}
+	cfg.RedeemURL = strings.TrimSpace(cfg.RedeemURL)
+	if cfg.RedeemURL == "" {
+		cfg.RedeemURL = strings.TrimSpace(catalog.RedeemURL)
+	}
+	if cfg.RedeemURL == "" {
+		cfg.RedeemURL = deriveRedeemURL(cfg.URL)
+	}
 	cfg.PublicKeyID = strings.TrimSpace(cfg.PublicKeyID)
 	if cfg.PublicKeyID == "" {
 		cfg.PublicKeyID = strings.TrimSpace(catalog.PublicKeyID)
@@ -487,6 +574,28 @@ func licenseActivationURL(value string) (string, error) {
 	return parsed.String(), nil
 }
 
+func licenseRedeemURL(value string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("redeem URL must be http or https")
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	switch {
+	case strings.HasSuffix(basePath, "/licenses/redeem"):
+		parsed.Path = basePath
+	case strings.HasSuffix(basePath, "/licenses/activate"):
+		parsed.Path = strings.TrimSuffix(basePath, "/activate") + "/redeem"
+	default:
+		parsed.Path = strings.TrimRight(basePath, "/") + "/licenses/redeem"
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
 func deriveLicenseURL(catalogURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(catalogURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -497,6 +606,24 @@ func deriveLicenseURL(catalogURL string) string {
 		basePath = strings.TrimSuffix(basePath, "/catalog/index")
 	}
 	parsed.Path = strings.TrimRight(basePath, "/") + "/licenses/activate"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func deriveRedeemURL(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(basePath, "/catalog/index") {
+		basePath = strings.TrimSuffix(basePath, "/catalog/index")
+	}
+	if strings.HasSuffix(basePath, "/licenses/activate") {
+		basePath = strings.TrimSuffix(basePath, "/activate")
+	}
+	parsed.Path = strings.TrimRight(basePath, "/") + "/licenses/redeem"
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String()

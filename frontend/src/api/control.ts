@@ -15,12 +15,17 @@ import type {
   ExportJob,
   ExportJobKind,
   GatewayPolicyExplanation,
+	GatewayModel,
+	GatewayModelRequest,
+	GatewaySimulation,
   GatewayTrace,
   GatewayTraceSummary,
   GovernancePolicy,
   GovernancePolicyRequest,
   ModelPricing,
   ModelPricingRequest,
+	ModelRoute,
+	ModelRouteRequest,
   PortalWorkspace,
   RecordListQuery,
   RoleBinding,
@@ -218,6 +223,52 @@ export async function checkProviderAccount(id: string): Promise<ProviderAccountH
 export async function clearProviderAccountCooldown(id: string): Promise<ProviderAccount> {
   const response = await apiClient.post<ProviderAccountPayload>(`/admin/provider-accounts/${id}/clear-cooldown`)
   return normalizeProviderAccount(response.data)
+}
+
+export async function getGatewayModels(): Promise<GatewayModel[]> {
+  const response = await apiClient.get<GatewayModel[] | null>('/admin/gateway-models')
+  return listOrEmpty(response.data)
+}
+
+export async function createGatewayModel(payload: GatewayModelRequest): Promise<GatewayModel> {
+  const response = await apiClient.post<GatewayModel>('/admin/gateway-models', payload)
+  return response.data
+}
+
+export async function updateGatewayModel(id: string, payload: GatewayModelRequest): Promise<GatewayModel> {
+  const response = await apiClient.put<GatewayModel>(`/admin/gateway-models/${id}`, payload)
+  return response.data
+}
+
+export async function deleteGatewayModel(id: string): Promise<void> {
+  await apiClient.delete(`/admin/gateway-models/${id}`)
+}
+
+export async function getModelRoutes(): Promise<ModelRoute[]> {
+  const response = await apiClient.get<ModelRoute[] | null>('/admin/model-routes')
+  return listOrEmpty(response.data)
+}
+
+export async function createModelRoute(payload: ModelRouteRequest): Promise<ModelRoute> {
+  const response = await apiClient.post<ModelRoute>('/admin/model-routes', payload)
+  return response.data
+}
+
+export async function updateModelRoute(id: string, payload: ModelRouteRequest): Promise<ModelRoute> {
+  const response = await apiClient.put<ModelRoute>(`/admin/model-routes/${id}`, payload)
+  return response.data
+}
+
+export async function deleteModelRoute(id: string): Promise<void> {
+  await apiClient.delete(`/admin/model-routes/${id}`)
+}
+
+export async function simulateGatewayRouting(model: string, estimatedTokens: number): Promise<GatewaySimulation> {
+  const response = await apiClient.post<GatewaySimulation>('/admin/gateway-simulator', {
+    model,
+    estimated_tokens: estimatedTokens
+  })
+  return response.data
 }
 
 export async function getModelPricings(): Promise<ModelPricing[]> {

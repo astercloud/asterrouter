@@ -19,7 +19,9 @@ const (
 type catalogBootstrap struct {
 	SchemaVersion string                `json:"schema_version"`
 	CatalogURL    string                `json:"catalog_url"`
+	ServicesURL   string                `json:"services_url"`
 	LicenseURL    string                `json:"license_url"`
+	RedeemURL     string                `json:"redeem_url"`
 	SigningKeys   []catalogBootstrapKey `json:"signing_keys"`
 	GeneratedAt   time.Time             `json:"generated_at"`
 }
@@ -116,6 +118,12 @@ func validateCatalogBootstrap(bootstrap catalogBootstrap) error {
 	if bootstrap.LicenseURL != "" && !isHTTPURL(bootstrap.LicenseURL) {
 		return fmt.Errorf("invalid official license URL in bootstrap")
 	}
+	if bootstrap.ServicesURL != "" && !isHTTPURL(bootstrap.ServicesURL) {
+		return fmt.Errorf("invalid official services URL in bootstrap")
+	}
+	if bootstrap.RedeemURL != "" && !isHTTPURL(bootstrap.RedeemURL) {
+		return fmt.Errorf("invalid official redeem URL in bootstrap")
+	}
 	for _, key := range bootstrap.SigningKeys {
 		if usableBootstrapKey(key) {
 			return nil
@@ -130,6 +138,12 @@ func applyCatalogBootstrap(cfg *OfficialCatalogConfig, bootstrap catalogBootstra
 	}
 	if cfg.LicenseURL == "" {
 		cfg.LicenseURL = strings.TrimSpace(bootstrap.LicenseURL)
+	}
+	if cfg.ServicesURL == "" {
+		cfg.ServicesURL = strings.TrimSpace(bootstrap.ServicesURL)
+	}
+	if cfg.RedeemURL == "" {
+		cfg.RedeemURL = strings.TrimSpace(bootstrap.RedeemURL)
 	}
 	if cfg.PublicKeyID != "" && cfg.PublicKeyBase64 != "" {
 		return

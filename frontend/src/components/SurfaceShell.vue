@@ -59,11 +59,12 @@ const surfaceLinks = computed(() => {
   if (props.surface !== 'relay_operator' && enabledProfiles.value.includes('relay_operator')) {
     links.push({ to: '/operator/overview', label: 'nav.operator', icon: RadioTower })
   }
-  if (props.surface !== 'portal' && enabledProfiles.value.includes('enterprise')) {
-    if (props.surface === 'enterprise') {
-      links.push({ to: '/portal/overview', label: 'nav.portal', icon: KeyRound })
-    } else {
+  if (enabledProfiles.value.includes('enterprise')) {
+    if (props.surface !== 'enterprise') {
       links.push({ to: '/admin/dashboard', label: 'nav.admin', icon: PanelsTopLeft })
+    }
+    if (props.surface !== 'portal') {
+      links.push({ to: '/portal/overview', label: 'nav.portal', icon: KeyRound })
     }
   }
   return links
@@ -89,9 +90,9 @@ watch(
 </script>
 
 <template>
-  <div class="admin-layout" :class="{ 'sidebar-is-collapsed': collapsed }">
-    <aside class="admin-sidebar" :class="{ collapsed, 'mobile-open': mobileOpen }">
-      <div class="sidebar-brand-row">
+  <div class="app-shell admin-layout" :class="{ 'sidebar-is-collapsed': collapsed }">
+    <aside class="sidebar admin-sidebar" :class="{ collapsed, 'mobile-open': mobileOpen }">
+      <div class="sidebar-header sidebar-brand-row">
         <RouterLink class="sidebar-brand-link" :to="homeTo">
           <span class="brand-mark">{{ brandMark }}</span>
           <span class="sidebar-brand-copy">
@@ -110,7 +111,7 @@ watch(
           <RouterLink
             v-for="item in group.items"
             :key="item.to"
-            class="nav-item"
+            class="sidebar-link nav-item"
             :to="item.to"
             :title="collapsed ? t(item.label) : undefined"
           >
@@ -118,25 +119,28 @@ watch(
             <span>{{ t(item.label) }}</span>
           </RouterLink>
         </section>
+        <section v-if="surfaceLinks.length" class="sidebar-section sidebar-workspaces">
+          <p class="sidebar-section-title">{{ t('nav.workspaces') }}</p>
+          <RouterLink
+            v-for="link in surfaceLinks"
+            :key="link.to"
+            class="sidebar-link nav-item"
+            :to="link.to"
+            :title="collapsed ? t(link.label) : undefined"
+          >
+            <component :is="link.icon" :size="19" />
+            <span>{{ t(link.label) }}</span>
+          </RouterLink>
+        </section>
       </nav>
 
-      <div class="sidebar-footer">
-        <RouterLink
-          v-for="link in surfaceLinks"
-          :key="link.to"
-          class="nav-item"
-          :to="link.to"
-          :title="collapsed ? t(link.label) : undefined"
-        >
-          <component :is="link.icon" :size="19" />
-          <span>{{ t(link.label) }}</span>
-        </RouterLink>
-        <button class="nav-item" type="button" :title="darkMode ? t('nav.lightMode') : t('nav.darkMode')" @click="toggleTheme">
+      <div class="app-sidebar-footer sidebar-footer">
+        <button class="sidebar-link nav-item" type="button" :title="darkMode ? t('nav.lightMode') : t('nav.darkMode')" @click="toggleTheme">
           <Sun v-if="darkMode" :size="19" />
           <Moon v-else :size="19" />
           <span>{{ darkMode ? t('nav.lightMode') : t('nav.darkMode') }}</span>
         </button>
-        <button class="nav-item sidebar-collapse" type="button" :title="collapsed ? t('nav.expand') : t('nav.collapse')" @click="toggleCollapsed">
+        <button class="sidebar-link nav-item sidebar-collapse" type="button" :title="collapsed ? t('nav.expand') : t('nav.collapse')" @click="toggleCollapsed">
           <ChevronRight v-if="collapsed" :size="19" />
           <ChevronLeft v-else :size="19" />
           <span>{{ t('nav.collapse') }}</span>
@@ -146,7 +150,7 @@ watch(
 
     <button v-if="mobileOpen" class="sidebar-overlay" type="button" :aria-label="t('nav.closeMenu')" @click="mobileOpen = false"></button>
 
-    <div class="admin-main">
+    <div class="app-main admin-main">
       <TopBar show-menu @toggle-menu="mobileOpen = true" />
       <RouterView />
     </div>

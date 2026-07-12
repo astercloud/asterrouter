@@ -58,6 +58,12 @@ type Config struct {
 	OfficialKeyID      string
 	OfficialPublicKey  string
 	AllowRestart       bool
+	DatabaseURL        string
+	PluginCacheDir     string
+	PluginActiveDir    string
+	BackupDir          string
+	DiagnosticDir      string
+	MaxArchiveBytes    int64
 	MaxDownloadBytes   int64
 	HTTPClient         *http.Client
 }
@@ -70,6 +76,12 @@ type Service struct {
 	officialKeyID      string
 	officialPublicKey  string
 	allowRestart       bool
+	databaseURL        string
+	pluginCacheDir     string
+	pluginActiveDir    string
+	backupDir          string
+	diagnosticDir      string
+	maxArchiveBytes    int64
 	maxDownloadBytes   int64
 	client             *http.Client
 
@@ -210,6 +222,12 @@ func NewService(cfg Config) *Service {
 		officialKeyID:      strings.TrimSpace(cfg.OfficialKeyID),
 		officialPublicKey:  strings.TrimSpace(cfg.OfficialPublicKey),
 		allowRestart:       cfg.AllowRestart,
+		databaseURL:        strings.TrimSpace(cfg.DatabaseURL),
+		pluginCacheDir:     strings.TrimSpace(cfg.PluginCacheDir),
+		pluginActiveDir:    strings.TrimSpace(cfg.PluginActiveDir),
+		backupDir:          strings.TrimSpace(cfg.BackupDir),
+		diagnosticDir:      strings.TrimSpace(cfg.DiagnosticDir),
+		maxArchiveBytes:    defaultArchiveBytes(cfg.MaxArchiveBytes),
 		maxDownloadBytes:   maxBytes,
 		client:             client,
 	}

@@ -11,7 +11,6 @@ func (r *MemoryRepository) ListWorkspaceUsers(context.Context) ([]WorkspaceUser,
 	defer r.mu.RUnlock()
 	out := make([]WorkspaceUser, 0, len(r.workspaceUsers))
 	for _, user := range r.workspaceUsers {
-		user.ProjectCount = r.projectCountForUser(user.ID)
 		out = append(out, user)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -63,24 +62,10 @@ func (r *MemoryRepository) DeleteRoleBinding(_ context.Context, id string) error
 	return nil
 }
 
-func (r *MemoryRepository) projectCountForUser(userID string) int {
-	projects := map[string]struct{}{}
-	for _, binding := range r.roleBindings {
-		if binding.UserID == userID && binding.ScopeType == RoleScopeProject && binding.ScopeID != "" {
-			projects[binding.ScopeID] = struct{}{}
-		}
-	}
-	return len(projects)
-}
-
 func (r *PostgresRepository) ListWorkspaceUsers(ctx context.Context) ([]WorkspaceUser, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT u.id, u.email, u.display_name, u.status, u.role,
-       COUNT(DISTINCT rb.scope_id) FILTER (WHERE rb.scope_type = 'project' AND rb.scope_id <> '') AS project_count,
-       u.created_at, u.updated_at
+SELECT u.id, u.email, u.display_name, u.status, u.role, u.external_issuer, u.external_subject, u.department_id, u.totp_enabled, u.totp_secret_ciphertext, u.totp_recovery_hashes, u.password_hash, u.email_verified, u.email_verify_hash, u.email_verify_expires_at, u.password_reset_hash, u.password_reset_expires_at, u.created_at, u.updated_at
 FROM workspace_users u
-LEFT JOIN role_bindings rb ON rb.user_id = u.id
-GROUP BY u.id, u.email, u.display_name, u.status, u.role, u.created_at, u.updated_at
 ORDER BY u.status ASC, u.email ASC
 `)
 	if err != nil {
@@ -90,9 +75,11 @@ ORDER BY u.status ASC, u.email ASC
 	var out []WorkspaceUser
 	for rows.Next() {
 		var user WorkspaceUser
-		if err := rows.Scan(&user.ID, &user.Email, &user.DisplayName, &user.Status, &user.Role, &user.ProjectCount, &user.CreatedAt, &user.UpdatedAt); err != nil {
+		var recovery string
+		if err := rows.Scan(&user.ID, &user.Email, &user.DisplayName, &user.Status, &user.Role, &user.ExternalIssuer, &user.ExternalSubject, &user.DepartmentID, &user.TOTPEnabled, &user.TOTPSecretCiphertext, &recovery, &user.PasswordHash, &user.EmailVerified, &user.EmailVerifyHash, &user.EmailVerifyExpiresAt, &user.PasswordResetHash, &user.PasswordResetExpiresAt, &user.CreatedAt, &user.UpdatedAt); err != nil {
 			return nil, err
 		}
+		user.TOTPRecoveryHashes = parseStringList(recovery)
 		out = append(out, user)
 	}
 	return out, rows.Err()
@@ -100,15 +87,27 @@ ORDER BY u.status ASC, u.email ASC
 
 func (r *PostgresRepository) SaveWorkspaceUser(ctx context.Context, user WorkspaceUser) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO workspace_users(id, email, display_name, status, role, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7)
+INSERT INTO workspace_users(id, email, display_name, status, role, external_issuer, external_subject, department_id, totp_enabled, totp_secret_ciphertext, totp_recovery_hashes, password_hash, email_verified, email_verify_hash, email_verify_expires_at, password_reset_hash, password_reset_expires_at, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 ON CONFLICT(id) DO UPDATE SET
   email = EXCLUDED.email,
   display_name = EXCLUDED.display_name,
   status = EXCLUDED.status,
   role = EXCLUDED.role,
+  external_issuer = EXCLUDED.external_issuer,
+  external_subject = EXCLUDED.external_subject,
+  department_id = EXCLUDED.department_id,
+  totp_enabled = EXCLUDED.totp_enabled,
+  totp_secret_ciphertext = EXCLUDED.totp_secret_ciphertext,
+  totp_recovery_hashes = EXCLUDED.totp_recovery_hashes,
+  password_hash = EXCLUDED.password_hash,
+  email_verified = EXCLUDED.email_verified,
+  email_verify_hash = EXCLUDED.email_verify_hash,
+  email_verify_expires_at = EXCLUDED.email_verify_expires_at,
+  password_reset_hash = EXCLUDED.password_reset_hash,
+  password_reset_expires_at = EXCLUDED.password_reset_expires_at,
   updated_at = EXCLUDED.updated_at
-`, user.ID, user.Email, user.DisplayName, user.Status, user.Role, user.CreatedAt, user.UpdatedAt)
+`, user.ID, user.Email, user.DisplayName, user.Status, user.Role, user.ExternalIssuer, user.ExternalSubject, user.DepartmentID, user.TOTPEnabled, user.TOTPSecretCiphertext, marshalStringList(user.TOTPRecoveryHashes), user.PasswordHash, user.EmailVerified, user.EmailVerifyHash, user.EmailVerifyExpiresAt, user.PasswordResetHash, user.PasswordResetExpiresAt, user.CreatedAt, user.UpdatedAt)
 	return err
 }
 

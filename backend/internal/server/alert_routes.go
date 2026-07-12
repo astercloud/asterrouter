@@ -53,7 +53,6 @@ func alertQuery(c *gin.Context) controlplane.AlertQuery {
 		Severity:     strings.TrimSpace(c.Query("severity")),
 		Status:       strings.TrimSpace(c.Query("status")),
 		ResourceType: strings.TrimSpace(c.Query("resource_type")),
-		ProjectID:    strings.TrimSpace(c.Query("project_id")),
 		CreatedFrom:  timeQuery(c, "from"),
 		CreatedTo:    timeQuery(c, "to"),
 	}

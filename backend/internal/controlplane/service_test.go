@@ -20,10 +20,10 @@ func TestEnsureSeedDataCreatesProductBaselineResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dashboard(): %v", err)
 	}
-	if dashboard.ProviderCount != 1 || dashboard.ProjectCount != 1 || dashboard.ApplicationCount != 1 {
+	if dashboard.ProviderCount != 1 || dashboard.APIKeyCount != 0 {
 		t.Fatalf("unexpected dashboard counts: %+v", dashboard)
 	}
-	if len(dashboard.Models) != 2 {
+	if len(dashboard.Models) != 0 {
 		t.Fatalf("models = %+v", dashboard.Models)
 	}
 }
@@ -50,9 +50,6 @@ func TestCreateAPIKeyReturnsSecretOnceAndStoresHash(t *testing.T) {
 	if created.Record.KeyHash == created.Key {
 		t.Fatal("api key stored without hashing")
 	}
-	if created.Record.ProjectID != defaultWorkspaceProjectID || created.Record.ApplicationID != defaultWorkspaceApplicationID {
-		t.Fatalf("workspace default boundary mismatch: %+v", created.Record)
-	}
 
 	keys, err := svc.ListAPIKeys(context.Background())
 	if err != nil {
@@ -66,107 +63,20 @@ func TestCreateAPIKeyReturnsSecretOnceAndStoresHash(t *testing.T) {
 	}
 }
 
-func TestCreateAPIKeyWithProjectOnlyCreatesHiddenWorkspaceApplication(t *testing.T) {
+func TestGovernancePolicyLifecycleValidatesWorkspaceKeyScope(t *testing.T) {
 	ctx := context.Background()
-	repo := NewMemoryRepository()
-	svc := NewService(repo, "/v1")
-	project, err := svc.CreateProject(ctx, "tester", ProjectRequest{
-		Name:       "Engineering",
-		CostCenter: "ENG",
-		Status:     ProjectStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateProject(): %v", err)
-	}
-
+	svc := NewService(NewMemoryRepository(), "/v1")
 	created, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{
-		ProjectID:         project.ID,
-		Name:              "Engineering workspace key",
-		ModelAllowlist:    []string{"gpt-4o-mini"},
-		MonthlyTokenLimit: 100000,
+		Name:           "Scoped key",
+		ModelAllowlist: []string{"gpt-4o-mini"},
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey(): %v", err)
 	}
-	if created.Record.ProjectID != project.ID || created.Record.ApplicationID == "" {
-		t.Fatalf("project-only workspace boundary mismatch: %+v", created.Record)
-	}
-	apps, err := repo.ListApplications(ctx, project.ID)
-	if err != nil {
-		t.Fatalf("ListApplications(): %v", err)
-	}
-	if len(apps) != 1 || apps[0].ID != created.Record.ApplicationID || apps[0].Name != "Workspace Gateway" {
-		t.Fatalf("hidden workspace application mismatch: %+v", apps)
-	}
-}
-
-func TestProjectAndApplicationUpdateLifecycle(t *testing.T) {
-	svc := NewService(NewMemoryRepository(), "/v1")
-	project, err := svc.CreateProject(context.Background(), "tester", ProjectRequest{
-		Name:               "Data Platform",
-		Description:        "Initial",
-		CostCenter:         "DATA",
-		MonthlyBudgetCents: 10000,
-		Status:             ProjectStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateProject(): %v", err)
-	}
-	updatedProject, err := svc.UpdateProject(context.Background(), "tester", project.ID, ProjectRequest{
-		Name:               "Data Platform Updated",
-		Description:        "Updated",
-		CostCenter:         "DATA-OPS",
-		MonthlyBudgetCents: 25000,
-		Status:             ProjectStatusArchived,
-	})
-	if err != nil {
-		t.Fatalf("UpdateProject(): %v", err)
-	}
-	if updatedProject.ID != project.ID || updatedProject.CreatedAt != project.CreatedAt || updatedProject.Name != "Data Platform Updated" || updatedProject.Status != ProjectStatusArchived {
-		t.Fatalf("project update mismatch: before=%+v after=%+v", project, updatedProject)
-	}
-
-	app, err := svc.CreateApplication(context.Background(), "tester", ApplicationRequest{
-		ProjectID:   project.ID,
-		Name:        "Console",
-		Environment: "dev",
-		Owner:       "team-a",
-		Status:      ApplicationStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateApplication(): %v", err)
-	}
-	updatedApp, err := svc.UpdateApplication(context.Background(), "tester", app.ID, ApplicationRequest{
-		ProjectID:   project.ID,
-		Name:        "Console API",
-		Environment: "prod",
-		Owner:       "team-b",
-		Status:      ApplicationStatusDisabled,
-	})
-	if err != nil {
-		t.Fatalf("UpdateApplication(): %v", err)
-	}
-	if updatedApp.ID != app.ID || updatedApp.CreatedAt != app.CreatedAt || updatedApp.Name != "Console API" || updatedApp.Status != ApplicationStatusDisabled {
-		t.Fatalf("application update mismatch: before=%+v after=%+v", app, updatedApp)
-	}
-}
-
-func TestGovernancePolicyLifecycleValidatesScope(t *testing.T) {
-	svc := NewService(NewMemoryRepository(), "/v1")
-	project, err := svc.CreateProject(context.Background(), "tester", ProjectRequest{
-		Name:               "Policy Project",
-		CostCenter:         "POLICY",
-		MonthlyBudgetCents: 10000,
-		Status:             ProjectStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateProject(): %v", err)
-	}
-
-	policy, err := svc.CreateGovernancePolicy(context.Background(), "tester", GovernancePolicyRequest{
-		Name:               "Default policy",
-		ScopeType:          GovernancePolicyScopeProject,
-		ScopeID:            project.ID,
+	policy, err := svc.CreateGovernancePolicy(ctx, "tester", GovernancePolicyRequest{
+		Name:               "Workspace key policy",
+		ScopeType:          GovernancePolicyScopeAPIKey,
+		ScopeID:            created.Record.ID,
 		ModelAllowlist:     []string{"gpt-4o-mini", "gpt-4o-mini", ""},
 		QPSLimit:           10,
 		MonthlyTokenLimit:  1000000,
@@ -174,51 +84,33 @@ func TestGovernancePolicyLifecycleValidatesScope(t *testing.T) {
 		OverageAction:      GovernancePolicyOverageBlock,
 		PromptLoggingMode:  GovernancePolicyPromptLoggingMetadataOnly,
 		RetentionDays:      30,
-		ToolCallAllowed:    true,
-		ImageInputAllowed:  true,
 		Status:             GovernancePolicyStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateGovernancePolicy(): %v", err)
 	}
-	if policy.ID == "" || policy.ScopeID != project.ID || len(policy.ModelAllowlist) != 1 {
+	if policy.ScopeID != created.Record.ID || len(policy.ModelAllowlist) != 1 || policy.Version != 1 {
 		t.Fatalf("policy mismatch: %+v", policy)
 	}
-	if policy.Version != 1 || policy.LastUpdatedBy != "tester" {
-		t.Fatalf("policy version audit mismatch: %+v", policy)
-	}
-
-	updated, err := svc.UpdateGovernancePolicy(context.Background(), "tester", policy.ID, GovernancePolicyRequest{
-		Name:               "Default policy updated",
-		ScopeType:          GovernancePolicyScopeGlobal,
-		ModelDenylist:      []string{"legacy-model"},
-		QPSLimit:           20,
-		MonthlyTokenLimit:  2000000,
-		MonthlyBudgetCents: 0,
-		OverageAction:      GovernancePolicyOverageWarn,
-		PromptLoggingMode:  GovernancePolicyPromptLoggingDisabled,
-		RetentionDays:      0,
-		ToolCallAllowed:    false,
-		ImageInputAllowed:  true,
-		WebAccessAllowed:   false,
-		Status:             GovernancePolicyStatusDisabled,
+	updated, err := svc.UpdateGovernancePolicy(ctx, "tester", policy.ID, GovernancePolicyRequest{
+		Name:              "Global policy",
+		ScopeType:         GovernancePolicyScopeGlobal,
+		OverageAction:     GovernancePolicyOverageWarn,
+		PromptLoggingMode: GovernancePolicyPromptLoggingDisabled,
+		Status:            GovernancePolicyStatusDisabled,
 	})
 	if err != nil {
 		t.Fatalf("UpdateGovernancePolicy(): %v", err)
 	}
-	if updated.ID != policy.ID || updated.ScopeType != GovernancePolicyScopeGlobal || updated.ScopeID != "" || updated.Status != GovernancePolicyStatusDisabled {
+	if updated.ScopeType != GovernancePolicyScopeGlobal || updated.ScopeID != "" || updated.Version != 2 {
 		t.Fatalf("updated policy mismatch: %+v", updated)
 	}
-	if updated.Version != 2 || updated.LastUpdatedBy != "tester" {
-		t.Fatalf("updated policy version audit mismatch: %+v", updated)
-	}
-
-	if _, err := svc.CreateGovernancePolicy(context.Background(), "tester", GovernancePolicyRequest{
-		Name:      "Missing project",
-		ScopeType: GovernancePolicyScopeProject,
-		ScopeID:   "proj_missing",
+	if _, err := svc.CreateGovernancePolicy(ctx, "tester", GovernancePolicyRequest{
+		Name:      "Missing key",
+		ScopeType: GovernancePolicyScopeAPIKey,
+		ScopeID:   "key_missing",
 	}); err == nil {
-		t.Fatal("CreateGovernancePolicy() accepted missing project scope")
+		t.Fatal("CreateGovernancePolicy() accepted missing workspace key scope")
 	}
 }
 
@@ -228,8 +120,6 @@ func TestEnforceGatewayPolicyRejectsQPSLimit(t *testing.T) {
 		t.Fatalf("EnsureSeedData(): %v", err)
 	}
 	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "QPS key",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          1,
@@ -269,8 +159,6 @@ func TestGatewayPolicyReferenceOverridesAPIKeyLimitsAndModels(t *testing.T) {
 		t.Fatalf("CreateGovernancePolicy(): %v", err)
 	}
 	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "Policy key",
 		PolicyID:          policy.ID,
 		ModelAllowlist:    []string{"legacy-model", "policy-model", "blocked-model"},
@@ -357,8 +245,6 @@ func TestEnforceGatewayPolicyRejectsMonthlyTokenQuota(t *testing.T) {
 		t.Fatalf("EnsureSeedData(): %v", err)
 	}
 	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "Quota key",
 		ModelAllowlist:    []string{"gpt-4o-mini"},
 		QPSLimit:          0,
@@ -384,68 +270,36 @@ func TestEnforceGatewayPolicyRejectsMonthlyTokenQuota(t *testing.T) {
 	}
 }
 
-func TestEnforceGatewayPolicyRejectsMonthlyProjectBudget(t *testing.T) {
+func TestEnforceGatewayPolicyRejectsWorkspaceKeyBudget(t *testing.T) {
+	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")
-	project, err := svc.CreateProject(context.Background(), "tester", ProjectRequest{
-		Name:               "Budget Guard",
-		CostCenter:         "BUDGET",
+	policy, err := svc.CreateGovernancePolicy(ctx, "tester", GovernancePolicyRequest{
+		Name:               "Budget guard",
+		ScopeType:          GovernancePolicyScopeGlobal,
 		MonthlyBudgetCents: 250,
-		Status:             ProjectStatusActive,
+		OverageAction:      GovernancePolicyOverageBlock,
+		Status:             GovernancePolicyStatusActive,
 	})
 	if err != nil {
-		t.Fatalf("CreateProject(): %v", err)
+		t.Fatalf("CreateGovernancePolicy(): %v", err)
 	}
-	app, err := svc.CreateApplication(context.Background(), "tester", ApplicationRequest{
-		ProjectID:   project.ID,
-		Name:        "Budget App",
-		Environment: "prod",
-		Owner:       "platform",
-		Status:      ApplicationStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateApplication(): %v", err)
-	}
-	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
-		ProjectID:         project.ID,
-		ApplicationID:     app.ID,
-		Name:              "Budget key",
-		ModelAllowlist:    []string{"gpt-4o-mini"},
-		QPSLimit:          0,
-		MonthlyTokenLimit: 0,
+	created, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{
+		Name:           "Budget key",
+		PolicyID:       policy.ID,
+		ModelAllowlist: []string{"gpt-4o-mini"},
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey(): %v", err)
 	}
-	auth, err := svc.AuthorizeGatewayModel(context.Background(), created.Key, "gpt-4o-mini")
+	auth, err := svc.AuthorizeGatewayModel(ctx, created.Key, "gpt-4o-mini")
 	if err != nil {
 		t.Fatalf("AuthorizeGatewayModel(): %v", err)
 	}
-	if err := svc.RecordGatewayUsage(context.Background(), auth, GatewayUsageInput{
-		Model:     "gpt-4o-mini",
-		Status:    "forwarded",
-		CostCents: 250,
-	}); err != nil {
+	if err := svc.RecordGatewayUsage(ctx, auth, GatewayUsageInput{Model: "gpt-4o-mini", Status: "forwarded", CostCents: 250}); err != nil {
 		t.Fatalf("RecordGatewayUsage(): %v", err)
 	}
-	if err := svc.EnforceGatewayPolicy(context.Background(), auth); !errors.Is(err, ErrGatewayBudgetExceeded) {
+	if err := svc.EnforceGatewayPolicy(ctx, auth); !errors.Is(err, ErrGatewayBudgetExceeded) {
 		t.Fatalf("EnforceGatewayPolicy() err = %v", err)
-	}
-	projects, err := svc.ListProjects(context.Background())
-	if err != nil {
-		t.Fatalf("ListProjects(): %v", err)
-	}
-	var got Project
-	for _, item := range projects {
-		if item.ID == project.ID {
-			got = item
-			break
-		}
-	}
-	if got.ID == "" {
-		t.Fatalf("project not found in list: %+v", projects)
-	}
-	if got.CurrentMonthCostCents != 250 || got.BudgetRemainingCents != 0 || got.BudgetUsedPercent != 100 || got.BudgetStatus != "exceeded" {
-		t.Fatalf("budget summary mismatch: %+v", got)
 	}
 }
 
@@ -455,8 +309,6 @@ func TestUsageReportQueryAggregatesBeyondCurrentPage(t *testing.T) {
 		t.Fatalf("EnsureSeedData(): %v", err)
 	}
 	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "Usage aggregate key",
 		ModelAllowlist:    []string{"model-a", "model-b"},
 		QPSLimit:          0,
@@ -470,9 +322,9 @@ func TestUsageReportQueryAggregatesBeyondCurrentPage(t *testing.T) {
 		t.Fatalf("AuthorizeGatewayModel(): %v", err)
 	}
 	inputs := []GatewayUsageInput{
-		{Model: "model-a", Status: "forwarded", InputTokens: 1, OutputTokens: 1, CostCents: 100, LatencyMS: 10},
-		{Model: "model-b", Status: "error", ErrorType: "policy_error", InputTokens: 2, OutputTokens: 2, CostCents: 200, LatencyMS: 20},
-		{Model: "model-b", Status: "forwarded", InputTokens: 3, OutputTokens: 3, CostCents: 300, LatencyMS: 30},
+		{Model: "model-a", ProviderID: "provider-a", ProviderAccountID: "account-a", Status: "forwarded", InputTokens: 1, OutputTokens: 1, CostCents: 100, LatencyMS: 10},
+		{Model: "model-b", ProviderID: "provider-b", ProviderAccountID: "account-b", Status: "error", ErrorType: "policy_error", InputTokens: 2, OutputTokens: 2, CostCents: 200, LatencyMS: 20},
+		{Model: "model-b", ProviderID: "provider-b", ProviderAccountID: "account-c", Status: "forwarded", InputTokens: 3, OutputTokens: 3, CostCents: 300, LatencyMS: 30},
 	}
 	for _, input := range inputs {
 		if err := svc.RecordGatewayUsage(context.Background(), auth, input); err != nil {
@@ -504,6 +356,22 @@ func TestUsageReportQueryAggregatesBeyondCurrentPage(t *testing.T) {
 	}
 	if len(filtered.Recent) != 1 || filtered.TotalRequests != 2 || len(filtered.ByModel) != 1 || filtered.ByModel[0].Model != "model-b" {
 		t.Fatalf("filtered aggregate mismatch: %+v", filtered)
+	}
+
+	filteredByProvider, err := svc.UsageReportQuery(context.Background(), UsageQuery{Limit: 10, ProviderID: "provider-b"})
+	if err != nil {
+		t.Fatalf("provider filtered UsageReportQuery(): %v", err)
+	}
+	if len(filteredByProvider.Recent) != 2 || filteredByProvider.TotalRequests != 2 || filteredByProvider.TotalTokens != 10 {
+		t.Fatalf("provider filtered aggregate mismatch: %+v", filteredByProvider)
+	}
+
+	filteredByAccount, err := svc.UsageReportQuery(context.Background(), UsageQuery{Limit: 10, AccountID: "account-b"})
+	if err != nil {
+		t.Fatalf("account filtered UsageReportQuery(): %v", err)
+	}
+	if len(filteredByAccount.Recent) != 1 || filteredByAccount.TotalRequests != 1 || filteredByAccount.Recent[0].ProviderAccountID != "account-b" {
+		t.Fatalf("account filtered aggregate mismatch: %+v", filteredByAccount)
 	}
 }
 
@@ -544,8 +412,6 @@ func TestModelPricingEstimatesGatewayUsageCost(t *testing.T) {
 	}
 
 	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "Priced usage key",
 		ModelAllowlist:    []string{"priced-model"},
 		MonthlyTokenLimit: 0,
@@ -574,58 +440,19 @@ func TestModelPricingEstimatesGatewayUsageCost(t *testing.T) {
 	}
 }
 
-func TestCostAllocationReportAggregatesByGovernanceDimension(t *testing.T) {
+func TestCostAllocationReportAggregatesByWorkspaceKeyAndModel(t *testing.T) {
+	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")
-	if err := svc.EnsureSeedData(context.Background()); err != nil {
-		t.Fatalf("EnsureSeedData(): %v", err)
-	}
-	project, err := svc.CreateProject(context.Background(), "tester", ProjectRequest{
-		Name:               "Billing Platform",
-		CostCenter:         "FINOPS",
-		MonthlyBudgetCents: 1000,
-		Status:             ProjectStatusActive,
-	})
+	platformKey, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{Name: "Platform key", ModelAllowlist: []string{"model-a"}})
 	if err != nil {
-		t.Fatalf("CreateProject(): %v", err)
+		t.Fatalf("CreateAPIKey(platform): %v", err)
 	}
-	app, err := svc.CreateApplication(context.Background(), "tester", ApplicationRequest{
-		ProjectID:   project.ID,
-		Name:        "Invoice Agent",
-		Environment: "prod",
-		Owner:       "finops",
-		Status:      ApplicationStatusActive,
-	})
+	billingKey, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{Name: "Billing key", ModelAllowlist: []string{"model-a", "model-b"}})
 	if err != nil {
-		t.Fatalf("CreateApplication(): %v", err)
+		t.Fatalf("CreateAPIKey(billing): %v", err)
 	}
-	platformKey, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
-		Name:              "Platform key",
-		ModelAllowlist:    []string{"model-a"},
-		MonthlyTokenLimit: 0,
-	})
-	if err != nil {
-		t.Fatalf("CreateAPIKey platform: %v", err)
-	}
-	billingKey, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
-		ProjectID:         project.ID,
-		ApplicationID:     app.ID,
-		Name:              "Billing key",
-		ModelAllowlist:    []string{"model-a", "model-b"},
-		MonthlyTokenLimit: 0,
-	})
-	if err != nil {
-		t.Fatalf("CreateAPIKey billing: %v", err)
-	}
-	platformAuth, err := svc.AuthorizeGatewayModel(context.Background(), platformKey.Key, "model-a")
-	if err != nil {
-		t.Fatalf("AuthorizeGatewayModel platform: %v", err)
-	}
-	billingAuth, err := svc.AuthorizeGatewayModel(context.Background(), billingKey.Key, "model-a")
-	if err != nil {
-		t.Fatalf("AuthorizeGatewayModel billing: %v", err)
-	}
+	platformAuth, _ := svc.AuthorizeGatewayModel(ctx, platformKey.Key, "model-a")
+	billingAuth, _ := svc.AuthorizeGatewayModel(ctx, billingKey.Key, "model-a")
 	inputs := []struct {
 		auth  GatewayAuthContext
 		usage GatewayUsageInput
@@ -635,39 +462,25 @@ func TestCostAllocationReportAggregatesByGovernanceDimension(t *testing.T) {
 		{billingAuth, GatewayUsageInput{Model: "model-b", Status: "error", ErrorType: "policy_error", InputTokens: 7, OutputTokens: 3, CostCents: 150, LatencyMS: 40}},
 	}
 	for _, input := range inputs {
-		if err := svc.RecordGatewayUsage(context.Background(), input.auth, input.usage); err != nil {
+		if err := svc.RecordGatewayUsage(ctx, input.auth, input.usage); err != nil {
 			t.Fatalf("RecordGatewayUsage(): %v", err)
 		}
 	}
-
-	report, err := svc.CostAllocationReportQuery(context.Background(), CostAllocationByProject, UsageQuery{Limit: 1})
+	keyReport, err := svc.CostAllocationReportQuery(ctx, CostAllocationByAPIKey, UsageQuery{})
 	if err != nil {
-		t.Fatalf("CostAllocationReportQuery project: %v", err)
+		t.Fatalf("CostAllocationReportQuery(api_key): %v", err)
 	}
-	if report.TotalRequests != 3 || report.TotalCostCents != 500 || len(report.Rows) != 1 {
-		t.Fatalf("project report should have full totals and paginated rows: %+v", report)
+	if keyReport.TotalRequests != 3 || len(keyReport.Rows) != 2 || keyReport.Rows[0].APIKeyName != "Billing key" || keyReport.Rows[0].TotalCostCents != 400 {
+		t.Fatalf("workspace key allocation mismatch: %+v", keyReport)
 	}
-	if report.Rows[0].ProjectID != project.ID || report.Rows[0].TotalCostCents != 400 || report.Rows[0].BudgetCents != 1000 || report.Rows[0].BudgetUsedPercent != 40 {
-		t.Fatalf("project allocation row mismatch: %+v", report.Rows[0])
-	}
-
-	keyReport, err := svc.CostAllocationReportQuery(context.Background(), CostAllocationByAPIKey, UsageQuery{ProjectID: project.ID})
+	modelReport, err := svc.CostAllocationReportQuery(ctx, CostAllocationByModel, UsageQuery{})
 	if err != nil {
-		t.Fatalf("CostAllocationReportQuery api_key: %v", err)
+		t.Fatalf("CostAllocationReportQuery(model): %v", err)
 	}
-	if len(keyReport.Rows) != 1 || keyReport.Rows[0].APIKeyName != "Billing key" || keyReport.Rows[0].TotalTokens != 35 || keyReport.Rows[0].ErrorRequests != 1 {
-		t.Fatalf("api key allocation mismatch: %+v", keyReport)
+	if len(modelReport.Rows) != 2 || modelReport.Rows[0].Model != "model-a" || modelReport.Rows[0].TotalCostCents != 350 {
+		t.Fatalf("model allocation mismatch: %+v", modelReport)
 	}
-
-	modelReport, err := svc.CostAllocationReportQuery(context.Background(), CostAllocationByModel, UsageQuery{ProjectID: project.ID})
-	if err != nil {
-		t.Fatalf("CostAllocationReportQuery model: %v", err)
-	}
-	if len(modelReport.Rows) != 2 || modelReport.Rows[0].Model != "model-a" || modelReport.Rows[0].TotalCostCents != 250 {
-		t.Fatalf("model allocation ordering mismatch: %+v", modelReport.Rows)
-	}
-
-	if _, err := svc.CostAllocationReportQuery(context.Background(), "department", UsageQuery{}); !errors.Is(err, ErrInvalidCostAllocationDimension) {
+	if _, err := svc.CostAllocationReportQuery(ctx, "project", UsageQuery{}); !errors.Is(err, ErrInvalidCostAllocationDimension) {
 		t.Fatalf("invalid dimension err = %v", err)
 	}
 }
@@ -705,13 +518,6 @@ func TestCreateProviderEncryptsSecret(t *testing.T) {
 		t.Fatal("provider secret stored in plaintext")
 	}
 
-	selected, ok, err := svc.GatewayProviderForModel(context.Background(), "gpt-4o-mini")
-	if err != nil {
-		t.Fatalf("GatewayProviderForModel(): %v", err)
-	}
-	if !ok || selected.APIKey != "upstream-secret" {
-		t.Fatalf("provider secret not recovered for gateway: %+v ok=%v", selected, ok)
-	}
 }
 
 func TestCheckProviderProbesModelsAndPersistsHealth(t *testing.T) {
@@ -854,6 +660,135 @@ func TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts(t
 	}
 }
 
+func TestRoutingGroupTypeSpecificConfiguration(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+
+	subscription, err := svc.CreateRoutingGroup(context.Background(), "tester", RoutingGroupRequest{
+		Name:               "Team subscription",
+		Platform:           "openai_compatible",
+		GroupType:          RoutingGroupTypeSubscription,
+		RateMultiplier:     1,
+		MonthlyBudgetCents: 5000,
+		Status:             RoutingGroupStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutingGroup(subscription): %v", err)
+	}
+	if subscription.GroupType != RoutingGroupTypeSubscription || subscription.MonthlyBudgetCents != 5000 {
+		t.Fatalf("subscription fields not preserved: %+v", subscription)
+	}
+
+	exclusive, err := svc.CreateRoutingGroup(context.Background(), "tester", RoutingGroupRequest{
+		Name:           "Dedicated customer",
+		Platform:       "anthropic",
+		GroupType:      RoutingGroupTypeExclusive,
+		RateMultiplier: 1.2,
+		Status:         RoutingGroupStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutingGroup(exclusive): %v", err)
+	}
+	if !exclusive.IsExclusive {
+		t.Fatalf("exclusive group must force is_exclusive: %+v", exclusive)
+	}
+
+	image, err := svc.CreateRoutingGroup(context.Background(), "tester", RoutingGroupRequest{
+		Name:                "Image pool",
+		Platform:            "gemini",
+		GroupType:           RoutingGroupTypeImageGeneration,
+		RateMultiplier:      1,
+		ImageRateMultiplier: 1.5,
+		ImagePrice1KCents:   4,
+		Status:              RoutingGroupStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutingGroup(image): %v", err)
+	}
+	if !image.ImageEnabled || image.VideoEnabled || image.ImageRateMultiplier != 1.5 {
+		t.Fatalf("image group not normalized correctly: %+v", image)
+	}
+
+	video, err := svc.CreateRoutingGroup(context.Background(), "tester", RoutingGroupRequest{
+		Name:                "Video pool",
+		Platform:            "grok",
+		GroupType:           RoutingGroupTypeVideoGeneration,
+		RateMultiplier:      1,
+		VideoRateMultiplier: 1.8,
+		VideoPrice720PCents: 12,
+		Status:              RoutingGroupStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutingGroup(video): %v", err)
+	}
+	if !video.VideoEnabled || video.ImageEnabled || video.VideoRateMultiplier != 1.8 {
+		t.Fatalf("video group not normalized correctly: %+v", video)
+	}
+}
+
+func TestRoutingGroupTypeSpecificValidation(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+
+	if _, err := svc.CreateRoutingGroup(context.Background(), "tester", RoutingGroupRequest{
+		Name:           "Bad subscription",
+		Platform:       "openai_compatible",
+		GroupType:      RoutingGroupTypeSubscription,
+		RateMultiplier: 1,
+		Status:         RoutingGroupStatusActive,
+	}); err == nil {
+		t.Fatal("subscription group without a budget should fail")
+	}
+
+	if _, err := svc.CreateRoutingGroup(context.Background(), "tester", RoutingGroupRequest{
+		Name:              "Bad image",
+		Platform:          "gemini",
+		GroupType:         RoutingGroupTypeImageGeneration,
+		RateMultiplier:    1,
+		ImagePrice1KCents: -1,
+		Status:            RoutingGroupStatusActive,
+	}); err == nil {
+		t.Fatal("negative image price should fail")
+	}
+
+	if _, err := svc.CreateRoutingGroup(context.Background(), "tester", RoutingGroupRequest{
+		Name:               "Bad peak",
+		Platform:           "openai_compatible",
+		GroupType:          RoutingGroupTypeSubscription,
+		RateMultiplier:     1,
+		MonthlyBudgetCents: 5000,
+		PeakRateEnabled:    true,
+		Status:             RoutingGroupStatusActive,
+	}); err == nil {
+		t.Fatal("peak rate without start/end should fail")
+	}
+}
+
+func TestRoutingGroupClearsFieldsThatDoNotBelongToType(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+
+	group, err := svc.CreateRoutingGroup(context.Background(), "tester", RoutingGroupRequest{
+		Name:                "Standard",
+		Platform:            "openai_compatible",
+		GroupType:           RoutingGroupTypeStandard,
+		RateMultiplier:      1,
+		MonthlyBudgetCents:  5000,
+		ImageEnabled:        true,
+		ImagePrice1KCents:   10,
+		VideoEnabled:        true,
+		VideoPrice720PCents: 20,
+		PeakRateEnabled:     true,
+		PeakStart:           "09:00",
+		PeakEnd:             "18:00",
+		PeakRateMultiplier:  2,
+		Status:              RoutingGroupStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutingGroup(): %v", err)
+	}
+	if group.MonthlyBudgetCents != 0 || group.ImageEnabled || group.VideoEnabled || group.PeakRateEnabled {
+		t.Fatalf("standard group retained type-specific fields: %+v", group)
+	}
+}
+
 func TestCreateProviderAccountRejectsLegacyAuthTypes(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
 	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
@@ -931,6 +866,7 @@ func TestGatewayProviderForModelPrefersSchedulableProviderAccount(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateProviderAccount fast: %v", err)
 	}
+	mustCreateGatewayModelRoutes(t, svc, "gpt-4o-mini", []ProviderAccount{fast})
 
 	selected, ok, err := svc.GatewayProviderForModel(context.Background(), "gpt-4o-mini")
 	if err != nil {
@@ -1157,6 +1093,7 @@ func TestGatewayProviderCandidatesForModelSkipsCooldownAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProviderAccount backup: %v", err)
 	}
+	mustCreateGatewayModelRoutes(t, svc, "gpt-4o-mini", []ProviderAccount{primary, backup})
 
 	candidates, hasPool, err := svc.GatewayProviderCandidatesForModel(context.Background(), "gpt-4o-mini")
 	if err != nil {
@@ -1246,6 +1183,7 @@ func TestRecordProviderAccountFailureAppliesMatchingRuleDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProviderAccount(): %v", err)
 	}
+	mustCreateGatewayModelRoutes(t, svc, "gpt-4o-mini", []ProviderAccount{account})
 
 	// A failure that matches the second rule (case-insensitive keyword
 	// match) should cool the account down by that rule's duration and
@@ -1307,6 +1245,7 @@ func TestClearProviderAccountCooldownMakesAccountImmediatelyEligible(t *testing.
 	if err != nil {
 		t.Fatalf("CreateProviderAccount(): %v", err)
 	}
+	mustCreateGatewayModelRoutes(t, svc, "gpt-4o-mini", []ProviderAccount{account})
 	if err := svc.RecordProviderAccountFailure(context.Background(), account.ID, http.StatusInternalServerError, "boom"); err != nil {
 		t.Fatalf("RecordProviderAccountFailure(): %v", err)
 	}
@@ -1327,5 +1266,71 @@ func TestClearProviderAccountCooldownMakesAccountImmediatelyEligible(t *testing.
 	}
 	if len(candidates) != 1 || candidates[0].AccountID != account.ID {
 		t.Fatalf("expected account to be schedulable again after clearing cooldown: %+v", candidates)
+	}
+}
+
+func mustCreateGatewayModelRoutes(t *testing.T, svc *Service, modelID string, accounts []ProviderAccount) GatewayModel {
+	t.Helper()
+	model, err := svc.CreateGatewayModel(context.Background(), "tester", GatewayModelRequest{
+		ModelID: modelID,
+		Name:    modelID,
+		Status:  GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateGatewayModel(%s): %v", modelID, err)
+	}
+	for index, account := range accounts {
+		if _, err := svc.CreateModelRoute(context.Background(), "tester", ModelRouteRequest{
+			GatewayModelID:    model.ID,
+			RouteGroup:        DefaultModelRouteGroup,
+			ProviderAccountID: account.ID,
+			UpstreamModel:     modelID,
+			Priority:          (index + 1) * 10,
+			Weight:            100,
+			Status:            ModelRouteStatusActive,
+		}); err != nil {
+			t.Fatalf("CreateModelRoute(%s, %s): %v", modelID, account.ID, err)
+		}
+	}
+	return model
+}
+
+func TestGatewayModelRouteMapsExternalModelAndRouteGroup(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
+		Name: "Mapped provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
+		Status: ProviderStatusActive, Models: []string{"upstream-chat-v2"}, APIKey: "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+	account, err := svc.CreateProviderAccount(context.Background(), "tester", ProviderAccountRequest{
+		ProviderID: provider.ID, Name: "Mapped account", Platform: "openai_compatible", AuthType: "api_key",
+		Status: AccountStatusActive, Priority: 10, Concurrency: 3, Models: []string{"upstream-chat-v2"}, Secret: "account-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount(): %v", err)
+	}
+	model, err := svc.CreateGatewayModel(context.Background(), "tester", GatewayModelRequest{
+		ModelID: "public-chat", Name: "Public Chat", DefaultRouteGroup: "stable", Status: GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateGatewayModel(): %v", err)
+	}
+	if _, err := svc.CreateModelRoute(context.Background(), "tester", ModelRouteRequest{
+		GatewayModelID: model.ID, RouteGroup: "stable", ProviderAccountID: account.ID,
+		UpstreamModel: "upstream-chat-v2", Priority: 10, Weight: 100, Status: ModelRouteStatusActive,
+	}); err != nil {
+		t.Fatalf("CreateModelRoute(): %v", err)
+	}
+
+	for _, requested := range []string{"public-chat", "public-chat:stable"} {
+		candidates, hasRoutes, err := svc.GatewayProviderCandidatesForModel(context.Background(), requested)
+		if err != nil {
+			t.Fatalf("GatewayProviderCandidatesForModel(%s): %v", requested, err)
+		}
+		if !hasRoutes || len(candidates) != 1 || candidates[0].UpstreamModel != "upstream-chat-v2" || candidates[0].RouteGroup != "stable" {
+			t.Fatalf("unexpected mapped candidates for %s: %+v hasRoutes=%v", requested, candidates, hasRoutes)
+		}
 	}
 }

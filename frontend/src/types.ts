@@ -17,11 +17,27 @@ export interface PublicSettings {
   enabled_locales: string[]
   oidc_enabled: boolean
   oidc_provider_name: string
+	feishu_enabled: boolean
+	feishu_region: 'cn' | 'global'
+	registration_enabled: boolean
+	email_verify_enabled: boolean
+	totp_enabled: boolean
+	turnstile_enabled: boolean
+	turnstile_site_key: string
+	invitation_required: boolean
+	login_agreement_enabled: boolean
+	login_agreement_mode: 'modal' | 'checkbox'
+	login_agreement_updated_at: string
+	legal_documents: LegalDocument[]
+	backend_mode: boolean
+	support_contact: string
+	documentation_url: string
   service_center_mode: string
   version: string
   server_timezone: string
   server_utc_offset: string
   storage_mode: string
+  demo_mode: boolean
 }
 
 export interface AuthUser {
@@ -39,9 +55,39 @@ export interface LoginResult {
 export interface AdminSettings extends PublicSettings {
   oidc_issuer_url: string
   oidc_client_id: string
+	feishu_app_id: string
+	feishu_app_secret?: string
+	feishu_configured: boolean
+	allowed_email_domains: string[]
+	invitation_codes: string[]
+	trusted_proxy_headers: boolean
+	turnstile_secret_key?: string
+	turnstile_configured: boolean
+	default_balance_cents: number
+	default_concurrency: number
+	default_rpm: number
+	smtp_host: string
+	smtp_port: number
+	smtp_username: string
+	smtp_password?: string
+	smtp_from: string
+	smtp_configured: boolean
+	login_agreement_title: string
+	login_agreement_content: string
+	default_page_size: number
+	page_size_options: number[]
+	home_content: string
+	hide_import_button: boolean
   data_retention_days: number
   prompt_logging_mode: string
   update_channel: string
+}
+
+export interface LegalDocument {
+	id: string
+	name: string
+	slug: string
+	content: string
 }
 
 export interface LocaleInfo {
@@ -82,31 +128,6 @@ export interface ProviderHealthCheck {
   message: string
   models: string[]
   checked_at: string
-}
-
-export interface Project {
-  id: string
-  name: string
-  description: string
-  cost_center: string
-  monthly_budget_cents: number
-  policy_id: string
-  current_month_cost_cents: number
-  budget_remaining_cents: number
-  budget_used_percent: number
-  budget_status: string
-  status: string
-  created_at: string
-  updated_at: string
-}
-
-export interface ProjectRequest {
-  name: string
-  description: string
-  cost_center: string
-  monthly_budget_cents: number
-  policy_id: string
-  status: string
 }
 
 export interface Department {
@@ -169,7 +190,6 @@ export interface GatewayPolicyCandidate {
 
 export interface GatewayPolicyExplanation {
   api_key_id: string
-  project_id: string
   selected_policy_id: string
   selected_policy_name: string
   selected_policy_version: number
@@ -196,32 +216,12 @@ export interface GovernancePolicyRequest {
   status: string
 }
 
-export interface Application {
-  id: string
-  project_id: string
-  name: string
-  environment: string
-  owner: string
-  status: string
-  created_at: string
-  updated_at: string
-}
-
-export interface ApplicationRequest {
-  project_id: string
-  name: string
-  environment: string
-  owner: string
-  status: string
-}
-
 export interface WorkspaceUser {
   id: string
   email: string
   display_name: string
   status: string
   role: string
-  project_count: number
   created_at: string
   updated_at: string
 }
@@ -255,7 +255,29 @@ export interface RoutingGroup {
   name: string
   description: string
   platform: string
+  group_type: string
   rate_multiplier: number
+  rpm_limit: number
+  is_exclusive: boolean
+  daily_budget_cents: number
+  weekly_budget_cents: number
+  monthly_budget_cents: number
+  image_enabled: boolean
+  batch_image_enabled: boolean
+  image_rate_multiplier: number
+  batch_image_discount_multiplier: number
+  image_price_1k_cents: number
+  image_price_2k_cents: number
+  image_price_4k_cents: number
+  video_enabled: boolean
+  video_rate_multiplier: number
+  video_price_480p_cents: number
+  video_price_720p_cents: number
+  video_price_1080p_cents: number
+  peak_rate_enabled: boolean
+  peak_start: string
+  peak_end: string
+  peak_rate_multiplier: number
   status: string
   sort_order: number
   account_count: number
@@ -268,7 +290,29 @@ export interface RoutingGroupRequest {
   name: string
   description: string
   platform: string
+  group_type: string
   rate_multiplier: number
+  rpm_limit: number
+  is_exclusive: boolean
+  daily_budget_cents: number
+  weekly_budget_cents: number
+  monthly_budget_cents: number
+  image_enabled: boolean
+  batch_image_enabled: boolean
+  image_rate_multiplier: number
+  batch_image_discount_multiplier: number
+  image_price_1k_cents: number
+  image_price_2k_cents: number
+  image_price_4k_cents: number
+  video_enabled: boolean
+  video_rate_multiplier: number
+  video_price_480p_cents: number
+  video_price_720p_cents: number
+  video_price_1080p_cents: number
+  peak_rate_enabled: boolean
+  peak_start: string
+  peak_end: string
+  peak_rate_multiplier: number
   status: string
   sort_order: number
 }
@@ -288,7 +332,10 @@ export interface ProviderAccount {
   status: string
   schedulable: boolean
   priority: number
+  weight: number
   concurrency: number
+  rpm_limit: number
+  tpm_limit: number
   load_factor?: number
   rate_multiplier: number
   models: string[]
@@ -299,6 +346,12 @@ export interface ProviderAccount {
   last_used_at?: string
   expires_at?: string
   cooldown_until?: string
+  circuit_state: string
+  circuit_failure_threshold: number
+  circuit_open_seconds: number
+  consecutive_failures: number
+  circuit_opened_until?: string
+  last_failure_at?: string
   temp_unschedulable_rules: ProviderAccountTempUnschedulableRule[]
   temp_unschedulable_reason: string
   created_at: string
@@ -313,13 +366,18 @@ export interface ProviderAccountRequest {
   status: string
   schedulable: boolean
   priority: number
+  weight: number
   concurrency: number
+  rpm_limit: number
+  tpm_limit: number
   load_factor?: number | null
   rate_multiplier: number
   models: string[]
   group_ids: string[]
   secret: string
   expires_at: string
+  circuit_failure_threshold: number
+  circuit_open_seconds: number
   temp_unschedulable_rules: ProviderAccountTempUnschedulableRule[]
 }
 
@@ -332,6 +390,80 @@ export interface ProviderAccountHealthCheck {
   message: string
   models: string[]
   checked_at: string
+}
+
+export interface GatewayModel {
+  id: string
+  model_id: string
+  name: string
+  description: string
+  modality: string
+  default_route_group: string
+  sticky_enabled: boolean
+  sticky_ttl_seconds: number
+  status: string
+  route_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface GatewayModelRequest {
+  model_id: string
+  name: string
+  description: string
+  modality: string
+  default_route_group: string
+  sticky_enabled: boolean
+  sticky_ttl_seconds: number
+  status: string
+}
+
+export interface ModelRoute {
+  id: string
+  gateway_model_id: string
+  route_group: string
+  provider_account_id: string
+  upstream_model: string
+  priority: number
+  weight: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ModelRouteRequest {
+  gateway_model_id: string
+  route_group: string
+  provider_account_id: string
+  upstream_model: string
+  priority: number
+  weight: number
+  status: string
+}
+
+export interface GatewaySimulationCandidate {
+  rank: number
+  route_id: string
+  route_group: string
+  provider_id: string
+  provider_account_id: string
+  upstream_model: string
+  headroom: number
+  rpm_limit: number
+  tpm_limit: number
+  concurrency: number
+  circuit_state: string
+  eligible: boolean
+  reason: string
+}
+
+export interface GatewaySimulation {
+  requested_model: string
+  resolved_model: string
+  route_group: string
+  status: string
+  summary: string
+  candidates: GatewaySimulationCandidate[]
 }
 
 export interface ModelPricing {
@@ -355,12 +487,12 @@ export interface ModelPricingRequest {
 
 export interface APIKeyRecord {
   id: string
-  project_id: string
-  application_id: string
   name: string
   fingerprint: string
   prefix: string
   status: string
+  key_type: string
+  customer_id: string
   policy_id: string
   model_allowlist: string[]
   qps_limit: number
@@ -372,14 +504,14 @@ export interface APIKeyRecord {
 }
 
 export interface APIKeyCreateRequest {
-  project_id: string
-  application_id: string
   name: string
   policy_id: string
   model_allowlist: string[]
   qps_limit: number
   monthly_token_limit: number
   expires_at: string
+  key_type?: string
+  customer_id?: string
 }
 
 export interface APIKeyUpdateRequest {
@@ -416,7 +548,6 @@ export interface AlertEvent {
   summary: string
   resource_type: string
   resource_id: string
-  project_id: string
   dedupe_key: string
   metadata: Record<string, string>
   first_seen_at: string
@@ -439,8 +570,6 @@ export interface AlertSummary {
 export interface Dashboard {
   provider_count: number
   active_provider_count: number
-  project_count: number
-  application_count: number
   api_key_count: number
   active_api_key_count: number
   models: string[]
@@ -448,8 +577,6 @@ export interface Dashboard {
 }
 
 export interface PortalWorkspace {
-  projects: Project[]
-  applications: Application[]
   api_keys: APIKeyRecord[]
   usage: UsageReport
   recent_traces: GatewayTrace[]
@@ -504,6 +631,20 @@ export interface SystemApplyResult {
   current_version: string
   latest_version: string
   manual_action?: string
+}
+
+export interface SystemArchiveInfo {
+  id: string
+  path: string
+  size_bytes: number
+  created_at: string
+}
+
+export interface SystemRestoreResult {
+  operation_id: string
+  backup_id: string
+  need_restart: boolean
+  message: string
 }
 
 export interface Plugin {
@@ -615,6 +756,13 @@ export interface LicenseActivateRequest {
   display_name?: string
 }
 
+export interface LicenseRedeemRequest {
+  code: string
+  instance_id?: string
+  instance_fingerprint?: string
+  display_name?: string
+}
+
 export interface LicenseImportRequest {
   envelope?: unknown
   file_json?: unknown
@@ -632,6 +780,78 @@ export interface PluginConfig {
 export interface PluginConfigRequest {
   settings: Record<string, string>
   secrets: Record<string, string>
+}
+
+export interface PluginAPIToken {
+  id: string
+  name: string
+  plugin_id?: string
+  token_prefix: string
+  scopes: string[]
+  surfaces: string[]
+  status: string
+  expires_at?: string
+  last_used_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PluginAPITokenCreateRequest {
+  name: string
+  plugin_id?: string
+  scopes: string[]
+  surfaces: string[]
+  expires_at?: string
+}
+
+export interface PluginAPITokenCreateResult {
+  token: PluginAPIToken
+  secret: string
+}
+
+export interface OfficialFeedStatus {
+  service_key: string
+  feed_id: string
+  feed_version: string
+  data_schema_version: string
+  status: string
+  signature_verified: boolean
+  payload_sha256: string
+  size_bytes: number
+  issued_at: string
+  expires_at: string
+  imported_at: string
+}
+
+export interface OfficialFeedClientInfo {
+  instance_id: string
+  license_id: string
+  encryption_algorithm: string
+  encryption_public_key: string
+}
+
+export interface OfficialFeedImportRequest {
+  envelope?: unknown
+  file_json?: unknown
+}
+
+export interface OfficialFeedSyncRun {
+  id: string
+  service_key: string
+  feed_id?: string
+  mode: string
+  status: string
+  request_id?: string
+  source_url?: string
+  error_code?: string
+  error?: string
+  started_at: string
+  finished_at: string
+}
+
+export interface OfficialFeedSyncResult {
+  feed: OfficialFeedStatus
+  run: OfficialFeedSyncRun
 }
 
 export interface PluginDeliveryAttempt {
@@ -652,6 +872,7 @@ export interface OfficialCatalogStatus {
   bootstrap_url?: string
   source_url: string
   license_url?: string
+  redeem_url?: string
   trust_configured: boolean
   catalog_version: number
   payload_sha256: string
@@ -695,11 +916,11 @@ export interface SidecarRuntimeStatus {
 
 export interface UsageRecord {
   id: string
-  project_id: string
-  application_id: string
   api_key_id: string
+  customer_id: string
   api_fingerprint: string
   model: string
+  upstream_model: string
   provider_id: string
   provider_account_id: string
   status: string
@@ -710,6 +931,15 @@ export interface UsageRecord {
   cost_cents: number
   created_at: string
 }
+
+export interface OperatorCustomerGroup { id:string; name:string; description:string; status:string; created_at:string; updated_at:string }
+export interface OperatorPlan { id:string; name:string; description:string; monthly_fee_cents:number; included_tokens:number; monthly_limit_cents:number; rate_multiplier:number; status:string; created_at:string; updated_at:string }
+export interface OperatorCustomer { id:string; name:string; email:string; group_id:string; plan_id:string; status:string; balance_cents:number; credit_cents:number; notes:string; created_at:string; updated_at:string }
+export interface OperatorPricingRule { id:string; name:string; plan_id:string; model:string; input_price_cents_per_1m_tokens:number; output_price_cents_per_1m_tokens:number; rate_multiplier:number; status:string; created_at:string; updated_at:string }
+export interface OperatorBalanceEntry { id:string; customer_id:string; kind:string; amount_cents:number; balance_after_cents:number; reference:string; note:string; actor:string; created_at:string }
+export interface OperatorRiskRule { id:string; name:string; rule_type:string; threshold:number; window_minutes:number; action:string; description:string; status:string; created_at:string; updated_at:string }
+export interface OperatorNotice { id:string; title:string; content:string; audience:string; status:string; publish_at?:string; created_at:string; updated_at:string }
+export interface OperatorDashboard { customers:number; active_customers:number; plans:number; balance_cents:number; risk_rules:number; published_notices:number }
 
 export interface UsageModelSummary {
   model: string
@@ -730,17 +960,12 @@ export interface UsageReport {
   recent: UsageRecord[]
 }
 
-export type CostAllocationDimension = 'project' | 'application' | 'api_key' | 'model'
+export type CostAllocationDimension = 'api_key' | 'model'
 
 export interface CostAllocationRow {
   dimension: CostAllocationDimension
   resource_id: string
   resource_name: string
-  project_id: string
-  project_name: string
-  cost_center: string
-  application_id: string
-  application_name: string
   api_key_id: string
   api_key_name: string
   api_fingerprint: string
@@ -772,11 +997,11 @@ export interface RecordListQuery {
   dimension?: CostAllocationDimension
   api_key_id?: string
   model?: string
+  provider_id?: string
+  provider_account_id?: string
   type?: string
   severity?: string
   status?: string
-  project_id?: string
-  application_id?: string
   action?: string
   resource_type?: string
   from?: string
@@ -793,8 +1018,6 @@ export interface GatewayTraceSummary {
 
 export interface GatewayTrace {
   id: string
-  project_id: string
-  application_id: string
   api_key_id: string
   api_fingerprint: string
   model: string
@@ -802,6 +1025,10 @@ export interface GatewayTrace {
   message_count: number
   provider_id: string
   provider_account_id: string
+  gateway_model_id: string
+  route_id: string
+  route_group: string
+  upstream_model: string
   route_source: string
   route_reason: string
   policy_id: string

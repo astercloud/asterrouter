@@ -10,6 +10,8 @@ import (
 func (s *Service) InstallPackage(ctx context.Context, pluginID string, packageID string) (PackageInstallation, error) {
 	pluginID = strings.TrimSpace(pluginID)
 	packageID = strings.TrimSpace(packageID)
+	s.packageMu.Lock()
+	defer s.packageMu.Unlock()
 	record, ok, err := s.repo.FindPackage(ctx, packageID)
 	if err != nil {
 		return PackageInstallation{}, err
@@ -41,19 +43,30 @@ func (s *Service) InstallPackage(ctx context.Context, pluginID string, packageID
 	if !ok || cache.Status != PackageCacheStatusCached || strings.TrimSpace(cache.CachePath) == "" {
 		return PackageInstallation{}, ErrPackageNotCached
 	}
+	previous, hadPrevious, err := s.repo.FindPackageInstallation(ctx, record.PluginID)
+	if err != nil {
+		return PackageInstallation{}, err
+	}
 	runtime := ""
+	var finalizeActivation func() error
+	var rollbackActivation func() error
 	if inspectedRuntime, ok, err := inspectPackageRuntime(cache.CachePath); err != nil {
 		return PackageInstallation{}, err
 	} else if ok {
-		_ = s.stopSidecarSupervisor(ctx, record.PluginID)
-		activatedRuntime, err := s.activatePackage(record, cache.CachePath)
+		if err := s.stopSidecarSupervisor(ctx, record.PluginID); err != nil {
+			return PackageInstallation{}, fmt.Errorf("stop existing plugin runtime: %w", err)
+		}
+		activatedRuntime, finalize, rollback, err := s.activatePackage(record, cache.CachePath)
 		if err != nil {
 			return PackageInstallation{}, err
 		}
 		if inspectedRuntime != activatedRuntime {
+			_ = rollback()
 			return PackageInstallation{}, fmt.Errorf("plugin package runtime changed during activation")
 		}
 		runtime = activatedRuntime
+		finalizeActivation = finalize
+		rollbackActivation = rollback
 	}
 	now := s.now().UTC()
 	installation := packageInstallationRecord{
@@ -68,17 +81,30 @@ func (s *Service) InstallPackage(ctx context.Context, pluginID string, packageID
 		UpdatedAt:   now,
 	}
 	if err := s.repo.SavePackageInstallation(ctx, installation); err != nil {
+		if rollbackActivation != nil {
+			_ = rollbackActivation()
+		}
+		if hadPrevious && previous.Status == PackageInstallInstalled {
+			_ = s.ensureSidecarSupervisor(ctx, record.PluginID)
+		}
 		return PackageInstallation{}, err
 	}
 	if runtime == "sidecar" {
 		plugin, ok, err := s.repo.FindPlugin(ctx, record.PluginID)
 		if err != nil {
+			_ = s.restoreInstallationAfterFailure(ctx, record.PluginID, previous, hadPrevious, rollbackActivation)
 			return PackageInstallation{}, err
 		}
 		if ok && plugin.Status == StatusEnabled {
 			if err := s.ensureSidecarSupervisor(ctx, record.PluginID); err != nil {
+				_ = s.restoreInstallationAfterFailure(ctx, record.PluginID, previous, hadPrevious, rollbackActivation)
 				return PackageInstallation{}, err
 			}
+		}
+	}
+	if finalizeActivation != nil {
+		if err := finalizeActivation(); err != nil {
+			return PackageInstallation{}, fmt.Errorf("finalize plugin activation: %w", err)
 		}
 	}
 	return packageInstallationFromRecord(installation), nil
@@ -87,6 +113,8 @@ func (s *Service) InstallPackage(ctx context.Context, pluginID string, packageID
 func (s *Service) UninstallPackage(ctx context.Context, pluginID string, packageID string) (PackageInstallation, error) {
 	pluginID = strings.TrimSpace(pluginID)
 	packageID = strings.TrimSpace(packageID)
+	s.packageMu.Lock()
+	defer s.packageMu.Unlock()
 	installation, ok, err := s.repo.FindPackageInstallation(ctx, pluginID)
 	if err != nil {
 		return PackageInstallation{}, err
@@ -94,14 +122,58 @@ func (s *Service) UninstallPackage(ctx context.Context, pluginID string, package
 	if !ok || installation.Status != PackageInstallInstalled || installation.PackageID != packageID {
 		return PackageInstallation{}, ErrPackageNotInstalled
 	}
-	_ = s.stopSidecarSupervisor(ctx, pluginID)
-	_ = os.RemoveAll(s.activePackageDir(pluginID, installation.Version))
+	if err := s.stopSidecarSupervisor(ctx, pluginID); err != nil {
+		return PackageInstallation{}, fmt.Errorf("stop existing plugin runtime: %w", err)
+	}
+	activeDir := s.activePackageDir(pluginID, installation.Version)
+	backupDir := activeDir + ".uninstall-" + fmt.Sprint(s.now().UnixNano())
+	hadActive := false
+	if _, statErr := os.Stat(activeDir); statErr == nil {
+		if err := os.Rename(activeDir, backupDir); err != nil {
+			return PackageInstallation{}, fmt.Errorf("stage plugin uninstall: %w", err)
+		}
+		hadActive = true
+	} else if !os.IsNotExist(statErr) {
+		return PackageInstallation{}, statErr
+	}
 	installation.Status = PackageInstallUninstalled
 	installation.UpdatedAt = s.now().UTC()
 	if err := s.repo.SavePackageInstallation(ctx, installation); err != nil {
+		if hadActive {
+			_ = os.Rename(backupDir, activeDir)
+		}
+		_ = s.ensureSidecarSupervisor(ctx, pluginID)
 		return PackageInstallation{}, err
 	}
+	if hadActive {
+		if err := os.RemoveAll(backupDir); err != nil {
+			return PackageInstallation{}, fmt.Errorf("remove uninstalled plugin package: %w", err)
+		}
+	}
 	return packageInstallationFromRecord(installation), nil
+}
+
+func (s *Service) restoreInstallationAfterFailure(ctx context.Context, pluginID string, previous packageInstallationRecord, hadPrevious bool, rollback func() error) error {
+	if rollback != nil {
+		_ = rollback()
+	}
+	if hadPrevious {
+		if err := s.repo.SavePackageInstallation(ctx, previous); err != nil {
+			return err
+		}
+		if previous.Status == PackageInstallInstalled {
+			_ = s.ensureSidecarSupervisor(ctx, pluginID)
+		}
+		return nil
+	}
+	if current, ok, err := s.repo.FindPackageInstallation(ctx, pluginID); err == nil && ok {
+		current.Status = PackageInstallUninstalled
+		current.UpdatedAt = s.now().UTC()
+		if err := s.repo.SavePackageInstallation(ctx, current); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func packageInstallationFromRecord(record packageInstallationRecord) PackageInstallation {

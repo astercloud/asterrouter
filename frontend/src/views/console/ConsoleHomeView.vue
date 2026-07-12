@@ -19,8 +19,6 @@ const providers = ref<ProviderConnection[]>([])
 const apiKeys = ref<APIKeyRecord[]>([])
 const usage = ref<UsageReport | null>(null)
 const form = reactive<APIKeyCreateRequest>({
-  project_id: '',
-  application_id: '',
   name: t('console.defaultKeyName'),
   policy_id: '',
   model_allowlist: [],
@@ -76,8 +74,6 @@ function ensureFormDefaults() {
 }
 
 function resetForm() {
-  form.project_id = ''
-  form.application_id = ''
   form.name = t('console.defaultKeyName')
   form.policy_id = ''
   form.qps_limit = 0
@@ -254,6 +250,9 @@ onMounted(load)
           </div>
           <div class="panel-body">
             <div class="row-actions">
+              <RouterLink class="button secondary" to="/console/providers">{{ t('admin.providers') }}</RouterLink>
+              <RouterLink class="button secondary" to="/console/routing-groups">{{ t('admin.routingGroups') }}</RouterLink>
+              <RouterLink class="button secondary" to="/console/resources">{{ t('admin.providerAccounts') }}</RouterLink>
               <RouterLink class="button secondary" to="/console/keys">{{ t('console.keys') }}</RouterLink>
               <RouterLink class="button secondary" to="/console/usage">{{ t('console.usage') }}</RouterLink>
               <RouterLink class="button secondary" to="/console/settings">{{ t('admin.settings') }}</RouterLink>

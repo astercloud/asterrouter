@@ -25,7 +25,6 @@ type alertInput struct {
 	Summary      string
 	ResourceType string
 	ResourceID   string
-	ProjectID    string
 	DedupeKey    string
 	Metadata     map[string]string
 }
@@ -112,7 +111,6 @@ func (s *Service) upsertAlert(ctx context.Context, input alertInput) error {
 	event.Summary = strings.TrimSpace(input.Summary)
 	event.ResourceType = strings.TrimSpace(input.ResourceType)
 	event.ResourceID = strings.TrimSpace(input.ResourceID)
-	event.ProjectID = strings.TrimSpace(input.ProjectID)
 	event.Metadata = cloneStringMap(input.Metadata)
 	event.LastSeenAt = now
 	if event.Title == "" {
@@ -149,39 +147,6 @@ func (s *Service) resolveAlertByDedupeKey(ctx context.Context, actor string, ded
 	return s.repo.SaveAlertEvent(ctx, event)
 }
 
-func (s *Service) syncProjectBudgetAlert(ctx context.Context, project Project) error {
-	dedupeKey := projectBudgetAlertDedupeKey(project.ID, time.Now().UTC())
-	if project.BudgetStatus == "unlimited" || project.BudgetStatus == "ok" {
-		return s.resolveAlertByDedupeKey(ctx, systemActor, dedupeKey, fmt.Sprintf("Project %s budget is within policy.", project.Name))
-	}
-	severity := AlertSeverityWarning
-	title := "Project budget reached warning threshold"
-	if project.BudgetStatus == "exceeded" {
-		severity = AlertSeverityCritical
-		title = "Project monthly budget exhausted"
-	}
-	return s.upsertAlert(ctx, alertInput{
-		Type:         AlertTypeProjectBudget,
-		Severity:     severity,
-		Title:        title,
-		Summary:      fmt.Sprintf("Project %s used %s of %s cents this month (%.2f%%).", project.Name, formatInt(project.CurrentMonthCostCents), formatInt(project.MonthlyBudgetCents), project.BudgetUsedPercent),
-		ResourceType: "project",
-		ResourceID:   project.ID,
-		ProjectID:    project.ID,
-		DedupeKey:    dedupeKey,
-		Metadata: map[string]string{
-			"project_name":             project.Name,
-			"cost_center":              project.CostCenter,
-			"monthly_budget_cents":     strconv.Itoa(project.MonthlyBudgetCents),
-			"current_month_cost_cents": strconv.Itoa(project.CurrentMonthCostCents),
-			"budget_remaining_cents":   strconv.Itoa(project.BudgetRemainingCents),
-			"budget_used_percent":      fmt.Sprintf("%.2f", project.BudgetUsedPercent),
-			"budget_status":            project.BudgetStatus,
-			"budget_month":             alertMonthKey(time.Now().UTC()),
-		},
-	})
-}
-
 func (s *Service) syncAPIKeyQuotaAlert(ctx context.Context, auth GatewayAuthContext, usedTokens int) error {
 	dedupeKey := apiKeyQuotaAlertDedupeKey(auth.APIKey.ID, time.Now().UTC())
 	limit := auth.effectiveMonthlyTokenLimit()
@@ -205,15 +170,10 @@ func (s *Service) syncAPIKeyQuotaAlert(ctx context.Context, auth GatewayAuthCont
 		Summary:      fmt.Sprintf("API key %s used %s of %s monthly tokens (%d%%).", auth.APIKey.Name, formatInt(usedTokens), formatInt(limit), usedPercent),
 		ResourceType: "api_key",
 		ResourceID:   auth.APIKey.ID,
-		ProjectID:    auth.Project.ID,
 		DedupeKey:    dedupeKey,
 		Metadata: map[string]string{
 			"api_key_name":         auth.APIKey.Name,
 			"api_key_fingerprint":  auth.APIKey.Fingerprint,
-			"project_id":           auth.Project.ID,
-			"project_name":         auth.Project.Name,
-			"application_id":       auth.Application.ID,
-			"application_name":     auth.Application.Name,
 			"monthly_token_limit":  strconv.Itoa(limit),
 			"current_month_tokens": strconv.Itoa(usedTokens),
 			"quota_used_percent":   strconv.Itoa(usedPercent),
@@ -236,20 +196,20 @@ func (s *Service) syncAPIKeyQuotaAlertForAuth(ctx context.Context, auth GatewayA
 func (s *Service) syncGatewayErrorRateAlert(ctx context.Context, auth GatewayAuthContext) error {
 	windowEnd := time.Now().UTC()
 	windowStart := windowEnd.Add(-gatewayErrorRateWindow)
-	dedupeKey := "gateway_error_rate:" + auth.Project.ID
+	dedupeKey := "gateway_error_rate:" + auth.APIKey.ID
 	aggregate, err := s.repo.SummarizeUsageRecords(ctx, UsageQuery{
-		ProjectID:   auth.Project.ID,
+		APIKeyID:    auth.APIKey.ID,
 		CreatedFrom: windowStart,
 	})
 	if err != nil {
 		return err
 	}
 	if aggregate.TotalRequests < gatewayErrorRateMinRequests {
-		return s.resolveAlertByDedupeKey(ctx, systemActor, dedupeKey, fmt.Sprintf("Project %s has fewer than %d requests in the rolling error-rate window.", auth.Project.Name, gatewayErrorRateMinRequests))
+		return s.resolveAlertByDedupeKey(ctx, systemActor, dedupeKey, fmt.Sprintf("Workspace key %s has fewer than %d requests in the rolling error-rate window.", auth.APIKey.Name, gatewayErrorRateMinRequests))
 	}
 	errorRate := percentCeil(aggregate.ErrorRequests, aggregate.TotalRequests)
 	if errorRate < gatewayErrorRateWarningPercent {
-		return s.resolveAlertByDedupeKey(ctx, systemActor, dedupeKey, fmt.Sprintf("Project %s gateway error rate recovered to %d%%.", auth.Project.Name, errorRate))
+		return s.resolveAlertByDedupeKey(ctx, systemActor, dedupeKey, fmt.Sprintf("Workspace key %s gateway error rate recovered to %d%%.", auth.APIKey.Name, errorRate))
 	}
 	severity := AlertSeverityWarning
 	title := "Gateway error rate reached warning threshold"
@@ -261,14 +221,13 @@ func (s *Service) syncGatewayErrorRateAlert(ctx context.Context, auth GatewayAut
 		Type:         AlertTypeGatewayErrorRate,
 		Severity:     severity,
 		Title:        title,
-		Summary:      fmt.Sprintf("Project %s had %s errors out of %s requests in the last %s (%d%%).", auth.Project.Name, formatInt(aggregate.ErrorRequests), formatInt(aggregate.TotalRequests), formatDuration(gatewayErrorRateWindow), errorRate),
-		ResourceType: "project",
-		ResourceID:   auth.Project.ID,
-		ProjectID:    auth.Project.ID,
+		Summary:      fmt.Sprintf("Workspace key %s had %s errors out of %s requests in the last %s (%d%%).", auth.APIKey.Name, formatInt(aggregate.ErrorRequests), formatInt(aggregate.TotalRequests), formatDuration(gatewayErrorRateWindow), errorRate),
+		ResourceType: "api_key",
+		ResourceID:   auth.APIKey.ID,
 		DedupeKey:    dedupeKey,
 		Metadata: map[string]string{
-			"project_id":            auth.Project.ID,
-			"project_name":          auth.Project.Name,
+			"api_key_id":            auth.APIKey.ID,
+			"api_key_name":          auth.APIKey.Name,
 			"window_seconds":        strconv.Itoa(int(gatewayErrorRateWindow.Seconds())),
 			"window_started_at":     windowStart.Format(time.RFC3339),
 			"window_ended_at":       windowEnd.Format(time.RFC3339),
@@ -338,15 +297,6 @@ func (s *Service) syncProviderAccountHealthAlert(ctx context.Context, account Pr
 	})
 }
 
-func (s *Service) refreshProjectBudgetAlert(ctx context.Context, projectID string) error {
-	project, err := s.projectByID(ctx, projectID)
-	if err != nil {
-		return err
-	}
-	_, err = s.enrichProjectBudgets(ctx, []Project{project})
-	return err
-}
-
 func (s *Service) alertByID(ctx context.Context, id string) (AlertEvent, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -394,10 +344,6 @@ func normalizeActor(actor string) string {
 		return "local-admin"
 	}
 	return actor
-}
-
-func projectBudgetAlertDedupeKey(projectID string, now time.Time) string {
-	return "project_budget:" + strings.TrimSpace(projectID) + ":" + alertMonthKey(now)
 }
 
 func apiKeyQuotaAlertDedupeKey(apiKeyID string, now time.Time) string {

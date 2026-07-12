@@ -1,26 +1,35 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { Boxes, CheckCircle2, Download, FileClock, LockKeyhole, Plug, RefreshCw, Search, Settings2, Upload, X, XCircle } from '@lucide/vue'
+import { Boxes, CheckCircle2, Copy, Download, FileClock, LockKeyhole, Plus, Plug, RefreshCw, Search, Settings2, Trash2, Upload, X, XCircle } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import {
   activateOfficialLicense,
+  createPluginAPIToken,
   disablePlugin,
   downloadPluginPackage,
   enablePlugin,
   getOfficialCatalogStatus,
+  getOfficialFeedClientInfo,
+  getOfficialFeedStatuses,
+  getOfficialFeedSyncRuns,
   getOfficialLicenseStatus,
+  getPluginAPITokens,
   getPluginCatalog,
   getPluginConfig,
   getPluginDeliveries,
   getSidecarRuntimeStatus,
   importOfficialLicense,
+  importOfficialFeed,
+  redeemOfficialLicense,
+  revokePluginAPIToken,
   importPluginPackage,
   installPluginPackage,
   syncOfficialCatalog,
+  syncOfficialFeed,
   uninstallPluginPackage,
   updatePluginConfig
 } from '@/api/plugins'
-import type { OfficialCatalogStatus, OfficialLicenseStatus, Plugin, PluginCatalog, PluginConfig, PluginDeliveryAttempt, PluginPackage, SidecarRuntimeStatus } from '@/types'
+import type { OfficialCatalogStatus, OfficialFeedClientInfo, OfficialFeedStatus, OfficialFeedSyncRun, OfficialLicenseStatus, Plugin, PluginAPIToken, PluginCatalog, PluginConfig, PluginDeliveryAttempt, PluginPackage, SidecarRuntimeStatus } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -47,10 +56,11 @@ const deliveryPlugin = ref<Plugin | null>(null)
 const deliveries = ref<PluginDeliveryAttempt[]>([])
 const deliveryLoading = ref(false)
 const deliveryStatusFilter = ref('')
-const licenseModal = ref<'activate' | 'import' | null>(null)
+const licenseModal = ref<'activate' | 'import' | 'redeem' | null>(null)
 const packageImportTarget = ref<{ plugin: Plugin; pkg: PluginPackage } | null>(null)
 const packageImportFileJSON = ref('')
 const licenseForm = ref({
+  code: '',
   licenseID: '',
   activationSecret: '',
   instanceID: '',
@@ -71,6 +81,29 @@ const officialCatalogStatus = ref<OfficialCatalogStatus | null>(null)
 const officialLicenseStatus = ref<OfficialLicenseStatus | null>(null)
 const runtimeStatus = ref<SidecarRuntimeStatus | null>(null)
 const runtimeStatusLoading = ref(false)
+const apiTokenSaving = ref(false)
+const apiTokenRevokeID = ref('')
+const apiTokenModal = ref(false)
+const apiTokenSecret = ref('')
+const apiTokens = ref<PluginAPIToken[]>([])
+const currentPluginSurface = window.location.pathname.startsWith('/console') ? 'personal' : window.location.pathname.startsWith('/operator') ? 'relay_operator' : 'enterprise'
+const apiTokenForm = ref({
+  name: '',
+  pluginID: '',
+  scopes: ['catalog:read'],
+  surfaces: [currentPluginSurface],
+  expiresAt: ''
+})
+const apiTokenScopeOptions = ['catalog:read', 'plugin:read', 'plugin:action', 'artifact:write', 'job:write', 'event:read']
+const apiTokenSurfaceOptions = [currentPluginSurface]
+const feedClientInfo = ref<OfficialFeedClientInfo | null>(null)
+const feedStatuses = ref<OfficialFeedStatus[]>([])
+const feedImportModal = ref(false)
+const feedImportJSON = ref('')
+const feedImporting = ref(false)
+const feedSyncing = ref(false)
+const feedSyncServiceKey = ref('')
+const feedSyncRuns = ref<OfficialFeedSyncRun[]>([])
 
 type SecretField = {
   key: string
@@ -135,6 +168,14 @@ const tierOptions = computed(() => Array.from(new Set(catalog.value.plugins.map(
 const statusOptions = computed(() => Array.from(new Set(catalog.value.plugins.map((item) => item.status))).filter(Boolean).sort())
 const activeConfigSchema = computed(() => notificationConfigSchema(configPlugin.value))
 const canSyncOfficialCatalog = computed(() => ['online', 'private_mirror'].includes(officialCatalogStatus.value?.mode || ''))
+const feedServiceOptions = computed(() => {
+  const entitled = (officialLicenseStatus.value?.entitlements || [])
+    .filter((item) => item.type === 'data_feed' && item.status === 'active')
+    .map((item) => item.resource_key.trim())
+    .filter(Boolean)
+  const cached = feedStatuses.value.map((item) => item.service_key.trim()).filter(Boolean)
+  return Array.from(new Set([...entitled, ...cached])).sort()
+})
 const pluginTree = computed(() => {
   const groups = new Map<string, Plugin[]>()
   for (const plugin of filteredPlugins.value) {
@@ -163,14 +204,123 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [catalogData, catalogStatus, licenseStatus] = await Promise.all([getPluginCatalog(), loadOfficialCatalogStatus(), loadOfficialLicenseStatus()])
+    const [catalogData, catalogStatus, licenseStatus, tokenData, feedData, syncRuns] = await Promise.all([
+      getPluginCatalog(),
+      loadOfficialCatalogStatus(),
+      loadOfficialLicenseStatus(),
+      getPluginAPITokens(),
+      getOfficialFeedStatuses().catch(() => []),
+      getOfficialFeedSyncRuns().catch(() => [])
+    ])
     catalog.value = catalogData
     officialCatalogStatus.value = catalogStatus
     officialLicenseStatus.value = licenseStatus
+    apiTokens.value = tokenData
+    feedStatuses.value = feedData
+    feedClientInfo.value = licenseStatus.status === 'active' ? await getOfficialFeedClientInfo().catch(() => null) : null
+    feedSyncRuns.value = syncRuns
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
     loading.value = false
+  }
+}
+
+async function savePluginAPIToken() {
+  apiTokenSaving.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    const result = await createPluginAPIToken({
+      name: apiTokenForm.value.name,
+      plugin_id: apiTokenForm.value.pluginID || undefined,
+      scopes: apiTokenForm.value.scopes,
+      surfaces: apiTokenForm.value.surfaces,
+      expires_at: apiTokenForm.value.expiresAt ? new Date(apiTokenForm.value.expiresAt).toISOString() : undefined
+    })
+    apiTokens.value = [result.token, ...apiTokens.value]
+    apiTokenSecret.value = result.secret
+    apiTokenForm.value.name = ''
+    apiTokenForm.value.pluginID = ''
+    apiTokenForm.value.scopes = ['catalog:read']
+    apiTokenForm.value.surfaces = [currentPluginSurface]
+    apiTokenForm.value.expiresAt = ''
+    message.value = t('plugins.apiTokenCreated')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    apiTokenSaving.value = false
+  }
+}
+
+async function revokePluginToken(token: PluginAPIToken) {
+  if (token.status === 'revoked' || !window.confirm(t('plugins.revokeTokenConfirm'))) return
+  apiTokenRevokeID.value = token.id
+  error.value = ''
+  try {
+    const revoked = await revokePluginAPIToken(token.id)
+    const index = apiTokens.value.findIndex((item) => item.id === token.id)
+    if (index >= 0) apiTokens.value[index] = revoked
+    message.value = t('plugins.apiTokenRevoked')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    apiTokenRevokeID.value = ''
+  }
+}
+
+function closeAPITokenModal() {
+  apiTokenModal.value = false
+  apiTokenSecret.value = ''
+}
+
+async function copyAPITokenSecret() {
+  if (!apiTokenSecret.value || !navigator.clipboard) return
+  await navigator.clipboard.writeText(apiTokenSecret.value)
+  message.value = t('plugins.apiTokenCopied')
+}
+
+async function saveOfficialFeedImport() {
+  feedImporting.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    const parsed = JSON.parse(feedImportJSON.value)
+    const imported = await importOfficialFeed({ file_json: parsed })
+    feedStatuses.value = [imported, ...feedStatuses.value.filter((item) => item.feed_id !== imported.feed_id || item.service_key !== imported.service_key)]
+    feedClientInfo.value = await getOfficialFeedClientInfo()
+    feedImportJSON.value = ''
+    feedImportModal.value = false
+    message.value = t('plugins.feedImported')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    feedImporting.value = false
+  }
+}
+
+async function copyFeedPublicKey() {
+  if (!feedClientInfo.value?.encryption_public_key || !navigator.clipboard) return
+  await navigator.clipboard.writeText(feedClientInfo.value.encryption_public_key)
+  message.value = t('plugins.feedPublicKeyCopied')
+}
+
+async function syncFeed() {
+  const serviceKey = feedSyncServiceKey.value.trim()
+  if (!serviceKey) return
+  feedSyncing.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    const result = await syncOfficialFeed(serviceKey)
+    feedStatuses.value = await getOfficialFeedStatuses()
+    feedSyncRuns.value = await getOfficialFeedSyncRuns('', 20)
+    message.value = t('plugins.feedSynced', { service: result.feed.service_key, version: result.feed.feed_version })
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+    feedSyncRuns.value = await getOfficialFeedSyncRuns('', 20).catch(() => feedSyncRuns.value)
+  } finally {
+    feedSyncing.value = false
   }
 }
 
@@ -404,6 +554,28 @@ async function saveLicenseActivation() {
   }
 }
 
+async function saveLicenseRedeem() {
+  licenseSaving.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    officialLicenseStatus.value = await redeemOfficialLicense({
+      code: licenseForm.value.code,
+      instance_id: licenseForm.value.instanceID || undefined,
+      instance_fingerprint: licenseForm.value.fingerprint || undefined,
+      display_name: licenseForm.value.displayName || undefined
+    })
+    licenseModal.value = null
+    licenseForm.value.code = ''
+    message.value = t('plugins.licenseRedeemed')
+    catalog.value = await getPluginCatalog()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    licenseSaving.value = false
+  }
+}
+
 async function saveLicenseImport() {
   licenseSaving.value = true
   error.value = ''
@@ -591,6 +763,14 @@ watch(
   }
 )
 
+watch(
+  feedServiceOptions,
+  (options) => {
+    if (!feedSyncServiceKey.value && options.length) feedSyncServiceKey.value = options[0]
+  },
+  { immediate: true }
+)
+
 onMounted(load)
 </script>
 
@@ -686,6 +866,10 @@ onMounted(load)
           <p>{{ officialCatalogStatus?.license_url || '-' }}</p>
         </div>
         <div class="form-span-2">
+          <label>{{ t('plugins.catalogRedeemURL') }}</label>
+          <p>{{ officialCatalogStatus?.redeem_url || '-' }}</p>
+        </div>
+        <div class="form-span-2">
           <label>{{ t('plugins.catalogPayload') }}</label>
           <p>{{ shortHash(officialCatalogStatus?.payload_sha256 || '') }}</p>
         </div>
@@ -710,6 +894,10 @@ onMounted(load)
           <button class="button secondary" type="button" :disabled="licenseLoading" @click="licenseModal = 'activate'">
             <CheckCircle2 :size="15" />
             {{ t('plugins.activateLicense') }}
+          </button>
+          <button class="button secondary" type="button" :disabled="licenseLoading" @click="licenseModal = 'redeem'">
+            <LockKeyhole :size="15" />
+            {{ t('plugins.redeemCode') }}
           </button>
         </div>
       </header>
@@ -746,6 +934,178 @@ onMounted(load)
           <label>{{ t('plugins.licenseEnvelope') }}</label>
           <p>{{ shortHash(officialLicenseStatus?.envelope_sha256 || '') }}</p>
         </div>
+      </div>
+    </section>
+
+    <section class="panel section-gap">
+      <header class="panel-header split-header">
+        <div>
+          <h2>{{ t('plugins.officialFeeds') }}</h2>
+          <p>{{ t('plugins.officialFeedsSubtitle') }}</p>
+        </div>
+        <div class="row-actions feed-actions">
+          <select v-model="feedSyncServiceKey" class="feed-service-select" :aria-label="t('plugins.feedService')">
+            <option value="">{{ t('plugins.selectFeedService') }}</option>
+            <option v-for="service in feedServiceOptions" :key="service" :value="service">{{ service }}</option>
+          </select>
+          <button class="button secondary" type="button" :disabled="feedSyncing || !canSyncOfficialCatalog || !feedSyncServiceKey" @click="syncFeed">
+            <RefreshCw :size="16" />
+            {{ feedSyncing ? t('plugins.syncingFeed') : t('plugins.syncFeed') }}
+          </button>
+          <button class="button secondary" type="button" @click="feedImportModal = true">
+            <Upload :size="16" />
+            {{ t('plugins.importFeed') }}
+          </button>
+        </div>
+      </header>
+      <div v-if="feedClientInfo" class="panel-body detail-grid">
+        <div>
+          <label>{{ t('plugins.licenseInstance') }}</label>
+          <p>{{ feedClientInfo.instance_id }}</p>
+        </div>
+        <div>
+          <label>{{ t('plugins.licenseID') }}</label>
+          <p>{{ feedClientInfo.license_id }}</p>
+        </div>
+        <div class="form-span-2">
+          <label>{{ t('plugins.feedEncryption') }}</label>
+          <p>{{ feedClientInfo.encryption_algorithm }}</p>
+        </div>
+        <div class="form-span-2">
+          <label>{{ t('plugins.feedPublicKey') }}</label>
+          <div class="inline-code-row">
+            <code>{{ feedClientInfo.encryption_public_key }}</code>
+            <button class="icon-button" type="button" :title="t('plugins.copyFeedPublicKey')" @click="copyFeedPublicKey">
+              <Copy :size="15" />
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="panel-body table-scroll feed-table-body">
+        <table class="data-table crud-table">
+          <thead>
+            <tr>
+              <th>{{ t('plugins.feedService') }}</th>
+              <th>{{ t('plugins.feedVersion') }}</th>
+              <th>{{ t('plugins.feedSchema') }}</th>
+              <th>{{ t('plugins.feedVerification') }}</th>
+              <th>{{ t('plugins.feedFreshness') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="feed in feedStatuses" :key="`${feed.service_key}:${feed.feed_id}`">
+              <td>
+                <strong>{{ feed.service_key }}</strong>
+                <span>{{ feed.feed_id }}</span>
+              </td>
+              <td>
+                <strong>{{ feed.feed_version }}</strong>
+                <span>{{ formatSize(feed.size_bytes) }}</span>
+              </td>
+              <td><span>{{ feed.data_schema_version }}</span></td>
+              <td>
+                <span class="pill" :class="feed.signature_verified ? 'status-success' : 'status-danger'">
+                  {{ feed.signature_verified ? t('plugins.signatureVerified') : t('plugins.signatureInvalid') }}
+                </span>
+                <span>{{ shortHash(feed.payload_sha256) }}</span>
+              </td>
+              <td>
+                <span class="pill" :class="feed.status === 'active' ? 'status-success' : 'status-warning'">{{ feed.status }}</span>
+                <span>{{ t('plugins.licenseExpiresAt') }}: {{ formatOptionalTime(feed.expires_at) }}</span>
+              </td>
+            </tr>
+            <tr v-if="!feedStatuses.length">
+              <td colspan="5" class="empty-cell">{{ t('plugins.feedEmpty') }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="feedSyncRuns.length" class="panel-body table-scroll feed-runs-body">
+        <table class="data-table crud-table">
+          <thead>
+            <tr>
+              <th>{{ t('plugins.feedSyncTime') }}</th>
+              <th>{{ t('plugins.feedService') }}</th>
+              <th>{{ t('plugins.catalogMode') }}</th>
+              <th>{{ t('plugins.catalogStatus') }}</th>
+              <th>{{ t('plugins.feedRequestID') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="run in feedSyncRuns" :key="run.id">
+              <td>{{ formatTime(run.started_at) }}</td>
+              <td>
+                <strong>{{ run.service_key }}</strong>
+                <span>{{ run.feed_id || '-' }}</span>
+              </td>
+              <td>{{ run.mode }}</td>
+              <td>
+                <span class="pill" :class="run.status === 'succeeded' ? 'status-success' : 'status-danger'">{{ run.status }}</span>
+                <span>{{ run.error_code || run.error || '-' }}</span>
+              </td>
+              <td>
+                <strong>{{ run.request_id || '-' }}</strong>
+                <span>{{ run.source_url || '-' }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel section-gap">
+      <header class="panel-header split-header">
+        <div>
+          <h2>{{ t('plugins.openAPI') }}</h2>
+          <p>{{ t('plugins.openAPISubtitle') }}</p>
+        </div>
+        <button class="button" type="button" @click="apiTokenSecret = ''; apiTokenModal = true">
+          <Plus :size="16" />
+          {{ t('plugins.createAPIToken') }}
+        </button>
+      </header>
+      <div class="panel-body table-scroll">
+        <table class="data-table crud-table">
+          <thead>
+            <tr>
+              <th>{{ t('plugins.apiTokenName') }}</th>
+              <th>{{ t('plugins.apiTokenPlugin') }}</th>
+              <th>{{ t('plugins.apiTokenScopes') }}</th>
+              <th>{{ t('plugins.surfaces') }}</th>
+              <th>{{ t('plugins.apiTokenActivity') }}</th>
+              <th>{{ t('common.actions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="token in apiTokens" :key="token.id">
+              <td>
+                <strong>{{ token.name }}</strong>
+                <span>{{ token.token_prefix }}...</span>
+              </td>
+              <td><span>{{ token.plugin_id || t('plugins.catalogOnly') }}</span></td>
+              <td><span>{{ token.scopes.join(', ') }}</span></td>
+              <td><span>{{ token.surfaces.join(', ') }}</span></td>
+              <td>
+                <span class="pill" :class="statusClass(token.status)">{{ token.status }}</span>
+                <span>{{ t('plugins.lastUsed') }}: {{ formatOptionalTime(token.last_used_at) }}</span>
+              </td>
+              <td>
+                <button
+                  class="icon-button danger-item"
+                  type="button"
+                  :disabled="token.status === 'revoked' || apiTokenRevokeID === token.id"
+                  :title="t('plugins.revokeToken')"
+                  @click="revokePluginToken(token)"
+                >
+                  <Trash2 :size="16" />
+                </button>
+              </td>
+            </tr>
+            <tr v-if="!apiTokens.length">
+              <td colspan="6" class="empty-cell">{{ t('plugins.apiTokenEmpty') }}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -990,12 +1350,101 @@ onMounted(load)
       </section>
     </div>
 
+    <div v-if="feedImportModal" class="modal-backdrop" @click.self="feedImportModal = false">
+      <section class="modal-card wide">
+        <header class="modal-header">
+          <div>
+            <h2>{{ t('plugins.importFeed') }}</h2>
+            <p>{{ t('plugins.importFeedSubtitle') }}</p>
+          </div>
+          <button class="icon-button" type="button" @click="feedImportModal = false"><X :size="19" /></button>
+        </header>
+        <form class="modal-body form-grid" @submit.prevent="saveOfficialFeedImport">
+          <label class="form-span-2">
+            <span>{{ t('plugins.feedPackageJSON') }}</span>
+            <textarea v-model="feedImportJSON" rows="14" spellcheck="false"></textarea>
+          </label>
+        </form>
+        <footer class="modal-footer">
+          <button class="button secondary" type="button" @click="feedImportModal = false">{{ t('common.cancel') }}</button>
+          <button class="button" type="button" :disabled="feedImporting" @click="saveOfficialFeedImport">
+            <Upload :size="16" />
+            {{ feedImporting ? t('common.saving') : t('plugins.importFeed') }}
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div v-if="apiTokenModal" class="modal-backdrop" @click.self="closeAPITokenModal">
+      <section class="modal-card wide">
+        <header class="modal-header">
+          <div>
+            <h2>{{ t('plugins.createAPIToken') }}</h2>
+            <p>{{ t('plugins.createAPITokenSubtitle') }}</p>
+          </div>
+          <button class="icon-button" type="button" @click="closeAPITokenModal"><X :size="19" /></button>
+        </header>
+        <div v-if="apiTokenSecret" class="modal-body form-grid">
+          <div class="form-span-2 notice success token-secret-panel">
+            <strong>{{ t('plugins.apiTokenSecretOnce') }}</strong>
+            <code>{{ apiTokenSecret }}</code>
+          </div>
+        </div>
+        <form v-else class="modal-body form-grid" @submit.prevent="savePluginAPIToken">
+          <label>
+            <span>{{ t('plugins.apiTokenName') }}</span>
+            <input v-model="apiTokenForm.name" required autocomplete="off" />
+          </label>
+          <label>
+            <span>{{ t('plugins.apiTokenPlugin') }}</span>
+            <select v-model="apiTokenForm.pluginID">
+              <option value="">{{ t('plugins.catalogOnly') }}</option>
+              <option v-for="plugin in catalog.plugins" :key="plugin.id" :value="plugin.id">{{ plugin.name }}</option>
+            </select>
+          </label>
+          <fieldset class="form-span-2 token-option-group">
+            <legend>{{ t('plugins.apiTokenScopes') }}</legend>
+            <div class="token-option-grid">
+              <label v-for="scope in apiTokenScopeOptions" :key="scope" class="checkbox-row">
+                <input v-model="apiTokenForm.scopes" type="checkbox" :value="scope" />
+                <span>{{ scope }}</span>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset class="form-span-2 token-option-group">
+            <legend>{{ t('plugins.surfaces') }}</legend>
+            <div class="token-option-grid">
+              <label v-for="surface in apiTokenSurfaceOptions" :key="surface" class="checkbox-row">
+                <input v-model="apiTokenForm.surfaces" type="checkbox" :value="surface" />
+                <span>{{ surface }}</span>
+              </label>
+            </div>
+          </fieldset>
+          <label class="form-span-2">
+            <span>{{ t('plugins.apiTokenExpiresAt') }}</span>
+            <input v-model="apiTokenForm.expiresAt" type="datetime-local" />
+          </label>
+        </form>
+        <footer class="modal-footer">
+          <button class="button secondary" type="button" @click="closeAPITokenModal">{{ t('common.cancel') }}</button>
+          <button v-if="apiTokenSecret" class="button" type="button" @click="copyAPITokenSecret">
+            <Copy :size="16" />
+            {{ t('plugins.copyAPIToken') }}
+          </button>
+          <button v-else class="button" type="button" :disabled="apiTokenSaving" @click="savePluginAPIToken">
+            <Plus :size="16" />
+            {{ apiTokenSaving ? t('common.saving') : t('plugins.createAPIToken') }}
+          </button>
+        </footer>
+      </section>
+    </div>
+
     <div v-if="licenseModal" class="modal-backdrop" @click.self="licenseModal = null">
       <section class="modal-card">
         <header class="modal-header">
           <div>
-            <h2>{{ licenseModal === 'activate' ? t('plugins.activateLicense') : t('plugins.importLicense') }}</h2>
-            <p>{{ licenseModal === 'activate' ? t('plugins.activateLicenseSubtitle') : t('plugins.importLicenseSubtitle') }}</p>
+            <h2>{{ licenseModal === 'activate' ? t('plugins.activateLicense') : licenseModal === 'redeem' ? t('plugins.redeemCode') : t('plugins.importLicense') }}</h2>
+            <p>{{ licenseModal === 'activate' ? t('plugins.activateLicenseSubtitle') : licenseModal === 'redeem' ? t('plugins.redeemCodeSubtitle') : t('plugins.importLicenseSubtitle') }}</p>
           </div>
           <button class="icon-button" type="button" @click="licenseModal = null"><X :size="19" /></button>
         </header>
@@ -1007,6 +1456,24 @@ onMounted(load)
           <label>
             <span>{{ t('plugins.activationSecret') }}</span>
             <input v-model="licenseForm.activationSecret" type="password" autocomplete="off" />
+          </label>
+          <label>
+            <span>{{ t('plugins.licenseInstance') }}</span>
+            <input v-model="licenseForm.instanceID" autocomplete="off" />
+          </label>
+          <label>
+            <span>{{ t('plugins.instanceDisplayName') }}</span>
+            <input v-model="licenseForm.displayName" autocomplete="off" />
+          </label>
+          <label class="form-span-2">
+            <span>{{ t('plugins.instanceFingerprint') }}</span>
+            <input v-model="licenseForm.fingerprint" placeholder="sha256:..." autocomplete="off" />
+          </label>
+        </form>
+        <form v-else-if="licenseModal === 'redeem'" class="modal-body form-grid" @submit.prevent="saveLicenseRedeem">
+          <label class="form-span-2">
+            <span>{{ t('plugins.redeemCode') }}</span>
+            <input v-model="licenseForm.code" autocomplete="off" spellcheck="false" />
           </label>
           <label>
             <span>{{ t('plugins.licenseInstance') }}</span>
@@ -1033,7 +1500,7 @@ onMounted(load)
         </form>
         <footer class="modal-footer">
           <button class="button secondary" type="button" @click="licenseModal = null">{{ t('common.cancel') }}</button>
-          <button class="button" type="button" :disabled="licenseSaving" @click="licenseModal === 'activate' ? saveLicenseActivation() : saveLicenseImport()">
+          <button class="button" type="button" :disabled="licenseSaving" @click="licenseModal === 'activate' ? saveLicenseActivation() : licenseModal === 'redeem' ? saveLicenseRedeem() : saveLicenseImport()">
             <CheckCircle2 :size="17" />
             {{ licenseSaving ? t('common.saving') : t('common.save') }}
           </button>
@@ -1128,7 +1595,7 @@ onMounted(load)
           </label>
           <label>
             <span>{{ t('plugins.alertTypes') }}</span>
-            <input v-model="configForm.alertTypes" placeholder="project_budget,api_key_quota" />
+            <input v-model="configForm.alertTypes" placeholder="api_key_quota,gateway_error_rate" />
           </label>
         </form>
         <footer class="modal-footer">

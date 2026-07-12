@@ -23,11 +23,6 @@ import (
 const systemActor = "system"
 
 const (
-	defaultWorkspaceProjectID     = "proj_platform"
-	defaultWorkspaceApplicationID = "app_internal_sandbox"
-)
-
-const (
 	providerProbeTimeout   = 15 * time.Second
 	providerProbeBodyLimit = 2 << 20
 )
@@ -38,7 +33,7 @@ var (
 	ErrGatewayRouteUnavailable = errors.New("no schedulable gateway route is available for this model")
 	ErrGatewayRateLimited      = errors.New("gateway api key qps limit exceeded")
 	ErrGatewayQuotaExceeded    = errors.New("gateway api key monthly token quota exceeded")
-	ErrGatewayBudgetExceeded   = errors.New("project monthly budget exceeded")
+	ErrGatewayBudgetExceeded   = errors.New("workspace key monthly budget exceeded")
 )
 
 type Service struct {
@@ -46,14 +41,23 @@ type Service struct {
 	gatewayPath     string
 	secretKey       string
 	alertDispatcher AlertDispatcher
+	usageObserver   UsageObserver
 	rateMu          sync.Mutex
 	rateWindows     map[string][]time.Time
 	slotMu          sync.Mutex
 	accountSlots    map[string]int
+	scheduler       *gatewayScheduler
 }
 
 type AlertDispatcher interface {
 	DispatchAlert(ctx context.Context, event AlertEvent) error
+}
+
+// UsageObserver receives a usage record after it has been durably saved by the
+// control plane. Implementations must be idempotent because delivery can be
+// retried after a process restart.
+type UsageObserver interface {
+	OnGatewayUsage(ctx context.Context, record UsageRecord) error
 }
 
 func NewService(repo Repository, gatewayPath string, secretKey ...string) *Service {
@@ -64,7 +68,7 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 	if len(secretKey) > 0 && strings.TrimSpace(secretKey[0]) != "" {
 		key = strings.TrimSpace(secretKey[0])
 	}
-	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, rateWindows: map[string][]time.Time{}, accountSlots: map[string]int{}}
+	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, rateWindows: map[string][]time.Time{}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler()}
 }
 
 // TryAcquireProviderAccountSlot attempts to reserve one in-process concurrency
@@ -110,16 +114,16 @@ func (s *Service) SetAlertDispatcher(dispatcher AlertDispatcher) {
 	s.alertDispatcher = dispatcher
 }
 
+func (s *Service) SetUsageObserver(observer UsageObserver) {
+	s.usageObserver = observer
+}
+
 func (s *Service) EnsureSeedData(ctx context.Context) error {
 	providers, err := s.repo.ListProviders(ctx)
 	if err != nil {
 		return err
 	}
-	projects, err := s.repo.ListProjects(ctx)
-	if err != nil {
-		return err
-	}
-	if len(providers) > 0 || len(projects) > 0 {
+	if len(providers) > 0 {
 		return nil
 	}
 
@@ -137,48 +141,14 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	project := Project{
-		ID:                 defaultWorkspaceProjectID,
-		Name:               "Workspace Default",
-		Description:        "Hidden default boundary for workspace keys.",
-		CostCenter:         "WORKSPACE",
-		MonthlyBudgetCents: 50000,
-		Status:             ProjectStatusActive,
-		CreatedAt:          now,
-		UpdatedAt:          now,
-	}
-	app := Application{
-		ID:          defaultWorkspaceApplicationID,
-		ProjectID:   project.ID,
-		Name:        "Workspace Gateway",
-		Environment: "default",
-		Owner:       "workspace",
-		Status:      ApplicationStatusActive,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
 	if err := s.repo.SaveProvider(ctx, provider); err != nil {
 		return err
 	}
-	if err := s.repo.SaveProject(ctx, project); err != nil {
-		return err
-	}
-	if err := s.repo.SaveApplication(ctx, app); err != nil {
-		return err
-	}
-	return s.audit(ctx, systemActor, "seed", "control_plane", "product_baseline", "Seeded product baseline provider, project, and application")
+	return s.audit(ctx, systemActor, "seed", "control_plane", "product_baseline", "Seeded product baseline provider")
 }
 
 func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {
 	providers, err := s.repo.ListProviders(ctx)
-	if err != nil {
-		return Dashboard{}, err
-	}
-	projects, err := s.repo.ListProjects(ctx)
-	if err != nil {
-		return Dashboard{}, err
-	}
-	apps, err := s.repo.ListApplications(ctx, "")
 	if err != nil {
 		return Dashboard{}, err
 	}
@@ -192,13 +162,9 @@ func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {
 	}
 
 	var activeProviders, activeKeys int
-	modelSet := map[string]struct{}{}
 	for _, provider := range providers {
 		if provider.Status == ProviderStatusActive || provider.Status == ProviderStatusNeedsSecret {
 			activeProviders++
-		}
-		for _, model := range provider.Models {
-			modelSet[model] = struct{}{}
 		}
 	}
 	for _, key := range keys {
@@ -206,17 +172,14 @@ func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {
 			activeKeys++
 		}
 	}
-	models := make([]string, 0, len(modelSet))
-	for model := range modelSet {
-		models = append(models, model)
+	models, err := s.GatewayModels(ctx)
+	if err != nil {
+		return Dashboard{}, err
 	}
-	sort.Strings(models)
 
 	return Dashboard{
 		ProviderCount:       len(providers),
 		ActiveProviderCount: activeProviders,
-		ProjectCount:        len(projects),
-		ApplicationCount:    len(apps),
 		APIKeyCount:         len(keys),
 		ActiveAPIKeyCount:   activeKeys,
 		Models:              models,
@@ -452,104 +415,6 @@ func parseOpenAICompatibleModels(body []byte) ([]string, error) {
 	return cleanStringList(models), nil
 }
 
-func (s *Service) ListProjects(ctx context.Context) ([]Project, error) {
-	projects, err := s.repo.ListProjects(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return s.enrichProjectBudgets(ctx, projects)
-}
-
-func (s *Service) CreateProject(ctx context.Context, actor string, req ProjectRequest) (Project, error) {
-	now := time.Now().UTC()
-	project, err := projectFromRequest(req, now)
-	if err != nil {
-		return Project{}, err
-	}
-	if err := s.validateGovernancePolicyReference(ctx, project.PolicyID); err != nil {
-		return Project{}, err
-	}
-	project.ID = "proj_" + randomID(10)
-	if err := s.repo.SaveProject(ctx, project); err != nil {
-		return Project{}, err
-	}
-	if err := s.audit(ctx, actor, "create", "project", project.ID, fmt.Sprintf("Created project %s", project.Name)); err != nil {
-		return Project{}, err
-	}
-	return project, nil
-}
-
-func (s *Service) UpdateProject(ctx context.Context, actor string, id string, req ProjectRequest) (Project, error) {
-	existing, err := s.projectByID(ctx, id)
-	if err != nil {
-		return Project{}, err
-	}
-	project, err := projectFromRequest(req, existing.CreatedAt)
-	if err != nil {
-		return Project{}, err
-	}
-	project.ID = existing.ID
-	project.CreatedAt = existing.CreatedAt
-	project.UpdatedAt = time.Now().UTC()
-	if err := s.validateGovernancePolicyReference(ctx, project.PolicyID); err != nil {
-		return Project{}, err
-	}
-	if err := s.repo.SaveProject(ctx, project); err != nil {
-		return Project{}, err
-	}
-	if err := s.audit(ctx, actor, "update", "project", project.ID, fmt.Sprintf("Updated project %s", project.Name)); err != nil {
-		return Project{}, err
-	}
-	return project, nil
-}
-
-func (s *Service) ListApplications(ctx context.Context, projectID string) ([]Application, error) {
-	return s.repo.ListApplications(ctx, projectID)
-}
-
-func (s *Service) CreateApplication(ctx context.Context, actor string, req ApplicationRequest) (Application, error) {
-	if err := s.projectExists(ctx, req.ProjectID); err != nil {
-		return Application{}, err
-	}
-	now := time.Now().UTC()
-	app, err := applicationFromRequest(req, now)
-	if err != nil {
-		return Application{}, err
-	}
-	app.ID = "app_" + randomID(10)
-	if err := s.repo.SaveApplication(ctx, app); err != nil {
-		return Application{}, err
-	}
-	if err := s.audit(ctx, actor, "create", "application", app.ID, fmt.Sprintf("Created application %s", app.Name)); err != nil {
-		return Application{}, err
-	}
-	return app, nil
-}
-
-func (s *Service) UpdateApplication(ctx context.Context, actor string, id string, req ApplicationRequest) (Application, error) {
-	if err := s.projectExists(ctx, req.ProjectID); err != nil {
-		return Application{}, err
-	}
-	existing, err := s.applicationByID(ctx, id)
-	if err != nil {
-		return Application{}, err
-	}
-	app, err := applicationFromRequest(req, existing.CreatedAt)
-	if err != nil {
-		return Application{}, err
-	}
-	app.ID = existing.ID
-	app.CreatedAt = existing.CreatedAt
-	app.UpdatedAt = time.Now().UTC()
-	if err := s.repo.SaveApplication(ctx, app); err != nil {
-		return Application{}, err
-	}
-	if err := s.audit(ctx, actor, "update", "application", app.ID, fmt.Sprintf("Updated application %s", app.Name)); err != nil {
-		return Application{}, err
-	}
-	return app, nil
-}
-
 func (s *Service) ListRoutingGroups(ctx context.Context) ([]RoutingGroup, error) {
 	return s.repo.ListRoutingGroups(ctx)
 }
@@ -660,6 +525,10 @@ func (s *Service) UpdateProviderAccount(ctx context.Context, actor string, id st
 	account.ErrorMessage = existing.ErrorMessage
 	account.LastUsedAt = existing.LastUsedAt
 	account.CooldownUntil = existing.CooldownUntil
+	account.CircuitState = existing.CircuitState
+	account.ConsecutiveFailures = existing.ConsecutiveFailures
+	account.CircuitOpenedUntil = existing.CircuitOpenedUntil
+	account.LastFailureAt = existing.LastFailureAt
 	account.TempUnschedulableReason = existing.TempUnschedulableReason
 	if strings.TrimSpace(req.Secret) != "" {
 		ciphertext, err := encryptSecret(s.secretKey, req.Secret)
@@ -780,10 +649,6 @@ func (s *Service) ListAPIKeys(ctx context.Context) ([]APIKeyRecord, error) {
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCreateRequest) (APIKeyCreateResponse, error) {
-	projectID, applicationID, err := s.resolveAPIKeyBoundary(ctx, actor, req.ProjectID, req.ApplicationID)
-	if err != nil {
-		return APIKeyCreateResponse{}, err
-	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return APIKeyCreateResponse{}, errors.New("name is required")
@@ -802,19 +667,23 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCrea
 	if err != nil {
 		return APIKeyCreateResponse{}, err
 	}
+	keyType, customerID, err := normalizeAPIKeyOwnership(req.KeyType, req.CustomerID)
+	if err != nil {
+		return APIKeyCreateResponse{}, err
+	}
 
 	rawKey := "ar_" + randomToken(32)
 	hash := hashAPIKey(rawKey)
 	now := time.Now().UTC()
 	record := APIKeyRecord{
 		ID:                "key_" + randomID(10),
-		ProjectID:         projectID,
-		ApplicationID:     applicationID,
 		Name:              name,
 		KeyHash:           hash,
 		Fingerprint:       fingerprint(hash),
 		Prefix:            prefix(rawKey, 10),
 		Status:            APIKeyStatusActive,
+		KeyType:           keyType,
+		CustomerID:        customerID,
 		PolicyID:          strings.TrimSpace(req.PolicyID),
 		ModelAllowlist:    models,
 		QPSLimit:          req.QPSLimit,
@@ -862,6 +731,18 @@ func (s *Service) UpdateAPIKey(ctx context.Context, actor string, id string, req
 	if err != nil {
 		return APIKeyRecord{}, err
 	}
+	keyType := req.KeyType
+	if strings.TrimSpace(keyType) == "" {
+		keyType = key.KeyType
+	}
+	customerID := req.CustomerID
+	if strings.TrimSpace(customerID) == "" && keyType == APIKeyTypeCustomer {
+		customerID = key.CustomerID
+	}
+	keyType, customerID, err = normalizeAPIKeyOwnership(keyType, customerID)
+	if err != nil {
+		return APIKeyRecord{}, err
+	}
 	key.Name = name
 	key.PolicyID = strings.TrimSpace(req.PolicyID)
 	key.ModelAllowlist = models
@@ -869,6 +750,8 @@ func (s *Service) UpdateAPIKey(ctx context.Context, actor string, id string, req
 	key.MonthlyTokenLimit = req.MonthlyTokenLimit
 	key.ExpiresAt = expiresAt
 	key.Status = status
+	key.KeyType = keyType
+	key.CustomerID = customerID
 	key.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveAPIKey(ctx, key); err != nil {
 		return APIKeyRecord{}, err
@@ -879,104 +762,22 @@ func (s *Service) UpdateAPIKey(ctx context.Context, actor string, id string, req
 	return key, nil
 }
 
-func (s *Service) resolveAPIKeyBoundary(ctx context.Context, actor string, projectID string, applicationID string) (string, string, error) {
-	projectID = strings.TrimSpace(projectID)
-	applicationID = strings.TrimSpace(applicationID)
-	if projectID == "" && applicationID == "" {
-		return s.ensureDefaultWorkspaceBoundary(ctx, actor)
+func normalizeAPIKeyOwnership(keyType string, customerID string) (string, string, error) {
+	keyType = strings.TrimSpace(keyType)
+	if keyType == "" {
+		keyType = APIKeyTypeWorkspace
 	}
-	if applicationID != "" {
-		app, err := s.applicationByID(ctx, applicationID)
-		if err != nil {
-			return "", "", err
-		}
-		if projectID == "" {
-			projectID = app.ProjectID
-		}
-		if projectID != app.ProjectID {
-			return "", "", errors.New("application does not belong to project")
-		}
+	if !oneOf(keyType, APIKeyTypeWorkspace, APIKeyTypeUser, APIKeyTypeCustomer, APIKeyTypeService) {
+		return "", "", errors.New("key_type must be workspace, user, customer, or service")
 	}
-	if err := s.projectExists(ctx, projectID); err != nil {
-		return "", "", err
+	customerID = strings.TrimSpace(customerID)
+	if keyType == APIKeyTypeCustomer && customerID == "" {
+		return "", "", errors.New("customer_id is required for customer keys")
 	}
-	if applicationID == "" {
-		appID, err := s.ensureDefaultWorkspaceApplicationForProject(ctx, actor, projectID)
-		if err != nil {
-			return "", "", err
-		}
-		applicationID = appID
+	if keyType != APIKeyTypeCustomer {
+		customerID = ""
 	}
-	return projectID, applicationID, nil
-}
-
-func (s *Service) ensureDefaultWorkspaceBoundary(ctx context.Context, actor string) (string, string, error) {
-	now := time.Now().UTC()
-	if _, err := s.projectByID(ctx, defaultWorkspaceProjectID); err != nil {
-		project := Project{
-			ID:                 defaultWorkspaceProjectID,
-			Name:               "Workspace Default",
-			Description:        "Hidden default boundary for workspace keys.",
-			CostCenter:         "WORKSPACE",
-			MonthlyBudgetCents: 0,
-			Status:             ProjectStatusActive,
-			CreatedAt:          now,
-			UpdatedAt:          now,
-		}
-		if err := s.repo.SaveProject(ctx, project); err != nil {
-			return "", "", err
-		}
-		_ = s.audit(ctx, actorOrSystem(actor), "seed", "project", project.ID, "Created hidden workspace default project")
-	}
-	if _, err := s.applicationByID(ctx, defaultWorkspaceApplicationID); err != nil {
-		app := Application{
-			ID:          defaultWorkspaceApplicationID,
-			ProjectID:   defaultWorkspaceProjectID,
-			Name:        "Workspace Gateway",
-			Environment: "default",
-			Owner:       "workspace",
-			Status:      ApplicationStatusActive,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		}
-		if err := s.repo.SaveApplication(ctx, app); err != nil {
-			return "", "", err
-		}
-		_ = s.audit(ctx, actorOrSystem(actor), "seed", "application", app.ID, "Created hidden workspace default application")
-	}
-	return defaultWorkspaceProjectID, defaultWorkspaceApplicationID, nil
-}
-
-func (s *Service) ensureDefaultWorkspaceApplicationForProject(ctx context.Context, actor string, projectID string) (string, error) {
-	if projectID == defaultWorkspaceProjectID {
-		_, appID, err := s.ensureDefaultWorkspaceBoundary(ctx, actor)
-		return appID, err
-	}
-	appID := defaultWorkspaceApplicationIDForProject(projectID)
-	if _, err := s.applicationByID(ctx, appID); err == nil {
-		return appID, nil
-	}
-	now := time.Now().UTC()
-	app := Application{
-		ID:          appID,
-		ProjectID:   projectID,
-		Name:        "Workspace Gateway",
-		Environment: "default",
-		Owner:       "workspace",
-		Status:      ApplicationStatusActive,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	if err := s.repo.SaveApplication(ctx, app); err != nil {
-		return "", err
-	}
-	_ = s.audit(ctx, actorOrSystem(actor), "seed", "application", app.ID, "Created hidden workspace default application")
-	return app.ID, nil
-}
-
-func defaultWorkspaceApplicationIDForProject(projectID string) string {
-	sum := sha256.Sum256([]byte(projectID))
-	return "app_workspace_" + hex.EncodeToString(sum[:])[:12]
+	return keyType, customerID, nil
 }
 
 func (s *Service) RotateAPIKey(ctx context.Context, actor string, id string) (APIKeyCreateResponse, error) {
@@ -1041,30 +842,16 @@ func (s *Service) AuthenticateGatewayKey(ctx context.Context, rawKey string) (Ga
 	if key.ExpiresAt != nil && now.After(*key.ExpiresAt) {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
-	project, err := s.projectByID(ctx, key.ProjectID)
-	if err != nil {
-		return GatewayAuthContext{}, ErrGatewayUnauthorized
-	}
-	if project.Status != ProjectStatusActive {
-		return GatewayAuthContext{}, ErrGatewayUnauthorized
-	}
-	app, err := s.applicationByID(ctx, key.ApplicationID)
-	if err != nil {
-		return GatewayAuthContext{}, ErrGatewayUnauthorized
-	}
-	if app.Status != ApplicationStatusActive {
-		return GatewayAuthContext{}, ErrGatewayUnauthorized
-	}
 	if err := s.repo.UpdateAPIKeyLastUsed(ctx, key.ID, now); err != nil {
 		return GatewayAuthContext{}, err
 	}
 	key.LastUsedAt = &now
 	key.UpdatedAt = now
-	policy, policySource, err := s.effectiveGatewayPolicy(ctx, key, project)
+	policy, policySource, err := s.effectiveGatewayPolicy(ctx, key)
 	if err != nil {
 		return GatewayAuthContext{}, err
 	}
-	return GatewayAuthContext{APIKey: key, Project: project, Application: app, Policy: policy, PolicySource: policySource}, nil
+	return GatewayAuthContext{APIKey: key, Policy: policy, PolicySource: policySource}, nil
 }
 
 func (s *Service) AuthorizeGatewayModel(ctx context.Context, rawKey string, model string) (GatewayAuthContext, error) {
@@ -1096,7 +883,7 @@ func (s *Service) EnforceGatewayPolicy(ctx context.Context, auth GatewayAuthCont
 	}
 	monthlyBudgetCents := auth.effectiveMonthlyBudgetCents()
 	if monthlyBudgetCents > 0 {
-		used, err := s.repo.SumUsageCostCentsByProjectSince(ctx, auth.Project.ID, currentMonth)
+		used, err := s.repo.SumUsageCostCentsByAPIKeySince(ctx, auth.APIKey.ID, currentMonth)
 		if err != nil {
 			return err
 		}
@@ -1140,7 +927,17 @@ func (s *Service) GatewayModelsForKey(ctx context.Context, rawKey string) ([]str
 	if err != nil {
 		return nil, err
 	}
-	return append([]string(nil), auth.APIKey.ModelAllowlist...), nil
+	models, err := s.GatewayModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make([]string, 0, len(models))
+	for _, model := range models {
+		if s.gatewayModelAllowed(auth, model) {
+			allowed = append(allowed, model)
+		}
+	}
+	return allowed, nil
 }
 
 func (s *Service) RecordGatewayCall(ctx context.Context, auth GatewayAuthContext, model string, status string, summary string) error {
@@ -1155,13 +952,14 @@ func (s *Service) RecordGatewayCall(ctx context.Context, auth GatewayAuthContext
 		Action:       "invoke",
 		ResourceType: "gateway_call",
 		ResourceID:   resourceID,
-		Summary:      fmt.Sprintf("%s; project=%s application=%s status=%s", summary, auth.Project.ID, auth.Application.ID, status),
+		Summary:      fmt.Sprintf("%s; workspace_key=%s status=%s", summary, auth.APIKey.ID, status),
 		CreatedAt:    time.Now().UTC(),
 	})
 }
 
 type GatewayUsageInput struct {
 	Model             string
+	UpstreamModel     string
 	ProviderID        string
 	ProviderAccountID string
 	Status            string
@@ -1178,6 +976,10 @@ type GatewayTraceInput struct {
 	MessageCount      int
 	ProviderID        string
 	ProviderAccountID string
+	GatewayModelID    string
+	RouteID           string
+	RouteGroup        string
+	UpstreamModel     string
 	RouteSource       string
 	RouteReason       string
 	Status            string
@@ -1202,13 +1004,13 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 			costCents = estimated
 		}
 	}
-	if err := s.repo.SaveUsageRecord(ctx, UsageRecord{
+	record := UsageRecord{
 		ID:                "usage_" + randomID(12),
-		ProjectID:         auth.Project.ID,
-		ApplicationID:     auth.Application.ID,
 		APIKeyID:          auth.APIKey.ID,
+		CustomerID:        auth.APIKey.CustomerID,
 		APIFingerprint:    auth.APIKey.Fingerprint,
 		Model:             strings.TrimSpace(in.Model),
+		UpstreamModel:     strings.TrimSpace(in.UpstreamModel),
 		ProviderID:        strings.TrimSpace(in.ProviderID),
 		ProviderAccountID: strings.TrimSpace(in.ProviderAccountID),
 		Status:            status,
@@ -1218,11 +1020,14 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 		OutputTokens:      nonNegative(in.OutputTokens),
 		CostCents:         costCents,
 		CreatedAt:         time.Now().UTC(),
-	}); err != nil {
+	}
+	if err := s.repo.SaveUsageRecord(ctx, record); err != nil {
 		return err
 	}
-	if costCents > 0 {
-		_ = s.refreshProjectBudgetAlert(ctx, auth.Project.ID)
+	if s.usageObserver != nil {
+		if err := s.usageObserver.OnGatewayUsage(ctx, record); err != nil {
+			_ = s.audit(ctx, systemActor, "usage_observer_error", "usage_record", record.ID, err.Error())
+		}
 	}
 	if auth.APIKey.MonthlyTokenLimit > 0 && (in.InputTokens > 0 || in.OutputTokens > 0) {
 		_ = s.syncAPIKeyQuotaAlertForAuth(ctx, auth)
@@ -1239,8 +1044,6 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 	policyID, policyName, policySource, policyVersion, policySnapshot := gatewayTracePolicyEvidence(auth)
 	return s.repo.SaveGatewayTrace(ctx, GatewayTrace{
 		ID:                "trace_" + randomID(12),
-		ProjectID:         auth.Project.ID,
-		ApplicationID:     auth.Application.ID,
 		APIKeyID:          auth.APIKey.ID,
 		APIFingerprint:    auth.APIKey.Fingerprint,
 		Model:             strings.TrimSpace(in.Model),
@@ -1248,6 +1051,10 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 		MessageCount:      nonNegative(in.MessageCount),
 		ProviderID:        strings.TrimSpace(in.ProviderID),
 		ProviderAccountID: strings.TrimSpace(in.ProviderAccountID),
+		GatewayModelID:    strings.TrimSpace(in.GatewayModelID),
+		RouteID:           strings.TrimSpace(in.RouteID),
+		RouteGroup:        strings.TrimSpace(in.RouteGroup),
+		UpstreamModel:     strings.TrimSpace(in.UpstreamModel),
 		RouteSource:       strings.TrimSpace(in.RouteSource),
 		RouteReason:       strings.TrimSpace(in.RouteReason),
 		PolicyID:          policyID,
@@ -1418,43 +1225,18 @@ func (s *Service) RecordExportEvent(ctx context.Context, actor string, action st
 }
 
 func (s *Service) GatewayModels(ctx context.Context) ([]string, error) {
-	providers, err := s.repo.ListProviders(ctx)
+	models, err := s.repo.ListGatewayModels(ctx)
 	if err != nil {
 		return nil, err
 	}
-	accounts, err := s.repo.ListProviderAccounts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	providersByID := providerByIDMap(providers)
-	now := time.Now().UTC()
-	modelSet := map[string]struct{}{}
-	for _, provider := range providers {
-		if provider.Status == ProviderStatusDisabled {
-			continue
-		}
-		for _, model := range provider.Models {
-			modelSet[model] = struct{}{}
+	result := make([]string, 0, len(models))
+	for _, model := range models {
+		if model.Status == GatewayModelStatusActive {
+			result = append(result, model.ModelID)
 		}
 	}
-	for _, account := range accounts {
-		if !accountEligibleForRouting(account, "", now) {
-			continue
-		}
-		provider, ok := providersByID[account.ProviderID]
-		if !ok || provider.Status == ProviderStatusDisabled {
-			continue
-		}
-		for _, model := range account.Models {
-			modelSet[model] = struct{}{}
-		}
-	}
-	models := make([]string, 0, len(modelSet))
-	for model := range modelSet {
-		models = append(models, model)
-	}
-	sort.Strings(models)
-	return models, nil
+	sort.Strings(result)
+	return result, nil
 }
 
 // providerAccountFailureCooldown is the default cooldown applied to an
@@ -1483,57 +1265,56 @@ func (s *Service) GatewayProviderForModel(ctx context.Context, model string) (Ga
 	return selected, true, nil
 }
 
-// GatewayProviderCandidatesForModel returns the ordered list of routes that
-// the gateway should try for model, most preferred first. When a schedulable
-// provider account pool exists for the model, hasAccountPool is true and the
-// candidates are drawn exclusively from that pool (falling back to a direct
-// provider connection is intentionally not mixed in, matching the existing
-// "account pool takes over routing for this model" behavior). Callers are
-// expected to attempt each candidate in order until one succeeds, acquiring a
-// concurrency slot (via TryAcquireProviderAccountSlot) before forwarding and
-// calling RecordProviderAccountFailure on account-side failures so that the
-// next attempt (in this request or a later one) skips a just-failed account.
+// GatewayProviderCandidatesForModel resolves an external model identifier and
+// route group through explicit model_routes. Provider model arrays are only
+// capability declarations; they never expose or route a gateway model by
+// themselves.
 func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model string) ([]GatewayProvider, bool, error) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return nil, false, nil
-	}
-	candidates, hasAccountPool, err := s.rankedProviderAccountCandidates(ctx, model)
-	if err != nil {
+	resolved, found, err := s.ResolveGatewayModel(ctx, model)
+	if err != nil || !found {
 		return nil, false, err
 	}
-	if hasAccountPool {
-		if len(candidates) == 0 {
-			return nil, true, nil
-		}
-		routes := make([]GatewayProvider, 0, len(candidates))
-		for _, entry := range candidates {
-			secret, err := decryptSecret(s.secretKey, entry.account.SecretCiphertext)
-			if err != nil {
-				return nil, true, err
-			}
-			routes = append(routes, GatewayProvider{
-				ID:              entry.provider.ID,
-				Name:            entry.provider.Name,
-				BaseURL:         entry.provider.BaseURL,
-				APIKey:          secret,
-				AccountID:       entry.account.ID,
-				AccountName:     entry.account.Name,
-				Concurrency:     entry.account.Concurrency,
-				Source:          "provider_account",
-				SelectionReason: fmt.Sprintf("selected account %s by priority=%d load_ratio=%.4g rate_multiplier=%.4g", entry.account.ID, entry.account.Priority, entry.loadRatio, entry.account.RateMultiplier),
-			})
-		}
-		return routes, true, nil
-	}
-	route, ok, err := s.gatewayProviderConnectionForModel(ctx, model)
+	candidates, hasRoutes, err := s.rankedModelRouteCandidates(ctx, resolved)
 	if err != nil {
-		return nil, false, err
+		return nil, hasRoutes, err
 	}
-	if !ok {
-		return nil, false, nil
+	if len(candidates) == 0 {
+		return nil, hasRoutes, nil
 	}
-	return []GatewayProvider{route}, false, nil
+	routes := make([]GatewayProvider, 0, len(candidates))
+	for _, entry := range candidates {
+		secret, err := decryptSecret(s.secretKey, entry.account.SecretCiphertext)
+		if err != nil {
+			return nil, true, err
+		}
+		routes = append(routes, GatewayProvider{
+			ID:               entry.provider.ID,
+			Name:             entry.provider.Name,
+			BaseURL:          entry.provider.BaseURL,
+			APIKey:           secret,
+			AccountID:        entry.account.ID,
+			AccountName:      entry.account.Name,
+			Concurrency:      entry.account.Concurrency,
+			GatewayModelID:   resolved.GatewayModel.ID,
+			RequestedModel:   resolved.RequestedID,
+			UpstreamModel:    entry.route.UpstreamModel,
+			RouteID:          entry.route.ID,
+			RouteGroup:       resolved.RouteGroup,
+			RoutePriority:    entry.route.Priority,
+			RouteWeight:      entry.route.Weight,
+			AccountWeight:    entry.account.Weight,
+			RPMLimit:         entry.account.RPMLimit,
+			TPMLimit:         entry.account.TPMLimit,
+			CircuitState:     entry.circuitState,
+			CircuitProbe:     entry.circuitProbe,
+			Headroom:         entry.headroom,
+			StickyEnabled:    resolved.GatewayModel.StickyEnabled,
+			StickyTTLSeconds: resolved.GatewayModel.StickyTTLSeconds,
+			Source:           "model_route",
+			SelectionReason:  fmt.Sprintf("selected route %s group=%s route_priority=%d account_priority=%d headroom=%.4g load_ratio=%.4g circuit=%s", entry.route.ID, resolved.RouteGroup, entry.route.Priority, entry.account.Priority, entry.headroom, entry.loadRatio, entry.circuitState),
+		})
+	}
+	return routes, true, nil
 }
 
 type rankedProviderAccountCandidate struct {
@@ -1622,6 +1403,21 @@ func (s *Service) RecordProviderAccountFailure(ctx context.Context, accountID st
 		return err
 	}
 	now := time.Now().UTC()
+	account.ConsecutiveFailures++
+	account.LastFailureAt = &now
+	threshold := account.CircuitFailureThreshold
+	if threshold <= 0 {
+		threshold = 5
+	}
+	openSeconds := account.CircuitOpenSeconds
+	if openSeconds <= 0 {
+		openSeconds = 60
+	}
+	if account.CircuitState == CircuitStateHalfOpen || account.ConsecutiveFailures >= threshold {
+		openedUntil := now.Add(time.Duration(openSeconds) * time.Second)
+		account.CircuitState = CircuitStateOpen
+		account.CircuitOpenedUntil = &openedUntil
+	}
 	if rule, keyword, ok := matchTempUnschedulableRule(account.TempUnschedulableRules, httpStatus, responseBodyPreview); ok {
 		cooldownUntil := now.Add(time.Duration(rule.DurationMinutes) * time.Minute)
 		account.CooldownUntil = &cooldownUntil
@@ -1632,6 +1428,23 @@ func (s *Service) RecordProviderAccountFailure(ctx context.Context, accountID st
 		account.TempUnschedulableReason = ""
 	}
 	account.UpdatedAt = now
+	return s.repo.SaveProviderAccount(ctx, account)
+}
+
+func (s *Service) RecordProviderAccountSuccess(ctx context.Context, accountID string) error {
+	if strings.TrimSpace(accountID) == "" {
+		return nil
+	}
+	account, err := s.providerAccountByID(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	account.CircuitState = CircuitStateClosed
+	account.ConsecutiveFailures = 0
+	account.CircuitOpenedUntil = nil
+	account.CooldownUntil = nil
+	account.TempUnschedulableReason = ""
+	account.UpdatedAt = time.Now().UTC()
 	return s.repo.SaveProviderAccount(ctx, account)
 }
 
@@ -1669,6 +1482,9 @@ func (s *Service) ClearProviderAccountCooldown(ctx context.Context, actor string
 		return ProviderAccount{}, err
 	}
 	account.CooldownUntil = nil
+	account.CircuitState = CircuitStateClosed
+	account.ConsecutiveFailures = 0
+	account.CircuitOpenedUntil = nil
 	account.TempUnschedulableReason = ""
 	account.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveProviderAccount(ctx, account); err != nil {
@@ -1678,34 +1494,6 @@ func (s *Service) ClearProviderAccountCooldown(ctx context.Context, actor string
 		return ProviderAccount{}, err
 	}
 	return account, nil
-}
-
-func (s *Service) gatewayProviderConnectionForModel(ctx context.Context, model string) (GatewayProvider, bool, error) {
-	providers, err := s.repo.ListProviders(ctx)
-	if err != nil {
-		return GatewayProvider{}, false, err
-	}
-	for _, provider := range providers {
-		if provider.Status != ProviderStatusActive || !provider.SecretConfigured || provider.SecretCiphertext == "" {
-			continue
-		}
-		if !contains(provider.Models, model) {
-			continue
-		}
-		secret, err := decryptSecret(s.secretKey, provider.SecretCiphertext)
-		if err != nil {
-			return GatewayProvider{}, false, err
-		}
-		return GatewayProvider{
-			ID:              provider.ID,
-			Name:            provider.Name,
-			BaseURL:         provider.BaseURL,
-			APIKey:          secret,
-			Source:          "provider_connection",
-			SelectionReason: fmt.Sprintf("selected provider %s by priority=%d", provider.ID, provider.Priority),
-		}, true, nil
-	}
-	return GatewayProvider{}, false, nil
 }
 
 func (s *Service) Health(ctx context.Context) error {
@@ -1727,45 +1515,6 @@ func (s *Service) audit(ctx context.Context, actor, action, resourceType, resour
 	})
 }
 
-func (s *Service) enrichProjectBudgets(ctx context.Context, projects []Project) ([]Project, error) {
-	month := monthStart(time.Now().UTC())
-	out := append([]Project(nil), projects...)
-	for i := range out {
-		used, err := s.repo.SumUsageCostCentsByProjectSince(ctx, out[i].ID, month)
-		if err != nil {
-			return nil, err
-		}
-		out[i].CurrentMonthCostCents = used
-		out[i].BudgetRemainingCents = out[i].MonthlyBudgetCents - used
-		out[i].BudgetStatus = projectBudgetStatus(out[i].MonthlyBudgetCents, used)
-		if out[i].MonthlyBudgetCents > 0 {
-			out[i].BudgetUsedPercent = percent(used, out[i].MonthlyBudgetCents)
-		}
-		if err := s.syncProjectBudgetAlert(ctx, out[i]); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func projectBudgetStatus(budgetCents int, usedCents int) string {
-	if budgetCents <= 0 {
-		return "unlimited"
-	}
-	if usedCents >= budgetCents {
-		return "exceeded"
-	}
-	if percent(usedCents, budgetCents) >= 80 {
-		return "warning"
-	}
-	return "ok"
-}
-
-func (s *Service) projectExists(ctx context.Context, id string) error {
-	_, err := s.projectByID(ctx, id)
-	return err
-}
-
 func (s *Service) providerByID(ctx context.Context, id string) (ProviderConnection, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -1781,45 +1530,6 @@ func (s *Service) providerByID(ctx context.Context, id string) (ProviderConnecti
 		}
 	}
 	return ProviderConnection{}, fmt.Errorf("provider %q not found", id)
-}
-
-func (s *Service) projectByID(ctx context.Context, id string) (Project, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return Project{}, errors.New("project_id is required")
-	}
-	projects, err := s.repo.ListProjects(ctx)
-	if err != nil {
-		return Project{}, err
-	}
-	for _, project := range projects {
-		if project.ID == id {
-			return project, nil
-		}
-	}
-	return Project{}, fmt.Errorf("project %q not found", id)
-}
-
-func (s *Service) applicationExists(ctx context.Context, id string) error {
-	_, err := s.applicationByID(ctx, id)
-	return err
-}
-
-func (s *Service) applicationByID(ctx context.Context, id string) (Application, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return Application{}, errors.New("application_id is required")
-	}
-	apps, err := s.repo.ListApplications(ctx, "")
-	if err != nil {
-		return Application{}, err
-	}
-	for _, app := range apps {
-		if app.ID == id {
-			return app, nil
-		}
-	}
-	return Application{}, fmt.Errorf("application %q not found", id)
 }
 
 func (s *Service) routingGroupByID(ctx context.Context, id string) (RoutingGroup, error) {
@@ -1966,68 +1676,21 @@ func providerFromRequest(req ProviderRequest, now time.Time) (ProviderConnection
 	}, nil
 }
 
-func projectFromRequest(req ProjectRequest, now time.Time) (Project, error) {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return Project{}, errors.New("name is required")
-	}
-	status := req.Status
-	if status == "" {
-		status = ProjectStatusActive
-	}
-	if !oneOf(status, ProjectStatusActive, ProjectStatusArchived) {
-		return Project{}, errors.New("status must be active or archived")
-	}
-	if req.MonthlyBudgetCents < 0 {
-		return Project{}, errors.New("monthly_budget_cents must be greater than or equal to 0")
-	}
-	return Project{
-		Name:               name,
-		Description:        strings.TrimSpace(req.Description),
-		CostCenter:         strings.TrimSpace(req.CostCenter),
-		MonthlyBudgetCents: req.MonthlyBudgetCents,
-		PolicyID:           strings.TrimSpace(req.PolicyID),
-		Status:             status,
-		CreatedAt:          now,
-		UpdatedAt:          now,
-	}, nil
-}
-
-func applicationFromRequest(req ApplicationRequest, now time.Time) (Application, error) {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return Application{}, errors.New("name is required")
-	}
-	environment := strings.TrimSpace(req.Environment)
-	if environment == "" {
-		environment = "dev"
-	}
-	status := req.Status
-	if status == "" {
-		status = ApplicationStatusActive
-	}
-	if !oneOf(status, ApplicationStatusActive, ApplicationStatusDisabled) {
-		return Application{}, errors.New("status must be active or disabled")
-	}
-	return Application{
-		ProjectID:   strings.TrimSpace(req.ProjectID),
-		Name:        name,
-		Environment: environment,
-		Owner:       strings.TrimSpace(req.Owner),
-		Status:      status,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}, nil
-}
-
 func routingGroupFromRequest(req RoutingGroupRequest, now time.Time) (RoutingGroup, error) {
 	name := strings.TrimSpace(req.Name)
 	platform := strings.TrimSpace(req.Platform)
+	groupType := strings.TrimSpace(req.GroupType)
 	if name == "" {
 		return RoutingGroup{}, errors.New("name is required")
 	}
 	if platform == "" {
 		return RoutingGroup{}, errors.New("platform is required")
+	}
+	if groupType == "" {
+		groupType = RoutingGroupTypeStandard
+	}
+	if !oneOf(groupType, RoutingGroupTypeStandard, RoutingGroupTypeSubscription, RoutingGroupTypeExclusive, RoutingGroupTypeImageGeneration, RoutingGroupTypeVideoGeneration) {
+		return RoutingGroup{}, errors.New("group_type must be standard, subscription, exclusive, image_generation, or video_generation")
 	}
 	status := req.Status
 	if status == "" {
@@ -2043,16 +1706,185 @@ func routingGroupFromRequest(req RoutingGroupRequest, now time.Time) (RoutingGro
 	if rateMultiplier < 0 {
 		return RoutingGroup{}, errors.New("rate_multiplier must be greater than or equal to 0")
 	}
+	if req.RPMLimit < 0 {
+		return RoutingGroup{}, errors.New("rpm_limit must be greater than or equal to 0")
+	}
+	if err := validateNonNegativeIntFields(map[string]int{
+		"daily_budget_cents":      req.DailyBudgetCents,
+		"weekly_budget_cents":     req.WeeklyBudgetCents,
+		"monthly_budget_cents":    req.MonthlyBudgetCents,
+		"image_price_1k_cents":    req.ImagePrice1KCents,
+		"image_price_2k_cents":    req.ImagePrice2KCents,
+		"image_price_4k_cents":    req.ImagePrice4KCents,
+		"video_price_480p_cents":  req.VideoPrice480PCents,
+		"video_price_720p_cents":  req.VideoPrice720PCents,
+		"video_price_1080p_cents": req.VideoPrice1080PCents,
+	}); err != nil {
+		return RoutingGroup{}, err
+	}
+	imageRateMultiplier := req.ImageRateMultiplier
+	if imageRateMultiplier == 0 {
+		imageRateMultiplier = 1
+	}
+	videoRateMultiplier := req.VideoRateMultiplier
+	if videoRateMultiplier == 0 {
+		videoRateMultiplier = 1
+	}
+	batchImageDiscountMultiplier := req.BatchImageDiscountMultiplier
+	if batchImageDiscountMultiplier == 0 {
+		batchImageDiscountMultiplier = 1
+	}
+	peakRateMultiplier := req.PeakRateMultiplier
+	if peakRateMultiplier == 0 {
+		peakRateMultiplier = 1
+	}
+	if err := validateNonNegativeFloatFields(map[string]float64{
+		"image_rate_multiplier":           imageRateMultiplier,
+		"video_rate_multiplier":           videoRateMultiplier,
+		"batch_image_discount_multiplier": batchImageDiscountMultiplier,
+		"peak_rate_multiplier":            peakRateMultiplier,
+	}); err != nil {
+		return RoutingGroup{}, err
+	}
+	isExclusive := req.IsExclusive
+	dailyBudgetCents := req.DailyBudgetCents
+	weeklyBudgetCents := req.WeeklyBudgetCents
+	monthlyBudgetCents := req.MonthlyBudgetCents
+	imageEnabled := req.ImageEnabled
+	batchImageEnabled := req.BatchImageEnabled
+	imagePrice1KCents := req.ImagePrice1KCents
+	imagePrice2KCents := req.ImagePrice2KCents
+	imagePrice4KCents := req.ImagePrice4KCents
+	videoEnabled := req.VideoEnabled
+	videoPrice480PCents := req.VideoPrice480PCents
+	videoPrice720PCents := req.VideoPrice720PCents
+	videoPrice1080PCents := req.VideoPrice1080PCents
+	peakRateEnabled := req.PeakRateEnabled
+	switch groupType {
+	case RoutingGroupTypeStandard:
+		dailyBudgetCents = 0
+		weeklyBudgetCents = 0
+		monthlyBudgetCents = 0
+		imageEnabled = false
+		batchImageEnabled = false
+		imagePrice1KCents = 0
+		imagePrice2KCents = 0
+		imagePrice4KCents = 0
+		videoEnabled = false
+		videoPrice480PCents = 0
+		videoPrice720PCents = 0
+		videoPrice1080PCents = 0
+		peakRateEnabled = false
+	case RoutingGroupTypeSubscription:
+		if req.DailyBudgetCents == 0 && req.WeeklyBudgetCents == 0 && req.MonthlyBudgetCents == 0 {
+			return RoutingGroup{}, errors.New("subscription groups require at least one budget limit")
+		}
+		imageEnabled = false
+		batchImageEnabled = false
+		imagePrice1KCents = 0
+		imagePrice2KCents = 0
+		imagePrice4KCents = 0
+		videoEnabled = false
+		videoPrice480PCents = 0
+		videoPrice720PCents = 0
+		videoPrice1080PCents = 0
+	case RoutingGroupTypeExclusive:
+		isExclusive = true
+		dailyBudgetCents = 0
+		weeklyBudgetCents = 0
+		monthlyBudgetCents = 0
+		imageEnabled = false
+		batchImageEnabled = false
+		imagePrice1KCents = 0
+		imagePrice2KCents = 0
+		imagePrice4KCents = 0
+		videoEnabled = false
+		videoPrice480PCents = 0
+		videoPrice720PCents = 0
+		videoPrice1080PCents = 0
+		peakRateEnabled = false
+	case RoutingGroupTypeImageGeneration:
+		dailyBudgetCents = 0
+		weeklyBudgetCents = 0
+		monthlyBudgetCents = 0
+		imageEnabled = true
+		videoEnabled = false
+		videoPrice480PCents = 0
+		videoPrice720PCents = 0
+		videoPrice1080PCents = 0
+		peakRateEnabled = false
+	case RoutingGroupTypeVideoGeneration:
+		dailyBudgetCents = 0
+		weeklyBudgetCents = 0
+		monthlyBudgetCents = 0
+		videoEnabled = true
+		imageEnabled = false
+		batchImageEnabled = false
+		imagePrice1KCents = 0
+		imagePrice2KCents = 0
+		imagePrice4KCents = 0
+		peakRateEnabled = false
+	}
+	peakStart := strings.TrimSpace(req.PeakStart)
+	peakEnd := strings.TrimSpace(req.PeakEnd)
+	if peakRateEnabled && (peakStart == "" || peakEnd == "") {
+		return RoutingGroup{}, errors.New("peak_start and peak_end are required when peak_rate_enabled is true")
+	}
+	if !peakRateEnabled {
+		peakStart = ""
+		peakEnd = ""
+		peakRateMultiplier = 1
+	}
 	return RoutingGroup{
-		Name:           name,
-		Description:    strings.TrimSpace(req.Description),
-		Platform:       platform,
-		RateMultiplier: rateMultiplier,
-		Status:         status,
-		SortOrder:      req.SortOrder,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		Name:                         name,
+		Description:                  strings.TrimSpace(req.Description),
+		Platform:                     platform,
+		GroupType:                    groupType,
+		RateMultiplier:               rateMultiplier,
+		RPMLimit:                     req.RPMLimit,
+		IsExclusive:                  isExclusive,
+		DailyBudgetCents:             dailyBudgetCents,
+		WeeklyBudgetCents:            weeklyBudgetCents,
+		MonthlyBudgetCents:           monthlyBudgetCents,
+		ImageEnabled:                 imageEnabled,
+		BatchImageEnabled:            batchImageEnabled,
+		ImageRateMultiplier:          imageRateMultiplier,
+		BatchImageDiscountMultiplier: batchImageDiscountMultiplier,
+		ImagePrice1KCents:            imagePrice1KCents,
+		ImagePrice2KCents:            imagePrice2KCents,
+		ImagePrice4KCents:            imagePrice4KCents,
+		VideoEnabled:                 videoEnabled,
+		VideoRateMultiplier:          videoRateMultiplier,
+		VideoPrice480PCents:          videoPrice480PCents,
+		VideoPrice720PCents:          videoPrice720PCents,
+		VideoPrice1080PCents:         videoPrice1080PCents,
+		PeakRateEnabled:              peakRateEnabled,
+		PeakStart:                    peakStart,
+		PeakEnd:                      peakEnd,
+		PeakRateMultiplier:           peakRateMultiplier,
+		Status:                       status,
+		SortOrder:                    req.SortOrder,
+		CreatedAt:                    now,
+		UpdatedAt:                    now,
 	}, nil
+}
+
+func validateNonNegativeIntFields(values map[string]int) error {
+	for name, value := range values {
+		if value < 0 {
+			return fmt.Errorf("%s must be greater than or equal to 0", name)
+		}
+	}
+	return nil
+}
+
+func validateNonNegativeFloatFields(values map[string]float64) error {
+	for name, value := range values {
+		if value < 0 {
+			return fmt.Errorf("%s must be greater than or equal to 0", name)
+		}
+	}
+	return nil
 }
 
 func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defaultSchedulable bool) (ProviderAccount, error) {
@@ -2103,6 +1935,30 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 	if priority <= 0 {
 		priority = 50
 	}
+	weight := req.Weight
+	if weight == 0 {
+		weight = 100
+	}
+	if weight < 1 || weight > 10000 {
+		return ProviderAccount{}, errors.New("weight must be between 1 and 10000")
+	}
+	if req.RPMLimit < 0 || req.TPMLimit < 0 {
+		return ProviderAccount{}, errors.New("rpm_limit and tpm_limit must be greater than or equal to 0")
+	}
+	circuitFailureThreshold := req.CircuitFailureThreshold
+	if circuitFailureThreshold == 0 {
+		circuitFailureThreshold = 5
+	}
+	if circuitFailureThreshold < 1 || circuitFailureThreshold > 100 {
+		return ProviderAccount{}, errors.New("circuit_failure_threshold must be between 1 and 100")
+	}
+	circuitOpenSeconds := req.CircuitOpenSeconds
+	if circuitOpenSeconds == 0 {
+		circuitOpenSeconds = 60
+	}
+	if circuitOpenSeconds < 1 || circuitOpenSeconds > 86400 {
+		return ProviderAccount{}, errors.New("circuit_open_seconds must be between 1 and 86400")
+	}
 	rateMultiplier := req.RateMultiplier
 	if rateMultiplier == 0 {
 		rateMultiplier = 1
@@ -2127,24 +1983,30 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 		schedulable = *req.Schedulable
 	}
 	return ProviderAccount{
-		ProviderID:             providerID,
-		Name:                   name,
-		Platform:               platform,
-		AuthType:               authType,
-		Status:                 status,
-		Schedulable:            schedulable,
-		Priority:               priority,
-		Concurrency:            concurrency,
-		LoadFactor:             loadFactor,
-		RateMultiplier:         rateMultiplier,
-		Models:                 models,
-		GroupIDs:               cleanStringList(req.GroupIDs),
-		SecretConfigured:       strings.TrimSpace(req.Secret) != "",
-		SecretHint:             maskSecret(req.Secret),
-		ExpiresAt:              expiresAt,
-		TempUnschedulableRules: tempUnschedulableRules,
-		CreatedAt:              now,
-		UpdatedAt:              now,
+		ProviderID:              providerID,
+		Name:                    name,
+		Platform:                platform,
+		AuthType:                authType,
+		Status:                  status,
+		Schedulable:             schedulable,
+		Priority:                priority,
+		Weight:                  weight,
+		Concurrency:             concurrency,
+		RPMLimit:                req.RPMLimit,
+		TPMLimit:                req.TPMLimit,
+		LoadFactor:              loadFactor,
+		RateMultiplier:          rateMultiplier,
+		Models:                  models,
+		GroupIDs:                cleanStringList(req.GroupIDs),
+		SecretConfigured:        strings.TrimSpace(req.Secret) != "",
+		SecretHint:              maskSecret(req.Secret),
+		ExpiresAt:               expiresAt,
+		CircuitState:            CircuitStateClosed,
+		CircuitFailureThreshold: circuitFailureThreshold,
+		CircuitOpenSeconds:      circuitOpenSeconds,
+		TempUnschedulableRules:  tempUnschedulableRules,
+		CreatedAt:               now,
+		UpdatedAt:               now,
 	}, nil
 }
 

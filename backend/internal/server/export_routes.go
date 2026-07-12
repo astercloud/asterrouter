@@ -111,7 +111,7 @@ func exportJobKind(c *gin.Context) string {
 }
 
 func exportJobParameters(c *gin.Context) map[string]string {
-	keys := []string{"q", "model", "status", "project_id", "application_id", "api_key_id", "action", "resource_type", "from", "to", "limit", "offset"}
+	keys := []string{"q", "model", "status", "api_key_id", "action", "resource_type", "from", "to", "limit", "offset"}
 	parameters := map[string]string{}
 	for _, key := range keys {
 		value := strings.TrimSpace(c.Query(key))
@@ -239,15 +239,14 @@ func collectAuditLogsForExportQuery(ctx context.Context, control *controlplane.S
 }
 
 func usageCSVRows(records []controlplane.UsageRecord) [][]string {
-	rows := [][]string{{"time", "project_id", "application_id", "api_key_id", "api_fingerprint", "model", "provider_id", "provider_account_id", "status", "error_type", "input_tokens", "output_tokens", "cost_cents", "latency_ms"}}
+	rows := [][]string{{"time", "api_key_id", "api_fingerprint", "model", "upstream_model", "provider_id", "provider_account_id", "status", "error_type", "input_tokens", "output_tokens", "cost_cents", "latency_ms"}}
 	for _, record := range records {
 		rows = append(rows, []string{
 			record.CreatedAt.Format(time.RFC3339),
-			record.ProjectID,
-			record.ApplicationID,
 			record.APIKeyID,
 			record.APIFingerprint,
 			record.Model,
+			record.UpstreamModel,
 			record.ProviderID,
 			record.ProviderAccountID,
 			record.Status,
@@ -262,17 +261,12 @@ func usageCSVRows(records []controlplane.UsageRecord) [][]string {
 }
 
 func costAllocationCSVRows(report controlplane.CostAllocationReport) [][]string {
-	rows := [][]string{{"dimension", "resource_id", "resource_name", "project_id", "project_name", "cost_center", "application_id", "application_name", "api_key_id", "api_key_name", "api_fingerprint", "model", "requests", "error_requests", "total_tokens", "total_cost_cents", "avg_latency_ms", "budget_cents", "budget_used_percent", "cost_share_percent"}}
+	rows := [][]string{{"dimension", "resource_id", "resource_name", "api_key_id", "api_key_name", "api_fingerprint", "model", "requests", "error_requests", "total_tokens", "total_cost_cents", "avg_latency_ms", "budget_cents", "budget_used_percent", "cost_share_percent"}}
 	for _, row := range report.Rows {
 		rows = append(rows, []string{
 			row.Dimension,
 			row.ResourceID,
 			row.ResourceName,
-			row.ProjectID,
-			row.ProjectName,
-			row.CostCenter,
-			row.ApplicationID,
-			row.ApplicationName,
 			row.APIKeyID,
 			row.APIKeyName,
 			row.APIFingerprint,
@@ -299,12 +293,10 @@ func writeCostAllocationError(c *gin.Context, err error) {
 }
 
 func gatewayTraceCSVRows(traces []controlplane.GatewayTrace) [][]string {
-	rows := [][]string{{"time", "project_id", "application_id", "api_key_id", "api_fingerprint", "model", "stream", "message_count", "provider_id", "provider_account_id", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_version", "policy_snapshot", "status", "http_status", "error_type", "input_tokens", "output_tokens", "latency_ms", "request_summary", "response_summary", "route_attempts"}}
+	rows := [][]string{{"time", "api_key_id", "api_fingerprint", "model", "stream", "message_count", "provider_id", "provider_account_id", "gateway_model_id", "route_id", "route_group", "upstream_model", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_version", "policy_snapshot", "status", "http_status", "error_type", "input_tokens", "output_tokens", "latency_ms", "request_summary", "response_summary", "route_attempts"}}
 	for _, trace := range traces {
 		rows = append(rows, []string{
 			trace.CreatedAt.Format(time.RFC3339),
-			trace.ProjectID,
-			trace.ApplicationID,
 			trace.APIKeyID,
 			trace.APIFingerprint,
 			trace.Model,
@@ -312,6 +304,10 @@ func gatewayTraceCSVRows(traces []controlplane.GatewayTrace) [][]string {
 			strconv.Itoa(trace.MessageCount),
 			trace.ProviderID,
 			trace.ProviderAccountID,
+			trace.GatewayModelID,
+			trace.RouteID,
+			trace.RouteGroup,
+			trace.UpstreamModel,
 			trace.RouteSource,
 			trace.RouteReason,
 			trace.PolicyID,
@@ -401,31 +397,30 @@ func exportOffset(c *gin.Context) int {
 
 func usageQuery(c *gin.Context) controlplane.UsageQuery {
 	return controlplane.UsageQuery{
-		Limit:         intQuery(c, "limit", 50),
-		Offset:        intQuery(c, "offset", 0),
-		Search:        strings.TrimSpace(c.Query("q")),
-		APIKeyID:      strings.TrimSpace(c.Query("api_key_id")),
-		Model:         strings.TrimSpace(c.Query("model")),
-		Status:        strings.TrimSpace(c.Query("status")),
-		ProjectID:     strings.TrimSpace(c.Query("project_id")),
-		ApplicationID: strings.TrimSpace(c.Query("application_id")),
-		CreatedFrom:   timeQuery(c, "from"),
-		CreatedTo:     timeQuery(c, "to"),
+		Limit:       intQuery(c, "limit", 50),
+		Offset:      intQuery(c, "offset", 0),
+		Search:      strings.TrimSpace(c.Query("q")),
+		APIKeyID:    strings.TrimSpace(c.Query("api_key_id")),
+		CustomerID:  strings.TrimSpace(c.Query("customer_id")),
+		Model:       strings.TrimSpace(c.Query("model")),
+		ProviderID:  strings.TrimSpace(c.Query("provider_id")),
+		AccountID:   strings.TrimSpace(c.Query("provider_account_id")),
+		Status:      strings.TrimSpace(c.Query("status")),
+		CreatedFrom: timeQuery(c, "from"),
+		CreatedTo:   timeQuery(c, "to"),
 	}
 }
 
 func gatewayTraceQuery(c *gin.Context) controlplane.GatewayTraceQuery {
 	return controlplane.GatewayTraceQuery{
-		Limit:         intQuery(c, "limit", 50),
-		Offset:        intQuery(c, "offset", 0),
-		Search:        strings.TrimSpace(c.Query("q")),
-		APIKeyID:      strings.TrimSpace(c.Query("api_key_id")),
-		Model:         strings.TrimSpace(c.Query("model")),
-		Status:        strings.TrimSpace(c.Query("status")),
-		ProjectID:     strings.TrimSpace(c.Query("project_id")),
-		ApplicationID: strings.TrimSpace(c.Query("application_id")),
-		CreatedFrom:   timeQuery(c, "from"),
-		CreatedTo:     timeQuery(c, "to"),
+		Limit:       intQuery(c, "limit", 50),
+		Offset:      intQuery(c, "offset", 0),
+		Search:      strings.TrimSpace(c.Query("q")),
+		APIKeyID:    strings.TrimSpace(c.Query("api_key_id")),
+		Model:       strings.TrimSpace(c.Query("model")),
+		Status:      strings.TrimSpace(c.Query("status")),
+		CreatedFrom: timeQuery(c, "from"),
+		CreatedTo:   timeQuery(c, "to"),
 	}
 }
 

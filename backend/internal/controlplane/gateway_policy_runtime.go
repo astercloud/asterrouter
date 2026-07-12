@@ -14,12 +14,12 @@ func (s *Service) validateGovernancePolicyReference(ctx context.Context, policyI
 	return err
 }
 
-func (s *Service) effectiveGatewayPolicy(ctx context.Context, key APIKeyRecord, project Project) (*GovernancePolicy, string, error) {
+func (s *Service) effectiveGatewayPolicy(ctx context.Context, key APIKeyRecord) (*GovernancePolicy, string, error) {
 	policies, err := s.repo.ListGovernancePolicies(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-	policy, source := effectiveGatewayPolicyFromPolicies(policies, key, project)
+	policy, source := effectiveGatewayPolicyFromPolicies(policies, key)
 	return policy, source, nil
 }
 
@@ -28,15 +28,19 @@ func (s *Service) gatewayModelAllowed(auth GatewayAuthContext, model string) boo
 	if model == "" {
 		return false
 	}
+	baseModel := model
+	if separator := strings.LastIndex(model, ":"); separator > 0 {
+		baseModel = model[:separator]
+	}
 	if auth.Policy != nil {
-		if contains(auth.Policy.ModelDenylist, model) {
+		if contains(auth.Policy.ModelDenylist, model) || contains(auth.Policy.ModelDenylist, baseModel) {
 			return false
 		}
 		if len(auth.Policy.ModelAllowlist) > 0 {
-			return contains(auth.Policy.ModelAllowlist, model)
+			return contains(auth.Policy.ModelAllowlist, model) || contains(auth.Policy.ModelAllowlist, baseModel)
 		}
 	}
-	return contains(auth.APIKey.ModelAllowlist, model)
+	return contains(auth.APIKey.ModelAllowlist, model) || contains(auth.APIKey.ModelAllowlist, baseModel)
 }
 
 func (auth GatewayAuthContext) effectiveQPSLimit() int {
@@ -57,7 +61,7 @@ func (auth GatewayAuthContext) effectiveMonthlyBudgetCents() int {
 	if auth.Policy != nil && auth.Policy.MonthlyBudgetCents > 0 {
 		return auth.Policy.MonthlyBudgetCents
 	}
-	return auth.Project.MonthlyBudgetCents
+	return 0
 }
 
 func (auth GatewayAuthContext) shouldBlockOverage() bool {
@@ -89,8 +93,8 @@ func activePolicyByScope(policies []GovernancePolicy, scopeType string, scopeID 
 	return GovernancePolicy{}, false
 }
 
-func effectiveGatewayPolicyFromPolicies(policies []GovernancePolicy, key APIKeyRecord, project Project) (*GovernancePolicy, string) {
-	explanation := explainGatewayPolicy(policies, key, project)
+func effectiveGatewayPolicyFromPolicies(policies []GovernancePolicy, key APIKeyRecord) (*GovernancePolicy, string) {
+	explanation := explainGatewayPolicy(policies, key)
 	if explanation.SelectedPolicyID == "" {
 		return nil, ""
 	}
@@ -103,16 +107,13 @@ func effectiveGatewayPolicyFromPolicies(policies []GovernancePolicy, key APIKeyR
 	return nil, ""
 }
 
-func explainGatewayPolicy(policies []GovernancePolicy, key APIKeyRecord, project Project) GatewayPolicyExplanation {
+func explainGatewayPolicy(policies []GovernancePolicy, key APIKeyRecord) GatewayPolicyExplanation {
 	explanation := GatewayPolicyExplanation{
-		APIKeyID:  key.ID,
-		ProjectID: project.ID,
+		APIKeyID: key.ID,
 	}
 	sources := []gatewayPolicyCandidateSource{
 		{Source: GatewayPolicySourceAPIKeyExplicit, ExplicitPolicyID: key.PolicyID, MissingReason: "api key explicit policy reference not found"},
 		{Source: GatewayPolicySourceAPIKeyScope, ScopeType: GovernancePolicyScopeAPIKey, ScopeID: key.ID},
-		{Source: GatewayPolicySourceProjectExplicit, ExplicitPolicyID: project.PolicyID, MissingReason: "project explicit policy reference not found"},
-		{Source: GatewayPolicySourceProjectScope, ScopeType: GovernancePolicyScopeProject, ScopeID: project.ID},
 		{Source: GatewayPolicySourceGlobalScope, ScopeType: GovernancePolicyScopeGlobal, ScopeID: ""},
 	}
 	for _, source := range sources {

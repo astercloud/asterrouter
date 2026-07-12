@@ -9,10 +9,8 @@ import (
 )
 
 const (
-	CostAllocationByProject     = "project"
-	CostAllocationByApplication = "application"
-	CostAllocationByAPIKey      = "api_key"
-	CostAllocationByModel       = "model"
+	CostAllocationByAPIKey = "api_key"
+	CostAllocationByModel  = "model"
 )
 
 var ErrInvalidCostAllocationDimension = errors.New("invalid cost allocation dimension")
@@ -30,35 +28,18 @@ func (s *Service) CostAllocationReportQuery(ctx context.Context, dimension strin
 	if err != nil {
 		return CostAllocationReport{}, err
 	}
-	projects, err := s.repo.ListProjects(ctx)
+	keys, err := s.repo.ListAPIKeys(ctx)
 	if err != nil {
 		return CostAllocationReport{}, err
 	}
-	applications, err := s.repo.ListApplications(ctx, "")
-	if err != nil {
-		return CostAllocationReport{}, err
-	}
-	apiKeys, err := s.repo.ListAPIKeys(ctx)
-	if err != nil {
-		return CostAllocationReport{}, err
-	}
-
-	projectByID := make(map[string]Project, len(projects))
-	for _, project := range projects {
-		projectByID[project.ID] = project
-	}
-	appByID := make(map[string]Application, len(applications))
-	for _, app := range applications {
-		appByID[app.ID] = app
-	}
-	keyByID := make(map[string]APIKeyRecord, len(apiKeys))
-	for _, key := range apiKeys {
+	keyByID := make(map[string]APIKeyRecord, len(keys))
+	for _, key := range keys {
 		keyByID[key.ID] = key
 	}
 
 	rows := make([]CostAllocationRow, 0, len(rollups))
 	for _, rollup := range rollups {
-		rows = append(rows, costAllocationRow(dimension, rollup, aggregate.TotalCostCents, projectByID, appByID, keyByID))
+		rows = append(rows, costAllocationRow(dimension, rollup, aggregate.TotalCostCents, keyByID))
 	}
 	return CostAllocationReport{
 		Dimension:      dimension,
@@ -74,21 +55,17 @@ func (s *Service) CostAllocationReportQuery(ctx context.Context, dimension strin
 func normalizeCostAllocationDimension(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return CostAllocationByProject, nil
+		return CostAllocationByAPIKey, nil
 	}
-	switch value {
-	case CostAllocationByProject, CostAllocationByApplication, CostAllocationByAPIKey, CostAllocationByModel:
-		return value, nil
-	default:
+	if value != CostAllocationByAPIKey && value != CostAllocationByModel {
 		return "", ErrInvalidCostAllocationDimension
 	}
+	return value, nil
 }
 
-func costAllocationRow(dimension string, rollup CostAllocationRollup, totalCostCents int, projects map[string]Project, applications map[string]Application, apiKeys map[string]APIKeyRecord) CostAllocationRow {
+func costAllocationRow(dimension string, rollup CostAllocationRollup, totalCostCents int, apiKeys map[string]APIKeyRecord) CostAllocationRow {
 	row := CostAllocationRow{
 		Dimension:      dimension,
-		ProjectID:      rollup.ProjectID,
-		ApplicationID:  rollup.ApplicationID,
 		APIKeyID:       rollup.APIKeyID,
 		APIFingerprint: rollup.APIFingerprint,
 		Model:          rollup.Model,
@@ -98,54 +75,24 @@ func costAllocationRow(dimension string, rollup CostAllocationRollup, totalCostC
 		TotalCostCents: rollup.TotalCostCents,
 		AvgLatencyMS:   rollup.AvgLatencyMS,
 	}
-
 	if key, ok := apiKeys[row.APIKeyID]; ok {
 		row.APIKeyName = key.Name
 		if row.APIFingerprint == "" {
 			row.APIFingerprint = key.Fingerprint
 		}
-		if row.ProjectID == "" {
-			row.ProjectID = key.ProjectID
-		}
-		if row.ApplicationID == "" {
-			row.ApplicationID = key.ApplicationID
-		}
-	}
-	if app, ok := applications[row.ApplicationID]; ok {
-		row.ApplicationName = app.Name
-		if row.ProjectID == "" {
-			row.ProjectID = app.ProjectID
-		}
-	}
-	if project, ok := projects[row.ProjectID]; ok {
-		row.ProjectName = project.Name
-		row.CostCenter = project.CostCenter
-		row.BudgetCents = project.MonthlyBudgetCents
-		if row.BudgetCents > 0 {
-			row.BudgetUsedPercent = percent(row.TotalCostCents, row.BudgetCents)
-		}
 	}
 	if totalCostCents > 0 {
 		row.CostSharePercent = percent(row.TotalCostCents, totalCostCents)
 	}
-
 	row.ResourceID, row.ResourceName = costAllocationResource(dimension, row)
 	return row
 }
 
 func costAllocationResource(dimension string, row CostAllocationRow) (string, string) {
-	switch dimension {
-	case CostAllocationByProject:
-		return firstNonEmpty(row.ProjectID, "unassigned"), firstNonEmpty(row.ProjectName, row.ProjectID, "Unassigned project")
-	case CostAllocationByApplication:
-		return firstNonEmpty(row.ApplicationID, "unassigned"), firstNonEmpty(row.ApplicationName, row.ApplicationID, "Unassigned application")
-	case CostAllocationByAPIKey:
-		return firstNonEmpty(row.APIKeyID, "unassigned"), firstNonEmpty(row.APIKeyName, row.APIFingerprint, row.APIKeyID, "Unassigned API key")
-	case CostAllocationByModel:
-		return firstNonEmpty(row.Model, "unknown_model"), firstNonEmpty(row.Model, "Unknown model")
-	default:
-		return "unknown", "Unknown"
+	if dimension == CostAllocationByAPIKey {
+		return firstNonEmpty(row.APIKeyID, "unassigned"), firstNonEmpty(row.APIKeyName, row.APIFingerprint, row.APIKeyID, "Unassigned workspace key")
 	}
+	return firstNonEmpty(row.Model, "unknown_model"), firstNonEmpty(row.Model, "Unknown model")
 }
 
 func percent(part int, total int) float64 {
@@ -169,19 +116,18 @@ func (r *MemoryRepository) SummarizeCostAllocation(_ context.Context, dimension 
 		if !memoryUsageRecordMatches(record, query) {
 			continue
 		}
-		key := costAllocationKey(dimension, record)
+		key := record.APIKeyID
+		if dimension == CostAllocationByModel {
+			key = record.Model
+		}
 		rollup := values[key]
 		if rollup == nil {
 			rollup = &CostAllocationRollup{
-				ProjectID:      record.ProjectID,
-				ApplicationID:  record.ApplicationID,
 				APIKeyID:       record.APIKeyID,
 				APIFingerprint: record.APIFingerprint,
 				Model:          record.Model,
 			}
 			if dimension == CostAllocationByModel {
-				rollup.ProjectID = ""
-				rollup.ApplicationID = ""
 				rollup.APIKeyID = ""
 				rollup.APIFingerprint = ""
 			}
@@ -195,7 +141,6 @@ func (r *MemoryRepository) SummarizeCostAllocation(_ context.Context, dimension 
 		rollup.TotalCostCents += record.CostCents
 		rollup.LatencyTotal += record.LatencyMS
 	}
-
 	out := make([]CostAllocationRollup, 0, len(values))
 	for _, rollup := range values {
 		if rollup.Requests > 0 {
@@ -203,7 +148,12 @@ func (r *MemoryRepository) SummarizeCostAllocation(_ context.Context, dimension 
 		}
 		out = append(out, *rollup)
 	}
-	sortCostAllocationRollups(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TotalCostCents == out[j].TotalCostCents {
+			return out[i].Requests > out[j].Requests
+		}
+		return out[i].TotalCostCents > out[j].TotalCostCents
+	})
 	limit, offset := normalizeListWindow(query.Limit, query.Offset, 100, 500)
 	if offset >= len(out) {
 		return []CostAllocationRollup{}, nil
@@ -213,21 +163,6 @@ func (r *MemoryRepository) SummarizeCostAllocation(_ context.Context, dimension 
 		end = len(out)
 	}
 	return out[offset:end], nil
-}
-
-func costAllocationKey(dimension string, record UsageRecord) string {
-	switch dimension {
-	case CostAllocationByProject:
-		return record.ProjectID
-	case CostAllocationByApplication:
-		return record.ProjectID + "\x00" + record.ApplicationID
-	case CostAllocationByAPIKey:
-		return record.APIKeyID
-	case CostAllocationByModel:
-		return record.Model
-	default:
-		return record.ProjectID
-	}
 }
 
 func (r *PostgresRepository) SummarizeCostAllocation(ctx context.Context, dimension string, query UsageQuery) ([]CostAllocationRollup, error) {
@@ -259,12 +194,11 @@ FROM usage_records`, selectFields)
 		return nil, err
 	}
 	defer rows.Close()
-
 	out := []CostAllocationRollup{}
 	for rows.Next() {
 		var rollup CostAllocationRollup
 		var requests, errorsCount, tokens, costCents, latencyTotal int64
-		if err := rows.Scan(&rollup.ProjectID, &rollup.ApplicationID, &rollup.APIKeyID, &rollup.APIFingerprint, &rollup.Model, &requests, &errorsCount, &tokens, &costCents, &latencyTotal); err != nil {
+		if err := rows.Scan(&rollup.APIKeyID, &rollup.APIFingerprint, &rollup.Model, &requests, &errorsCount, &tokens, &costCents, &latencyTotal); err != nil {
 			return nil, err
 		}
 		rollup.Requests = int(requests)
@@ -282,31 +216,11 @@ FROM usage_records`, selectFields)
 
 func costAllocationSQLGrouping(dimension string) (string, string, error) {
 	switch dimension {
-	case CostAllocationByProject:
-		return "project_id, '' AS application_id, '' AS api_key_id, '' AS api_fingerprint, '' AS model", "project_id", nil
-	case CostAllocationByApplication:
-		return "project_id, application_id, '' AS api_key_id, '' AS api_fingerprint, '' AS model", "project_id, application_id", nil
 	case CostAllocationByAPIKey:
-		return "MAX(project_id) AS project_id, MAX(application_id) AS application_id, api_key_id, MAX(api_fingerprint) AS api_fingerprint, '' AS model", "api_key_id", nil
+		return "api_key_id, MAX(api_fingerprint) AS api_fingerprint, '' AS model", "api_key_id", nil
 	case CostAllocationByModel:
-		return "'' AS project_id, '' AS application_id, '' AS api_key_id, '' AS api_fingerprint, model", "model", nil
+		return "'' AS api_key_id, '' AS api_fingerprint, model", "model", nil
 	default:
 		return "", "", ErrInvalidCostAllocationDimension
 	}
-}
-
-func sortCostAllocationRollups(rows []CostAllocationRollup) {
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].TotalCostCents == rows[j].TotalCostCents {
-			if rows[i].Requests == rows[j].Requests {
-				return costAllocationSortName(rows[i]) < costAllocationSortName(rows[j])
-			}
-			return rows[i].Requests > rows[j].Requests
-		}
-		return rows[i].TotalCostCents > rows[j].TotalCostCents
-	})
-}
-
-func costAllocationSortName(row CostAllocationRollup) string {
-	return firstNonEmpty(row.ProjectID, row.ApplicationID, row.APIKeyID, row.Model)
 }

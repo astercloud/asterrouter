@@ -27,6 +27,17 @@ type Repository interface {
 	FindPackageInstallation(ctx context.Context, pluginID string) (packageInstallationRecord, bool, error)
 	SaveLicense(ctx context.Context, record licenseRecord) error
 	LatestLicense(ctx context.Context) (licenseRecord, bool, error)
+	SavePluginAPIToken(ctx context.Context, record pluginAPITokenRecord) error
+	ListPluginAPITokens(ctx context.Context, pluginID string) ([]pluginAPITokenRecord, error)
+	FindPluginAPIToken(ctx context.Context, tokenHash string) (pluginAPITokenRecord, bool, error)
+	RevokePluginAPIToken(ctx context.Context, id string, updatedAt time.Time) error
+	TouchPluginAPIToken(ctx context.Context, id string, usedAt time.Time) error
+	SaveOfficialFeed(ctx context.Context, record officialFeedRecord) error
+	ListOfficialFeeds(ctx context.Context, serviceKey string) ([]officialFeedRecord, error)
+	LatestOfficialFeed(ctx context.Context, serviceKey string) (officialFeedRecord, bool, error)
+	UpdateOfficialFeedStatus(ctx context.Context, serviceKey string, feedID string, status string, updatedAt time.Time) error
+	SaveOfficialFeedSyncRun(ctx context.Context, record officialFeedSyncRunRecord) error
+	ListOfficialFeedSyncRuns(ctx context.Context, serviceKey string, limit int) ([]officialFeedSyncRunRecord, error)
 	Health(ctx context.Context) error
 	Close() error
 }

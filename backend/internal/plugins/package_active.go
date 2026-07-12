@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type sidecarManifest struct {
@@ -16,6 +17,7 @@ type sidecarManifest struct {
 	Version    string            `json:"version"`
 	Runtime    string            `json:"runtime"`
 	Entrypoint map[string]string `json:"entrypoint"`
+	DataFeeds  []string          `json:"data_feeds,omitempty"`
 }
 
 func inspectPackageRuntime(cachePath string) (string, bool, error) {
@@ -53,56 +55,85 @@ func inspectPackageRuntime(cachePath string) (string, bool, error) {
 	}
 }
 
-func (s *Service) activatePackage(record packageRecord, cachePath string) (string, error) {
+func (s *Service) activatePackage(record packageRecord, cachePath string) (runtime string, finalize func() error, rollback func() error, err error) {
 	activeDir := s.activePackageDir(record.PluginID, record.Version)
 	stageDir := activeDir + ".staging"
 	if err := os.RemoveAll(stageDir); err != nil {
-		return "", err
+		return "", nil, nil, err
 	}
 	if err := os.MkdirAll(stageDir, 0750); err != nil {
-		return "", fmt.Errorf("create plugin staging directory: %w", err)
+		return "", nil, nil, fmt.Errorf("create plugin staging directory: %w", err)
 	}
 	if err := extractTarGzip(cachePath, stageDir); err != nil {
 		_ = os.RemoveAll(stageDir)
-		return "", err
+		return "", nil, nil, err
 	}
 	manifest, err := readSidecarManifest(filepath.Join(stageDir, "plugin.json"))
 	if err != nil {
 		_ = os.RemoveAll(stageDir)
-		return "", err
+		return "", nil, nil, err
 	}
 	if manifest.ID != record.PluginID {
 		_ = os.RemoveAll(stageDir)
-		return "", fmt.Errorf("plugin manifest id mismatch")
+		return "", nil, nil, fmt.Errorf("plugin manifest id mismatch")
 	}
 	if manifest.Version != record.Version {
 		_ = os.RemoveAll(stageDir)
-		return "", fmt.Errorf("plugin manifest version mismatch")
+		return "", nil, nil, fmt.Errorf("plugin manifest version mismatch")
 	}
 	if manifest.Runtime == "sidecar" {
 		entrypoint, err := s.sidecarEntrypointFromManifest(stageDir, manifest)
 		if err != nil {
 			_ = os.RemoveAll(stageDir)
-			return "", err
+			return "", nil, nil, err
 		}
 		if err := os.Chmod(entrypoint, 0750); err != nil {
 			_ = os.RemoveAll(stageDir)
-			return "", fmt.Errorf("mark plugin sidecar executable: %w", err)
+			return "", nil, nil, fmt.Errorf("mark plugin sidecar executable: %w", err)
 		}
 	}
-	if err := os.RemoveAll(activeDir); err != nil {
+	backupDir := activeDir + ".previous-" + fmt.Sprint(time.Now().UnixNano())
+	hadPrevious := false
+	if _, statErr := os.Stat(activeDir); statErr == nil {
+		if err := os.Rename(activeDir, backupDir); err != nil {
+			_ = os.RemoveAll(stageDir)
+			return "", nil, nil, fmt.Errorf("stage previous plugin package: %w", err)
+		}
+		hadPrevious = true
+	} else if !os.IsNotExist(statErr) {
 		_ = os.RemoveAll(stageDir)
-		return "", err
+		return "", nil, nil, fmt.Errorf("inspect active plugin package: %w", statErr)
 	}
 	if err := os.MkdirAll(filepath.Dir(activeDir), 0750); err != nil {
 		_ = os.RemoveAll(stageDir)
-		return "", err
+		if hadPrevious {
+			_ = os.Rename(backupDir, activeDir)
+		}
+		return "", nil, nil, err
 	}
 	if err := os.Rename(stageDir, activeDir); err != nil {
 		_ = os.RemoveAll(stageDir)
-		return "", fmt.Errorf("activate plugin package: %w", err)
+		if hadPrevious {
+			_ = os.Rename(backupDir, activeDir)
+		}
+		return "", nil, nil, fmt.Errorf("activate plugin package: %w", err)
 	}
-	return manifest.Runtime, nil
+	finalize = func() error {
+		if !hadPrevious {
+			return nil
+		}
+		return os.RemoveAll(backupDir)
+	}
+	rollback = func() error {
+		if err := os.RemoveAll(activeDir); err != nil {
+			return err
+		}
+		if hadPrevious {
+			return os.Rename(backupDir, activeDir)
+		}
+		return nil
+	}
+	return manifest.Runtime, finalize, rollback, nil
 }
 
 func (s *Service) activePackageDir(pluginID string, version string) string {
@@ -143,6 +174,12 @@ func readSidecarManifest(path string) (sidecarManifest, error) {
 	}
 	if strings.TrimSpace(manifest.ID) == "" || strings.TrimSpace(manifest.Version) == "" {
 		return sidecarManifest{}, fmt.Errorf("plugin manifest is incomplete")
+	}
+	manifest.DataFeeds = cleanStringList(manifest.DataFeeds)
+	for _, serviceKey := range manifest.DataFeeds {
+		if serviceKey == "*" || sanitizeCatalogSlug(serviceKey) != serviceKey {
+			return sidecarManifest{}, fmt.Errorf("plugin manifest contains invalid data feed permission")
+		}
 	}
 	return manifest, nil
 }

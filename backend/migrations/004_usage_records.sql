@@ -1,10 +1,10 @@
 CREATE TABLE IF NOT EXISTS usage_records (
   id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  application_id TEXT NOT NULL,
   api_key_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL DEFAULT '',
   api_fingerprint TEXT NOT NULL,
   model TEXT NOT NULL,
+  upstream_model TEXT NOT NULL DEFAULT '',
   provider_id TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL,
   error_type TEXT NOT NULL DEFAULT '',

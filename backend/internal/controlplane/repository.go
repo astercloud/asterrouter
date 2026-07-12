@@ -18,14 +18,10 @@ type Repository interface {
 	SaveProvider(ctx context.Context, provider ProviderConnection) error
 	ListLatestProviderHealthChecks(ctx context.Context) ([]ProviderHealthCheck, error)
 	SaveProviderHealthCheck(ctx context.Context, check ProviderHealthCheck) error
-	ListProjects(ctx context.Context) ([]Project, error)
-	SaveProject(ctx context.Context, project Project) error
 	ListDepartments(ctx context.Context) ([]Department, error)
 	SaveDepartment(ctx context.Context, department Department) error
 	ListGovernancePolicies(ctx context.Context) ([]GovernancePolicy, error)
 	SaveGovernancePolicy(ctx context.Context, policy GovernancePolicy) error
-	ListApplications(ctx context.Context, projectID string) ([]Application, error)
-	SaveApplication(ctx context.Context, app Application) error
 	ListWorkspaceUsers(ctx context.Context) ([]WorkspaceUser, error)
 	SaveWorkspaceUser(ctx context.Context, user WorkspaceUser) error
 	ListRoleBindings(ctx context.Context) ([]RoleBinding, error)
@@ -35,6 +31,12 @@ type Repository interface {
 	SaveRoutingGroup(ctx context.Context, group RoutingGroup) error
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error)
 	SaveProviderAccount(ctx context.Context, account ProviderAccount) error
+	ListGatewayModels(ctx context.Context) ([]GatewayModel, error)
+	SaveGatewayModel(ctx context.Context, model GatewayModel) error
+	DeleteGatewayModel(ctx context.Context, id string) error
+	ListModelRoutes(ctx context.Context) ([]ModelRoute, error)
+	SaveModelRoute(ctx context.Context, route ModelRoute) error
+	DeleteModelRoute(ctx context.Context, id string) error
 	ListLatestProviderAccountHealthChecks(ctx context.Context) ([]ProviderAccountHealthCheck, error)
 	SaveProviderAccountHealthCheck(ctx context.Context, check ProviderAccountHealthCheck) error
 	ListModelPricings(ctx context.Context) ([]ModelPricing, error)
@@ -50,7 +52,7 @@ type Repository interface {
 	SummarizeUsageRecords(ctx context.Context, query UsageQuery) (UsageAggregate, error)
 	SummarizeCostAllocation(ctx context.Context, dimension string, query UsageQuery) ([]CostAllocationRollup, error)
 	SumUsageTokensByAPIKeySince(ctx context.Context, apiKeyID string, since time.Time) (int, error)
-	SumUsageCostCentsByProjectSince(ctx context.Context, projectID string, since time.Time) (int, error)
+	SumUsageCostCentsByAPIKeySince(ctx context.Context, apiKeyID string, since time.Time) (int, error)
 	SaveGatewayTrace(ctx context.Context, trace GatewayTrace) error
 	ListGatewayTraces(ctx context.Context, limit int) ([]GatewayTrace, error)
 	QueryGatewayTraces(ctx context.Context, query GatewayTraceQuery) ([]GatewayTrace, error)
@@ -83,14 +85,14 @@ type MemoryRepository struct {
 	mu                  sync.RWMutex
 	providers           map[string]ProviderConnection
 	healthChecks        map[string]ProviderHealthCheck
-	projects            map[string]Project
 	departments         map[string]Department
 	governancePolicies  map[string]GovernancePolicy
-	applications        map[string]Application
 	workspaceUsers      map[string]WorkspaceUser
 	roleBindings        map[string]RoleBinding
 	groups              map[string]RoutingGroup
 	accounts            map[string]ProviderAccount
+	gatewayModels       map[string]GatewayModel
+	modelRoutes         map[string]ModelRoute
 	accountHealthChecks map[string]ProviderAccountHealthCheck
 	modelPricings       map[string]ModelPricing
 	apiKeys             map[string]APIKeyRecord
@@ -104,14 +106,14 @@ func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		providers:           map[string]ProviderConnection{},
 		healthChecks:        map[string]ProviderHealthCheck{},
-		projects:            map[string]Project{},
 		departments:         map[string]Department{},
 		governancePolicies:  map[string]GovernancePolicy{},
-		applications:        map[string]Application{},
 		workspaceUsers:      map[string]WorkspaceUser{},
 		roleBindings:        map[string]RoleBinding{},
 		groups:              map[string]RoutingGroup{},
 		accounts:            map[string]ProviderAccount{},
+		gatewayModels:       map[string]GatewayModel{},
+		modelRoutes:         map[string]ModelRoute{},
 		accountHealthChecks: map[string]ProviderAccountHealthCheck{},
 		modelPricings:       map[string]ModelPricing{},
 		apiKeys:             map[string]APIKeyRecord{},
@@ -160,44 +162,6 @@ func (r *MemoryRepository) SaveProviderHealthCheck(_ context.Context, check Prov
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.healthChecks[check.ProviderID] = check
-	return nil
-}
-
-func (r *MemoryRepository) ListProjects(context.Context) ([]Project, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]Project, 0, len(r.projects))
-	for _, project := range r.projects {
-		out = append(out, project)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out, nil
-}
-
-func (r *MemoryRepository) SaveProject(_ context.Context, project Project) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.projects[project.ID] = project
-	return nil
-}
-
-func (r *MemoryRepository) ListApplications(_ context.Context, projectID string) ([]Application, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]Application, 0, len(r.applications))
-	for _, app := range r.applications {
-		if projectID == "" || app.ProjectID == projectID {
-			out = append(out, app)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out, nil
-}
-
-func (r *MemoryRepository) SaveApplication(_ context.Context, app Application) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.applications[app.ID] = app
 	return nil
 }
 
@@ -408,12 +372,12 @@ func (r *MemoryRepository) SumUsageTokensByAPIKeySince(_ context.Context, apiKey
 	return total, nil
 }
 
-func (r *MemoryRepository) SumUsageCostCentsByProjectSince(_ context.Context, projectID string, since time.Time) (int, error) {
+func (r *MemoryRepository) SumUsageCostCentsByAPIKeySince(_ context.Context, apiKeyID string, since time.Time) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var total int
 	for _, record := range r.usageRecords {
-		if record.ProjectID == projectID && !record.CreatedAt.Before(since) {
+		if record.APIKeyID == apiKeyID && !record.CreatedAt.Before(since) {
 			total += record.CostCents
 		}
 	}
@@ -549,16 +513,19 @@ func memoryUsageRecordMatches(record UsageRecord, query UsageQuery) bool {
 	if query.APIKeyID != "" && record.APIKeyID != query.APIKeyID {
 		return false
 	}
+	if query.CustomerID != "" && record.CustomerID != query.CustomerID {
+		return false
+	}
 	if query.Model != "" && record.Model != query.Model {
 		return false
 	}
+	if query.ProviderID != "" && record.ProviderID != query.ProviderID {
+		return false
+	}
+	if query.AccountID != "" && record.ProviderAccountID != query.AccountID {
+		return false
+	}
 	if query.Status != "" && record.Status != query.Status {
-		return false
-	}
-	if query.ProjectID != "" && record.ProjectID != query.ProjectID {
-		return false
-	}
-	if query.ApplicationID != "" && record.ApplicationID != query.ApplicationID {
 		return false
 	}
 	if !query.CreatedFrom.IsZero() && record.CreatedAt.Before(query.CreatedFrom) {
@@ -571,7 +538,7 @@ func memoryUsageRecordMatches(record UsageRecord, query UsageQuery) bool {
 	if keyword == "" {
 		return true
 	}
-	return anyContains(keyword, record.Model, record.Status, record.ErrorType, record.ProviderID, record.ProviderAccountID, record.APIKeyID, record.APIFingerprint, record.ProjectID, record.ApplicationID)
+	return anyContains(keyword, record.Model, record.Status, record.ErrorType, record.ProviderID, record.ProviderAccountID, record.APIKeyID, record.CustomerID, record.APIFingerprint)
 }
 
 func memoryGatewayTraceMatches(trace GatewayTrace, query GatewayTraceQuery) bool {
@@ -584,12 +551,6 @@ func memoryGatewayTraceMatches(trace GatewayTrace, query GatewayTraceQuery) bool
 	if query.Status != "" && trace.Status != query.Status {
 		return false
 	}
-	if query.ProjectID != "" && trace.ProjectID != query.ProjectID {
-		return false
-	}
-	if query.ApplicationID != "" && trace.ApplicationID != query.ApplicationID {
-		return false
-	}
 	if !query.CreatedFrom.IsZero() && trace.CreatedAt.Before(query.CreatedFrom) {
 		return false
 	}
@@ -600,7 +561,7 @@ func memoryGatewayTraceMatches(trace GatewayTrace, query GatewayTraceQuery) bool
 	if keyword == "" {
 		return true
 	}
-	return anyContains(keyword, trace.Model, trace.Status, trace.ErrorType, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicySnapshot, trace.APIKeyID, trace.APIFingerprint, trace.ProjectID, trace.ApplicationID, trace.RequestSummary, trace.ResponseSummary)
+	return anyContains(keyword, trace.Model, trace.Status, trace.ErrorType, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicySnapshot, trace.APIKeyID, trace.APIFingerprint, trace.RequestSummary, trace.ResponseSummary)
 }
 
 func memoryAuditLogMatches(event AuditLog, query AuditLogQuery) bool {
@@ -664,24 +625,23 @@ func appendTimeFilter(clauses *[]string, args *[]any, column string, operator st
 
 func appendUsageRecordFilters(clauses *[]string, args *[]any, query UsageQuery) {
 	appendExactFilter(clauses, args, "api_key_id", query.APIKeyID)
+	appendExactFilter(clauses, args, "customer_id", query.CustomerID)
 	appendExactFilter(clauses, args, "model", query.Model)
+	appendExactFilter(clauses, args, "provider_id", query.ProviderID)
+	appendExactFilter(clauses, args, "provider_account_id", query.AccountID)
 	appendExactFilter(clauses, args, "status", query.Status)
-	appendExactFilter(clauses, args, "project_id", query.ProjectID)
-	appendExactFilter(clauses, args, "application_id", query.ApplicationID)
 	appendTimeFilter(clauses, args, "created_at", ">=", query.CreatedFrom)
 	appendTimeFilter(clauses, args, "created_at", "<=", query.CreatedTo)
-	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "api_key_id", "api_fingerprint", "project_id", "application_id"})
+	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "api_key_id", "customer_id", "api_fingerprint"})
 }
 
 func appendGatewayTraceFilters(clauses *[]string, args *[]any, query GatewayTraceQuery) {
 	appendExactFilter(clauses, args, "api_key_id", query.APIKeyID)
 	appendExactFilter(clauses, args, "model", query.Model)
 	appendExactFilter(clauses, args, "status", query.Status)
-	appendExactFilter(clauses, args, "project_id", query.ProjectID)
-	appendExactFilter(clauses, args, "application_id", query.ApplicationID)
 	appendTimeFilter(clauses, args, "created_at", ">=", query.CreatedFrom)
 	appendTimeFilter(clauses, args, "created_at", "<=", query.CreatedTo)
-	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_snapshot", "api_key_id", "api_fingerprint", "project_id", "application_id", "request_summary", "response_summary"})
+	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_snapshot", "api_key_id", "api_fingerprint", "request_summary", "response_summary"})
 }
 
 func appendAuditLogFilters(clauses *[]string, args *[]any, query AuditLogQuery) {
@@ -759,20 +719,6 @@ CREATE TABLE IF NOT EXISTS provider_health_checks (
 CREATE INDEX IF NOT EXISTS provider_health_checks_provider_checked_idx
   ON provider_health_checks(provider_id, checked_at DESC);
 
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  cost_center TEXT NOT NULL DEFAULT '',
-  monthly_budget_cents INTEGER NOT NULL DEFAULT 0,
-  policy_id TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
-);
-
-ALTER TABLE projects ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
-
 CREATE TABLE IF NOT EXISTS departments (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -791,17 +737,6 @@ CREATE INDEX IF NOT EXISTS departments_parent_idx
 CREATE INDEX IF NOT EXISTS departments_cost_center_idx
   ON departments(cost_center);
 
-CREATE TABLE IF NOT EXISTS applications (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  environment TEXT NOT NULL DEFAULT 'dev',
-  owner TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS workspace_users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -811,6 +746,23 @@ CREATE TABLE IF NOT EXISTS workspace_users (
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS external_issuer TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS external_subject TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS department_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS totp_secret_ciphertext TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS totp_recovery_hashes TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_verify_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_verify_expires_at TIMESTAMPTZ;
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_reset_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_reset_expires_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_users_external_identity_unique
+  ON workspace_users(external_issuer, external_subject)
+  WHERE external_issuer <> '' AND external_subject <> '';
 
 CREATE TABLE IF NOT EXISTS role_bindings (
   id TEXT PRIMARY KEY,
@@ -833,12 +785,57 @@ CREATE TABLE IF NOT EXISTS routing_groups (
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   platform TEXT NOT NULL,
+  group_type TEXT NOT NULL DEFAULT 'standard',
   rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
+  rpm_limit INTEGER NOT NULL DEFAULT 0,
+  is_exclusive BOOLEAN NOT NULL DEFAULT false,
+  daily_budget_cents INTEGER NOT NULL DEFAULT 0,
+  weekly_budget_cents INTEGER NOT NULL DEFAULT 0,
+  monthly_budget_cents INTEGER NOT NULL DEFAULT 0,
+  image_enabled BOOLEAN NOT NULL DEFAULT false,
+  batch_image_enabled BOOLEAN NOT NULL DEFAULT false,
+  image_rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
+  batch_image_discount_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
+  image_price_1k_cents INTEGER NOT NULL DEFAULT 0,
+  image_price_2k_cents INTEGER NOT NULL DEFAULT 0,
+  image_price_4k_cents INTEGER NOT NULL DEFAULT 0,
+  video_enabled BOOLEAN NOT NULL DEFAULT false,
+  video_rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
+  video_price_480p_cents INTEGER NOT NULL DEFAULT 0,
+  video_price_720p_cents INTEGER NOT NULL DEFAULT 0,
+  video_price_1080p_cents INTEGER NOT NULL DEFAULT 0,
+  peak_rate_enabled BOOLEAN NOT NULL DEFAULT false,
+  peak_start TEXT NOT NULL DEFAULT '',
+  peak_end TEXT NOT NULL DEFAULT '',
+  peak_rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
   status TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS group_type TEXT NOT NULL DEFAULT 'standard';
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS rpm_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS is_exclusive BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS daily_budget_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS weekly_budget_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS monthly_budget_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS image_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS batch_image_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS image_rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS batch_image_discount_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS image_price_1k_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS image_price_2k_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS image_price_4k_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS video_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS video_rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS video_price_480p_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS video_price_720p_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS video_price_1080p_cents INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS peak_rate_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS peak_start TEXT NOT NULL DEFAULT '';
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS peak_end TEXT NOT NULL DEFAULT '';
+ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS peak_rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1;
 
 CREATE TABLE IF NOT EXISTS provider_accounts (
   id TEXT PRIMARY KEY,
@@ -849,7 +846,10 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   status TEXT NOT NULL,
   schedulable BOOLEAN NOT NULL DEFAULT true,
   priority INTEGER NOT NULL DEFAULT 50,
+  weight INTEGER NOT NULL DEFAULT 100,
   concurrency INTEGER NOT NULL DEFAULT 3,
+  rpm_limit INTEGER NOT NULL DEFAULT 0,
+  tpm_limit INTEGER NOT NULL DEFAULT 0,
   load_factor INTEGER,
   rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
   models TEXT NOT NULL DEFAULT '[]',
@@ -861,6 +861,12 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   last_used_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,
   cooldown_until TIMESTAMPTZ,
+  circuit_state TEXT NOT NULL DEFAULT 'closed',
+  circuit_failure_threshold INTEGER NOT NULL DEFAULT 5,
+  circuit_open_seconds INTEGER NOT NULL DEFAULT 60,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  circuit_opened_until TIMESTAMPTZ,
+  last_failure_at TIMESTAMPTZ,
   temp_unschedulable_rules TEXT NOT NULL DEFAULT '[]',
   temp_unschedulable_reason TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL,
@@ -869,7 +875,16 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
 
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS load_factor INTEGER;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS weight INTEGER NOT NULL DEFAULT 100;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS rpm_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS tpm_limit INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMPTZ;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS circuit_state TEXT NOT NULL DEFAULT 'closed';
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS circuit_failure_threshold INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS circuit_open_seconds INTEGER NOT NULL DEFAULT 60;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS circuit_opened_until TIMESTAMPTZ;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS last_failure_at TIMESTAMPTZ;
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS temp_unschedulable_rules TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS temp_unschedulable_reason TEXT NOT NULL DEFAULT '';
 
@@ -886,6 +901,46 @@ CREATE TABLE IF NOT EXISTS provider_account_health_checks (
 
 CREATE INDEX IF NOT EXISTS provider_account_health_checks_account_checked_idx
   ON provider_account_health_checks(account_id, checked_at DESC);
+
+CREATE TABLE IF NOT EXISTS gateway_models (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  modality TEXT NOT NULL DEFAULT 'chat',
+  default_route_group TEXT NOT NULL DEFAULT 'default',
+  sticky_enabled BOOLEAN NOT NULL DEFAULT false,
+  sticky_ttl_seconds INTEGER NOT NULL DEFAULT 1800,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS gateway_models_status_model_idx
+  ON gateway_models(status, model_id);
+
+ALTER TABLE gateway_models ADD COLUMN IF NOT EXISTS sticky_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE gateway_models ADD COLUMN IF NOT EXISTS sticky_ttl_seconds INTEGER NOT NULL DEFAULT 1800;
+
+CREATE TABLE IF NOT EXISTS model_routes (
+  id TEXT PRIMARY KEY,
+  gateway_model_id TEXT NOT NULL REFERENCES gateway_models(id) ON DELETE CASCADE,
+  route_group TEXT NOT NULL DEFAULT 'default',
+  provider_account_id TEXT NOT NULL REFERENCES provider_accounts(id) ON DELETE CASCADE,
+  upstream_model TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 100,
+  weight INTEGER NOT NULL DEFAULT 100,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE(gateway_model_id, route_group, provider_account_id, upstream_model)
+);
+
+CREATE INDEX IF NOT EXISTS model_routes_resolution_idx
+  ON model_routes(gateway_model_id, route_group, status, priority);
+
+CREATE INDEX IF NOT EXISTS model_routes_account_idx
+  ON model_routes(provider_account_id);
 
 CREATE TABLE IF NOT EXISTS model_pricings (
   id TEXT PRIMARY KEY,
@@ -933,13 +988,13 @@ CREATE INDEX IF NOT EXISTS governance_policies_status_idx
 
 CREATE TABLE IF NOT EXISTS api_keys (
   id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   key_hash TEXT NOT NULL UNIQUE,
   fingerprint TEXT NOT NULL,
   prefix TEXT NOT NULL,
   status TEXT NOT NULL,
+  key_type TEXT NOT NULL DEFAULT 'workspace',
+  customer_id TEXT NOT NULL DEFAULT '',
   policy_id TEXT NOT NULL DEFAULT '',
   model_allowlist TEXT NOT NULL DEFAULT '[]',
   qps_limit INTEGER NOT NULL DEFAULT 0,
@@ -951,6 +1006,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_type TEXT NOT NULL DEFAULT 'workspace';
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS customer_id TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
@@ -964,11 +1021,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 CREATE TABLE IF NOT EXISTS usage_records (
   id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  application_id TEXT NOT NULL,
   api_key_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL DEFAULT '',
   api_fingerprint TEXT NOT NULL,
   model TEXT NOT NULL,
+  upstream_model TEXT NOT NULL DEFAULT '',
   provider_id TEXT NOT NULL DEFAULT '',
   provider_account_id TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL,
@@ -981,11 +1038,11 @@ CREATE TABLE IF NOT EXISTS usage_records (
 );
 
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS provider_account_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS customer_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS upstream_model TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS gateway_traces (
   id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  application_id TEXT NOT NULL,
   api_key_id TEXT NOT NULL,
   api_fingerprint TEXT NOT NULL,
   model TEXT NOT NULL,
@@ -993,6 +1050,10 @@ CREATE TABLE IF NOT EXISTS gateway_traces (
   message_count INTEGER NOT NULL DEFAULT 0,
   provider_id TEXT NOT NULL DEFAULT '',
   provider_account_id TEXT NOT NULL DEFAULT '',
+  gateway_model_id TEXT NOT NULL DEFAULT '',
+  route_id TEXT NOT NULL DEFAULT '',
+  route_group TEXT NOT NULL DEFAULT '',
+  upstream_model TEXT NOT NULL DEFAULT '',
   route_source TEXT NOT NULL DEFAULT '',
   route_reason TEXT NOT NULL DEFAULT '',
   policy_id TEXT NOT NULL DEFAULT '',
@@ -1013,6 +1074,10 @@ CREATE TABLE IF NOT EXISTS gateway_traces (
 );
 
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS gateway_model_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS route_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS route_group TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS upstream_model TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_source TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_version INTEGER NOT NULL DEFAULT 0;
@@ -1037,7 +1102,6 @@ CREATE TABLE IF NOT EXISTS alert_events (
   summary TEXT NOT NULL,
   resource_type TEXT NOT NULL DEFAULT '',
   resource_id TEXT NOT NULL DEFAULT '',
-  project_id TEXT NOT NULL DEFAULT '',
   dedupe_key TEXT NOT NULL UNIQUE,
   metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   first_seen_at TIMESTAMPTZ NOT NULL,
@@ -1054,8 +1118,6 @@ CREATE INDEX IF NOT EXISTS alert_events_status_last_seen_idx
 CREATE INDEX IF NOT EXISTS alert_events_resource_idx
   ON alert_events(resource_type, resource_id, last_seen_at DESC);
 
-CREATE INDEX IF NOT EXISTS alert_events_project_idx
-  ON alert_events(project_id, last_seen_at DESC);
 `)
 	return err
 }
@@ -1136,87 +1198,15 @@ VALUES($1,$2,$3,$4,$5,$6,$7)
 	return err
 }
 
-func (r *PostgresRepository) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, description, cost_center, monthly_budget_cents, policy_id, status, created_at, updated_at
-FROM projects
-ORDER BY created_at ASC
-`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Project
-	for rows.Next() {
-		var project Project
-		if err := rows.Scan(&project.ID, &project.Name, &project.Description, &project.CostCenter, &project.MonthlyBudgetCents, &project.PolicyID, &project.Status, &project.CreatedAt, &project.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, project)
-	}
-	return out, rows.Err()
-}
-
-func (r *PostgresRepository) SaveProject(ctx context.Context, project Project) error {
-	_, err := r.db.ExecContext(ctx, `
-INSERT INTO projects(id, name, description, cost_center, monthly_budget_cents, policy_id, status, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-ON CONFLICT(id) DO UPDATE SET
-  name = EXCLUDED.name,
-  description = EXCLUDED.description,
-  cost_center = EXCLUDED.cost_center,
-  monthly_budget_cents = EXCLUDED.monthly_budget_cents,
-  policy_id = EXCLUDED.policy_id,
-  status = EXCLUDED.status,
-  updated_at = EXCLUDED.updated_at
-`, project.ID, project.Name, project.Description, project.CostCenter, project.MonthlyBudgetCents, project.PolicyID, project.Status, project.CreatedAt, project.UpdatedAt)
-	return err
-}
-
-func (r *PostgresRepository) ListApplications(ctx context.Context, projectID string) ([]Application, error) {
-	query := `
-SELECT id, project_id, name, environment, owner, status, created_at, updated_at
-FROM applications`
-	args := []any{}
-	if projectID != "" {
-		query += ` WHERE project_id = $1`
-		args = append(args, projectID)
-	}
-	query += ` ORDER BY created_at ASC`
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Application
-	for rows.Next() {
-		var app Application
-		if err := rows.Scan(&app.ID, &app.ProjectID, &app.Name, &app.Environment, &app.Owner, &app.Status, &app.CreatedAt, &app.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, app)
-	}
-	return out, rows.Err()
-}
-
-func (r *PostgresRepository) SaveApplication(ctx context.Context, app Application) error {
-	_, err := r.db.ExecContext(ctx, `
-INSERT INTO applications(id, project_id, name, environment, owner, status, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-ON CONFLICT(id) DO UPDATE SET
-  project_id = EXCLUDED.project_id,
-  name = EXCLUDED.name,
-  environment = EXCLUDED.environment,
-  owner = EXCLUDED.owner,
-  status = EXCLUDED.status,
-  updated_at = EXCLUDED.updated_at
-`, app.ID, app.ProjectID, app.Name, app.Environment, app.Owner, app.Status, app.CreatedAt, app.UpdatedAt)
-	return err
-}
-
 func (r *PostgresRepository) ListRoutingGroups(ctx context.Context) ([]RoutingGroup, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, description, platform, rate_multiplier, status, sort_order, created_at, updated_at
+SELECT id, name, description, platform, group_type, rate_multiplier, rpm_limit, is_exclusive,
+  daily_budget_cents, weekly_budget_cents, monthly_budget_cents,
+  image_enabled, batch_image_enabled, image_rate_multiplier, batch_image_discount_multiplier,
+  image_price_1k_cents, image_price_2k_cents, image_price_4k_cents,
+  video_enabled, video_rate_multiplier, video_price_480p_cents, video_price_720p_cents, video_price_1080p_cents,
+  peak_rate_enabled, peak_start, peak_end, peak_rate_multiplier,
+  status, sort_order, created_at, updated_at
 FROM routing_groups
 ORDER BY sort_order ASC, name ASC
 `)
@@ -1228,7 +1218,39 @@ ORDER BY sort_order ASC, name ASC
 	var out []RoutingGroup
 	for rows.Next() {
 		var group RoutingGroup
-		if err := rows.Scan(&group.ID, &group.Name, &group.Description, &group.Platform, &group.RateMultiplier, &group.Status, &group.SortOrder, &group.CreatedAt, &group.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&group.ID,
+			&group.Name,
+			&group.Description,
+			&group.Platform,
+			&group.GroupType,
+			&group.RateMultiplier,
+			&group.RPMLimit,
+			&group.IsExclusive,
+			&group.DailyBudgetCents,
+			&group.WeeklyBudgetCents,
+			&group.MonthlyBudgetCents,
+			&group.ImageEnabled,
+			&group.BatchImageEnabled,
+			&group.ImageRateMultiplier,
+			&group.BatchImageDiscountMultiplier,
+			&group.ImagePrice1KCents,
+			&group.ImagePrice2KCents,
+			&group.ImagePrice4KCents,
+			&group.VideoEnabled,
+			&group.VideoRateMultiplier,
+			&group.VideoPrice480PCents,
+			&group.VideoPrice720PCents,
+			&group.VideoPrice1080PCents,
+			&group.PeakRateEnabled,
+			&group.PeakStart,
+			&group.PeakEnd,
+			&group.PeakRateMultiplier,
+			&group.Status,
+			&group.SortOrder,
+			&group.CreatedAt,
+			&group.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, group)
@@ -1250,23 +1272,85 @@ ORDER BY sort_order ASC, name ASC
 
 func (r *PostgresRepository) SaveRoutingGroup(ctx context.Context, group RoutingGroup) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO routing_groups(id, name, description, platform, rate_multiplier, status, sort_order, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+INSERT INTO routing_groups(
+  id, name, description, platform, group_type, rate_multiplier, rpm_limit, is_exclusive,
+  daily_budget_cents, weekly_budget_cents, monthly_budget_cents,
+  image_enabled, batch_image_enabled, image_rate_multiplier, batch_image_discount_multiplier,
+  image_price_1k_cents, image_price_2k_cents, image_price_4k_cents,
+  video_enabled, video_rate_multiplier, video_price_480p_cents, video_price_720p_cents, video_price_1080p_cents,
+  peak_rate_enabled, peak_start, peak_end, peak_rate_multiplier,
+  status, sort_order, created_at, updated_at
+)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
 ON CONFLICT(id) DO UPDATE SET
   name = EXCLUDED.name,
   description = EXCLUDED.description,
   platform = EXCLUDED.platform,
+  group_type = EXCLUDED.group_type,
   rate_multiplier = EXCLUDED.rate_multiplier,
+  rpm_limit = EXCLUDED.rpm_limit,
+  is_exclusive = EXCLUDED.is_exclusive,
+  daily_budget_cents = EXCLUDED.daily_budget_cents,
+  weekly_budget_cents = EXCLUDED.weekly_budget_cents,
+  monthly_budget_cents = EXCLUDED.monthly_budget_cents,
+  image_enabled = EXCLUDED.image_enabled,
+  batch_image_enabled = EXCLUDED.batch_image_enabled,
+  image_rate_multiplier = EXCLUDED.image_rate_multiplier,
+  batch_image_discount_multiplier = EXCLUDED.batch_image_discount_multiplier,
+  image_price_1k_cents = EXCLUDED.image_price_1k_cents,
+  image_price_2k_cents = EXCLUDED.image_price_2k_cents,
+  image_price_4k_cents = EXCLUDED.image_price_4k_cents,
+  video_enabled = EXCLUDED.video_enabled,
+  video_rate_multiplier = EXCLUDED.video_rate_multiplier,
+  video_price_480p_cents = EXCLUDED.video_price_480p_cents,
+  video_price_720p_cents = EXCLUDED.video_price_720p_cents,
+  video_price_1080p_cents = EXCLUDED.video_price_1080p_cents,
+  peak_rate_enabled = EXCLUDED.peak_rate_enabled,
+  peak_start = EXCLUDED.peak_start,
+  peak_end = EXCLUDED.peak_end,
+  peak_rate_multiplier = EXCLUDED.peak_rate_multiplier,
   status = EXCLUDED.status,
   sort_order = EXCLUDED.sort_order,
   updated_at = EXCLUDED.updated_at
-`, group.ID, group.Name, group.Description, group.Platform, group.RateMultiplier, group.Status, group.SortOrder, group.CreatedAt, group.UpdatedAt)
+`,
+		group.ID,
+		group.Name,
+		group.Description,
+		group.Platform,
+		group.GroupType,
+		group.RateMultiplier,
+		group.RPMLimit,
+		group.IsExclusive,
+		group.DailyBudgetCents,
+		group.WeeklyBudgetCents,
+		group.MonthlyBudgetCents,
+		group.ImageEnabled,
+		group.BatchImageEnabled,
+		group.ImageRateMultiplier,
+		group.BatchImageDiscountMultiplier,
+		group.ImagePrice1KCents,
+		group.ImagePrice2KCents,
+		group.ImagePrice4KCents,
+		group.VideoEnabled,
+		group.VideoRateMultiplier,
+		group.VideoPrice480PCents,
+		group.VideoPrice720PCents,
+		group.VideoPrice1080PCents,
+		group.PeakRateEnabled,
+		group.PeakStart,
+		group.PeakEnd,
+		group.PeakRateMultiplier,
+		group.Status,
+		group.SortOrder,
+		group.CreatedAt,
+		group.UpdatedAt,
+	)
 	return err
 }
 
 func (r *PostgresRepository) ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, provider_id, name, platform, auth_type, status, schedulable, priority, concurrency, load_factor, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at
+SELECT id, provider_id, name, platform, auth_type, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at
 FROM provider_accounts
 ORDER BY priority ASC, name ASC
 `)
@@ -1280,8 +1364,8 @@ ORDER BY priority ASC, name ASC
 		var account ProviderAccount
 		var models, groupIDs, tempUnschedulableRules string
 		var loadFactor sql.NullInt64
-		var lastUsedAt, expiresAt, cooldownUntil sql.NullTime
-		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Name, &account.Platform, &account.AuthType, &account.Status, &account.Schedulable, &account.Priority, &account.Concurrency, &loadFactor, &account.RateMultiplier, &models, &groupIDs, &account.SecretConfigured, &account.SecretHint, &account.SecretCiphertext, &account.ErrorMessage, &lastUsedAt, &expiresAt, &cooldownUntil, &tempUnschedulableRules, &account.TempUnschedulableReason, &account.CreatedAt, &account.UpdatedAt); err != nil {
+		var lastUsedAt, expiresAt, cooldownUntil, circuitOpenedUntil, lastFailureAt sql.NullTime
+		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Name, &account.Platform, &account.AuthType, &account.Status, &account.Schedulable, &account.Priority, &account.Weight, &account.Concurrency, &account.RPMLimit, &account.TPMLimit, &loadFactor, &account.RateMultiplier, &models, &groupIDs, &account.SecretConfigured, &account.SecretHint, &account.SecretCiphertext, &account.ErrorMessage, &lastUsedAt, &expiresAt, &cooldownUntil, &account.CircuitState, &account.CircuitFailureThreshold, &account.CircuitOpenSeconds, &account.ConsecutiveFailures, &circuitOpenedUntil, &lastFailureAt, &tempUnschedulableRules, &account.TempUnschedulableReason, &account.CreatedAt, &account.UpdatedAt); err != nil {
 			return nil, err
 		}
 		account.Models = parseStringList(models)
@@ -1300,6 +1384,12 @@ ORDER BY priority ASC, name ASC
 		if cooldownUntil.Valid {
 			account.CooldownUntil = &cooldownUntil.Time
 		}
+		if circuitOpenedUntil.Valid {
+			account.CircuitOpenedUntil = &circuitOpenedUntil.Time
+		}
+		if lastFailureAt.Valid {
+			account.LastFailureAt = &lastFailureAt.Time
+		}
 		out = append(out, account)
 	}
 	return out, rows.Err()
@@ -1314,8 +1404,8 @@ func (r *PostgresRepository) SaveProviderAccount(ctx context.Context, account Pr
 		loadFactor = sql.NullInt64{Int64: int64(*account.LoadFactor), Valid: true}
 	}
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO provider_accounts(id, provider_id, name, platform, auth_type, status, schedulable, priority, concurrency, load_factor, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+INSERT INTO provider_accounts(id, provider_id, name, platform, auth_type, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
 ON CONFLICT(id) DO UPDATE SET
   provider_id = EXCLUDED.provider_id,
   name = EXCLUDED.name,
@@ -1324,7 +1414,10 @@ ON CONFLICT(id) DO UPDATE SET
   status = EXCLUDED.status,
   schedulable = EXCLUDED.schedulable,
   priority = EXCLUDED.priority,
+  weight = EXCLUDED.weight,
   concurrency = EXCLUDED.concurrency,
+  rpm_limit = EXCLUDED.rpm_limit,
+  tpm_limit = EXCLUDED.tpm_limit,
   load_factor = EXCLUDED.load_factor,
   rate_multiplier = EXCLUDED.rate_multiplier,
   models = EXCLUDED.models,
@@ -1336,10 +1429,16 @@ ON CONFLICT(id) DO UPDATE SET
   last_used_at = EXCLUDED.last_used_at,
   expires_at = EXCLUDED.expires_at,
   cooldown_until = EXCLUDED.cooldown_until,
+  circuit_state = EXCLUDED.circuit_state,
+  circuit_failure_threshold = EXCLUDED.circuit_failure_threshold,
+  circuit_open_seconds = EXCLUDED.circuit_open_seconds,
+  consecutive_failures = EXCLUDED.consecutive_failures,
+  circuit_opened_until = EXCLUDED.circuit_opened_until,
+  last_failure_at = EXCLUDED.last_failure_at,
   temp_unschedulable_rules = EXCLUDED.temp_unschedulable_rules,
   temp_unschedulable_reason = EXCLUDED.temp_unschedulable_reason,
   updated_at = EXCLUDED.updated_at
-`, account.ID, account.ProviderID, account.Name, account.Platform, account.AuthType, account.Status, account.Schedulable, account.Priority, account.Concurrency, loadFactor, account.RateMultiplier, models, groupIDs, account.SecretConfigured, account.SecretHint, account.SecretCiphertext, account.ErrorMessage, account.LastUsedAt, account.ExpiresAt, account.CooldownUntil, tempUnschedulableRules, account.TempUnschedulableReason, account.CreatedAt, account.UpdatedAt)
+`, account.ID, account.ProviderID, account.Name, account.Platform, account.AuthType, account.Status, account.Schedulable, account.Priority, account.Weight, account.Concurrency, account.RPMLimit, account.TPMLimit, loadFactor, account.RateMultiplier, models, groupIDs, account.SecretConfigured, account.SecretHint, account.SecretCiphertext, account.ErrorMessage, account.LastUsedAt, account.ExpiresAt, account.CooldownUntil, account.CircuitState, account.CircuitFailureThreshold, account.CircuitOpenSeconds, account.ConsecutiveFailures, account.CircuitOpenedUntil, account.LastFailureAt, tempUnschedulableRules, account.TempUnschedulableReason, account.CreatedAt, account.UpdatedAt)
 	return err
 }
 
@@ -1442,7 +1541,7 @@ FROM provider_accounts
 
 func (r *PostgresRepository) ListAPIKeys(ctx context.Context) ([]APIKeyRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, project_id, application_id, name, key_hash, fingerprint, prefix, status, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at
+SELECT id, name, key_hash, fingerprint, prefix, status, key_type, customer_id, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at
 FROM api_keys
 ORDER BY created_at DESC
 `)
@@ -1455,7 +1554,7 @@ ORDER BY created_at DESC
 		var key APIKeyRecord
 		var allowlist string
 		var expiresAt, lastUsedAt sql.NullTime
-		if err := rows.Scan(&key.ID, &key.ProjectID, &key.ApplicationID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.PolicyID, &allowlist, &key.QPSLimit, &key.MonthlyTokenLimit, &expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt); err != nil {
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.KeyType, &key.CustomerID, &key.PolicyID, &allowlist, &key.QPSLimit, &key.MonthlyTokenLimit, &expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt); err != nil {
 			return nil, err
 		}
 		key.ModelAllowlist = parseStringList(allowlist)
@@ -1472,14 +1571,14 @@ ORDER BY created_at DESC
 
 func (r *PostgresRepository) FindAPIKeyByHash(ctx context.Context, hash string) (APIKeyRecord, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
-SELECT id, project_id, application_id, name, key_hash, fingerprint, prefix, status, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at
+SELECT id, name, key_hash, fingerprint, prefix, status, key_type, customer_id, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at
 FROM api_keys
 WHERE key_hash = $1
 `, hash)
 	var key APIKeyRecord
 	var allowlist string
 	var expiresAt, lastUsedAt sql.NullTime
-	if err := row.Scan(&key.ID, &key.ProjectID, &key.ApplicationID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.PolicyID, &allowlist, &key.QPSLimit, &key.MonthlyTokenLimit, &expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt); err != nil {
+	if err := row.Scan(&key.ID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.KeyType, &key.CustomerID, &key.PolicyID, &allowlist, &key.QPSLimit, &key.MonthlyTokenLimit, &expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return APIKeyRecord{}, false, nil
 		}
@@ -1498,7 +1597,7 @@ WHERE key_hash = $1
 func (r *PostgresRepository) SaveAPIKey(ctx context.Context, key APIKeyRecord) error {
 	allowlist := marshalStringList(key.ModelAllowlist)
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO api_keys(id, project_id, application_id, name, key_hash, fingerprint, prefix, status, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at)
+INSERT INTO api_keys(id, name, key_hash, fingerprint, prefix, status, key_type, customer_id, policy_id, model_allowlist, qps_limit, monthly_token_limit, expires_at, last_used_at, created_at, updated_at)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 ON CONFLICT(id) DO UPDATE SET
   name = EXCLUDED.name,
@@ -1506,6 +1605,8 @@ ON CONFLICT(id) DO UPDATE SET
   fingerprint = EXCLUDED.fingerprint,
   prefix = EXCLUDED.prefix,
   status = EXCLUDED.status,
+  key_type = EXCLUDED.key_type,
+  customer_id = EXCLUDED.customer_id,
   policy_id = EXCLUDED.policy_id,
   model_allowlist = EXCLUDED.model_allowlist,
   qps_limit = EXCLUDED.qps_limit,
@@ -1513,7 +1614,7 @@ ON CONFLICT(id) DO UPDATE SET
   expires_at = EXCLUDED.expires_at,
   last_used_at = EXCLUDED.last_used_at,
   updated_at = EXCLUDED.updated_at
-`, key.ID, key.ProjectID, key.ApplicationID, key.Name, key.KeyHash, key.Fingerprint, key.Prefix, key.Status, key.PolicyID, allowlist, key.QPSLimit, key.MonthlyTokenLimit, key.ExpiresAt, key.LastUsedAt, key.CreatedAt, key.UpdatedAt)
+`, key.ID, key.Name, key.KeyHash, key.Fingerprint, key.Prefix, key.Status, key.KeyType, key.CustomerID, key.PolicyID, allowlist, key.QPSLimit, key.MonthlyTokenLimit, key.ExpiresAt, key.LastUsedAt, key.CreatedAt, key.UpdatedAt)
 	return err
 }
 
@@ -1529,9 +1630,9 @@ func (r *PostgresRepository) DisableAPIKey(ctx context.Context, id string, updat
 
 func (r *PostgresRepository) SaveUsageRecord(ctx context.Context, record UsageRecord) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO usage_records(id, project_id, application_id, api_key_id, api_fingerprint, model, provider_id, provider_account_id, status, error_type, latency_ms, input_tokens, output_tokens, cost_cents, created_at)
+INSERT INTO usage_records(id, api_key_id, customer_id, api_fingerprint, model, upstream_model, provider_id, provider_account_id, status, error_type, latency_ms, input_tokens, output_tokens, cost_cents, created_at)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-`, record.ID, record.ProjectID, record.ApplicationID, record.APIKeyID, record.APIFingerprint, record.Model, record.ProviderID, record.ProviderAccountID, record.Status, record.ErrorType, record.LatencyMS, record.InputTokens, record.OutputTokens, record.CostCents, record.CreatedAt)
+`, record.ID, record.APIKeyID, record.CustomerID, record.APIFingerprint, record.Model, record.UpstreamModel, record.ProviderID, record.ProviderAccountID, record.Status, record.ErrorType, record.LatencyMS, record.InputTokens, record.OutputTokens, record.CostCents, record.CreatedAt)
 	return err
 }
 
@@ -1545,7 +1646,7 @@ func (r *PostgresRepository) QueryUsageRecords(ctx context.Context, query UsageQ
 	args := []any{}
 	appendUsageRecordFilters(&clauses, &args, query)
 	sqlText := `
-SELECT id, project_id, application_id, api_key_id, api_fingerprint, model, provider_id, provider_account_id, status, error_type, latency_ms, input_tokens, output_tokens, cost_cents, created_at
+SELECT id, api_key_id, customer_id, api_fingerprint, model, upstream_model, provider_id, provider_account_id, status, error_type, latency_ms, input_tokens, output_tokens, cost_cents, created_at
 FROM usage_records`
 	if len(clauses) > 0 {
 		sqlText += " WHERE " + strings.Join(clauses, " AND ")
@@ -1560,7 +1661,7 @@ FROM usage_records`
 	var out []UsageRecord
 	for rows.Next() {
 		var record UsageRecord
-		if err := rows.Scan(&record.ID, &record.ProjectID, &record.ApplicationID, &record.APIKeyID, &record.APIFingerprint, &record.Model, &record.ProviderID, &record.ProviderAccountID, &record.Status, &record.ErrorType, &record.LatencyMS, &record.InputTokens, &record.OutputTokens, &record.CostCents, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.APIKeyID, &record.CustomerID, &record.APIFingerprint, &record.Model, &record.UpstreamModel, &record.ProviderID, &record.ProviderAccountID, &record.Status, &record.ErrorType, &record.LatencyMS, &record.InputTokens, &record.OutputTokens, &record.CostCents, &record.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, record)
@@ -1641,12 +1742,12 @@ WHERE api_key_id = $1 AND created_at >= $2
 	return total, nil
 }
 
-func (r *PostgresRepository) SumUsageCostCentsByProjectSince(ctx context.Context, projectID string, since time.Time) (int, error) {
+func (r *PostgresRepository) SumUsageCostCentsByAPIKeySince(ctx context.Context, apiKeyID string, since time.Time) (int, error) {
 	row := r.db.QueryRowContext(ctx, `
 SELECT COALESCE(SUM(cost_cents), 0)
 FROM usage_records
-WHERE project_id = $1 AND created_at >= $2
-`, projectID, since)
+WHERE api_key_id = $1 AND created_at >= $2
+`, apiKeyID, since)
 	var total int
 	if err := row.Scan(&total); err != nil {
 		return 0, err
@@ -1656,9 +1757,9 @@ WHERE project_id = $1 AND created_at >= $2
 
 func (r *PostgresRepository) SaveGatewayTrace(ctx context.Context, trace GatewayTrace) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO gateway_traces(id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
-`, trace.ID, trace.ProjectID, trace.ApplicationID, trace.APIKeyID, trace.APIFingerprint, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicyVersion, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, defaultJSONArray(trace.RouteAttempts), trace.CreatedAt)
+INSERT INTO gateway_traces(id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, gateway_model_id, route_id, route_group, upstream_model, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+`, trace.ID, trace.APIKeyID, trace.APIFingerprint, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.GatewayModelID, trace.RouteID, trace.RouteGroup, trace.UpstreamModel, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicyVersion, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, defaultJSONArray(trace.RouteAttempts), trace.CreatedAt)
 	return err
 }
 
@@ -1679,7 +1780,7 @@ func (r *PostgresRepository) QueryGatewayTraces(ctx context.Context, query Gatew
 	args := []any{}
 	appendGatewayTraceFilters(&clauses, &args, query)
 	sqlText := `
-SELECT id, project_id, application_id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at
+SELECT id, api_key_id, api_fingerprint, model, stream, message_count, provider_id, provider_account_id, gateway_model_id, route_id, route_group, upstream_model, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at
 FROM gateway_traces`
 	if len(clauses) > 0 {
 		sqlText += " WHERE " + strings.Join(clauses, " AND ")
@@ -1694,7 +1795,7 @@ FROM gateway_traces`
 	var out []GatewayTrace
 	for rows.Next() {
 		var trace GatewayTrace
-		if err := rows.Scan(&trace.ID, &trace.ProjectID, &trace.ApplicationID, &trace.APIKeyID, &trace.APIFingerprint, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicyVersion, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.RouteAttempts, &trace.CreatedAt); err != nil {
+		if err := rows.Scan(&trace.ID, &trace.APIKeyID, &trace.APIFingerprint, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.GatewayModelID, &trace.RouteID, &trace.RouteGroup, &trace.UpstreamModel, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicyVersion, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.RouteAttempts, &trace.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, trace)

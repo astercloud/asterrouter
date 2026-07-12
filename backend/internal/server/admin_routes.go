@@ -14,16 +14,115 @@ func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, 
 	}
 	registerDashboardAdminRoutes(admin, control)
 	registerProviderAdminRoutes(admin, control)
-	registerProjectAdminRoutes(admin, control)
 	registerIdentityAdminRoutes(admin, control)
 	registerDepartmentAdminRoutes(admin, control)
 	registerGovernancePolicyAdminRoutes(admin, control)
 	registerRoutingAdminRoutes(admin, control)
+	registerGatewayModelAdminRoutes(admin, control)
 	registerAPIKeyAdminRoutes(admin, control)
 	registerModelPricingAdminRoutes(admin, control)
 	registerObservabilityAdminRoutes(admin, control)
 	registerAlertAdminRoutes(admin, control)
 	registerCSVExportJobRoutes(admin.Group("/export-jobs"), control, exportJobs)
+}
+
+func registerGatewayModelAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {
+	admin.POST("/gateway-simulator", func(c *gin.Context) {
+		var req controlplane.GatewaySimulationRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1519, "invalid gateway simulation payload")
+			return
+		}
+		data, err := control.SimulateGatewayRouting(c.Request.Context(), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1520, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.GET("/gateway-models", func(c *gin.Context) {
+		data, err := control.ListGatewayModels(c.Request.Context())
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1112, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.POST("/gateway-models", func(c *gin.Context) {
+		var req controlplane.GatewayModelRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1515, "invalid gateway model payload")
+			return
+		}
+		data, err := control.CreateGatewayModel(c.Request.Context(), actor(c), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1516, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.PUT("/gateway-models/:id", func(c *gin.Context) {
+		var req controlplane.GatewayModelRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1515, "invalid gateway model payload")
+			return
+		}
+		data, err := control.UpdateGatewayModel(c.Request.Context(), actor(c), c.Param("id"), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1516, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.DELETE("/gateway-models/:id", func(c *gin.Context) {
+		if err := control.DeleteGatewayModel(c.Request.Context(), actor(c), c.Param("id")); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1516, err.Error())
+			return
+		}
+		httpx.OK(c, gin.H{"status": "deleted"})
+	})
+
+	admin.GET("/model-routes", func(c *gin.Context) {
+		data, err := control.ListModelRoutes(c.Request.Context())
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1113, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.POST("/model-routes", func(c *gin.Context) {
+		var req controlplane.ModelRouteRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1517, "invalid model route payload")
+			return
+		}
+		data, err := control.CreateModelRoute(c.Request.Context(), actor(c), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1518, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.PUT("/model-routes/:id", func(c *gin.Context) {
+		var req controlplane.ModelRouteRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1517, "invalid model route payload")
+			return
+		}
+		data, err := control.UpdateModelRoute(c.Request.Context(), actor(c), c.Param("id"), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1518, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.DELETE("/model-routes/:id", func(c *gin.Context) {
+		if err := control.DeleteModelRoute(c.Request.Context(), actor(c), c.Param("id")); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1518, err.Error())
+			return
+		}
+		httpx.OK(c, gin.H{"status": "deleted"})
+	})
 }
 
 func registerDashboardAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {
@@ -84,86 +183,6 @@ func registerProviderAdminRoutes(admin *gin.RouterGroup, control *controlplane.S
 		data, err := control.CheckProvider(c.Request.Context(), actor(c), c.Param("id"))
 		if err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1501, err.Error())
-			return
-		}
-		httpx.OK(c, data)
-	})
-}
-
-func registerProjectAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {
-	admin.GET("/projects", func(c *gin.Context) {
-		data, err := control.ListProjects(c.Request.Context())
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1102, err.Error())
-			return
-		}
-		httpx.OK(c, data)
-	})
-	admin.POST("/projects", func(c *gin.Context) {
-		var req controlplane.ProjectRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1502, "invalid project payload")
-			return
-		}
-		data, err := control.CreateProject(c.Request.Context(), actor(c), req)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1503, err.Error())
-			return
-		}
-		httpx.OK(c, data)
-	})
-	admin.PUT("/projects/:id", func(c *gin.Context) {
-		var req controlplane.ProjectRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1502, "invalid project payload")
-			return
-		}
-		data, err := control.UpdateProject(c.Request.Context(), actor(c), c.Param("id"), req)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1503, err.Error())
-			return
-		}
-		httpx.OK(c, data)
-	})
-	admin.GET("/applications", func(c *gin.Context) {
-		data, err := control.ListApplications(c.Request.Context(), "")
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1103, err.Error())
-			return
-		}
-		httpx.OK(c, data)
-	})
-	admin.PUT("/applications/:id", func(c *gin.Context) {
-		var req controlplane.ApplicationRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1504, "invalid application payload")
-			return
-		}
-		data, err := control.UpdateApplication(c.Request.Context(), actor(c), c.Param("id"), req)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1505, err.Error())
-			return
-		}
-		httpx.OK(c, data)
-	})
-	admin.GET("/projects/:projectID/applications", func(c *gin.Context) {
-		data, err := control.ListApplications(c.Request.Context(), c.Param("projectID"))
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1104, err.Error())
-			return
-		}
-		httpx.OK(c, data)
-	})
-	admin.POST("/projects/:projectID/applications", func(c *gin.Context) {
-		var req controlplane.ApplicationRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1504, "invalid application payload")
-			return
-		}
-		req.ProjectID = c.Param("projectID")
-		data, err := control.CreateApplication(c.Request.Context(), actor(c), req)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1505, err.Error())
 			return
 		}
 		httpx.OK(c, data)

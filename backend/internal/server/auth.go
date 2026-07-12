@@ -13,6 +13,9 @@ func requireAdminAuth(token string, authSvc *auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if authSvc != nil {
 			provided := bearerToken(c)
+			if provided == "" || provided == "oidc-cookie" {
+				provided, _ = c.Cookie("asterrouter_session")
+			}
 			if provided == "" {
 				provided = strings.TrimSpace(c.GetHeader("X-Admin-Token"))
 			}
@@ -23,6 +26,7 @@ func requireAdminAuth(token string, authSvc *auth.Service) gin.HandlerFunc {
 				return
 			}
 			c.Set("actor", principal.Subject)
+			c.Set("role", principal.Role)
 			c.Next()
 			return
 		}
@@ -42,6 +46,15 @@ func requireAdminAuth(token string, authSvc *auth.Service) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func role(c *gin.Context) string {
+	if value, ok := c.Get("role"); ok {
+		if roleValue, ok := value.(string); ok && strings.TrimSpace(roleValue) != "" {
+			return roleValue
+		}
+	}
+	return "super_admin"
 }
 
 func bearerToken(c *gin.Context) string {

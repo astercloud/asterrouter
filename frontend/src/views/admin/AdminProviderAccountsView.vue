@@ -49,13 +49,18 @@ const form = reactive<ProviderAccountRequest>({
   status: 'active',
   schedulable: true,
   priority: 50,
+  weight: 100,
   concurrency: 3,
+  rpm_limit: 0,
+  tpm_limit: 0,
   load_factor: null,
   rate_multiplier: 1,
   models: [],
   group_ids: [],
   secret: '',
   expires_at: '',
+  circuit_failure_threshold: 5,
+  circuit_open_seconds: 60,
   temp_unschedulable_rules: []
 })
 
@@ -107,13 +112,18 @@ function accountToRequest(account: ProviderAccount, status = account.status): Pr
     status,
     schedulable: account.schedulable,
     priority: account.priority,
+    weight: account.weight,
     concurrency: account.concurrency,
+    rpm_limit: account.rpm_limit,
+    tpm_limit: account.tpm_limit,
     load_factor: account.load_factor ?? null,
     rate_multiplier: account.rate_multiplier,
     models: [...account.models],
     group_ids: [...account.group_ids],
     secret: '',
     expires_at: dateInputValue(account.expires_at),
+    circuit_failure_threshold: account.circuit_failure_threshold,
+    circuit_open_seconds: account.circuit_open_seconds,
     temp_unschedulable_rules: cloneRules(account.temp_unschedulable_rules)
   }
 }
@@ -128,14 +138,19 @@ function resetForm() {
     status: 'active',
     schedulable: true,
     priority: 50,
+    weight: 100,
     concurrency: 3,
+    rpm_limit: 0,
+    tpm_limit: 0,
     load_factor: null,
     rate_multiplier: 1,
     models: [],
     group_ids: groups.value[0] ? [groups.value[0].id] : [],
     secret: '',
     temp_unschedulable_rules: [],
-    expires_at: ''
+    expires_at: '',
+    circuit_failure_threshold: 5,
+    circuit_open_seconds: 60
   })
   modelsText.value = 'gpt-4o-mini'
 }
@@ -404,7 +419,9 @@ onMounted(load)
               </td>
               <td>
                 <strong>{{ account.concurrency }} / {{ account.priority }}</strong>
-                <span>{{ t('providerAccounts.multiplier') }} {{ account.rate_multiplier }}</span>
+                <span>RPM {{ account.rpm_limit || '∞' }} · TPM {{ account.tpm_limit || '∞' }}</span>
+                <span>W{{ account.weight }} · {{ t('providerAccounts.multiplier') }} {{ account.rate_multiplier }}</span>
+                <span v-if="account.circuit_state !== 'closed' || account.consecutive_failures" class="pill status-warning">{{ account.circuit_state }} · {{ account.consecutive_failures }}</span>
                 <span v-if="activeCooldownUntil(account)" class="pill status-warning">
                   {{ t('providerAccounts.cooldownUntil') }} {{ activeCooldownUntil(account) }}
                 </span>
@@ -512,6 +529,8 @@ onMounted(load)
             <label>{{ t('providerAccounts.concurrency') }}</label>
             <input v-model.number="form.concurrency" type="number" min="0" />
           </div>
+          <div class="field"><label>{{ t('providerAccounts.rpmLimit') }}</label><input v-model.number="form.rpm_limit" type="number" min="0" /></div>
+          <div class="field"><label>{{ t('providerAccounts.tpmLimit') }}</label><input v-model.number="form.tpm_limit" type="number" min="0" /></div>
           <div class="field">
             <label>{{ t('providerAccounts.loadFactor') }}</label>
             <input v-model.number="form.load_factor" type="number" min="0" :placeholder="t('providerAccounts.loadFactorPlaceholder')" />
@@ -520,6 +539,7 @@ onMounted(load)
             <label>{{ t('providers.priority') }}</label>
             <input v-model.number="form.priority" type="number" min="0" />
           </div>
+          <div class="field"><label>{{ t('providerAccounts.weight') }}</label><input v-model.number="form.weight" type="number" min="1" max="10000" /></div>
           <div class="field">
             <label>{{ t('routingGroups.rateMultiplier') }}</label>
             <input v-model.number="form.rate_multiplier" type="number" min="0" step="0.01" />
@@ -528,6 +548,8 @@ onMounted(load)
             <label>{{ t('apiKeys.expiresAt') }}</label>
             <input v-model="form.expires_at" type="date" />
           </div>
+          <div class="field"><label>{{ t('providerAccounts.circuitFailureThreshold') }}</label><input v-model.number="form.circuit_failure_threshold" type="number" min="1" max="100" /></div>
+          <div class="field"><label>{{ t('providerAccounts.circuitOpenSeconds') }}</label><input v-model.number="form.circuit_open_seconds" type="number" min="1" max="86400" /></div>
           <label class="field checkbox-line form-span-2">
             <input v-model="form.schedulable" type="checkbox" />
             <span>{{ t('providerAccounts.schedulableHelp') }}</span>

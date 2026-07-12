@@ -86,7 +86,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			writeGatewayError(c, err)
 			return
 		}
-		candidates, hasAccountPool, err := control.GatewayProviderCandidatesForModel(c.Request.Context(), req.Model)
+		candidates, _, err := control.GatewayProviderCandidatesForModel(c.Request.Context(), req.Model)
 		if err != nil {
 			recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
 				Model:     req.Model,
@@ -98,7 +98,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			writeGatewayError(c, err)
 			return
 		}
-		if len(candidates) == 0 && hasAccountPool {
+		if len(candidates) == 0 {
 			routeErr := controlplane.ErrGatewayRouteUnavailable
 			_ = control.RecordGatewayCall(c.Request.Context(), auth, req.Model, "policy_rejected", routeErr.Error())
 			recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
@@ -112,6 +112,8 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			return
 		}
 		if len(candidates) > 0 {
+			stickyID := gatewayStickyID(c, req)
+			candidates = control.PreferStickyGatewayCandidate(auth.APIKey.ID, req.Model, "openai_chat", stickyID, candidates)
 			resp, provider, release, attempts, attemptErr := attemptGatewayCandidates(c, control, candidates, rawBody, req.Stream)
 			routeAttempts := marshalRouteAttempts(attempts)
 			if resp == nil {
@@ -121,6 +123,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 				_ = control.RecordGatewayCall(c.Request.Context(), auth, req.Model, "upstream_error", attemptErr.Error())
 				recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
 					Model:             req.Model,
+					UpstreamModel:     provider.UpstreamModel,
 					ProviderID:        provider.ID,
 					ProviderAccountID: provider.AccountID,
 					Status:            "upstream_error",
@@ -137,6 +140,9 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			status := "forwarded"
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				status = "upstream_error"
+			}
+			if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+				control.BindStickyGatewayCandidate(auth.APIKey.ID, req.Model, "openai_chat", stickyID, provider)
 			}
 			summary := gatewayRouteSummary(req.Model, provider)
 			if req.Stream {
@@ -157,6 +163,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 				}
 				recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
 					Model:             req.Model,
+					UpstreamModel:     provider.UpstreamModel,
 					ProviderID:        provider.ID,
 					ProviderAccountID: provider.AccountID,
 					Status:            usageStatus,
@@ -175,6 +182,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 				_ = control.RecordGatewayCall(c.Request.Context(), auth, req.Model, "upstream_error", err.Error())
 				recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
 					Model:             req.Model,
+					UpstreamModel:     provider.UpstreamModel,
 					ProviderID:        provider.ID,
 					ProviderAccountID: provider.AccountID,
 					Status:            "upstream_error",
@@ -196,6 +204,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			}
 			recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
 				Model:             req.Model,
+				UpstreamModel:     provider.UpstreamModel,
 				ProviderID:        provider.ID,
 				ProviderAccountID: provider.AccountID,
 				Status:            status,
@@ -208,58 +217,26 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			c.Data(resp.StatusCode, contentType, upstreamBody)
 			return
 		}
-		if req.Stream {
-			_ = control.RecordGatewayCall(c.Request.Context(), auth, req.Model, "unsupported_stream", fmt.Sprintf("Rejected streaming request for model %s without configured provider", req.Model))
-			recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
-				Model:     req.Model,
-				Status:    "error",
-				ErrorType: "unsupported_stream",
-				LatencyMS: time.Since(startedAt).Milliseconds(),
-			})
-			recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "error", http.StatusNotImplemented, "unsupported_stream", time.Since(startedAt).Milliseconds(), 0, 0, "streaming request rejected without configured provider", ""))
-			openAIError(c, http.StatusNotImplemented, "unsupported_feature", "streaming responses require a configured provider")
-			return
-		}
-		summary := fmt.Sprintf("Accepted chat completion request for model %s", req.Model)
-		if err := control.RecordGatewayCall(c.Request.Context(), auth, req.Model, "accepted", summary); err != nil {
-			openAIError(c, http.StatusInternalServerError, "server_error", err.Error())
-			return
-		}
-		recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
-			Model:     req.Model,
-			Status:    "accepted",
-			LatencyMS: time.Since(startedAt).Milliseconds(),
-		})
-		recordGatewayTrace(control, c, auth, gatewayTraceInput(req, controlplane.GatewayProvider{}, "accepted", http.StatusOK, "", time.Since(startedAt).Milliseconds(), 0, 0, "local fallback response", ""))
-		now := time.Now().Unix()
-		c.JSON(http.StatusOK, gin.H{
-			"id":      "chatcmpl_" + time.Now().UTC().Format("20060102150405"),
-			"object":  "chat.completion",
-			"created": now,
-			"model":   req.Model,
-			"choices": []gin.H{
-				{
-					"index": 0,
-					"message": gin.H{
-						"role":    "assistant",
-						"content": "AsterRouter local fallback accepted this gateway request. Configure provider forwarding to call an upstream model.",
-					},
-					"finish_reason": "stop",
-				},
-			},
-			"usage": gin.H{
-				"prompt_tokens":     0,
-				"completion_tokens": 0,
-				"total_tokens":      0,
-			},
-		})
 	})
 }
 
 type chatCompletionRequest struct {
-	Model    string           `json:"model"`
-	Messages []map[string]any `json:"messages"`
-	Stream   bool             `json:"stream"`
+	Model     string           `json:"model"`
+	Messages  []map[string]any `json:"messages"`
+	Stream    bool             `json:"stream"`
+	MaxTokens int              `json:"max_tokens"`
+	User      string           `json:"user"`
+}
+
+func gatewayStickyID(c *gin.Context, req chatCompletionRequest) string {
+	value := strings.TrimSpace(c.GetHeader("X-AsterRouter-Sticky-Key"))
+	if value == "" {
+		value = strings.TrimSpace(req.User)
+	}
+	if len(value) > 256 {
+		value = value[:256]
+	}
+	return value
 }
 
 func parseChatCompletionRequest(c *gin.Context) ([]byte, chatCompletionRequest, error) {
@@ -286,6 +263,9 @@ func parseChatCompletionRequest(c *gin.Context) ([]byte, chatCompletionRequest, 
 type gatewayRouteAttempt struct {
 	AccountID  string `json:"account_id,omitempty"`
 	ProviderID string `json:"provider_id,omitempty"`
+	RouteID    string `json:"route_id,omitempty"`
+	RouteGroup string `json:"route_group,omitempty"`
+	Model      string `json:"upstream_model,omitempty"`
 	Outcome    string `json:"outcome"`
 	Detail     string `json:"detail,omitempty"`
 }
@@ -329,19 +309,27 @@ func isProviderAccountFailureStatus(statusCode int) bool {
 // the response body has been fully consumed (streamed or read). Losing
 // candidates' slots are released internally and must not be released again.
 func attemptGatewayCandidates(c *gin.Context, control *controlplane.Service, candidates []controlplane.GatewayProvider, rawBody []byte, stream bool) (resp *http.Response, provider controlplane.GatewayProvider, release func(), attempts []gatewayRouteAttempt, transportErr error) {
+	estimatedTokens := estimateGatewayRequestTokens(rawBody)
 	for i, candidate := range candidates {
 		slotRelease, acquired := control.TryAcquireProviderAccountSlot(candidate.AccountID, candidate.Concurrency)
 		if !acquired {
-			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, Outcome: "skipped", Detail: "at_capacity"})
+			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup, Model: candidate.UpstreamModel, Outcome: "skipped", Detail: "at_capacity"})
+			continue
+		}
+		permit, reason, permitted := control.TryAcquireProviderAccountPermit(candidate, estimatedTokens)
+		if !permitted {
+			slotRelease()
+			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup, Model: candidate.UpstreamModel, Outcome: "skipped", Detail: reason})
 			continue
 		}
 		candidateResp, err := forwardChatCompletion(c, candidate, rawBody, stream)
 		if err != nil {
+			permit.Release()
 			slotRelease()
 			if candidate.AccountID != "" {
 				_ = control.RecordProviderAccountFailure(c.Request.Context(), candidate.AccountID, 0, err.Error())
 			}
-			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, Outcome: "failed", Detail: err.Error()})
+			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup, Model: candidate.UpstreamModel, Outcome: "failed", Detail: err.Error()})
 			transportErr = err
 			continue
 		}
@@ -349,27 +337,55 @@ func attemptGatewayCandidates(c *gin.Context, control *controlplane.Service, can
 		if !isLast && isProviderAccountFailureStatus(candidateResp.StatusCode) {
 			bodyPreview, _ := io.ReadAll(io.LimitReader(candidateResp.Body, failureBodyPreviewLimit))
 			_ = candidateResp.Body.Close()
+			permit.Release()
 			slotRelease()
 			if candidate.AccountID != "" {
 				_ = control.RecordProviderAccountFailure(c.Request.Context(), candidate.AccountID, candidateResp.StatusCode, string(bodyPreview))
 			}
 			detail := fmt.Sprintf("upstream http status %d", candidateResp.StatusCode)
-			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, Outcome: "failed", Detail: detail})
+			attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup, Model: candidate.UpstreamModel, Outcome: "failed", Detail: detail})
 			transportErr = errors.New(detail)
 			continue
+		}
+		if isProviderAccountFailureStatus(candidateResp.StatusCode) {
+			if candidate.AccountID != "" {
+				_ = control.RecordProviderAccountFailure(c.Request.Context(), candidate.AccountID, candidateResp.StatusCode, "")
+			}
+		} else if candidateResp.StatusCode >= 200 && candidateResp.StatusCode < 400 {
+			_ = control.RecordProviderAccountSuccess(c.Request.Context(), candidate.AccountID)
 		}
 		if candidate.AccountID != "" {
 			_ = control.TouchProviderAccountUsage(c.Request.Context(), candidate.AccountID)
 		}
-		attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, Outcome: "selected"})
-		return candidateResp, candidate, slotRelease, attempts, nil
+		attempts = append(attempts, gatewayRouteAttempt{AccountID: candidate.AccountID, ProviderID: candidate.ID, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup, Model: candidate.UpstreamModel, Outcome: "selected"})
+		return candidateResp, candidate, func() { permit.Release(); slotRelease() }, attempts, nil
 	}
 	return nil, controlplane.GatewayProvider{}, nil, attempts, transportErr
 }
 
+func estimateGatewayRequestTokens(rawBody []byte) int {
+	if len(rawBody) == 0 {
+		return 0
+	}
+	var limits struct {
+		MaxTokens           int `json:"max_tokens"`
+		MaxCompletionTokens int `json:"max_completion_tokens"`
+	}
+	_ = json.Unmarshal(rawBody, &limits)
+	completionTokens := limits.MaxTokens
+	if limits.MaxCompletionTokens > completionTokens {
+		completionTokens = limits.MaxCompletionTokens
+	}
+	return (len(rawBody)+3)/4 + completionTokens
+}
+
 func forwardChatCompletion(c *gin.Context, provider controlplane.GatewayProvider, rawBody []byte, stream bool) (*http.Response, error) {
+	upstreamBody, err := rewriteGatewayModel(rawBody, provider.UpstreamModel)
+	if err != nil {
+		return nil, err
+	}
 	endpoint := strings.TrimRight(provider.BaseURL, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, endpoint, bytes.NewReader(rawBody))
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, endpoint, bytes.NewReader(upstreamBody))
 	if err != nil {
 		return nil, err
 	}
@@ -383,10 +399,26 @@ func forwardChatCompletion(c *gin.Context, provider controlplane.GatewayProvider
 	return gatewayHTTPClient(stream).Do(req)
 }
 
+func rewriteGatewayModel(rawBody []byte, upstreamModel string) ([]byte, error) {
+	upstreamModel = strings.TrimSpace(upstreamModel)
+	if upstreamModel == "" {
+		return nil, errors.New("model route upstream_model is empty")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rawBody, &payload); err != nil {
+		return nil, err
+	}
+	payload["model"] = upstreamModel
+	return json.Marshal(payload)
+}
+
 func gatewayRouteSummary(model string, provider controlplane.GatewayProvider) string {
 	summary := fmt.Sprintf("Forwarded chat completion request for model %s to provider %s", model, provider.ID)
 	if provider.AccountID != "" {
 		summary += fmt.Sprintf(" account %s", provider.AccountID)
+	}
+	if provider.UpstreamModel != "" && provider.UpstreamModel != model {
+		summary += fmt.Sprintf(" upstream_model %s", provider.UpstreamModel)
 	}
 	if provider.SelectionReason != "" {
 		summary += "; " + provider.SelectionReason
@@ -401,6 +433,10 @@ func gatewayTraceInput(req chatCompletionRequest, provider controlplane.GatewayP
 		MessageCount:      len(req.Messages),
 		ProviderID:        provider.ID,
 		ProviderAccountID: provider.AccountID,
+		GatewayModelID:    provider.GatewayModelID,
+		RouteID:           provider.RouteID,
+		RouteGroup:        provider.RouteGroup,
+		UpstreamModel:     provider.UpstreamModel,
 		RouteSource:       provider.Source,
 		RouteReason:       provider.SelectionReason,
 		Status:            status,

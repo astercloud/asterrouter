@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { getCurrentUser, login as loginRequest } from '@/api/auth'
+import { completeTOTPLogin, getCurrentUser, login as loginRequest } from '@/api/auth'
 import type { AuthUser } from '@/types'
 
 const TOKEN_KEY = 'asterrouter_admin_token'
@@ -41,6 +41,25 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function completeOIDCLogin() {
+		token.value = 'oidc-cookie'
+		localStorage.setItem(TOKEN_KEY, token.value)
+		try {
+			user.value = await getCurrentUser()
+			localStorage.setItem(USER_KEY, JSON.stringify(user.value))
+		} catch (err) {
+			logout()
+			throw err
+		}
+	}
+
+	async function completeMFA(challenge: string, code: string) {
+		loading.value = true; error.value = ''
+		try { const result = await completeTOTPLogin(challenge, code); token.value = result.access_token; user.value = result.user; localStorage.setItem(TOKEN_KEY, result.access_token); localStorage.setItem(USER_KEY, JSON.stringify(result.user)) }
+		catch (err) { error.value = err instanceof Error ? err.message : 'MFA failed'; throw err }
+		finally { loading.value = false }
+	}
+
   function logout() {
     token.value = ''
     user.value = null
@@ -56,6 +75,8 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     login,
     loadCurrentUser,
+		completeOIDCLogin,
+		completeMFA,
     logout
   }
 })

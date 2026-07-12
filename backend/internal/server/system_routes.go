@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -91,6 +92,137 @@ func registerSystemRoutes(group *gin.RouterGroup, svc *system.Service, settingsS
 		_ = recordSystemEvent(c, control, "restart", operationID, result.Message)
 		httpx.OK(c, result)
 	})
+	group.GET("/backups", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1600, "system service is not available")
+			return
+		}
+		data, err := svc.ListBackups(c.Request.Context())
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1610, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	group.POST("/backups", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1600, "system service is not available")
+			return
+		}
+		operationID := systemOperationID(c, "backup")
+		data, err := svc.CreateBackup(c.Request.Context(), operationID)
+		if err != nil {
+			_ = recordSystemEvent(c, control, "backup_failed", operationID, err.Error())
+			writeArchiveError(c, err)
+			return
+		}
+		_ = recordSystemEvent(c, control, "backup", data.ID, fmt.Sprintf("Created backup %s", data.ID))
+		httpx.OK(c, data)
+	})
+	group.GET("/backups/:id/download", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1600, "system service is not available")
+			return
+		}
+		path, err := svc.BackupArchivePath(c.Param("id"))
+		if err != nil {
+			writeArchiveError(c, err)
+			return
+		}
+		c.FileAttachment(path, filepath.Base(path))
+	})
+	group.POST("/backups/restore", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1600, "system service is not available")
+			return
+		}
+		var request system.RestoreRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1611, "invalid restore request")
+			return
+		}
+		operationID := systemOperationID(c, "restore")
+		data, err := svc.RestoreBackup(c.Request.Context(), operationID, request)
+		if err != nil {
+			_ = recordSystemEvent(c, control, "restore_failed", operationID, err.Error())
+			writeArchiveError(c, err)
+			return
+		}
+		_ = recordSystemEvent(c, control, "restore", request.BackupID, fmt.Sprintf("Restored backup %s", request.BackupID))
+		httpx.OK(c, data)
+	})
+	group.POST("/diagnostics", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1600, "system service is not available")
+			return
+		}
+		operationID := systemOperationID(c, "diagnostic")
+		data, err := svc.CreateDiagnosticBundle(c.Request.Context(), operationID, systemDiagnosticDetails(c, settingsSvc, control))
+		if err != nil {
+			_ = recordSystemEvent(c, control, "diagnostic_failed", operationID, err.Error())
+			writeArchiveError(c, err)
+			return
+		}
+		_ = recordSystemEvent(c, control, "diagnostic", data.ID, fmt.Sprintf("Created diagnostic bundle %s", data.ID))
+		httpx.OK(c, data)
+	})
+	group.GET("/diagnostics/:id/download", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1600, "system service is not available")
+			return
+		}
+		path, err := svc.DiagnosticArchivePath(c.Param("id"))
+		if err != nil {
+			writeArchiveError(c, err)
+			return
+		}
+		c.FileAttachment(path, filepath.Base(path))
+	})
+}
+
+func systemDiagnosticDetails(c *gin.Context, settingsSvc *settings.Service, control *controlplane.Service) map[string]any {
+	details := map[string]any{}
+	if settingsSvc != nil {
+		if data, err := settingsSvc.Public(c.Request.Context()); err == nil {
+			details["settings"] = map[string]any{
+				"default_profile":     data.DefaultProfile,
+				"enabled_profiles":    data.EnabledProfiles,
+				"default_locale":      data.DefaultLocale,
+				"enabled_locales":     data.EnabledLocales,
+				"service_center_mode": data.ServiceCenterMode,
+				"storage_mode":        data.StorageMode,
+				"demo_mode":           data.DemoMode,
+			}
+			details["settings_health"] = "ok"
+		} else {
+			details["settings_health"] = "error"
+		}
+	}
+	if control != nil {
+		if err := control.Health(c.Request.Context()); err == nil {
+			details["control_plane_health"] = "ok"
+		} else {
+			details["control_plane_health"] = "error"
+		}
+	}
+	return details
+}
+
+func writeArchiveError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, system.ErrBackupConfirmation):
+		httpx.Error(c, http.StatusConflict, 1612, err.Error())
+	case errors.Is(err, system.ErrBackupNotFound):
+		httpx.Error(c, http.StatusNotFound, 1613, err.Error())
+	case errors.Is(err, system.ErrBackupToolMissing):
+		httpx.Error(c, http.StatusConflict, 1614, err.Error())
+	case errors.Is(err, system.ErrBackupDatabase):
+		httpx.Error(c, http.StatusConflict, 1617, err.Error())
+	case errors.Is(err, system.ErrBackupInvalid):
+		httpx.Error(c, http.StatusBadRequest, 1615, err.Error())
+	default:
+		httpx.Error(c, http.StatusInternalServerError, 1616, err.Error())
+	}
 }
 
 func updateChannel(c *gin.Context, settingsSvc *settings.Service) string {

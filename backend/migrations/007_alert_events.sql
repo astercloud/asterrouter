@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS alert_events (
   summary TEXT NOT NULL,
   resource_type TEXT NOT NULL DEFAULT '',
   resource_id TEXT NOT NULL DEFAULT '',
-  project_id TEXT NOT NULL DEFAULT '',
   dedupe_key TEXT NOT NULL UNIQUE,
   metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   first_seen_at TIMESTAMPTZ NOT NULL,
@@ -23,6 +22,3 @@ CREATE INDEX IF NOT EXISTS alert_events_status_last_seen_idx
 
 CREATE INDEX IF NOT EXISTS alert_events_resource_idx
   ON alert_events(resource_type, resource_id, last_seen_at DESC);
-
-CREATE INDEX IF NOT EXISTS alert_events_project_idx
-  ON alert_events(project_id, last_seen_at DESC);

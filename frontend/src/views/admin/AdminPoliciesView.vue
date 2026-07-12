@@ -204,8 +204,6 @@ onMounted(load)
       <select v-model="scopeFilter">
         <option value="">{{ t('policies.allScopes') }}</option>
         <option value="global">global</option>
-        <option value="department">department</option>
-        <option value="project">project</option>
         <option value="api_key">api_key</option>
       </select>
       <select v-model="statusFilter">
@@ -306,8 +304,6 @@ onMounted(load)
             <span>{{ t('policies.scopeType') }}</span>
             <select v-model="form.scope_type">
               <option value="global">global</option>
-              <option value="department">department</option>
-              <option value="project">project</option>
               <option value="api_key">api_key</option>
             </select>
           </label>

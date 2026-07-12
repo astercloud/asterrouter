@@ -25,7 +25,7 @@ const userModalOpen = ref(false)
 const bindingModalOpen = ref(false)
 const editingUser = ref<WorkspaceUser | null>(null)
 
-const roleOptions = ['super_admin', 'platform_admin', 'project_admin', 'read_only_auditor', 'developer']
+const roleOptions = ['super_admin', 'platform_admin', 'key_manager', 'read_only_auditor', 'developer']
 
 const userForm = reactive<WorkspaceUserRequest>({
   email: '',
@@ -243,7 +243,6 @@ onMounted(load)
             <tr>
               <th>{{ t('users.user') }}</th>
               <th>{{ t('users.role') }}</th>
-              <th>{{ t('users.projects') }}</th>
               <th>{{ t('providers.status') }}</th>
               <th>{{ t('common.actions') }}</th>
             </tr>
@@ -255,7 +254,6 @@ onMounted(load)
                 <span>{{ user.email }} · {{ user.id }}</span>
               </td>
               <td><span class="pill">{{ user.role }}</span></td>
-              <td><span class="pill">{{ user.project_count }}</span></td>
               <td><span class="pill" :class="statusClass(user.status)">{{ user.status }}</span></td>
               <td>
                 <div class="row-actions">
@@ -271,7 +269,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="!filteredUsers.length">
-              <td colspan="5" class="empty-cell">{{ loading ? t('common.loading') : t('users.empty') }}</td>
+              <td colspan="4" class="empty-cell">{{ loading ? t('common.loading') : t('users.empty') }}</td>
             </tr>
           </tbody>
         </table>

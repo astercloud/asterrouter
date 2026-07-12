@@ -28,10 +28,10 @@ const pageNumber = computed(() => Math.floor(offset.value / pageSize.value) + 1)
 const canPrevious = computed(() => offset.value > 0)
 const canNext = computed(() => alerts.value.length >= pageSize.value)
 
-const alertTypes = ['project_budget', 'api_key_quota', 'gateway_error_rate', 'provider_health', 'provider_account_health']
+const alertTypes = ['api_key_quota', 'gateway_error_rate', 'provider_health', 'provider_account_health']
 const severities = ['critical', 'warning', 'info']
 const statuses = ['active', 'acknowledged', 'resolved']
-const resourceTypes = ['project', 'api_key', 'provider', 'provider_account']
+const resourceTypes = ['api_key', 'provider', 'provider_account']
 
 async function load() {
   loading.value = true
@@ -225,7 +225,6 @@ onMounted(load)
               <td>
                 <strong>{{ label('resources', alert.resource_type) }}</strong>
                 <span>{{ alert.resource_id || '-' }}</span>
-                <span v-if="alert.project_id">{{ t('projects.project') }}: {{ alert.project_id }}</span>
               </td>
               <td>{{ formatTime(alert.first_seen_at) }}</td>
               <td>

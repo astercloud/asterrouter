@@ -7,21 +7,30 @@ const (
 	ProviderStatusDisabled    = "disabled"
 	ProviderStatusNeedsSecret = "needs_secret"
 
-	ProjectStatusActive   = "active"
-	ProjectStatusArchived = "archived"
-
-	ApplicationStatusActive   = "active"
-	ApplicationStatusDisabled = "disabled"
-
 	APIKeyStatusActive   = "active"
 	APIKeyStatusDisabled = "disabled"
+
+	APIKeyTypeWorkspace = "workspace"
+	APIKeyTypeUser      = "user"
+	APIKeyTypeCustomer  = "customer"
+	APIKeyTypeService   = "service"
 
 	AccountStatusActive   = "active"
 	AccountStatusError    = "error"
 	AccountStatusDisabled = "disabled"
 
+	CircuitStateClosed   = "closed"
+	CircuitStateOpen     = "open"
+	CircuitStateHalfOpen = "half_open"
+
 	RoutingGroupStatusActive   = "active"
 	RoutingGroupStatusDisabled = "disabled"
+
+	RoutingGroupTypeStandard        = "standard"
+	RoutingGroupTypeSubscription    = "subscription"
+	RoutingGroupTypeExclusive       = "exclusive"
+	RoutingGroupTypeImageGeneration = "image_generation"
+	RoutingGroupTypeVideoGeneration = "video_generation"
 
 	ModelPricingStatusActive   = "active"
 	ModelPricingStatusDisabled = "disabled"
@@ -62,71 +71,71 @@ type ProviderRequest struct {
 	APIKey   string   `json:"api_key"`
 }
 
-type Project struct {
-	ID                    string    `json:"id"`
-	Name                  string    `json:"name"`
-	Description           string    `json:"description"`
-	CostCenter            string    `json:"cost_center"`
-	MonthlyBudgetCents    int       `json:"monthly_budget_cents"`
-	PolicyID              string    `json:"policy_id"`
-	CurrentMonthCostCents int       `json:"current_month_cost_cents"`
-	BudgetRemainingCents  int       `json:"budget_remaining_cents"`
-	BudgetUsedPercent     float64   `json:"budget_used_percent"`
-	BudgetStatus          string    `json:"budget_status"`
-	Status                string    `json:"status"`
-	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
-}
-
-type ProjectRequest struct {
-	Name               string `json:"name"`
-	Description        string `json:"description"`
-	CostCenter         string `json:"cost_center"`
-	MonthlyBudgetCents int    `json:"monthly_budget_cents"`
-	PolicyID           string `json:"policy_id"`
-	Status             string `json:"status"`
-}
-
-type Application struct {
-	ID          string    `json:"id"`
-	ProjectID   string    `json:"project_id"`
-	Name        string    `json:"name"`
-	Environment string    `json:"environment"`
-	Owner       string    `json:"owner"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-type ApplicationRequest struct {
-	ProjectID   string `json:"project_id"`
-	Name        string `json:"name"`
-	Environment string `json:"environment"`
-	Owner       string `json:"owner"`
-	Status      string `json:"status"`
-}
-
 type RoutingGroup struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	Platform       string    `json:"platform"`
-	RateMultiplier float64   `json:"rate_multiplier"`
-	Status         string    `json:"status"`
-	SortOrder      int       `json:"sort_order"`
-	AccountCount   int       `json:"account_count"`
-	ActiveAccounts int       `json:"active_account_count"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                           string    `json:"id"`
+	Name                         string    `json:"name"`
+	Description                  string    `json:"description"`
+	Platform                     string    `json:"platform"`
+	GroupType                    string    `json:"group_type"`
+	RateMultiplier               float64   `json:"rate_multiplier"`
+	RPMLimit                     int       `json:"rpm_limit"`
+	IsExclusive                  bool      `json:"is_exclusive"`
+	DailyBudgetCents             int       `json:"daily_budget_cents"`
+	WeeklyBudgetCents            int       `json:"weekly_budget_cents"`
+	MonthlyBudgetCents           int       `json:"monthly_budget_cents"`
+	ImageEnabled                 bool      `json:"image_enabled"`
+	BatchImageEnabled            bool      `json:"batch_image_enabled"`
+	ImageRateMultiplier          float64   `json:"image_rate_multiplier"`
+	BatchImageDiscountMultiplier float64   `json:"batch_image_discount_multiplier"`
+	ImagePrice1KCents            int       `json:"image_price_1k_cents"`
+	ImagePrice2KCents            int       `json:"image_price_2k_cents"`
+	ImagePrice4KCents            int       `json:"image_price_4k_cents"`
+	VideoEnabled                 bool      `json:"video_enabled"`
+	VideoRateMultiplier          float64   `json:"video_rate_multiplier"`
+	VideoPrice480PCents          int       `json:"video_price_480p_cents"`
+	VideoPrice720PCents          int       `json:"video_price_720p_cents"`
+	VideoPrice1080PCents         int       `json:"video_price_1080p_cents"`
+	PeakRateEnabled              bool      `json:"peak_rate_enabled"`
+	PeakStart                    string    `json:"peak_start"`
+	PeakEnd                      string    `json:"peak_end"`
+	PeakRateMultiplier           float64   `json:"peak_rate_multiplier"`
+	Status                       string    `json:"status"`
+	SortOrder                    int       `json:"sort_order"`
+	AccountCount                 int       `json:"account_count"`
+	ActiveAccounts               int       `json:"active_account_count"`
+	CreatedAt                    time.Time `json:"created_at"`
+	UpdatedAt                    time.Time `json:"updated_at"`
 }
 
 type RoutingGroupRequest struct {
-	Name           string  `json:"name"`
-	Description    string  `json:"description"`
-	Platform       string  `json:"platform"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	Status         string  `json:"status"`
-	SortOrder      int     `json:"sort_order"`
+	Name                         string  `json:"name"`
+	Description                  string  `json:"description"`
+	Platform                     string  `json:"platform"`
+	GroupType                    string  `json:"group_type"`
+	RateMultiplier               float64 `json:"rate_multiplier"`
+	RPMLimit                     int     `json:"rpm_limit"`
+	IsExclusive                  bool    `json:"is_exclusive"`
+	DailyBudgetCents             int     `json:"daily_budget_cents"`
+	WeeklyBudgetCents            int     `json:"weekly_budget_cents"`
+	MonthlyBudgetCents           int     `json:"monthly_budget_cents"`
+	ImageEnabled                 bool    `json:"image_enabled"`
+	BatchImageEnabled            bool    `json:"batch_image_enabled"`
+	ImageRateMultiplier          float64 `json:"image_rate_multiplier"`
+	BatchImageDiscountMultiplier float64 `json:"batch_image_discount_multiplier"`
+	ImagePrice1KCents            int     `json:"image_price_1k_cents"`
+	ImagePrice2KCents            int     `json:"image_price_2k_cents"`
+	ImagePrice4KCents            int     `json:"image_price_4k_cents"`
+	VideoEnabled                 bool    `json:"video_enabled"`
+	VideoRateMultiplier          float64 `json:"video_rate_multiplier"`
+	VideoPrice480PCents          int     `json:"video_price_480p_cents"`
+	VideoPrice720PCents          int     `json:"video_price_720p_cents"`
+	VideoPrice1080PCents         int     `json:"video_price_1080p_cents"`
+	PeakRateEnabled              bool    `json:"peak_rate_enabled"`
+	PeakStart                    string  `json:"peak_start"`
+	PeakEnd                      string  `json:"peak_end"`
+	PeakRateMultiplier           float64 `json:"peak_rate_multiplier"`
+	Status                       string  `json:"status"`
+	SortOrder                    int     `json:"sort_order"`
 }
 
 type ProviderAccount struct {
@@ -138,7 +147,10 @@ type ProviderAccount struct {
 	Status                  string                                 `json:"status"`
 	Schedulable             bool                                   `json:"schedulable"`
 	Priority                int                                    `json:"priority"`
+	Weight                  int                                    `json:"weight"`
 	Concurrency             int                                    `json:"concurrency"`
+	RPMLimit                int                                    `json:"rpm_limit"`
+	TPMLimit                int                                    `json:"tpm_limit"`
 	LoadFactor              *int                                   `json:"load_factor,omitempty"`
 	RateMultiplier          float64                                `json:"rate_multiplier"`
 	Models                  []string                               `json:"models"`
@@ -150,6 +162,12 @@ type ProviderAccount struct {
 	LastUsedAt              *time.Time                             `json:"last_used_at,omitempty"`
 	ExpiresAt               *time.Time                             `json:"expires_at,omitempty"`
 	CooldownUntil           *time.Time                             `json:"cooldown_until,omitempty"`
+	CircuitState            string                                 `json:"circuit_state"`
+	CircuitFailureThreshold int                                    `json:"circuit_failure_threshold"`
+	CircuitOpenSeconds      int                                    `json:"circuit_open_seconds"`
+	ConsecutiveFailures     int                                    `json:"consecutive_failures"`
+	CircuitOpenedUntil      *time.Time                             `json:"circuit_opened_until,omitempty"`
+	LastFailureAt           *time.Time                             `json:"last_failure_at,omitempty"`
 	TempUnschedulableRules  []ProviderAccountTempUnschedulableRule `json:"temp_unschedulable_rules"`
 	TempUnschedulableReason string                                 `json:"temp_unschedulable_reason"`
 	CreatedAt               time.Time                              `json:"created_at"`
@@ -182,21 +200,26 @@ func (a ProviderAccount) EffectiveLoadFactor() int {
 }
 
 type ProviderAccountRequest struct {
-	ProviderID             string                                 `json:"provider_id"`
-	Name                   string                                 `json:"name"`
-	Platform               string                                 `json:"platform"`
-	AuthType               string                                 `json:"auth_type"`
-	Status                 string                                 `json:"status"`
-	Schedulable            *bool                                  `json:"schedulable"`
-	Priority               int                                    `json:"priority"`
-	Concurrency            int                                    `json:"concurrency"`
-	LoadFactor             *int                                   `json:"load_factor"`
-	RateMultiplier         float64                                `json:"rate_multiplier"`
-	Models                 []string                               `json:"models"`
-	GroupIDs               []string                               `json:"group_ids"`
-	Secret                 string                                 `json:"secret"`
-	ExpiresAt              string                                 `json:"expires_at"`
-	TempUnschedulableRules []ProviderAccountTempUnschedulableRule `json:"temp_unschedulable_rules"`
+	ProviderID              string                                 `json:"provider_id"`
+	Name                    string                                 `json:"name"`
+	Platform                string                                 `json:"platform"`
+	AuthType                string                                 `json:"auth_type"`
+	Status                  string                                 `json:"status"`
+	Schedulable             *bool                                  `json:"schedulable"`
+	Priority                int                                    `json:"priority"`
+	Weight                  int                                    `json:"weight"`
+	Concurrency             int                                    `json:"concurrency"`
+	RPMLimit                int                                    `json:"rpm_limit"`
+	TPMLimit                int                                    `json:"tpm_limit"`
+	LoadFactor              *int                                   `json:"load_factor"`
+	RateMultiplier          float64                                `json:"rate_multiplier"`
+	Models                  []string                               `json:"models"`
+	GroupIDs                []string                               `json:"group_ids"`
+	Secret                  string                                 `json:"secret"`
+	ExpiresAt               string                                 `json:"expires_at"`
+	CircuitFailureThreshold int                                    `json:"circuit_failure_threshold"`
+	CircuitOpenSeconds      int                                    `json:"circuit_open_seconds"`
+	TempUnschedulableRules  []ProviderAccountTempUnschedulableRule `json:"temp_unschedulable_rules"`
 }
 
 type ProviderAccountHealthCheck struct {
@@ -231,13 +254,13 @@ type ModelPricingRequest struct {
 
 type APIKeyRecord struct {
 	ID                string     `json:"id"`
-	ProjectID         string     `json:"project_id"`
-	ApplicationID     string     `json:"application_id"`
 	Name              string     `json:"name"`
 	KeyHash           string     `json:"-"`
 	Fingerprint       string     `json:"fingerprint"`
 	Prefix            string     `json:"prefix"`
 	Status            string     `json:"status"`
+	KeyType           string     `json:"key_type"`
+	CustomerID        string     `json:"customer_id"`
 	PolicyID          string     `json:"policy_id"`
 	ModelAllowlist    []string   `json:"model_allowlist"`
 	QPSLimit          int        `json:"qps_limit"`
@@ -249,14 +272,14 @@ type APIKeyRecord struct {
 }
 
 type APIKeyCreateRequest struct {
-	ProjectID         string   `json:"project_id"`
-	ApplicationID     string   `json:"application_id"`
 	Name              string   `json:"name"`
 	PolicyID          string   `json:"policy_id"`
 	ModelAllowlist    []string `json:"model_allowlist"`
 	QPSLimit          int      `json:"qps_limit"`
 	MonthlyTokenLimit int      `json:"monthly_token_limit"`
 	ExpiresAt         string   `json:"expires_at"`
+	KeyType           string   `json:"key_type"`
+	CustomerID        string   `json:"customer_id"`
 }
 
 type APIKeyUpdateRequest struct {
@@ -267,6 +290,8 @@ type APIKeyUpdateRequest struct {
 	MonthlyTokenLimit int      `json:"monthly_token_limit"`
 	ExpiresAt         string   `json:"expires_at"`
 	Status            string   `json:"status"`
+	KeyType           string   `json:"key_type"`
+	CustomerID        string   `json:"customer_id"`
 }
 
 type APIKeyCreateResponse struct {
@@ -287,8 +312,6 @@ type AuditLog struct {
 type Dashboard struct {
 	ProviderCount       int        `json:"provider_count"`
 	ActiveProviderCount int        `json:"active_provider_count"`
-	ProjectCount        int        `json:"project_count"`
-	ApplicationCount    int        `json:"application_count"`
 	APIKeyCount         int        `json:"api_key_count"`
 	ActiveAPIKeyCount   int        `json:"active_api_key_count"`
 	Models              []string   `json:"models"`
@@ -297,11 +320,11 @@ type Dashboard struct {
 
 type UsageRecord struct {
 	ID                string    `json:"id"`
-	ProjectID         string    `json:"project_id"`
-	ApplicationID     string    `json:"application_id"`
 	APIKeyID          string    `json:"api_key_id"`
+	CustomerID        string    `json:"customer_id"`
 	APIFingerprint    string    `json:"api_fingerprint"`
 	Model             string    `json:"model"`
+	UpstreamModel     string    `json:"upstream_model"`
 	ProviderID        string    `json:"provider_id"`
 	ProviderAccountID string    `json:"provider_account_id"`
 	Status            string    `json:"status"`
@@ -342,8 +365,6 @@ type UsageAggregate struct {
 }
 
 type CostAllocationRollup struct {
-	ProjectID      string
-	ApplicationID  string
 	APIKeyID       string
 	APIFingerprint string
 	Model          string
@@ -359,11 +380,6 @@ type CostAllocationRow struct {
 	Dimension         string  `json:"dimension"`
 	ResourceID        string  `json:"resource_id"`
 	ResourceName      string  `json:"resource_name"`
-	ProjectID         string  `json:"project_id"`
-	ProjectName       string  `json:"project_name"`
-	CostCenter        string  `json:"cost_center"`
-	ApplicationID     string  `json:"application_id"`
-	ApplicationName   string  `json:"application_name"`
 	APIKeyID          string  `json:"api_key_id"`
 	APIKeyName        string  `json:"api_key_name"`
 	APIFingerprint    string  `json:"api_fingerprint"`
@@ -389,22 +405,21 @@ type CostAllocationReport struct {
 }
 
 type UsageQuery struct {
-	Limit         int
-	Offset        int
-	Search        string
-	APIKeyID      string
-	Model         string
-	Status        string
-	ProjectID     string
-	ApplicationID string
-	CreatedFrom   time.Time
-	CreatedTo     time.Time
+	Limit       int
+	Offset      int
+	Search      string
+	APIKeyID    string
+	CustomerID  string
+	Model       string
+	ProviderID  string
+	AccountID   string
+	Status      string
+	CreatedFrom time.Time
+	CreatedTo   time.Time
 }
 
 type GatewayTrace struct {
 	ID                string    `json:"id"`
-	ProjectID         string    `json:"project_id"`
-	ApplicationID     string    `json:"application_id"`
 	APIKeyID          string    `json:"api_key_id"`
 	APIFingerprint    string    `json:"api_fingerprint"`
 	Model             string    `json:"model"`
@@ -412,6 +427,10 @@ type GatewayTrace struct {
 	MessageCount      int       `json:"message_count"`
 	ProviderID        string    `json:"provider_id"`
 	ProviderAccountID string    `json:"provider_account_id"`
+	GatewayModelID    string    `json:"gateway_model_id"`
+	RouteID           string    `json:"route_id"`
+	RouteGroup        string    `json:"route_group"`
+	UpstreamModel     string    `json:"upstream_model"`
 	RouteSource       string    `json:"route_source"`
 	RouteReason       string    `json:"route_reason"`
 	PolicyID          string    `json:"policy_id"`
@@ -432,16 +451,14 @@ type GatewayTrace struct {
 }
 
 type GatewayTraceQuery struct {
-	Limit         int
-	Offset        int
-	Search        string
-	APIKeyID      string
-	Model         string
-	Status        string
-	ProjectID     string
-	ApplicationID string
-	CreatedFrom   time.Time
-	CreatedTo     time.Time
+	Limit       int
+	Offset      int
+	Search      string
+	APIKeyID    string
+	Model       string
+	Status      string
+	CreatedFrom time.Time
+	CreatedTo   time.Time
 }
 
 type GatewayTraceSummary struct {
@@ -470,8 +487,6 @@ type AuditLogSummary struct {
 }
 
 type PortalWorkspace struct {
-	Projects      []Project      `json:"projects"`
-	Applications  []Application  `json:"applications"`
 	APIKeys       []APIKeyRecord `json:"api_keys"`
 	Usage         UsageReport    `json:"usage"`
 	RecentTraces  []GatewayTrace `json:"recent_traces"`
@@ -484,20 +499,33 @@ type PortalWorkspace struct {
 
 type GatewayAuthContext struct {
 	APIKey       APIKeyRecord      `json:"api_key"`
-	Project      Project           `json:"project"`
-	Application  Application       `json:"application"`
 	Policy       *GovernancePolicy `json:"policy,omitempty"`
 	PolicySource string            `json:"policy_source,omitempty"`
 }
 
 type GatewayProvider struct {
-	ID              string
-	Name            string
-	BaseURL         string
-	APIKey          string
-	AccountID       string
-	AccountName     string
-	Concurrency     int
-	Source          string
-	SelectionReason string
+	ID               string
+	Name             string
+	BaseURL          string
+	APIKey           string
+	AccountID        string
+	AccountName      string
+	Concurrency      int
+	GatewayModelID   string
+	RequestedModel   string
+	UpstreamModel    string
+	RouteID          string
+	RouteGroup       string
+	RoutePriority    int
+	RouteWeight      int
+	AccountWeight    int
+	RPMLimit         int
+	TPMLimit         int
+	CircuitState     string
+	CircuitProbe     bool
+	Headroom         float64
+	StickyEnabled    bool
+	StickyTTLSeconds int
+	Source           string
+	SelectionReason  string
 }

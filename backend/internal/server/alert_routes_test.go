@@ -14,32 +14,11 @@ import (
 func TestAdminAlertEndpoints(t *testing.T) {
 	ctx := context.Background()
 	handler, control := newTestRuntime(t, config.Config{})
-	project, err := control.CreateProject(ctx, "tester", controlplane.ProjectRequest{
-		Name:               "HTTP Alert Project",
-		CostCenter:         "OPS",
-		MonthlyBudgetCents: 100,
-		Status:             controlplane.ProjectStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateProject(): %v", err)
-	}
-	app, err := control.CreateApplication(ctx, "tester", controlplane.ApplicationRequest{
-		ProjectID:   project.ID,
-		Name:        "HTTP Alert App",
-		Environment: "prod",
-		Owner:       "platform",
-		Status:      controlplane.ApplicationStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateApplication(): %v", err)
-	}
 	created, err := control.CreateAPIKey(ctx, "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         project.ID,
-		ApplicationID:     app.ID,
 		Name:              "HTTP alert key",
 		ModelAllowlist:    []string{"gpt-alert"},
 		QPSLimit:          0,
-		MonthlyTokenLimit: 0,
+		MonthlyTokenLimit: 100,
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey(): %v", err)
@@ -48,11 +27,11 @@ func TestAdminAlertEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuthorizeGatewayModel(): %v", err)
 	}
-	if err := control.RecordGatewayUsage(ctx, auth, controlplane.GatewayUsageInput{Model: "gpt-alert", Status: "forwarded", CostCents: 100}); err != nil {
+	if err := control.RecordGatewayUsage(ctx, auth, controlplane.GatewayUsageInput{Model: "gpt-alert", Status: "forwarded", InputTokens: 100}); err != nil {
 		t.Fatalf("RecordGatewayUsage(): %v", err)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/alerts?type=project_budget&status=active", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/alerts?type=api_key_quota&status=active", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -69,7 +48,7 @@ func TestAdminAlertEndpoints(t *testing.T) {
 	}
 	alertID := listResp.Data[0].ID
 
-	summaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/alerts/summary?type=project_budget&status=active", nil)
+	summaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/alerts/summary?type=api_key_quota&status=active", nil)
 	summaryRec := httptest.NewRecorder()
 	handler.ServeHTTP(summaryRec, summaryReq)
 	if summaryRec.Code != http.StatusOK {

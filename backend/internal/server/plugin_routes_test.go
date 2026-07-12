@@ -47,6 +47,107 @@ func TestAdminPluginsCatalogEndpoint(t *testing.T) {
 	}
 }
 
+func TestAdminOfficialFeedSyncRecordsDisabledAttempt(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"enterprise"}})
+	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	pluginService := plugins.NewService(plugins.NewMemoryRepository())
+	handler := New(Options{Config: config.Config{}, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: system.NewService(system.Config{Version: "test", BuildType: "source"})})
+
+	body := bytes.NewBufferString(`{"service_key":"provider-intelligence"}`)
+	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/feeds/sync", body)
+	syncReq.Header.Set("Content-Type", "application/json")
+	syncRec := httptest.NewRecorder()
+	handler.ServeHTTP(syncRec, syncReq)
+	if syncRec.Code != http.StatusConflict {
+		t.Fatalf("sync status = %d body=%s", syncRec.Code, syncRec.Body.String())
+	}
+
+	runsReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/feeds/sync-runs?service_key=provider-intelligence", nil)
+	runsRec := httptest.NewRecorder()
+	handler.ServeHTTP(runsRec, runsReq)
+	if runsRec.Code != http.StatusOK {
+		t.Fatalf("runs status = %d body=%s", runsRec.Code, runsRec.Body.String())
+	}
+	var response struct {
+		Data []plugins.OfficialFeedSyncRun `json:"data"`
+	}
+	if err := json.Unmarshal(runsRec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode runs: %v", err)
+	}
+	if len(response.Data) != 1 || response.Data[0].Status != "failed" || response.Data[0].ErrorCode != "sync_disabled" {
+		t.Fatalf("unexpected sync runs: %+v", response.Data)
+	}
+}
+
+func TestPluginHostFeedEndpointRejectsExternalAndUnknownRuntime(t *testing.T) {
+	handler := newTestHandler(t, config.Config{})
+
+	externalReq := httptest.NewRequest(http.MethodGet, "/api/v1/plugin-host/com.asterrouter.test/feeds/provider-intelligence", nil)
+	externalReq.RemoteAddr = "198.51.100.20:43100"
+	externalReq.Header.Set("Authorization", "Bearer runtime-token")
+	externalRec := httptest.NewRecorder()
+	handler.ServeHTTP(externalRec, externalReq)
+	if externalRec.Code != http.StatusForbidden {
+		t.Fatalf("external status = %d body=%s", externalRec.Code, externalRec.Body.String())
+	}
+
+	loopbackReq := httptest.NewRequest(http.MethodGet, "/api/v1/plugin-host/com.asterrouter.test/feeds/provider-intelligence", nil)
+	loopbackReq.RemoteAddr = "127.0.0.1:43100"
+	loopbackReq.Header.Set("Authorization", "Bearer runtime-token")
+	loopbackRec := httptest.NewRecorder()
+	handler.ServeHTTP(loopbackRec, loopbackReq)
+	if loopbackRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown runtime status = %d body=%s", loopbackRec.Code, loopbackRec.Body.String())
+	}
+}
+
+func TestPluginOpenCatalogUsesScopedAPIToken(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "enterprise"}})
+	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	pluginService := plugins.NewService(plugins.NewMemoryRepository())
+	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
+		t.Fatalf("Plugin EnsureSeedData(): %v", err)
+	}
+	created, err := pluginService.CreatePluginAPIToken(context.Background(), plugins.PluginAPITokenCreateRequest{
+		Name:     "catalog integration",
+		Scopes:   []string{plugins.PluginAPIScopeCatalogRead},
+		Surfaces: []string{"personal"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePluginAPIToken(): %v", err)
+	}
+	handler := New(Options{Config: config.Config{}, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: system.NewService(system.Config{Version: "test", BuildType: "source"})})
+
+	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/api/v1/open/plugins/catalog?surface=personal", nil)
+	unauthorizedRec := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedRec, unauthorizedReq)
+	if unauthorizedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d body=%s", unauthorizedRec.Code, unauthorizedRec.Body.String())
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/open/plugins/catalog?surface=personal", nil)
+	request.Header.Set("Authorization", "Bearer "+created.Secret)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("catalog status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Data plugins.Catalog `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+	if len(response.Data.Plugins) == 0 {
+		t.Fatal("open catalog is empty")
+	}
+	for _, plugin := range response.Data.Plugins {
+		if plugin.ID == "com.asterrouter.enterprise.audit-baseline" {
+			t.Fatal("enterprise-only plugin leaked through personal API token")
+		}
+	}
+}
+
 func TestAdminPluginsCatalogSyncEndpoint(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -78,7 +179,7 @@ func TestAdminPluginsCatalogSyncEndpoint(t *testing.T) {
 	}))
 	defer catalogServer.Close()
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		OfficialCatalog: plugins.OfficialCatalogConfig{
@@ -217,7 +318,7 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 	defer catalogServer.Close()
 	catalogServerURL = catalogServer.URL
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		OfficialCatalog: plugins.OfficialCatalogConfig{
@@ -346,7 +447,7 @@ func TestAdminPluginsEnableFreePluginAudits(t *testing.T) {
 func TestAdminPluginConfigEndpointsAuditAndMaskSecrets(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 
-	body := bytes.NewBufferString(`{"settings":{"min_severity":"critical","alert_types":"project_budget"},"secrets":{"webhook_url":"https://example.com/hook","bearer_token":"secret-token"}}`)
+	body := bytes.NewBufferString(`{"settings":{"min_severity":"critical","alert_types":"api_key_quota"},"secrets":{"webhook_url":"https://example.com/hook","bearer_token":"secret-token"}}`)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/plugins/com.asterrouter.notification.webhook/config", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -398,7 +499,7 @@ func TestAdminPluginDeliveriesEndpoint(t *testing.T) {
 	if enableRec.Code != http.StatusOK {
 		t.Fatalf("enable status = %d body=%s", enableRec.Code, enableRec.Body.String())
 	}
-	configBody := bytes.NewBufferString(`{"settings":{"min_severity":"warning","alert_types":"project_budget"},"secrets":{"webhook_url":"` + webhook.URL + `"}}`)
+	configBody := bytes.NewBufferString(`{"settings":{"min_severity":"warning","alert_types":"api_key_quota"},"secrets":{"webhook_url":"` + webhook.URL + `"}}`)
 	configReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/plugins/com.asterrouter.notification.webhook/config", configBody)
 	configReq.Header.Set("Content-Type", "application/json")
 	configRec := httptest.NewRecorder()
@@ -407,32 +508,11 @@ func TestAdminPluginDeliveriesEndpoint(t *testing.T) {
 		t.Fatalf("config status = %d body=%s", configRec.Code, configRec.Body.String())
 	}
 
-	project, err := control.CreateProject(context.Background(), "tester", controlplane.ProjectRequest{
-		Name:               "Delivery Budget Project",
-		CostCenter:         "OPS",
-		MonthlyBudgetCents: 100,
-		Status:             controlplane.ProjectStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateProject(): %v", err)
-	}
-	app, err := control.CreateApplication(context.Background(), "tester", controlplane.ApplicationRequest{
-		ProjectID:   project.ID,
-		Name:        "Delivery App",
-		Environment: "prod",
-		Owner:       "ops",
-		Status:      controlplane.ApplicationStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("CreateApplication(): %v", err)
-	}
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         project.ID,
-		ApplicationID:     app.ID,
 		Name:              "delivery key",
 		ModelAllowlist:    []string{"gpt-delivery"},
 		QPSLimit:          0,
-		MonthlyTokenLimit: 0,
+		MonthlyTokenLimit: 100,
 	})
 	if err != nil {
 		t.Fatalf("CreateAPIKey(): %v", err)
@@ -442,9 +522,9 @@ func TestAdminPluginDeliveriesEndpoint(t *testing.T) {
 		t.Fatalf("AuthorizeGatewayModel(): %v", err)
 	}
 	if err := control.RecordGatewayUsage(context.Background(), auth, controlplane.GatewayUsageInput{
-		Model:     "gpt-delivery",
-		Status:    "forwarded",
-		CostCents: 100,
+		Model:       "gpt-delivery",
+		Status:      "forwarded",
+		InputTokens: 100,
 	}); err != nil {
 		t.Fatalf("RecordGatewayUsage(): %v", err)
 	}
@@ -512,7 +592,7 @@ func TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus(t *testing.T) {
 		"expires_at": expiresAt.Format(time.RFC3339),
 	}, now)
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		SecretKey: "test-secret",

@@ -15,37 +15,16 @@ CREATE TABLE IF NOT EXISTS provider_connections (
 
 ALTER TABLE provider_connections ADD COLUMN IF NOT EXISTS secret_ciphertext TEXT NOT NULL DEFAULT '';
 
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  cost_center TEXT NOT NULL DEFAULT '',
-  monthly_budget_cents INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS applications (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  environment TEXT NOT NULL DEFAULT 'dev',
-  owner TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS api_keys (
   id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   key_hash TEXT NOT NULL UNIQUE,
   fingerprint TEXT NOT NULL,
   prefix TEXT NOT NULL,
   status TEXT NOT NULL,
+  key_type TEXT NOT NULL DEFAULT 'workspace',
+  customer_id TEXT NOT NULL DEFAULT '',
+  policy_id TEXT NOT NULL DEFAULT '',
   model_allowlist TEXT NOT NULL DEFAULT '[]',
   qps_limit INTEGER NOT NULL DEFAULT 0,
   monthly_token_limit INTEGER NOT NULL DEFAULT 0,

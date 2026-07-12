@@ -4,11 +4,19 @@ import SurfaceShell from '@/components/SurfaceShell.vue'
 
 const navGroups = [
   {
-    label: 'nav.workspace',
+    label: 'nav.overview',
+    items: [{ to: '/portal/overview', label: 'portal.overview', icon: Gauge }]
+  },
+  {
+    label: 'nav.selfService',
     items: [
-      { to: '/portal/overview', label: 'portal.overview', icon: Gauge },
       { to: '/portal/integration', label: 'portal.integrationGuide', icon: Code2 },
-      { to: '/portal/keys', label: 'portal.myKeys', icon: KeyRound },
+      { to: '/portal/keys', label: 'portal.myKeys', icon: KeyRound }
+    ]
+  },
+  {
+    label: 'nav.activity',
+    items: [
       { to: '/portal/usage', label: 'portal.usage', icon: Activity },
       { to: '/portal/alerts', label: 'portal.alerts', icon: BellRing },
       { to: '/portal/traces', label: 'portal.recentTraces', icon: Route }

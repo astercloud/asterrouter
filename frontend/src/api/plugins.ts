@@ -1,13 +1,22 @@
 import { apiClient } from './client'
 import type {
   LicenseActivateRequest,
+  LicenseRedeemRequest,
   LicenseImportRequest,
   OfficialCatalogStatus,
+  OfficialFeedClientInfo,
+  OfficialFeedImportRequest,
+  OfficialFeedSyncResult,
+  OfficialFeedSyncRun,
+  OfficialFeedStatus,
   OfficialLicenseStatus,
   Plugin,
   PluginCatalog,
   PluginConfig,
   PluginConfigRequest,
+  PluginAPIToken,
+  PluginAPITokenCreateRequest,
+  PluginAPITokenCreateResult,
   PluginDeliveryAttempt,
   PluginPackage,
   PluginPackageInstallation,
@@ -42,6 +51,48 @@ export async function updatePluginConfig(id: string, payload: PluginConfigReques
   return response.data
 }
 
+export async function getPluginAPITokens(pluginID = ''): Promise<PluginAPIToken[]> {
+  const response = await apiClient.get<PluginAPIToken[]>('/admin/plugins/api-tokens', { params: pluginID ? { plugin_id: pluginID } : undefined })
+  return response.data
+}
+
+export async function createPluginAPIToken(payload: PluginAPITokenCreateRequest): Promise<PluginAPITokenCreateResult> {
+  const response = await apiClient.post<PluginAPITokenCreateResult>('/admin/plugins/api-tokens', payload)
+  return response.data
+}
+
+export async function revokePluginAPIToken(id: string): Promise<PluginAPIToken> {
+  const response = await apiClient.delete<PluginAPIToken>(`/admin/plugins/api-tokens/${encodeURIComponent(id)}`)
+  return response.data
+}
+
+export async function getOfficialFeedClientInfo(): Promise<OfficialFeedClientInfo> {
+  const response = await apiClient.get<OfficialFeedClientInfo>('/admin/plugins/feeds/client')
+  return response.data
+}
+
+export async function getOfficialFeedStatuses(serviceKey = ''): Promise<OfficialFeedStatus[]> {
+  const response = await apiClient.get<OfficialFeedStatus[]>('/admin/plugins/feeds', { params: serviceKey ? { service_key: serviceKey } : undefined })
+  return response.data
+}
+
+export async function importOfficialFeed(payload: OfficialFeedImportRequest): Promise<OfficialFeedStatus> {
+  const response = await apiClient.post<OfficialFeedStatus>('/admin/plugins/feeds/import', payload)
+  return response.data
+}
+
+export async function syncOfficialFeed(serviceKey: string): Promise<OfficialFeedSyncResult> {
+  const response = await apiClient.post<OfficialFeedSyncResult>('/admin/plugins/feeds/sync', { service_key: serviceKey })
+  return response.data
+}
+
+export async function getOfficialFeedSyncRuns(serviceKey = '', limit = 20): Promise<OfficialFeedSyncRun[]> {
+  const response = await apiClient.get<OfficialFeedSyncRun[]>('/admin/plugins/feeds/sync-runs', {
+    params: { ...(serviceKey ? { service_key: serviceKey } : {}), limit }
+  })
+  return response.data
+}
+
 export async function getPluginDeliveries(id: string, params?: { limit?: number; offset?: number; status?: string; alert_id?: string }): Promise<PluginDeliveryAttempt[]> {
   const response = await apiClient.get<PluginDeliveryAttempt[]>(`/admin/plugins/${encodeURIComponent(id)}/deliveries`, { params })
   return response.data
@@ -64,6 +115,11 @@ export async function getOfficialLicenseStatus(): Promise<OfficialLicenseStatus>
 
 export async function activateOfficialLicense(payload: LicenseActivateRequest): Promise<OfficialLicenseStatus> {
   const response = await apiClient.post<OfficialLicenseStatus>('/admin/plugins/license/activate', payload)
+  return response.data
+}
+
+export async function redeemOfficialLicense(payload: LicenseRedeemRequest): Promise<OfficialLicenseStatus> {
+  const response = await apiClient.post<OfficialLicenseStatus>('/admin/plugins/license/redeem', payload)
   return response.data
 }
 

@@ -12,13 +12,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control *controlplane.Service) {
+func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control *controlplane.Service, surface string) {
+	group.Use(func(c *gin.Context) {
+		if svc == nil || c.Param("id") == "" {
+			c.Next()
+			return
+		}
+		if err := svc.RequireSurface(c.Request.Context(), c.Param("id"), surface); err != nil {
+			if errors.Is(err, plugins.ErrPluginNotFound) {
+				httpx.Error(c, http.StatusNotFound, 1704, err.Error())
+			} else if errors.Is(err, plugins.ErrPluginSurface) {
+				httpx.Error(c, http.StatusForbidden, 1705, err.Error())
+			} else {
+				httpx.Error(c, http.StatusInternalServerError, 1701, err.Error())
+			}
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
 	group.GET("", func(c *gin.Context) {
 		if svc == nil {
 			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
 			return
 		}
-		catalog, err := svc.Catalog(c.Request.Context())
+		catalog, err := svc.CatalogForSurface(c.Request.Context(), surface)
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1701, err.Error())
 			return
@@ -49,6 +67,145 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 		}
 		httpx.OK(c, status)
 	})
+	group.GET("/feeds/client", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		info, err := svc.OfficialFeedClientInfo(c.Request.Context())
+		if err != nil {
+			writeOfficialFeedError(c, err)
+			return
+		}
+		httpx.OK(c, info)
+	})
+	group.GET("/feeds", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		items, err := svc.OfficialFeedStatuses(c.Request.Context(), c.Query("service_key"))
+		if err != nil {
+			writeOfficialFeedError(c, err)
+			return
+		}
+		httpx.OK(c, items)
+	})
+	group.GET("/feeds/sync-runs", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		items, err := svc.OfficialFeedSyncRuns(c.Request.Context(), c.Query("service_key"), intQuery(c, "limit", 20))
+		if err != nil {
+			writeOfficialFeedError(c, err)
+			return
+		}
+		httpx.OK(c, items)
+	})
+	group.POST("/feeds/sync", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		var req plugins.OfficialFeedSyncRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1780, "invalid official feed sync payload")
+			return
+		}
+		result, err := svc.SyncOfficialFeed(c.Request.Context(), req.ServiceKey)
+		if err != nil {
+			_ = recordPluginEvent(c, control, "feed_sync_failed", req.ServiceKey, fmt.Sprintf("Official feed sync failed for service %s (%s)", req.ServiceKey, result.Run.ErrorCode))
+			writeOfficialFeedError(c, err)
+			return
+		}
+		_ = recordPluginEvent(c, control, "feed_sync", result.Feed.ServiceKey, fmt.Sprintf("Synchronized official feed %s for service %s", result.Feed.FeedID, result.Feed.ServiceKey))
+		httpx.OK(c, result)
+	})
+	group.POST("/feeds/import", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		var req plugins.OfficialFeedImportRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1780, "invalid official feed import payload")
+			return
+		}
+		status, err := svc.ImportOfficialFeed(c.Request.Context(), req)
+		if err != nil {
+			writeOfficialFeedError(c, err)
+			return
+		}
+		_ = recordPluginEvent(c, control, "feed_import", status.ServiceKey, fmt.Sprintf("Imported official feed %s for service %s", status.FeedID, status.ServiceKey))
+		httpx.OK(c, status)
+	})
+	group.GET("/api-tokens", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		items, err := svc.ListPluginAPITokens(c.Request.Context(), c.Query("plugin_id"))
+		if err != nil {
+			writePluginAPITokenError(c, err)
+			return
+		}
+		filtered := make([]plugins.PluginAPIToken, 0, len(items))
+		for _, item := range items {
+			if pluginTokenHasSurface(item, surface) {
+				filtered = append(filtered, item)
+			}
+		}
+		httpx.OK(c, filtered)
+	})
+	group.POST("/api-tokens", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		var req plugins.PluginAPITokenCreateRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1770, "invalid plugin API token payload")
+			return
+		}
+		req.Surfaces = []string{surface}
+		result, err := svc.CreatePluginAPIToken(c.Request.Context(), req)
+		if err != nil {
+			writePluginAPITokenError(c, err)
+			return
+		}
+		_ = recordPluginEvent(c, control, "api_token_create", result.Token.ID, fmt.Sprintf("Created plugin API token %s", result.Token.Name))
+		httpx.OK(c, result)
+	})
+	group.DELETE("/api-tokens/:token_id", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		items, err := svc.ListPluginAPITokens(c.Request.Context(), "")
+		if err != nil {
+			writePluginAPITokenError(c, err)
+			return
+		}
+		allowed := false
+		for _, item := range items {
+			if item.ID == c.Param("token_id") && pluginTokenHasSurface(item, surface) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writePluginAPITokenError(c, plugins.ErrPluginAPITokenNotFound)
+			return
+		}
+		token, err := svc.RevokePluginAPIToken(c.Request.Context(), c.Param("token_id"))
+		if err != nil {
+			writePluginAPITokenError(c, err)
+			return
+		}
+		_ = recordPluginEvent(c, control, "api_token_revoke", token.ID, fmt.Sprintf("Revoked plugin API token %s", token.Name))
+		httpx.OK(c, token)
+	})
 	group.POST("/license/activate", func(c *gin.Context) {
 		if svc == nil {
 			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
@@ -65,6 +222,24 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 			return
 		}
 		_ = recordPluginEvent(c, control, "license_activate", status.LicenseID, fmt.Sprintf("Activated license %s", status.LicenseID))
+		httpx.OK(c, status)
+	})
+	group.POST("/license/redeem", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		var req plugins.LicenseRedeemRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1747, "invalid license redeem payload")
+			return
+		}
+		status, err := svc.RedeemLicense(c.Request.Context(), req)
+		if err != nil {
+			writeLicenseError(c, err)
+			return
+		}
+		_ = recordPluginEvent(c, control, "license_redeem", status.LicenseID, fmt.Sprintf("Redeemed license %s", status.LicenseID))
 		httpx.OK(c, status)
 	})
 	group.POST("/license/import", func(c *gin.Context) {
@@ -301,6 +476,15 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 	})
 }
 
+func pluginTokenHasSurface(token plugins.PluginAPIToken, surface string) bool {
+	for _, item := range token.Surfaces {
+		if item == surface {
+			return true
+		}
+	}
+	return false
+}
+
 func writePluginError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, plugins.ErrPluginNotFound):
@@ -394,12 +578,46 @@ func writeLicenseError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, plugins.ErrLicenseNotFound):
 		httpx.Error(c, http.StatusNotFound, 1740, err.Error())
-	case errors.Is(err, plugins.ErrLicenseNotConfigured), errors.Is(err, plugins.ErrLicenseInvalid), errors.Is(err, plugins.ErrLicenseActivation):
+	case errors.Is(err, plugins.ErrLicenseNotConfigured), errors.Is(err, plugins.ErrLicenseInvalid), errors.Is(err, plugins.ErrLicenseActivation), errors.Is(err, plugins.ErrLicenseRedeem), errors.Is(err, plugins.ErrLicenseBinding):
 		httpx.Error(c, http.StatusConflict, 1741, err.Error())
 	case errors.Is(err, plugins.ErrLicenseSignature):
 		httpx.Error(c, http.StatusForbidden, 1743, err.Error())
 	default:
 		httpx.Error(c, http.StatusBadGateway, 1744, err.Error())
+	}
+}
+
+func writePluginAPITokenError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, plugins.ErrPluginAPITokenNotFound), errors.Is(err, plugins.ErrPluginNotFound):
+		httpx.Error(c, http.StatusNotFound, 1771, err.Error())
+	case errors.Is(err, plugins.ErrPluginAPITokenInvalid):
+		httpx.Error(c, http.StatusBadRequest, 1772, err.Error())
+	case errors.Is(err, plugins.ErrPluginAPITokenExpired):
+		httpx.Error(c, http.StatusUnauthorized, 1773, err.Error())
+	case errors.Is(err, plugins.ErrPluginAPITokenScope), errors.Is(err, plugins.ErrPluginSurface):
+		httpx.Error(c, http.StatusForbidden, 1774, err.Error())
+	default:
+		httpx.Error(c, http.StatusInternalServerError, 1775, err.Error())
+	}
+}
+
+func writeOfficialFeedError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, plugins.ErrLicenseNotFound), errors.Is(err, plugins.ErrOfficialFeedNotFound):
+		httpx.Error(c, http.StatusNotFound, 1781, err.Error())
+	case errors.Is(err, plugins.ErrOfficialFeedEntitlement), errors.Is(err, plugins.ErrOfficialFeedBinding):
+		httpx.Error(c, http.StatusForbidden, 1782, err.Error())
+	case errors.Is(err, plugins.ErrCatalogSignature):
+		httpx.Error(c, http.StatusForbidden, 1783, err.Error())
+	case errors.Is(err, plugins.ErrOfficialFeedInvalid), errors.Is(err, plugins.ErrOfficialFeedDecrypt), errors.Is(err, plugins.ErrOfficialFeedReplay), errors.Is(err, plugins.ErrOfficialFeedExpired), errors.Is(err, plugins.ErrCatalogNotConfigured):
+		httpx.Error(c, http.StatusConflict, 1784, err.Error())
+	case errors.Is(err, plugins.ErrOfficialFeedSyncDisabled), errors.Is(err, plugins.ErrOfficialFeedSyncMode):
+		httpx.Error(c, http.StatusConflict, 1786, err.Error())
+	case errors.Is(err, plugins.ErrOfficialFeedRemote):
+		httpx.Error(c, http.StatusBadGateway, 1787, err.Error())
+	default:
+		httpx.Error(c, http.StatusInternalServerError, 1785, err.Error())
 	}
 }
 

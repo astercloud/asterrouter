@@ -1,33 +1,46 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getPublicSettings } from '@/api/settings'
-import EntryRedirectView from '@/views/EntryRedirectView.vue'
-import LoginView from '@/views/LoginView.vue'
-import SetupView from '@/views/SetupView.vue'
-import AdminShell from '@/views/admin/AdminShell.vue'
-import AdminApiKeysView from '@/views/admin/AdminApiKeysView.vue'
-import AdminAlertsView from '@/views/admin/AdminAlertsView.vue'
-import AdminAuditView from '@/views/admin/AdminAuditView.vue'
-import AdminCostAllocationView from '@/views/admin/AdminCostAllocationView.vue'
-import AdminDashboardView from '@/views/admin/AdminDashboardView.vue'
-import AdminDepartmentsView from '@/views/admin/AdminDepartmentsView.vue'
-import AdminExportJobsView from '@/views/admin/AdminExportJobsView.vue'
-import AdminGatewayTracesView from '@/views/admin/AdminGatewayTracesView.vue'
-import AdminModelPricingsView from '@/views/admin/AdminModelPricingsView.vue'
-import AdminPluginsView from '@/views/admin/AdminPluginsView.vue'
-import AdminPoliciesView from '@/views/admin/AdminPoliciesView.vue'
-import AdminProviderAccountsView from '@/views/admin/AdminProviderAccountsView.vue'
-import AdminProvidersView from '@/views/admin/AdminProvidersView.vue'
-import AdminRoutingGroupsView from '@/views/admin/AdminRoutingGroupsView.vue'
-import AdminSettingsView from '@/views/admin/AdminSettingsView.vue'
-import AdminUsageView from '@/views/admin/AdminUsageView.vue'
-import AdminUsersView from '@/views/admin/AdminUsersView.vue'
-import ConsoleHomeView from '@/views/console/ConsoleHomeView.vue'
-import ConsoleShell from '@/views/console/ConsoleShell.vue'
-import OperatorHomeView from '@/views/operator/OperatorHomeView.vue'
-import OperatorShell from '@/views/operator/OperatorShell.vue'
-import PortalHomeView from '@/views/portal/PortalHomeView.vue'
-import PortalShell from '@/views/portal/PortalShell.vue'
 import type { PublicSettings } from '@/types'
+
+const EntryRedirectView = () => import('@/views/EntryRedirectView.vue')
+const LoginView = () => import('@/views/LoginView.vue')
+const SetupView = () => import('@/views/SetupView.vue')
+const AdminShell = () => import('@/views/admin/AdminShell.vue')
+const AdminApiKeysView = () => import('@/views/admin/AdminApiKeysView.vue')
+const AdminAlertsView = () => import('@/views/admin/AdminAlertsView.vue')
+const AdminAuditView = () => import('@/views/admin/AdminAuditView.vue')
+const AdminCostAllocationView = () => import('@/views/admin/AdminCostAllocationView.vue')
+const AdminDashboardView = () => import('@/views/admin/AdminDashboardView.vue')
+const AdminDepartmentsView = () => import('@/views/admin/AdminDepartmentsView.vue')
+const AdminExportJobsView = () => import('@/views/admin/AdminExportJobsView.vue')
+const AdminGatewayTracesView = () => import('@/views/admin/AdminGatewayTracesView.vue')
+const AdminGatewayModelsView = () => import('@/views/admin/AdminGatewayModelsView.vue')
+const AdminGatewaySimulatorView = () => import('@/views/admin/AdminGatewaySimulatorView.vue')
+const AdminModelPricingsView = () => import('@/views/admin/AdminModelPricingsView.vue')
+const AdminModelRoutesView = () => import('@/views/admin/AdminModelRoutesView.vue')
+const AdminPluginsView = () => import('@/views/admin/AdminPluginsView.vue')
+const AdminPoliciesView = () => import('@/views/admin/AdminPoliciesView.vue')
+const AdminProviderAccountsView = () => import('@/views/admin/AdminProviderAccountsView.vue')
+const AdminProvidersView = () => import('@/views/admin/AdminProvidersView.vue')
+const AdminRoutingGroupsView = () => import('@/views/admin/AdminRoutingGroupsView.vue')
+const AdminSettingsView = () => import('@/views/admin/AdminSettingsView.vue')
+const AdminUsageView = () => import('@/views/admin/AdminUsageView.vue')
+const AdminUsersView = () => import('@/views/admin/AdminUsersView.vue')
+const ConsoleHomeView = () => import('@/views/console/ConsoleHomeView.vue')
+const ConsoleShell = () => import('@/views/console/ConsoleShell.vue')
+const OperatorHomeView = () => import('@/views/operator/OperatorHomeView.vue')
+const OperatorShell = () => import('@/views/operator/OperatorShell.vue')
+const OperatorCustomersView = () => import('@/views/operator/OperatorCustomersView.vue')
+const OperatorGroupsView = () => import('@/views/operator/OperatorGroupsView.vue')
+const OperatorPlansView = () => import('@/views/operator/OperatorPlansView.vue')
+const OperatorBalancesView = () => import('@/views/operator/OperatorBalancesView.vue')
+const OperatorPricingView = () => import('@/views/operator/OperatorPricingView.vue')
+const OperatorRiskView = () => import('@/views/operator/OperatorRiskView.vue')
+const OperatorNoticesView = () => import('@/views/operator/OperatorNoticesView.vue')
+const OperatorUsageView = () => import('@/views/operator/OperatorUsageView.vue')
+const OperatorKeysView = () => import('@/views/operator/OperatorKeysView.vue')
+const PortalHomeView = () => import('@/views/portal/PortalHomeView.vue')
+const PortalShell = () => import('@/views/portal/PortalShell.vue')
 
 let publicSettingsCache: PublicSettings | null = null
 
@@ -85,8 +98,15 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/console/overview' },
         { path: 'overview', component: ConsoleHomeView, meta: { titleKey: 'console.overview', descriptionKey: 'console.subtitle', consolePanel: 'overview' } },
-        { path: 'keys', component: ConsoleHomeView, meta: { titleKey: 'console.keys', descriptionKey: 'console.keySummary', consolePanel: 'keys' } },
-        { path: 'usage', component: ConsoleHomeView, meta: { titleKey: 'console.usage', descriptionKey: 'console.usageHelp', consolePanel: 'usage' } },
+        { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
+        { path: 'models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
+        { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
+        { path: 'gateway-simulator', component: AdminGatewaySimulatorView, meta: { titleKey: 'admin.gatewaySimulator', descriptionKey: 'gatewaySimulator.subtitle' } },
+        { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
+        { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
+        { path: 'resources', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
+        { path: 'keys', component: AdminApiKeysView, meta: { titleKey: 'console.keys', descriptionKey: 'console.keySummary' } },
+        { path: 'usage', component: AdminUsageView, meta: { titleKey: 'console.usage', descriptionKey: 'console.usageHelp' } },
         { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
         { path: ':pathMatch(.*)*', redirect: '/console/overview' }
       ]
@@ -97,10 +117,22 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/operator/overview' },
         { path: 'overview', component: OperatorHomeView, meta: { titleKey: 'operator.overview', descriptionKey: 'operator.subtitle', operatorPanel: 'overview' } },
-        { path: 'routing-groups', component: OperatorHomeView, meta: { titleKey: 'operator.groupList', descriptionKey: 'operator.groupSummary', operatorPanel: 'routing-groups' } },
-        { path: 'resources', component: OperatorHomeView, meta: { titleKey: 'operator.resourceList', descriptionKey: 'operator.resourceSummary', operatorPanel: 'resources' } },
-        { path: 'keys', component: OperatorHomeView, meta: { titleKey: 'operator.keyList', descriptionKey: 'operator.keySummary', operatorPanel: 'keys' } },
-        { path: 'usage', component: OperatorHomeView, meta: { titleKey: 'operator.traffic', descriptionKey: 'operator.trafficHelp', operatorPanel: 'usage' } },
+        { path: 'customers', component: OperatorCustomersView, meta: { titleKey: 'operatorDomain.customers', descriptionKey: 'operatorDomain.customersHelp' } },
+        { path: 'customer-keys', component: OperatorKeysView, meta: { titleKey: 'operatorDomain.keyList', descriptionKey: 'operatorDomain.keySummary' } },
+        { path: 'customer-groups', component: OperatorGroupsView, meta: { titleKey: 'operatorDomain.groups', descriptionKey: 'operatorDomain.groupsHelp' } },
+        { path: 'plans', component: OperatorPlansView, meta: { titleKey: 'operatorDomain.plans', descriptionKey: 'operatorDomain.plansHelp' } },
+        { path: 'balances', component: OperatorBalancesView, meta: { titleKey: 'operatorDomain.balances', descriptionKey: 'operatorDomain.balancesHelp' } },
+        { path: 'pricing', component: OperatorPricingView, meta: { titleKey: 'operatorDomain.pricing', descriptionKey: 'operatorDomain.pricingHelp' } },
+        { path: 'risk', component: OperatorRiskView, meta: { titleKey: 'operatorDomain.risk', descriptionKey: 'operatorDomain.riskHelp' } },
+        { path: 'notices', component: OperatorNoticesView, meta: { titleKey: 'operatorDomain.notices', descriptionKey: 'operatorDomain.noticesHelp' } },
+        { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
+        { path: 'models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
+        { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
+        { path: 'gateway-simulator', component: AdminGatewaySimulatorView, meta: { titleKey: 'admin.gatewaySimulator', descriptionKey: 'gatewaySimulator.subtitle' } },
+        { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'operator.groupList', descriptionKey: 'operator.groupSummary' } },
+        { path: 'resources', component: AdminProviderAccountsView, meta: { titleKey: 'operator.resourceList', descriptionKey: 'operator.resourceSummary' } },
+        { path: 'usage', component: OperatorUsageView, meta: { titleKey: 'operator.traffic', descriptionKey: 'operator.trafficHelp' } },
+        { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
         { path: ':pathMatch(.*)*', redirect: '/operator/overview' }
       ]
@@ -112,6 +144,9 @@ const router = createRouter({
         { path: '', redirect: '/admin/dashboard' },
         { path: 'dashboard', component: AdminDashboardView, meta: { titleKey: 'admin.overview', descriptionKey: 'dashboard.subtitle' } },
         { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
+        { path: 'gateway-models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
+        { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
+        { path: 'gateway-simulator', component: AdminGatewaySimulatorView, meta: { titleKey: 'admin.gatewaySimulator', descriptionKey: 'gatewaySimulator.subtitle' } },
         { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
         { path: 'provider-accounts', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
         { path: 'model-pricings', component: AdminModelPricingsView, meta: { titleKey: 'admin.modelPricings', descriptionKey: 'modelPricings.subtitle' } },

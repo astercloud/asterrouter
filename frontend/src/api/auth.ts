@@ -10,3 +10,14 @@ export async function getCurrentUser(): Promise<AuthUser> {
   const response = await apiClient.get<AuthUser>('/auth/me')
   return response.data
 }
+
+export async function completeTOTPLogin(challenge: string, code: string): Promise<LoginResult> {
+	const response = await apiClient.post<LoginResult>('/auth/totp/login', { challenge, code })
+	return response.data
+}
+
+export async function register(email: string, password: string, displayName: string, invitationCode = '') { return (await apiClient.post('/auth/register', { email, password, display_name: displayName, invitation_code: invitationCode })).data }
+export async function verifyEmail(token: string) { return (await apiClient.post('/auth/verify-email', { token })).data }
+export async function resendVerification(email: string) { return (await apiClient.post('/auth/resend-verification', { email })).data }
+export async function forgotPassword(email: string) { return (await apiClient.post('/auth/forgot-password', { email })).data }
+export async function resetPassword(token: string, password: string) { return (await apiClient.post('/auth/reset-password', { token, password })).data }

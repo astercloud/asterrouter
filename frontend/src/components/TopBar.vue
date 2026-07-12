@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ChevronDown, Globe2, Laptop, LogOut, Menu, PanelsTopLeft, RadioTower, UserRound } from '@lucide/vue'
+import { ChevronDown, Globe2, KeyRound, Laptop, LogOut, Menu, PanelsTopLeft, RadioTower, UserRound } from '@lucide/vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -32,6 +32,11 @@ const pageDescription = computed(() => {
 
 const userInitials = computed(() => auth.user?.username.slice(0, 2).toUpperCase() || 'AR')
 const enabledProfiles = computed(() => app.publicSettings?.enabled_profiles || [])
+const demoMode = computed(() => Boolean(app.publicSettings?.demo_mode))
+const isConsoleSurface = computed(() => route.path.startsWith('/console'))
+const isOperatorSurface = computed(() => route.path.startsWith('/operator'))
+const isAdminSurface = computed(() => route.path.startsWith('/admin'))
+const isPortalSurface = computed(() => route.path.startsWith('/portal'))
 
 function changeLocale(event: Event) {
   setLocale((event.target as HTMLSelectElement).value as LocaleCode)
@@ -65,8 +70,9 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
 </script>
 
 <template>
-  <header class="topbar">
-    <div class="topbar-context">
+  <header class="app-header glass topbar">
+    <div class="app-header-inner">
+      <div class="topbar-context">
       <button
         v-if="showMenu"
         class="icon-button mobile-menu-button"
@@ -82,9 +88,10 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
         <p class="topbar-title">{{ pageTitle }}</p>
         <p class="topbar-description">{{ pageDescription }}</p>
       </div>
-    </div>
+      </div>
 
-    <div class="topbar-actions">
+      <div class="topbar-actions">
+      <span v-if="demoMode" class="pill status-warning">{{ t('nav.demoMode') }}</span>
       <label class="locale-control">
         <Globe2 :size="17" aria-hidden="true" />
         <select :value="getLocale()" :aria-label="t('nav.language')" @change="changeLocale">
@@ -115,16 +122,20 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
             <strong>{{ auth.user.username }}</strong>
             <span>{{ auth.user.role }}</span>
           </div>
-          <button v-if="enabledProfiles.includes('personal')" type="button" @click="openSurface('/console/overview')">
+          <button v-if="enabledProfiles.includes('personal') && !isConsoleSurface" type="button" @click="openSurface('/console/overview')">
             <Laptop :size="16" />
             {{ t('nav.console') }}
           </button>
-          <button v-if="enabledProfiles.includes('relay_operator')" type="button" @click="openSurface('/operator/overview')">
+          <button v-if="enabledProfiles.includes('relay_operator') && !isOperatorSurface" type="button" @click="openSurface('/operator/overview')">
             <RadioTower :size="16" />
             {{ t('nav.operator') }}
           </button>
-          <button v-if="enabledProfiles.includes('enterprise')" type="button" @click="openSurface('/portal/overview')">
+          <button v-if="enabledProfiles.includes('enterprise') && !isAdminSurface" type="button" @click="openSurface('/admin/dashboard')">
             <PanelsTopLeft :size="16" />
+            {{ t('nav.admin') }}
+          </button>
+          <button v-if="enabledProfiles.includes('enterprise') && !isPortalSurface" type="button" @click="openSurface('/portal/overview')">
+            <KeyRound :size="16" />
             {{ t('nav.portal') }}
           </button>
           <button class="danger-item" type="button" @click="logout">
@@ -137,6 +148,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
       <span v-else class="guest-avatar" aria-hidden="true">
         <UserRound :size="18" />
       </span>
+      </div>
     </div>
   </header>
 </template>

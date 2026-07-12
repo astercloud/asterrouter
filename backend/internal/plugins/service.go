@@ -14,6 +14,7 @@ import (
 
 var (
 	ErrPluginNotFound        = errors.New("plugin not found")
+	ErrPluginSurface         = errors.New("plugin is not available on this surface")
 	ErrPluginLocked          = errors.New("plugin entitlement is missing")
 	ErrPluginCoreRequired    = errors.New("core plugin cannot be disabled")
 	ErrPluginNotConfigurable = errors.New("plugin is not configurable")
@@ -21,20 +22,24 @@ var (
 )
 
 type Service struct {
-	repo             Repository
-	secretKey        string
-	httpClient       *http.Client
-	catalogConfig    OfficialCatalogConfig
-	licenseConfig    OfficialLicenseConfig
-	packageCacheDir  string
-	packageActiveDir string
-	coreVersion      string
-	targetOS         string
-	targetArch       string
-	now              func() time.Time
-	sidecarsMu       sync.Mutex
-	sidecars         map[string]*sidecarProcess
-	supervisors      map[string]*sidecarSupervisor
+	repo               Repository
+	secretKey          string
+	httpClient         *http.Client
+	catalogConfig      OfficialCatalogConfig
+	licenseConfig      OfficialLicenseConfig
+	licenseInstanceID  string
+	licenseFingerprint string
+	packageCacheDir    string
+	packageActiveDir   string
+	pluginHostURL      string
+	coreVersion        string
+	targetOS           string
+	targetArch         string
+	now                func() time.Time
+	sidecarsMu         sync.Mutex
+	packageMu          sync.Mutex
+	sidecars           map[string]*sidecarProcess
+	supervisors        map[string]*sidecarSupervisor
 }
 
 type ServiceOptions struct {
@@ -44,6 +49,7 @@ type ServiceOptions struct {
 	OfficialLicense OfficialLicenseConfig
 	PackageCacheDir string
 	PluginActiveDir string
+	PluginHostURL   string
 	CoreVersion     string
 	TargetOS        string
 	TargetArch      string
@@ -74,19 +80,22 @@ func NewServiceWithOptions(repo Repository, options ServiceOptions) *Service {
 	cacheDir := defaultString(strings.TrimSpace(options.PackageCacheDir), defaultPackageCacheDir())
 	activeDir := defaultString(strings.TrimSpace(options.PluginActiveDir), defaultPackageActiveDir(cacheDir))
 	return &Service{
-		repo:             repo,
-		secretKey:        key,
-		httpClient:       client,
-		catalogConfig:    normalizeOfficialCatalogConfig(options.OfficialCatalog),
-		licenseConfig:    normalizeOfficialLicenseConfig(options.OfficialLicense, options.OfficialCatalog),
-		packageCacheDir:  cacheDir,
-		packageActiveDir: activeDir,
-		coreVersion:      defaultString(strings.TrimSpace(options.CoreVersion), "0.1.0-dev"),
-		targetOS:         defaultString(strings.ToLower(strings.TrimSpace(options.TargetOS)), runtime.GOOS),
-		targetArch:       defaultString(strings.ToLower(strings.TrimSpace(options.TargetArch)), runtime.GOARCH),
-		now:              now,
-		sidecars:         map[string]*sidecarProcess{},
-		supervisors:      map[string]*sidecarSupervisor{},
+		repo:               repo,
+		secretKey:          key,
+		httpClient:         client,
+		catalogConfig:      normalizeOfficialCatalogConfig(options.OfficialCatalog),
+		licenseConfig:      normalizeOfficialLicenseConfig(options.OfficialLicense, options.OfficialCatalog),
+		licenseInstanceID:  strings.TrimSpace(options.OfficialLicense.InstanceID),
+		licenseFingerprint: strings.TrimSpace(options.OfficialLicense.Fingerprint),
+		packageCacheDir:    cacheDir,
+		packageActiveDir:   activeDir,
+		pluginHostURL:      strings.TrimRight(strings.TrimSpace(options.PluginHostURL), "/"),
+		coreVersion:        defaultString(strings.TrimSpace(options.CoreVersion), "0.1.0-dev"),
+		targetOS:           defaultString(strings.ToLower(strings.TrimSpace(options.TargetOS)), runtime.GOOS),
+		targetArch:         defaultString(strings.ToLower(strings.TrimSpace(options.TargetArch)), runtime.GOARCH),
+		now:                now,
+		sidecars:           map[string]*sidecarProcess{},
+		supervisors:        map[string]*sidecarSupervisor{},
 	}
 }
 
@@ -121,11 +130,22 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 }
 
 func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
+	return s.catalog(ctx, "")
+}
+
+func (s *Service) CatalogForSurface(ctx context.Context, surface string) (Catalog, error) {
+	return s.catalog(ctx, strings.TrimSpace(surface))
+}
+
+func (s *Service) catalog(ctx context.Context, surface string) (Catalog, error) {
 	plugins, err := s.repo.ListPlugins(ctx)
 	if err != nil {
 		return Catalog{}, err
 	}
 	for index := range plugins {
+		if surface != "" && !pluginSurfaceAllowed(plugins[index], surface) {
+			continue
+		}
 		plugin, err := s.applyLocalEntitlement(ctx, plugins[index])
 		if err != nil {
 			return Catalog{}, err
@@ -137,7 +157,43 @@ func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 		}
 		plugins[index].Packages = packages
 	}
-	return Catalog{Summary: summarize(plugins), Plugins: plugins}, nil
+	filtered := make([]Plugin, 0, len(plugins))
+	for _, plugin := range plugins {
+		if surface == "" || pluginSurfaceAllowed(plugin, surface) {
+			filtered = append(filtered, plugin)
+		}
+	}
+	return Catalog{Summary: summarize(filtered), Plugins: filtered}, nil
+}
+
+func (s *Service) RequireSurface(ctx context.Context, id string, surface string) error {
+	plugin, ok, err := s.repo.FindPlugin(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrPluginNotFound
+	}
+	if !pluginSurfaceAllowed(plugin, strings.TrimSpace(surface)) {
+		return ErrPluginSurface
+	}
+	return nil
+}
+
+func pluginSurfaceAllowed(plugin Plugin, surface string) bool {
+	if surface == "" {
+		return true
+	}
+	for _, item := range plugin.Surfaces {
+		if strings.TrimSpace(item) == surface {
+			return true
+		}
+		// Keep old catalog records readable while they are refreshed.
+		if surface == "enterprise" && (item == "admin" || item == "portal") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) Enable(ctx context.Context, id string) (Plugin, error) {

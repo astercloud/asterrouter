@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,7 +34,7 @@ func TestAdminDashboardEndpoint(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Data.ProviderCount != 1 || resp.Data.ProjectCount != 1 {
+	if resp.Data.ProviderCount != 1 || resp.Data.APIKeyCount != 0 {
 		t.Fatalf("unexpected dashboard: %+v", resp.Data)
 	}
 }
@@ -94,6 +95,77 @@ func TestAdminModelPricingEndpoints(t *testing.T) {
 	}
 }
 
+func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{})
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name: "route provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
+		Status: controlplane.ProviderStatusActive, Models: []string{"upstream-chat"}, APIKey: "provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+	account := createGatewayTestAccount(t, control, provider, "upstream-chat", "account-secret", 10, 3)
+
+	modelCreate := httptest.NewRequest(http.MethodPost, "/api/v1/admin/gateway-models", bytes.NewBufferString(`{"model_id":"public-chat","name":"Public Chat","modality":"chat","default_route_group":"stable","status":"active"}`))
+	modelCreate.Header.Set("Content-Type", "application/json")
+	modelCreateRec := httptest.NewRecorder()
+	handler.ServeHTTP(modelCreateRec, modelCreate)
+	if modelCreateRec.Code != http.StatusOK {
+		t.Fatalf("create gateway model status = %d body=%s", modelCreateRec.Code, modelCreateRec.Body.String())
+	}
+	var modelResp struct {
+		Data controlplane.GatewayModel `json:"data"`
+	}
+	if err := json.Unmarshal(modelCreateRec.Body.Bytes(), &modelResp); err != nil {
+		t.Fatalf("decode gateway model: %v", err)
+	}
+
+	routeBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","priority":10,"weight":100,"status":"active"}`, modelResp.Data.ID, account.ID)
+	routeCreate := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes", bytes.NewBufferString(routeBody))
+	routeCreate.Header.Set("Content-Type", "application/json")
+	routeCreateRec := httptest.NewRecorder()
+	handler.ServeHTTP(routeCreateRec, routeCreate)
+	if routeCreateRec.Code != http.StatusOK {
+		t.Fatalf("create model route status = %d body=%s", routeCreateRec.Code, routeCreateRec.Body.String())
+	}
+	var routeResp struct {
+		Data controlplane.ModelRoute `json:"data"`
+	}
+	if err := json.Unmarshal(routeCreateRec.Body.Bytes(), &routeResp); err != nil {
+		t.Fatalf("decode model route: %v", err)
+	}
+	if routeResp.Data.UpstreamModel != "upstream-chat" || routeResp.Data.ProviderAccountID != account.ID {
+		t.Fatalf("created route mismatch: %+v", routeResp.Data)
+	}
+
+	modelList := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-models", nil)
+	modelListRec := httptest.NewRecorder()
+	handler.ServeHTTP(modelListRec, modelList)
+	if modelListRec.Code != http.StatusOK || !strings.Contains(modelListRec.Body.String(), `"route_count":1`) {
+		t.Fatalf("gateway model list status = %d body=%s", modelListRec.Code, modelListRec.Body.String())
+	}
+
+	routeUpdateBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","priority":20,"weight":250,"status":"disabled"}`, modelResp.Data.ID, account.ID)
+	routeUpdate := httptest.NewRequest(http.MethodPut, "/api/v1/admin/model-routes/"+routeResp.Data.ID, bytes.NewBufferString(routeUpdateBody))
+	routeUpdate.Header.Set("Content-Type", "application/json")
+	routeUpdateRec := httptest.NewRecorder()
+	handler.ServeHTTP(routeUpdateRec, routeUpdate)
+	if routeUpdateRec.Code != http.StatusOK || !strings.Contains(routeUpdateRec.Body.String(), `"weight":250`) {
+		t.Fatalf("update model route status = %d body=%s", routeUpdateRec.Code, routeUpdateRec.Body.String())
+	}
+
+	modelDelete := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/gateway-models/"+modelResp.Data.ID, nil)
+	modelDeleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(modelDeleteRec, modelDelete)
+	if modelDeleteRec.Code != http.StatusOK {
+		t.Fatalf("delete gateway model status = %d body=%s", modelDeleteRec.Code, modelDeleteRec.Body.String())
+	}
+	routes, err := control.ListModelRoutes(context.Background())
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("expected routes to be cascade deleted: routes=%+v err=%v", routes, err)
+	}
+}
+
 func TestAdminGovernancePolicyEndpoints(t *testing.T) {
 	handler := newTestHandler(t, config.Config{})
 
@@ -150,138 +222,9 @@ func TestAdminGovernancePolicyEndpoints(t *testing.T) {
 	}
 }
 
-func TestAdminProjectAndApplicationUpdateEndpoints(t *testing.T) {
-	handler := newTestHandler(t, config.Config{})
-
-	projectBody := bytes.NewBufferString(`{"name":"Finance AI","description":"finance sandbox","cost_center":"FIN","monthly_budget_cents":12000,"status":"active"}`)
-	projectReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/projects", projectBody)
-	projectReq.Header.Set("Content-Type", "application/json")
-	projectRec := httptest.NewRecorder()
-	handler.ServeHTTP(projectRec, projectReq)
-	if projectRec.Code != http.StatusOK {
-		t.Fatalf("project create status = %d body=%s", projectRec.Code, projectRec.Body.String())
-	}
-	var projectResp struct {
-		Data controlplane.Project `json:"data"`
-	}
-	if err := json.Unmarshal(projectRec.Body.Bytes(), &projectResp); err != nil {
-		t.Fatalf("decode project create: %v", err)
-	}
-
-	updateProjectBody := bytes.NewBufferString(`{"name":"Finance AI Updated","description":"finance prod","cost_center":"FIN-OPS","monthly_budget_cents":36000,"status":"archived"}`)
-	updateProjectReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/projects/"+projectResp.Data.ID, updateProjectBody)
-	updateProjectReq.Header.Set("Content-Type", "application/json")
-	updateProjectRec := httptest.NewRecorder()
-	handler.ServeHTTP(updateProjectRec, updateProjectReq)
-	if updateProjectRec.Code != http.StatusOK {
-		t.Fatalf("project update status = %d body=%s", updateProjectRec.Code, updateProjectRec.Body.String())
-	}
-	var updatedProjectResp struct {
-		Data controlplane.Project `json:"data"`
-	}
-	if err := json.Unmarshal(updateProjectRec.Body.Bytes(), &updatedProjectResp); err != nil {
-		t.Fatalf("decode project update: %v", err)
-	}
-	if updatedProjectResp.Data.ID != projectResp.Data.ID || updatedProjectResp.Data.Name != "Finance AI Updated" || updatedProjectResp.Data.Status != controlplane.ProjectStatusArchived {
-		t.Fatalf("unexpected updated project: %+v", updatedProjectResp.Data)
-	}
-
-	appBody := bytes.NewBufferString(`{"name":"Budget Bot","environment":"dev","owner":"finance","status":"active"}`)
-	appReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/projects/"+projectResp.Data.ID+"/applications", appBody)
-	appReq.Header.Set("Content-Type", "application/json")
-	appRec := httptest.NewRecorder()
-	handler.ServeHTTP(appRec, appReq)
-	if appRec.Code != http.StatusOK {
-		t.Fatalf("app create status = %d body=%s", appRec.Code, appRec.Body.String())
-	}
-	var appResp struct {
-		Data controlplane.Application `json:"data"`
-	}
-	if err := json.Unmarshal(appRec.Body.Bytes(), &appResp); err != nil {
-		t.Fatalf("decode app create: %v", err)
-	}
-
-	updateAppBody := bytes.NewBufferString(`{"project_id":"` + projectResp.Data.ID + `","name":"Budget Bot API","environment":"prod","owner":"platform","status":"disabled"}`)
-	updateAppReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/applications/"+appResp.Data.ID, updateAppBody)
-	updateAppReq.Header.Set("Content-Type", "application/json")
-	updateAppRec := httptest.NewRecorder()
-	handler.ServeHTTP(updateAppRec, updateAppReq)
-	if updateAppRec.Code != http.StatusOK {
-		t.Fatalf("app update status = %d body=%s", updateAppRec.Code, updateAppRec.Body.String())
-	}
-	var updatedAppResp struct {
-		Data controlplane.Application `json:"data"`
-	}
-	if err := json.Unmarshal(updateAppRec.Body.Bytes(), &updatedAppResp); err != nil {
-		t.Fatalf("decode app update: %v", err)
-	}
-	if updatedAppResp.Data.ID != appResp.Data.ID || updatedAppResp.Data.Name != "Budget Bot API" || updatedAppResp.Data.Status != controlplane.ApplicationStatusDisabled {
-		t.Fatalf("unexpected updated app: %+v", updatedAppResp.Data)
-	}
-}
-
-func TestAdminProjectsIncludesBudgetUsageSummary(t *testing.T) {
-	handler, control := newTestRuntime(t, config.Config{})
-	project, err := control.UpdateProject(context.Background(), "tester", "proj_platform", controlplane.ProjectRequest{
-		Name:               "Platform Engineering",
-		Description:        "Budget visible project",
-		CostCenter:         "IT-PLATFORM",
-		MonthlyBudgetCents: 1000,
-		Status:             controlplane.ProjectStatusActive,
-	})
-	if err != nil {
-		t.Fatalf("UpdateProject(): %v", err)
-	}
-	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         project.ID,
-		ApplicationID:     "app_internal_sandbox",
-		Name:              "budget summary key",
-		ModelAllowlist:    []string{"gpt-4o-mini"},
-		MonthlyTokenLimit: 0,
-	})
-	if err != nil {
-		t.Fatalf("CreateAPIKey(): %v", err)
-	}
-	auth, err := control.AuthorizeGatewayModel(context.Background(), created.Key, "gpt-4o-mini")
-	if err != nil {
-		t.Fatalf("AuthorizeGatewayModel(): %v", err)
-	}
-	if err := control.RecordGatewayUsage(context.Background(), auth, controlplane.GatewayUsageInput{
-		Model:     "gpt-4o-mini",
-		Status:    "forwarded",
-		CostCents: 850,
-	}); err != nil {
-		t.Fatalf("RecordGatewayUsage(): %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/projects", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("projects status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	var resp struct {
-		Data []controlplane.Project `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode projects: %v", err)
-	}
-	for _, item := range resp.Data {
-		if item.ID == project.ID {
-			if item.CurrentMonthCostCents != 850 || item.BudgetRemainingCents != 150 || item.BudgetStatus != "warning" {
-				t.Fatalf("budget summary mismatch: %+v", item)
-			}
-			return
-		}
-	}
-	t.Fatalf("project not found in response: %+v", resp.Data)
-}
-
 func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "query key",
 		ModelAllowlist:    []string{"model-a", "model-b"},
 		QPSLimit:          0,
@@ -307,8 +250,6 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("RecordGatewayTrace b: %v", err)
 	}
 	other, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		ProjectID:         "proj_platform",
-		ApplicationID:     "app_internal_sandbox",
 		Name:              "other query key",
 		ModelAllowlist:    []string{"model-a"},
 		QPSLimit:          0,
@@ -567,9 +508,6 @@ func TestCreateAPIKeyEndpoint(t *testing.T) {
 	if resp.Data.Key == "" || resp.Data.Record.Fingerprint == "" {
 		t.Fatalf("api key response incomplete: %+v", resp.Data)
 	}
-	if resp.Data.Record.ProjectID != "proj_platform" || resp.Data.Record.ApplicationID != "app_internal_sandbox" {
-		t.Fatalf("workspace default boundary mismatch: %+v", resp.Data.Record)
-	}
 }
 
 func TestAPIKeyPolicyExplanationEndpoint(t *testing.T) {
@@ -590,7 +528,7 @@ func TestAPIKeyPolicyExplanationEndpoint(t *testing.T) {
 		t.Fatalf("decode policy: %v", err)
 	}
 
-	keyBody := bytes.NewBufferString(`{"project_id":"proj_platform","application_id":"app_internal_sandbox","name":"demo","policy_id":"` + policyResp.Data.ID + `","model_allowlist":["gpt-4o-mini"],"qps_limit":2,"monthly_token_limit":1000}`)
+	keyBody := bytes.NewBufferString(`{"name":"demo","policy_id":"` + policyResp.Data.ID + `","model_allowlist":["gpt-4o-mini"],"qps_limit":2,"monthly_token_limit":1000}`)
 	keyReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys", keyBody)
 	keyReq.Header.Set("Content-Type", "application/json")
 	keyRec := httptest.NewRecorder()
@@ -925,5 +863,33 @@ func TestAdminSystemUpdateWithoutManifestRequiresManualConfiguration(t *testing.
 	}
 	if !strings.Contains(rec.Body.String(), "manifest") {
 		t.Fatalf("expected manifest guidance: %s", rec.Body.String())
+	}
+}
+
+func TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup(t *testing.T) {
+	handler, _ := newTestRuntime(t, config.Config{})
+
+	for _, path := range []string{"/api/v1/admin/system/backups", "/api/v1/console/system/backups", "/api/v1/operator/system/backups"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/backups", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "PostgreSQL") {
+		t.Fatalf("POST backup status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/backups/restore", bytes.NewBufferString(`{"backup_id":"missing","confirm":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "confirmation") {
+		t.Fatalf("POST restore status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }

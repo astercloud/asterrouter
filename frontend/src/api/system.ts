@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { SystemApplyResult, SystemUpdateInfo } from '@/types'
+import type { SystemApplyResult, SystemArchiveInfo, SystemRestoreResult, SystemUpdateInfo } from '@/types'
 
 export async function checkSystemUpdates(force = false): Promise<SystemUpdateInfo> {
   const response = await apiClient.get<SystemUpdateInfo>('/admin/system/check-updates', {
@@ -21,4 +21,46 @@ export async function rollbackSystemUpdate(): Promise<SystemApplyResult> {
 export async function restartSystem(): Promise<SystemApplyResult> {
   const response = await apiClient.post<SystemApplyResult>('/admin/system/restart')
   return response.data
+}
+
+export async function listSystemBackups(): Promise<SystemArchiveInfo[]> {
+  const response = await apiClient.get<SystemArchiveInfo[]>('/admin/system/backups')
+  return response.data || []
+}
+
+export async function createSystemBackup(): Promise<SystemArchiveInfo> {
+  const response = await apiClient.post<SystemArchiveInfo>('/admin/system/backups')
+  return response.data
+}
+
+export async function restoreSystemBackup(backupID: string): Promise<SystemRestoreResult> {
+  const response = await apiClient.post<SystemRestoreResult>('/admin/system/backups/restore', {
+    backup_id: backupID,
+    confirm: true
+  })
+  return response.data
+}
+
+export async function downloadSystemBackup(backup: SystemArchiveInfo): Promise<void> {
+  await downloadArchive(`/admin/system/backups/${encodeURIComponent(backup.id)}/download`, backup.path)
+}
+
+export async function createDiagnosticBundle(): Promise<SystemArchiveInfo> {
+  const response = await apiClient.post<SystemArchiveInfo>('/admin/system/diagnostics')
+  return response.data
+}
+
+export async function downloadDiagnosticBundle(bundle: SystemArchiveInfo): Promise<void> {
+  await downloadArchive(`/admin/system/diagnostics/${encodeURIComponent(bundle.id)}/download`, bundle.path)
+}
+
+async function downloadArchive(path: string, filename: string): Promise<void> {
+  const response = await apiClient.get<Blob>(path, { responseType: 'blob' })
+  const blob = new Blob([response.data], { type: 'application/gzip' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
 }

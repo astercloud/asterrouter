@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/buildinfo"
 	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	operatorcore "github.com/astercloud/asterrouter/backend/internal/operator"
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	"github.com/astercloud/asterrouter/backend/internal/server"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
@@ -42,6 +44,11 @@ func main() {
 		log.Fatalf("initialize control plane repository: %v", err)
 	}
 	defer controlRepo.Close()
+	operatorRepo, err := operatorcore.NewRepository(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("initialize operator repository: %v", err)
+	}
+	defer operatorRepo.Close()
 	pluginRepo, _, err := plugins.NewRepository(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("initialize plugin repository: %v", err)
@@ -58,14 +65,44 @@ func main() {
 		EnabledProfiles: cfg.Profiles,
 		DefaultProfile:  cfg.DefaultProfile,
 		StorageMode:     storageMode,
+		DemoMode:        cfg.DemoMode,
 	})
+	adminSettings, err := settingsService.Admin(context.Background())
+	if err != nil {
+		log.Fatalf("load settings: %v", err)
+	}
+	oidcService, err := auth.NewOIDCService(auth.OIDCConfig{
+		Enabled:     adminSettings.OIDCEnabled,
+		IssuerURL:   adminSettings.OIDCIssuerURL,
+		ClientID:    adminSettings.OIDCClientID,
+		RedirectURL: strings.TrimRight(adminSettings.PublicBaseURL, "/") + "/api/v1/auth/oidc/callback",
+	})
+	if err != nil {
+		log.Fatalf("initialize oidc: %v", err)
+	}
+	if adminSettings.OIDCEnabled {
+		if err := oidcService.Initialize(context.Background()); err != nil {
+			log.Fatalf("initialize oidc provider: %v", err)
+		}
+	}
+	feishuSecret, err := settingsService.FeishuSecret(context.Background())
+	if err != nil {
+		log.Fatalf("load feishu secret: %v", err)
+	}
+	feishuService, err := auth.NewFeishuService(auth.FeishuConfig{Enabled: adminSettings.FeishuEnabled, Region: adminSettings.FeishuRegion, AppID: adminSettings.FeishuAppID, AppSecret: feishuSecret, RedirectURL: strings.TrimRight(adminSettings.PublicBaseURL, "/") + "/api/v1/auth/feishu/callback"})
+	if err != nil {
+		log.Fatalf("initialize feishu login: %v", err)
+	}
 	authService := auth.NewService(auth.Config{
 		Username:         cfg.AdminUsername,
 		Password:         cfg.AdminPassword,
 		LegacyAdminToken: cfg.AdminToken,
 		SecretKey:        cfg.SecretKey,
+		DemoMode:         cfg.DemoMode,
 	})
 	controlService := controlplane.NewService(controlRepo, "/v1", cfg.SecretKey)
+	operatorService := operatorcore.NewService(operatorRepo, controlService)
+	controlService.SetUsageObserver(operatorService)
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatalf("seed control plane repository: %v", err)
 	}
@@ -75,12 +112,15 @@ func main() {
 			Mode:            cfg.CatalogMode,
 			BootstrapURL:    cfg.CatalogBootstrapURL,
 			URL:             cfg.CatalogURL,
+			ServicesURL:     cfg.OfficialServicesURL,
 			LicenseURL:      cfg.LicenseURL,
+			RedeemURL:       cfg.RedeemURL,
 			PublicKeyID:     cfg.CatalogKeyID,
 			PublicKeyBase64: cfg.CatalogPublicKey,
 		},
 		OfficialLicense: plugins.OfficialLicenseConfig{
 			URL:             cfg.LicenseURL,
+			RedeemURL:       cfg.RedeemURL,
 			PublicKeyID:     cfg.LicenseKeyID,
 			PublicKeyBase64: cfg.LicensePublicKey,
 			InstanceID:      cfg.InstanceID,
@@ -89,6 +129,7 @@ func main() {
 		},
 		PackageCacheDir: cfg.PluginCacheDir,
 		PluginActiveDir: cfg.PluginActiveDir,
+		PluginHostURL:   cfg.PluginHostURL,
 		CoreVersion:     cfg.Version,
 	})
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
@@ -116,13 +157,22 @@ func main() {
 		OfficialKeyID:      officialCatalogKeyID,
 		OfficialPublicKey:  officialCatalogPublicKey,
 		AllowRestart:       cfg.AllowRestart,
+		DatabaseURL:        cfg.DatabaseURL,
+		PluginCacheDir:     cfg.PluginCacheDir,
+		PluginActiveDir:    cfg.PluginActiveDir,
+		BackupDir:          cfg.BackupDir,
+		DiagnosticDir:      cfg.DiagnosticDir,
+		MaxArchiveBytes:    cfg.MaxArchiveBytes,
 	})
 
 	router := server.New(server.Options{
 		Config:          cfg,
 		AuthService:     authService,
+		OIDCService:     oidcService,
+		FeishuService:   feishuService,
 		SettingsService: settingsService,
 		ControlService:  controlService,
+		OperatorService: operatorService,
 		PluginService:   pluginService,
 		SystemService:   systemService,
 		ExportJobStore:  exportJobStore,

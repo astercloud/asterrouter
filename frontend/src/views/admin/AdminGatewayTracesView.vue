@@ -38,8 +38,6 @@ const filteredTraces = computed(() => {
       trace.policy_source,
       trace.policy_snapshot,
       trace.api_fingerprint,
-      trace.project_id,
-      trace.application_id,
       trace.request_summary,
       trace.response_summary
     ].some((value) => String(value || '').toLowerCase().includes(keyword))
@@ -202,11 +200,11 @@ onMounted(load)
               <td>{{ formatTime(trace.created_at) }}</td>
               <td>
                 <strong>{{ trace.model || '-' }}</strong>
-                <span>{{ trace.stream ? t('traces.stream') : t('traces.nonStream') }} · {{ trace.message_count }} {{ t('traces.messages') }}</span>
+                <span>{{ trace.upstream_model || '-' }} · {{ trace.stream ? t('traces.stream') : t('traces.nonStream') }}</span>
               </td>
               <td>
                 <strong>{{ trace.provider_id || '-' }}</strong>
-                <span>{{ trace.provider_account_id || trace.route_source || '-' }}</span>
+                <span>{{ trace.route_group || '-' }} · {{ trace.provider_account_id || trace.route_source || '-' }}</span>
               </td>
               <td>
                 <strong>{{ trace.policy_name || trace.policy_id || '-' }}</strong>

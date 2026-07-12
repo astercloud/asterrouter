@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,7 @@ type Config struct {
 	LegacyAdminToken string
 	SecretKey        string
 	TokenTTL         time.Duration
+	DemoMode         bool
 }
 
 type Service struct {
@@ -27,6 +29,14 @@ type Service struct {
 	legacyAdminToken string
 	secretKey        []byte
 	tokenTTL         time.Duration
+	demoMode         bool
+	mfaMu            sync.Mutex
+	mfaChallenges    map[string]mfaChallenge
+}
+
+type mfaChallenge struct {
+	Subject, Role string
+	ExpiresAt     time.Time
 }
 
 type Principal struct {
@@ -73,16 +83,67 @@ func NewService(cfg Config) *Service {
 		legacyAdminToken: strings.TrimSpace(cfg.LegacyAdminToken),
 		secretKey:        []byte(secret),
 		tokenTTL:         ttl,
+		demoMode:         cfg.DemoMode,
+		mfaChallenges:    map[string]mfaChallenge{},
 	}
 }
 
+func (s *Service) BeginMFA(subject, role string) (string, time.Time, error) {
+	if strings.TrimSpace(subject) == "" || strings.TrimSpace(role) == "" {
+		return "", time.Time{}, ErrInvalidCredentials
+	}
+	token, err := randomURLToken(32)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expires := time.Now().UTC().Add(5 * time.Minute)
+	s.mfaMu.Lock()
+	s.mfaChallenges[token] = mfaChallenge{Subject: subject, Role: role, ExpiresAt: expires}
+	for key, challenge := range s.mfaChallenges {
+		if time.Now().UTC().After(challenge.ExpiresAt) {
+			delete(s.mfaChallenges, key)
+		}
+	}
+	s.mfaMu.Unlock()
+	return token, expires, nil
+}
+
+func (s *Service) ConsumeMFA(token string) (string, string, bool) {
+	s.mfaMu.Lock()
+	defer s.mfaMu.Unlock()
+	challenge, ok := s.mfaChallenges[strings.TrimSpace(token)]
+	delete(s.mfaChallenges, strings.TrimSpace(token))
+	if !ok || time.Now().UTC().After(challenge.ExpiresAt) {
+		return "", "", false
+	}
+	return challenge.Subject, challenge.Role, true
+}
+
 func (s *Service) Login(_ context.Context, username string, password string) (LoginResult, error) {
+	if s.demoMode && strings.TrimSpace(username) == "demo" && constantTimeEqual(password, "demo") {
+		return s.loginFor("demo", "demo", "demo_admin")
+	}
 	if strings.TrimSpace(username) != s.username || !constantTimeEqual(password, s.password) {
 		return LoginResult{}, ErrInvalidCredentials
 	}
+	return s.loginFor(s.username, s.username, "super_admin")
+}
+
+// LoginOIDC creates the same signed local session as password login after the
+// caller has verified the upstream OIDC ID token and provisioned the user.
+func (s *Service) LoginOIDC(subject, role string) (LoginResult, error) {
+	subject = strings.TrimSpace(subject)
+	role = strings.TrimSpace(role)
+	if subject == "" || role == "" {
+		return LoginResult{}, ErrInvalidCredentials
+	}
+	return s.loginFor(subject, subject, role)
+}
+
+func (s *Service) loginFor(username string, subject string, role string) (LoginResult, error) {
 	expiresAt := time.Now().UTC().Add(s.tokenTTL)
-	user := User{Username: s.username, Role: "super_admin"}
-	token, err := s.sign(Principal{Subject: s.username, Role: user.Role, Expires: expiresAt.Unix()})
+	user := User{Username: username, Role: role}
+	token, err := s.sign(Principal{Subject: subject, Role: user.Role, Expires: expiresAt.Unix()})
 	if err != nil {
 		return LoginResult{}, err
 	}

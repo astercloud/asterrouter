@@ -11,6 +11,7 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	operatorcore "github.com/astercloud/asterrouter/backend/internal/operator"
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
 	"github.com/astercloud/asterrouter/backend/internal/system"
@@ -18,17 +19,18 @@ import (
 
 func newTestRuntime(t *testing.T, cfg config.Config) (http.Handler, *controlplane.Service) {
 	t.Helper()
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("EnsureSeedData(): %v", err)
 	}
 	pluginService := plugins.NewService(plugins.NewMemoryRepository())
+	operatorService := operatorcore.NewService(operatorcore.NewMemoryRepository(), controlService)
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("Plugin EnsureSeedData(): %v", err)
 	}
 	systemService := system.NewService(system.Config{Version: "test", BuildType: "source"})
-	return New(Options{Config: cfg, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: systemService}), controlService
+	return New(Options{Config: cfg, SettingsService: settingsService, ControlService: controlService, OperatorService: operatorService, PluginService: pluginService, SystemService: systemService}), controlService
 }
 
 func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
@@ -45,12 +47,13 @@ func newAuthTestHandler(t *testing.T) http.Handler {
 
 func newAuthTestRuntime(t *testing.T) (http.Handler, *controlplane.Service) {
 	t.Helper()
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("EnsureSeedData(): %v", err)
 	}
 	pluginService := plugins.NewService(plugins.NewMemoryRepository())
+	operatorService := operatorcore.NewService(operatorcore.NewMemoryRepository(), controlService)
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("Plugin EnsureSeedData(): %v", err)
 	}
@@ -59,6 +62,7 @@ func newAuthTestRuntime(t *testing.T) (http.Handler, *controlplane.Service) {
 		AuthService:     auth.NewService(auth.Config{Username: "admin", Password: "secret", SecretKey: "test-secret"}),
 		SettingsService: settingsService,
 		ControlService:  controlService,
+		OperatorService: operatorService,
 		PluginService:   pluginService,
 		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
 	}), controlService
@@ -138,6 +142,32 @@ func TestLoginAllowsAdminSettingsAccess(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("settings status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLegacyCaptchaEndpointDisablesCaptcha(t *testing.T) {
+	handler := newAuthTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/iam/get-captcha-code?locale=zh_CN", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			CaptchaOnOff bool   `json:"captchaOnOff"`
+			Img          string `json:"img"`
+			UUID         string `json:"uuid"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Data.CaptchaOnOff || resp.Data.Img != "" || resp.Data.UUID != "" {
+		t.Fatalf("captcha response = %+v", resp.Data)
 	}
 }
 

@@ -3,7 +3,6 @@ package controlplane
 import "time"
 
 const (
-	AlertTypeProjectBudget         = "project_budget"
 	AlertTypeAPIKeyQuota           = "api_key_quota"
 	AlertTypeGatewayErrorRate      = "gateway_error_rate"
 	AlertTypeProviderHealth        = "provider_health"
@@ -27,7 +26,6 @@ type AlertEvent struct {
 	Summary        string            `json:"summary"`
 	ResourceType   string            `json:"resource_type"`
 	ResourceID     string            `json:"resource_id"`
-	ProjectID      string            `json:"project_id"`
 	DedupeKey      string            `json:"dedupe_key"`
 	Metadata       map[string]string `json:"metadata"`
 	FirstSeenAt    time.Time         `json:"first_seen_at"`
@@ -46,7 +44,6 @@ type AlertQuery struct {
 	Severity     string
 	Status       string
 	ResourceType string
-	ProjectID    string
 	CreatedFrom  time.Time
 	CreatedTo    time.Time
 }

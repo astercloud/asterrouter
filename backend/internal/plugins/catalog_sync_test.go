@@ -271,6 +271,7 @@ func TestServiceBootstrapOnlySyncDownloadAndActivateLicense(t *testing.T) {
 				"data": catalogBootstrap{
 					SchemaVersion: catalogBootstrapSchema,
 					CatalogURL:    serverURL + "/official/v1/catalog/index",
+					ServicesURL:   serverURL + "/official/v1/services",
 					LicenseURL:    serverURL + "/custom/licenses/activate",
 					SigningKeys: []catalogBootstrapKey{
 						{
@@ -343,6 +344,10 @@ func TestServiceBootstrapOnlySyncDownloadAndActivateLicense(t *testing.T) {
 	}
 	if status.Status != catalogSyncSucceeded || status.SourceURL != server.URL+"/official/v1/catalog/index" || !status.TrustConfigured || status.LicenseURL != server.URL+"/custom/licenses/activate" {
 		t.Fatalf("unexpected bootstrap status: %+v", status)
+	}
+	effective, err := svc.effectiveCatalogConfig(context.Background())
+	if err != nil || effective.ServicesURL != server.URL+"/official/v1/services" {
+		t.Fatalf("effective services URL = %q err=%v", effective.ServicesURL, err)
 	}
 	result, err := svc.DownloadPackage(context.Background(), "com.astercloud.catalog.provider-intelligence", packageID, PackageDownloadRequest{})
 	if err != nil {
@@ -426,6 +431,125 @@ func TestServiceImportLicenseUnlocksPaidPackageDownload(t *testing.T) {
 	}
 	if string(cached) != string(content) {
 		t.Fatalf("cached content = %q, want %q", cached, content)
+	}
+}
+
+func TestServiceRedeemLicenseUsesStableIdempotencyAndInstanceBinding(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey(): %v", err)
+	}
+	now := time.Date(2026, 7, 11, 5, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(24 * time.Hour)
+	envelope := signedLicenseEnvelope(t, privateKey, "license-key-v1", licenseSnapshotPayload{
+		SchemaVersion:   licenseSnapshotSchema,
+		SnapshotID:      "lss_redeem",
+		SnapshotVersion: 1,
+		License: snapshotLicense{
+			PublicID:  "lic_redeem",
+			Edition:   "pro",
+			Status:    LicenseStatusActive,
+			StartsAt:  now.Add(-time.Hour),
+			ExpiresAt: &expiresAt,
+		},
+		Customer: snapshotCustomer{PublicID: "cus_redeem"},
+		SKU:      snapshotSKU{PublicID: "sku_pro", Code: "ASTER-PRO", Features: json.RawMessage(`{}`), Limits: json.RawMessage(`{}`)},
+		Instance: snapshotInstance{
+			PublicID:         "inst_redeem",
+			Fingerprint:      "sha256:redeem-fingerprint",
+			DisplayName:      "redeem-test",
+			FirstActivatedAt: now,
+		},
+		IssuedAt:  now,
+		ExpiresAt: expiresAt,
+	}, now, expiresAt)
+
+	var requestBody struct {
+		Code        string `json:"code"`
+		InstanceID  string `json:"instance_id"`
+		Fingerprint string `json:"instance_fingerprint"`
+	}
+	var idempotencyKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/official/v1/licenses/redeem" {
+			t.Fatalf("redeem path = %q", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode redeem request: %v", err)
+		}
+		idempotencyKey = r.Header.Get("X-Aster-Idempotency-Key")
+		if idempotencyKey == "" || r.Header.Get("X-Aster-Core-Version") != "1.2.0" {
+			t.Fatalf("missing redemption headers: %+v", r.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"envelope": envelope}})
+	}))
+	defer server.Close()
+
+	svc := NewServiceWithOptions(NewMemoryRepository(), ServiceOptions{
+		SecretKey: "test-secret",
+		OfficialLicense: OfficialLicenseConfig{
+			RedeemURL:       server.URL + "/official/v1",
+			PublicKeyID:     "license-key-v1",
+			PublicKeyBase64: base64.StdEncoding.EncodeToString(publicKey),
+		},
+		CoreVersion: "1.2.0",
+		Now:         func() time.Time { return now },
+	})
+	status, err := svc.RedeemLicense(context.Background(), LicenseRedeemRequest{
+		Code:        "ASTER-REDEEM-ONCE",
+		InstanceID:  "inst_redeem",
+		Fingerprint: "sha256:redeem-fingerprint",
+	})
+	if err != nil {
+		t.Fatalf("RedeemLicense(): %v", err)
+	}
+	if status.LicenseID != "lic_redeem" || status.InstanceID != "inst_redeem" {
+		t.Fatalf("redeemed license mismatch: %+v", status)
+	}
+	if requestBody.Code != "ASTER-REDEEM-ONCE" || requestBody.InstanceID != "inst_redeem" || requestBody.Fingerprint != "sha256:redeem-fingerprint" {
+		t.Fatalf("redeem request mismatch: %+v", requestBody)
+	}
+	expected := sha256.Sum256([]byte("inst_redeem|ASTER-REDEEM-ONCE"))
+	if idempotencyKey != hex.EncodeToString(expected[:]) {
+		t.Fatalf("idempotency key = %q, want stable hash", idempotencyKey)
+	}
+}
+
+func TestServiceRedeemLicenseRejectsDifferentInstance(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey(): %v", err)
+	}
+	now := time.Date(2026, 7, 11, 6, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(24 * time.Hour)
+	envelope := signedLicenseEnvelope(t, privateKey, "license-key-v1", licenseSnapshotPayload{
+		SchemaVersion:   licenseSnapshotSchema,
+		SnapshotID:      "lss_wrong_instance",
+		SnapshotVersion: 1,
+		License:         snapshotLicense{PublicID: "lic_wrong_instance", Status: LicenseStatusActive, StartsAt: now.Add(-time.Hour), ExpiresAt: &expiresAt},
+		Instance:        snapshotInstance{PublicID: "inst_other", Fingerprint: "sha256:other", FirstActivatedAt: now},
+		IssuedAt:        now, ExpiresAt: expiresAt,
+	}, now, expiresAt)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"envelope": envelope})
+	}))
+	defer server.Close()
+	svc := NewServiceWithOptions(NewMemoryRepository(), ServiceOptions{
+		OfficialLicense: OfficialLicenseConfig{RedeemURL: server.URL, PublicKeyID: "license-key-v1", PublicKeyBase64: base64.StdEncoding.EncodeToString(publicKey)},
+		Now:             func() time.Time { return now },
+	})
+	_, err = svc.RedeemLicense(context.Background(), LicenseRedeemRequest{Code: "CODE", InstanceID: "inst_requested", Fingerprint: "sha256:requested"})
+	if !errors.Is(err, ErrLicenseBinding) {
+		t.Fatalf("RedeemLicense() error = %v, want ErrLicenseBinding", err)
+	}
+	status, err := svc.LicenseStatus(context.Background())
+	if err != nil {
+		t.Fatalf("LicenseStatus(): %v", err)
+	}
+	if status.Status != "not_imported" {
+		t.Fatalf("invalid bound license should not be stored: %+v", status)
 	}
 }
 

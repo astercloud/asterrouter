@@ -14,9 +14,19 @@ frontend/tsconfig.tsbuildinfo
 !frontend/package-lock.json
 
 # Local agent notes and product drafts
-docs/
+docs/*
+!docs/product-positioning.md
+!docs/roadmap/
+docs/roadmap/*
+!docs/roadmap/v2/
+docs/roadmap/v2/*
+!docs/roadmap/v2/README.md
+!docs/roadmap/v3/
+docs/roadmap/v3/*
+!docs/roadmap/v3/README.md
 
 # Local environment
 .env
 .env.*
 !.env.example
+.playwright-mcp

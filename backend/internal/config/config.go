@@ -2,7 +2,10 @@ package config
 
 import (
 	"errors"
+	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/astercloud/asterrouter/backend/internal/buildinfo"
@@ -27,9 +30,11 @@ type Config struct {
 	CatalogMode         string
 	CatalogBootstrapURL string
 	CatalogURL          string
+	OfficialServicesURL string
 	CatalogKeyID        string
 	CatalogPublicKey    string
 	LicenseURL          string
+	RedeemURL           string
 	LicenseKeyID        string
 	LicensePublicKey    string
 	InstanceID          string
@@ -37,17 +42,25 @@ type Config struct {
 	InstanceDisplayName string
 	PluginCacheDir      string
 	PluginActiveDir     string
+	PluginHostURL       string
+	BackupDir           string
+	DiagnosticDir       string
+	MaxArchiveBytes     int64
 	AllowRestart        bool
+	DemoMode            bool
 }
 
 func Load() Config {
+	addr := getEnv("ASTER_ADDR", ":8080")
 	profiles := normalizeProfiles(os.Getenv("ASTER_PROFILES"))
 	defaultProfile := normalizeProfile(os.Getenv("ASTER_DEFAULT_PROFILE"))
 	if defaultProfile == "" && len(profiles) > 0 {
 		defaultProfile = profiles[0]
 	}
+	pluginCacheDir := getEnv("ASTER_PLUGIN_CACHE_DIR", "data/plugin-cache")
+	pluginActiveDir := getEnv("ASTER_PLUGIN_ACTIVE_DIR", filepath.Join(filepath.Dir(pluginCacheDir), "plugin-active"))
 	return Config{
-		Addr:                getEnv("ASTER_ADDR", ":8080"),
+		Addr:                addr,
 		AdminToken:          strings.TrimSpace(os.Getenv("ASTER_ADMIN_TOKEN")),
 		AdminUsername:       getEnv("ASTER_ADMIN_USERNAME", "admin"),
 		AdminPassword:       strings.TrimSpace(os.Getenv("ASTER_ADMIN_PASSWORD")),
@@ -63,18 +76,55 @@ func Load() Config {
 		CatalogMode:         getEnv("ASTER_CATALOG_MODE", "disabled"),
 		CatalogBootstrapURL: strings.TrimSpace(os.Getenv("ASTER_CATALOG_BOOTSTRAP_URL")),
 		CatalogURL:          strings.TrimSpace(os.Getenv("ASTER_CATALOG_URL")),
+		OfficialServicesURL: strings.TrimSpace(os.Getenv("ASTER_OFFICIAL_SERVICES_URL")),
 		CatalogKeyID:        strings.TrimSpace(os.Getenv("ASTER_CATALOG_KEY_ID")),
 		CatalogPublicKey:    strings.TrimSpace(os.Getenv("ASTER_CATALOG_PUBLIC_KEY")),
 		LicenseURL:          strings.TrimSpace(os.Getenv("ASTER_LICENSE_URL")),
+		RedeemURL:           strings.TrimSpace(os.Getenv("ASTER_REDEEM_URL")),
 		LicenseKeyID:        strings.TrimSpace(os.Getenv("ASTER_LICENSE_KEY_ID")),
 		LicensePublicKey:    strings.TrimSpace(os.Getenv("ASTER_LICENSE_PUBLIC_KEY")),
 		InstanceID:          strings.TrimSpace(os.Getenv("ASTER_INSTANCE_ID")),
 		InstanceFingerprint: strings.TrimSpace(os.Getenv("ASTER_INSTANCE_FINGERPRINT")),
 		InstanceDisplayName: strings.TrimSpace(os.Getenv("ASTER_INSTANCE_DISPLAY_NAME")),
-		PluginCacheDir:      getEnv("ASTER_PLUGIN_CACHE_DIR", "data/plugin-cache"),
-		PluginActiveDir:     strings.TrimSpace(os.Getenv("ASTER_PLUGIN_ACTIVE_DIR")),
+		PluginCacheDir:      pluginCacheDir,
+		PluginActiveDir:     pluginActiveDir,
+		PluginHostURL:       defaultString(strings.TrimSpace(os.Getenv("ASTER_PLUGIN_HOST_URL")), defaultPluginHostURL(addr)),
+		BackupDir:           getEnv("ASTER_BACKUP_DIR", "data/backups"),
+		DiagnosticDir:       getEnv("ASTER_DIAGNOSTIC_DIR", "data/diagnostics"),
+		MaxArchiveBytes:     getInt64Env("ASTER_MAX_ARCHIVE_BYTES", 2<<30),
 		AllowRestart:        getBoolEnv("ASTER_ALLOW_RESTART"),
+		DemoMode:            getBoolEnv("ASTER_DEMO_MODE"),
 	}
+}
+
+func defaultPluginHostURL(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		if strings.HasPrefix(addr, ":") {
+			port = strings.TrimPrefix(addr, ":")
+		} else {
+			return ""
+		}
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	if port == "" {
+		return ""
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/api/v1/plugin-host"
+}
+
+func defaultString(value string, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return fallback
 }
 
 func ValidateRuntime(cfg Config) error {
@@ -87,7 +137,7 @@ func ValidateRuntime(cfg Config) error {
 	if strings.TrimSpace(cfg.SecretKey) == localDevelopmentSecret {
 		return errors.New("ASTER_SECRET_KEY must be set to a stable production secret")
 	}
-	if strings.TrimSpace(cfg.AdminPassword) == "" && strings.TrimSpace(cfg.AdminToken) == "" {
+	if strings.TrimSpace(cfg.AdminPassword) == "" && strings.TrimSpace(cfg.AdminToken) == "" && !cfg.DemoMode {
 		return errors.New("ASTER_ADMIN_PASSWORD or ASTER_ADMIN_TOKEN is required for release deployments")
 	}
 	switch strings.TrimSpace(cfg.CatalogMode) {
@@ -152,4 +202,16 @@ func getBoolEnv(key string) bool {
 	default:
 		return false
 	}
+}
+
+func getInt64Env(key string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }

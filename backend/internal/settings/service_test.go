@@ -33,6 +33,37 @@ func TestApplyProfiles(t *testing.T) {
 	}
 }
 
+func TestDemoModeCompletesSetupWithAllProfiles(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
+	got, err := svc.Admin(context.Background())
+	if err != nil {
+		t.Fatalf("Admin() error = %v", err)
+	}
+	if !got.SetupCompleted || !got.DemoMode || got.DefaultProfile != "personal" {
+		t.Fatalf("demo settings not applied: %+v", got.PublicSettings)
+	}
+	if len(got.EnabledProfiles) != 3 {
+		t.Fatalf("EnabledProfiles = %+v", got.EnabledProfiles)
+	}
+}
+
+func TestDemoModeDoesNotOverrideConfiguredProfiles(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), ServiceOptions{
+		Version:         "test",
+		StorageMode:     "memory",
+		DemoMode:        true,
+		EnabledProfiles: []string{"enterprise"},
+		DefaultProfile:  "enterprise",
+	})
+	got, err := svc.Admin(context.Background())
+	if err != nil {
+		t.Fatalf("Admin() error = %v", err)
+	}
+	if got.DefaultProfile != "enterprise" || len(got.EnabledProfiles) != 1 || got.EnabledProfiles[0] != "enterprise" {
+		t.Fatalf("configured profiles overridden: %+v", got.PublicSettings)
+	}
+}
+
 func TestUpdateValidatesLocale(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), ServiceOptions{Version: "test", StorageMode: "memory"})
 	_, err := svc.Update(context.Background(), AdminSettings{
@@ -49,5 +80,23 @@ func TestUpdateValidatesLocale(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Update() error = nil, want validation error")
+	}
+}
+
+func TestValidateLegalDocumentsRejectsDuplicateSlug(t *testing.T) {
+	err := validateLegalDocuments([]LegalDocument{
+		{ID: "terms", Name: "Terms", Slug: "terms", Content: "one"},
+		{ID: "privacy", Name: "Privacy", Slug: "terms", Content: "two"},
+	}, true)
+	if err == nil {
+		t.Fatal("validateLegalDocuments() error = nil, want duplicate slug error")
+	}
+}
+
+func TestParseIntListFallsBackOnInvalidJSON(t *testing.T) {
+	fallback := []int{10, 20, 50}
+	got := parseIntList("invalid", fallback)
+	if len(got) != len(fallback) || got[1] != 20 {
+		t.Fatalf("parseIntList() = %v, want %v", got, fallback)
 	}
 }
