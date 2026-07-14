@@ -198,3 +198,10 @@ func (s *Service) gatewayAffinityScopeKey(kind string, input GatewayAffinityInpu
 	_, _ = mac.Write([]byte(identity))
 	return "affinity_" + hex.EncodeToString(mac.Sum(nil))
 }
+
+func (s *Service) GatewayEffectivePricingCohortKey(input GatewayAffinityInput) string {
+	if s == nil {
+		return ""
+	}
+	return s.gatewayAffinityScopeKey(AffinityBindingSupplier, input)
+}

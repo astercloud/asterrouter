@@ -126,9 +126,16 @@ func TestGatewayCandidateAffinityReusesAccountThenSupplierWithinScope(t *testing
 	if got := svc.PreferGatewayCandidatesWithAffinity(ctx, newSession, candidates); got[0].ID != "provider-b" || !strings.Contains(got[0].SelectionReason, "customer supplier affinity reused") {
 		t.Fatalf("supplier affinity not reused for a new session: %+v", got)
 	}
+	cohortKey := svc.GatewayEffectivePricingCohortKey(input)
+	if cohortKey == "" || svc.GatewayEffectivePricingCohortKey(newSession) != cohortKey || strings.Contains(cohortKey, input.PrincipalID) || strings.Contains(cohortKey, input.CredentialID) {
+		t.Fatalf("effective pricing cohort is not stable and opaque across sessions: %q", cohortKey)
+	}
 	otherCustomer := input
 	otherCustomer.PrincipalID = "customer-b"
 	otherCustomer.CredentialID = "key-b"
+	if svc.GatewayEffectivePricingCohortKey(otherCustomer) == cohortKey {
+		t.Fatal("effective pricing cohort leaked across customers")
+	}
 	if got := svc.PreferGatewayCandidatesWithAffinity(ctx, otherCustomer, candidates); got[0].RouteID != "route-a" {
 		t.Fatalf("affinity binding leaked across customers: %+v", got)
 	}

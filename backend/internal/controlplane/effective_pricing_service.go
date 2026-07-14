@@ -514,6 +514,7 @@ func (s *Service) EffectivePricingReport(ctx context.Context, query EffectivePri
 		costMicros, confidence := effectiveAggregateCost(aggregate, price, hasPrice)
 		tokenCount := aggregate.TotalInputTokens + aggregate.OutputTokens
 		effectiveCostPer1M := scaledPerMillion(costMicros, tokenCount)
+		uncachedCostPer1M, cacheSavingsPer1M, cacheSavingsRate, cacheEconomicsAvailable := aggregateCacheEconomics(aggregate, price, hasPrice)
 		referenceCost := aggregateReferenceCost(aggregate, price, hasPrice)
 		effectiveMultiplier := safeRatio(costMicros, referenceCost)
 		metricsCoverage := safeRatio(aggregate.CacheMetricsRequestCount, aggregate.SuccessfulRequestCount)
@@ -555,6 +556,8 @@ func (s *Service) EffectivePricingReport(ctx context.Context, query EffectivePri
 			UpstreamModel: aggregate.UpstreamModel, Protocol: aggregate.Protocol, Currency: price.Currency,
 			QuotedMultiplier: price.QuotedMultiplier, BilledMultiplier: safeRatio(billingAmount, referenceCost),
 			EffectiveMultiplier: effectiveMultiplier, EffectiveCostMicrosPer1M: effectiveCostPer1M,
+			UncachedCostMicrosPer1M: uncachedCostPer1M, CacheSavingsMicrosPer1M: cacheSavingsPer1M,
+			CacheSavingsRate: cacheSavingsRate, CacheEconomicsAvailable: cacheEconomicsAvailable,
 			RequestCount: aggregate.RequestCount, ErrorRate: safeRatio(aggregate.ErrorCount, aggregate.RequestCount),
 			P95LatencyMS:    aggregate.P95LatencyMS,
 			MetricsCoverage: metricsCoverage, EligibleRequestHitRate: eligibleRequestHitRate,
@@ -667,6 +670,26 @@ func aggregateReferenceCost(aggregate EffectivePricingUsageAggregate, price Proc
 	return scaledTokenCost(aggregate.TotalInputTokens, price.ReferenceInputMicrosPer1MTokens) + scaledTokenCost(aggregate.OutputTokens, price.ReferenceOutputMicrosPer1MTokens)
 }
 
+func aggregateCacheEconomics(aggregate EffectivePricingUsageAggregate, price ProcurementPrice, hasPrice bool) (int64, int64, float64, bool) {
+	tokenCount := aggregate.TotalInputTokens + aggregate.OutputTokens
+	if !hasPrice || tokenCount <= 0 || aggregate.TotalInputTokens <= 0 || price.UncachedInputMicrosPer1MTokens <= 0 {
+		return 0, 0, 0, false
+	}
+	uncachedInputCost := scaledTokenCost(aggregate.TotalInputTokens, price.UncachedInputMicrosPer1MTokens)
+	uncachedRequestCost := price.RequestMicros*aggregate.RequestCount + uncachedInputCost + scaledTokenCost(aggregate.OutputTokens, price.OutputMicrosPer1MTokens)
+	uncachedCostPer1M := scaledPerMillion(uncachedRequestCost, tokenCount)
+	componentTokens := aggregate.UncachedInputTokens + aggregate.CacheReadTokens + aggregate.CacheWrite5mTokens + aggregate.CacheWrite1hTokens
+	if aggregate.RequestCount <= 0 || aggregate.SuccessfulRequestCount != aggregate.RequestCount || aggregate.CacheMetricsRequestCount != aggregate.SuccessfulRequestCount || componentTokens != aggregate.TotalInputTokens {
+		return uncachedCostPer1M, 0, 0, false
+	}
+	modeledInputCost := scaledTokenCost(aggregate.UncachedInputTokens, price.UncachedInputMicrosPer1MTokens) +
+		scaledTokenCost(aggregate.CacheReadTokens, price.CacheReadMicrosPer1MTokens) +
+		scaledTokenCost(aggregate.CacheWrite5mTokens, price.CacheWrite5mMicrosPer1MTokens) +
+		scaledTokenCost(aggregate.CacheWrite1hTokens, price.CacheWrite1hMicrosPer1MTokens)
+	savings := uncachedInputCost - modeledInputCost
+	return uncachedCostPer1M, scaledSignedPerMillion(savings, tokenCount), float64(savings) / float64(uncachedInputCost), true
+}
+
 func scaledTokenCost(tokens, rate int64) int64 {
 	if tokens <= 0 || rate <= 0 {
 		return 0
@@ -676,6 +699,13 @@ func scaledTokenCost(tokens, rate int64) int64 {
 
 func scaledPerMillion(costMicros, tokens int64) int64 {
 	if costMicros <= 0 || tokens <= 0 {
+		return 0
+	}
+	return int64(math.Round(float64(costMicros) * 1_000_000 / float64(tokens)))
+}
+
+func scaledSignedPerMillion(costMicros, tokens int64) int64 {
+	if tokens <= 0 {
 		return 0
 	}
 	return int64(math.Round(float64(costMicros) * 1_000_000 / float64(tokens)))

@@ -162,6 +162,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 		}()
 		if len(plan.Candidates) > 0 {
 			if err := control.MarkAIOperationRunning(c.Request.Context(), operation.ID); err != nil {
+				_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "operation_start_failed")
 				_ = completeOperation(controlplane.AIOperationStatusFailed, "operation_transition_error")
 				openAIError(c, http.StatusInternalServerError, "server_error", "failed to start gateway operation")
 				return
@@ -187,7 +188,8 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 				Model: req.Model, Protocol: string(req.Protocol), RouteGroup: plan.RouteGroup, StickyKey: req.StickyKey,
 				PolicyVersion: canonicalAuth.PolicyVersion,
 			}
-			pricedCandidates := control.OrderGatewayCandidatesByEffectivePricing(c.Request.Context(), req.Model, string(req.Protocol), req.Fingerprint, plan.Candidates)
+			cohortKey := control.GatewayEffectivePricingCohortKey(affinity)
+			pricedCandidates := control.OrderGatewayCandidatesByEffectivePricing(c.Request.Context(), req.Model, string(req.Protocol), cohortKey, plan.Candidates)
 			candidates := control.PreferGatewayCandidatesWithAffinity(c.Request.Context(), affinity, pricedCandidates)
 			resp, provider, release, attempts, attemptErr := attemptGatewayCandidates(c, control, operation.ID, affinity, candidates, req.Payload, req.Stream)
 			routeAttempts := marshalRouteEvidence(plan.Exclusions, attempts)
@@ -544,7 +546,9 @@ func attemptGatewayCandidates(c *gin.Context, control *controlplane.Service, ope
 			_ = candidateResp.Body.Close()
 			permit.Release()
 			_ = control.CompleteAIAttempt(c.Request.Context(), attempt.ID, controlplane.AIAttemptStatusFailed, "billing_hold_error")
-			return nil, candidate, nil, attempts, billingErr
+			attempts = append(attempts, gatewayRouteAttempt{AttemptID: attempt.ID, AccountID: candidate.AccountID, ProviderID: candidate.ID, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup, Model: candidate.UpstreamModel, Outcome: "failed", Detail: "provider response received but billing hold commit failed"})
+			disputeErr := control.DisputeBillingHold(c.Request.Context(), operationID, "provider_response_billing_unknown")
+			return nil, candidate, nil, attempts, errors.Join(billingErr, disputeErr)
 		}
 		if isProviderAccountFailureStatus(candidateResp.StatusCode) {
 			if candidate.AccountID != "" {

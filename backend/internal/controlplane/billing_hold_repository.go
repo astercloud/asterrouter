@@ -170,7 +170,7 @@ func enforcePostgresBillingHoldBudget(ctx context.Context, tx *sql.Tx, admission
 		return nil
 	}
 	hold := admission.Hold
-	lockKey := strings.Join([]string{"billing_hold", hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.BudgetPeriodStart.Format("2006-01")}, "\x00")
+	lockKey := strings.Join([]string{"billing_hold", hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.BudgetPeriodStart.Format("2006-01")}, "\n")
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
 		return err
 	}

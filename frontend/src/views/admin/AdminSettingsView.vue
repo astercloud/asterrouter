@@ -566,7 +566,7 @@ onMounted(async () => {
             :key="tab.id"
             type="button"
             role="tab"
-            :aria-controls="`settings-panel-${tab.id}`"
+            aria-controls="settings-panel"
             :aria-selected="activeSettingsTab === tab.id"
             :tabindex="activeSettingsTab === tab.id ? 0 : -1"
             :class="{ active: activeSettingsTab === tab.id }"
@@ -580,7 +580,7 @@ onMounted(async () => {
       </nav>
     </div>
 
-    <section :id="`settings-panel-${activeSettingsTab}`" class="grid section-gap settings-content-grid" role="tabpanel" :aria-labelledby="`settings-tab-${activeSettingsTab}`">
+    <section id="settings-panel" class="grid section-gap settings-content-grid" role="tabpanel" :aria-labelledby="`settings-tab-${activeSettingsTab}`">
       <div v-if="activeSettingsTab === 'general'" class="panel">
         <div class="panel-header">
           <SlidersHorizontal :size="18" />

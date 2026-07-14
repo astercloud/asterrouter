@@ -69,6 +69,10 @@ describe('AccountProfileView', () => {
     expect(wrapper.findAll('.account-tabs button')).toHaveLength(3)
     expect(wrapper.get('[data-section="account-profile"]').isVisible()).toBe(true)
 
+    await wrapper.get('[data-tab="profile"]').trigger('keydown', { key: 'End' })
+    await flushPromises()
+    expect(wrapper.get('[data-section="account-security"]').isVisible()).toBe(true)
+
     await wrapper.get('[data-tab="login"]').trigger('click')
     const methods = wrapper.get('[data-section="account-login-methods"]')
     expect(methods.text()).toContain('GitHub')

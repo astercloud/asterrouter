@@ -31,9 +31,25 @@ func TestEffectivePricingRepositoryContract(t *testing.T) {
 			repo := test.open(t)
 			t.Cleanup(func() { _ = repo.Close() })
 			now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
+			provider := ProviderConnection{
+				ID: "provider-contract", Name: "Contract Provider", Type: "openai_compatible",
+				BaseURL: "https://provider.example/v1", Status: ProviderStatusActive,
+				Models: []string{"model-contract"}, CreatedAt: now, UpdatedAt: now,
+			}
+			if err := repo.SaveProvider(ctx, provider); err != nil {
+				t.Fatalf("SaveProvider(): %v", err)
+			}
+			account := ProviderAccount{
+				ID: "account-contract", ProviderID: provider.ID, Name: "Contract Account",
+				Platform: "openai_compatible", AuthType: "api_key", Status: AccountStatusActive,
+				Models: []string{"model-contract"}, CreatedAt: now, UpdatedAt: now,
+			}
+			if err := repo.SaveProviderAccount(ctx, account); err != nil {
+				t.Fatalf("SaveProviderAccount(): %v", err)
+			}
 
 			capability := ProviderCacheCapability{
-				ID: "capability-contract", ProviderAccountID: "account-contract", UpstreamModel: "model-contract",
+				ID: "capability-contract", ProviderAccountID: account.ID, UpstreamModel: "model-contract",
 				Protocol: "openai_chat_completions", SupportStatus: CacheSupportObserved,
 				AffinityTransport: AffinityTransportHeader, AffinityField: "X-Session-ID",
 				CacheControlMode: CacheControlModePromptCacheKey, CreatedAt: now, UpdatedAt: now,

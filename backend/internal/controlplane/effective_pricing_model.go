@@ -428,6 +428,10 @@ type EffectivePricingReportRow struct {
 	BilledMultiplier         float64  `json:"billed_multiplier"`
 	EffectiveMultiplier      float64  `json:"effective_multiplier"`
 	EffectiveCostMicrosPer1M int64    `json:"effective_cost_micros_per_1m"`
+	UncachedCostMicrosPer1M  int64    `json:"uncached_cost_micros_per_1m"`
+	CacheSavingsMicrosPer1M  int64    `json:"cache_savings_micros_per_1m"`
+	CacheSavingsRate         float64  `json:"cache_savings_rate"`
+	CacheEconomicsAvailable  bool     `json:"cache_economics_available"`
 	RequestCount             int64    `json:"request_count"`
 	ErrorRate                float64  `json:"error_rate"`
 	P95LatencyMS             int64    `json:"p95_latency_ms"`

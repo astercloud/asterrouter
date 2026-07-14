@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,29 @@ func TestEffectivePricingReportRanksRealCostInsteadOfQuotedMultiplier(t *testing
 	}
 	if report.Rows[0].P95LatencyMS != 450 || report.Rows[1].P95LatencyMS != 150 {
 		t.Fatalf("report p95 latency = %+v", report.Rows)
+	}
+	if !report.Rows[0].CacheEconomicsAvailable || report.Rows[0].UncachedCostMicrosPer1M != 1_000_000 || report.Rows[0].CacheSavingsMicrosPer1M != 810_000 || report.Rows[0].CacheSavingsRate != 0.81 {
+		t.Fatalf("cache economics = %+v", report.Rows[0])
+	}
+}
+
+func TestAggregateCacheEconomicsPreservesNegativeSavingsAndCoverageGate(t *testing.T) {
+	aggregate := EffectivePricingUsageAggregate{
+		RequestCount: 1, SuccessfulRequestCount: 1, CacheMetricsRequestCount: 1,
+		TotalInputTokens: 100, CacheWrite5mTokens: 100,
+	}
+	price := ProcurementPrice{
+		UncachedInputMicrosPer1MTokens: 1_000_000,
+		CacheWrite5mMicrosPer1MTokens:  1_250_000,
+	}
+	uncached, savings, rate, available := aggregateCacheEconomics(aggregate, price, true)
+	if !available || uncached != 1_000_000 || savings != -250_000 || rate != -0.25 {
+		t.Fatalf("negative cache economics uncached=%d savings=%d rate=%f available=%t", uncached, savings, rate, available)
+	}
+	aggregate.CacheMetricsRequestCount = 0
+	uncached, savings, rate, available = aggregateCacheEconomics(aggregate, price, true)
+	if available || uncached != 1_000_000 || savings != 0 || rate != 0 {
+		t.Fatalf("coverage-gated cache economics uncached=%d savings=%d rate=%f available=%t", uncached, savings, rate, available)
 	}
 }
 
@@ -114,6 +138,28 @@ func TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt(t *test
 	ordered = svc.OrderGatewayCandidatesByEffectivePricing(ctx, "public-model", "openai_chat_completions", "fingerprint-a", candidates)
 	if ordered[0].AccountID != "account-a" {
 		t.Fatalf("rolled back decision still changed order=%+v", ordered)
+	}
+}
+
+func TestEffectivePricingCanaryUsesStableCohortDistribution(t *testing.T) {
+	const percent = 25
+	selected := 0
+	for index := 0; index < 1000; index++ {
+		cohortKey := fmt.Sprintf("customer-cohort-%d", index)
+		first := inEffectivePricingCanary("canary-test-secret", "decision-a", cohortKey, percent)
+		second := inEffectivePricingCanary("canary-test-secret", "decision-a", cohortKey, percent)
+		if first != second {
+			t.Fatalf("cohort %q was not stable", cohortKey)
+		}
+		if first {
+			selected++
+		}
+	}
+	if selected < 200 || selected > 300 {
+		t.Fatalf("25%% canary selected %d/1000 cohorts", selected)
+	}
+	if inEffectivePricingCanary("canary-test-secret", "decision-a", "", percent) {
+		t.Fatal("empty cohort entered canary")
 	}
 }
 
@@ -210,6 +256,7 @@ func TestEffectivePricingDecisionCacheQualityTiebreaker(t *testing.T) {
 		name                    string
 		candidateCostMicros     int64
 		candidateLatencyMS      int64
+		cacheReadPriceMicros    int64
 		wantStatus              string
 		wantCacheTiebreaker     bool
 		wantCostThresholdReason bool
@@ -236,10 +283,18 @@ func TestEffectivePricingDecisionCacheQualityTiebreaker(t *testing.T) {
 			wantStatus:              EffectivePricingDecisionHold,
 			wantP95RegressionReason: true,
 		},
+		{
+			name:                    "holds high cache hit candidate when cache has no economic savings",
+			candidateCostMicros:     50,
+			candidateLatencyMS:      100,
+			cacheReadPriceMicros:    1_000_000,
+			wantStatus:              EffectivePricingDecisionHold,
+			wantCostThresholdReason: true,
+		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+			t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 			repo := NewMemoryRepository()
@@ -247,6 +302,10 @@ func TestEffectivePricingDecisionCacheQualityTiebreaker(t *testing.T) {
 			svc.now = func() time.Time { return now }
 			seedEffectivePricingProvider(t, repo, now, "provider-a", "account-a", "Channel A")
 			seedEffectivePricingProvider(t, repo, now, "provider-b", "account-b", "Channel B")
+			cacheReadPrice := tt.cacheReadPriceMicros
+			if cacheReadPrice == 0 {
+				cacheReadPrice = 100_000
+			}
 			for _, accountID := range []string{"account-a", "account-b"} {
 				providerID := "provider-a"
 				if accountID == "account-b" {
@@ -255,7 +314,7 @@ func TestEffectivePricingDecisionCacheQualityTiebreaker(t *testing.T) {
 				if err := repo.SaveProcurementPrice(ctx, ProcurementPrice{
 					ID: "price-" + accountID, ProviderID: providerID, ProviderAccountID: accountID,
 					UpstreamModel: "model", Protocol: "openai_chat_completions", Currency: "USD",
-					UncachedInputMicrosPer1MTokens: 1_000_000, CacheReadMicrosPer1MTokens: 100_000,
+					UncachedInputMicrosPer1MTokens: 1_000_000, CacheReadMicrosPer1MTokens: cacheReadPrice,
 					ReferenceInputMicrosPer1MTokens: 1_000_000, Confidence: ProcurementCostConfidenceExact,
 					Status: ProcurementPriceStatusActive, EffectiveFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
 				}); err != nil {

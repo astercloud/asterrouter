@@ -97,8 +97,8 @@ export interface TOTPSetup {
 }
 
 export interface AccountSecurityUpdate {
-	access_token: string
-	expires_at: string
+	access_token?: string
+	expires_at?: string
 	changed?: boolean
 	enabled?: boolean
 	codes?: string[]
@@ -802,6 +802,10 @@ export interface EffectivePricingReportRow {
   billed_multiplier: number
   effective_multiplier: number
   effective_cost_micros_per_1m: number
+  uncached_cost_micros_per_1m: number
+  cache_savings_micros_per_1m: number
+  cache_savings_rate: number
+  cache_economics_available: boolean
   request_count: number
   error_rate: number
   p95_latency_ms: number

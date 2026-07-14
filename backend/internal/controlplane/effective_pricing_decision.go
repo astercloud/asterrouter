@@ -58,14 +58,18 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 	status := EffectivePricingDecisionHold
 	costThresholdMet := improvement >= report.Policy.MinCostImprovement
 	cacheHitImprovement := candidate.CacheTokenHitRate - current.CacheTokenHitRate
+	cacheSavingsImprovement := candidate.CacheSavingsRate - current.CacheSavingsRate
 	affinityImprovement := candidate.AffinityConsistencyRate - current.AffinityConsistencyRate
-	cacheEvidenceImproved := oneOf(candidate.CacheSupportStatus, CacheSupportObserved, CacheSupportBilledVerified) && cacheHitImprovement >= report.Policy.MinCacheHitRateImprovement
+	cacheEvidenceImproved := current.CacheEconomicsAvailable && candidate.CacheEconomicsAvailable && oneOf(candidate.CacheSupportStatus, CacheSupportObserved, CacheSupportBilledVerified) && cacheHitImprovement >= report.Policy.MinCacheHitRateImprovement && cacheSavingsImprovement > 0
 	affinityEvidenceImproved := oneOf(candidate.PoolAffinityGrade, PoolAffinityProbable, PoolAffinityVerified) && affinityImprovement >= report.Policy.MinAffinityImprovement
 	cacheTiebreakerMet := !costThresholdMet && improvement >= -report.Policy.MaxCacheTiebreakCostRegression && candidate.MetricsCoverage >= report.Policy.MinMetricsCoverage && (cacheEvidenceImproved || affinityEvidenceImproved)
 	if !cacheTiebreakerMet && !costThresholdMet {
 		blockingReasons = append(blockingReasons, "cost_improvement_below_threshold")
 		if !cacheEvidenceImproved && !affinityEvidenceImproved {
 			blockingReasons = append(blockingReasons, "cache_quality_improvement_below_threshold")
+			if !current.CacheEconomicsAvailable || !candidate.CacheEconomicsAvailable {
+				blockingReasons = append(blockingReasons, "cache_economics_evidence_missing")
+			}
 		}
 	}
 	if candidate.BillingConsistencyRate < report.Policy.MinBillingConsistency {
@@ -182,7 +186,7 @@ func (s *Service) ActOnEffectivePricingDecision(ctx context.Context, actor, id s
 	return decision, nil
 }
 
-func (s *Service) OrderGatewayCandidatesByEffectivePricing(ctx context.Context, model, protocol, requestFingerprint string, candidates []GatewayProvider) []GatewayProvider {
+func (s *Service) OrderGatewayCandidatesByEffectivePricing(ctx context.Context, model, protocol, cohortKey string, candidates []GatewayProvider) []GatewayProvider {
 	if len(candidates) < 2 {
 		return candidates
 	}
@@ -194,7 +198,7 @@ func (s *Service) OrderGatewayCandidatesByEffectivePricing(ctx context.Context, 
 		if decision.Model != model || decision.Protocol != protocol || !oneOf(decision.Status, EffectivePricingDecisionCanary, EffectivePricingDecisionActive) {
 			continue
 		}
-		if decision.Status == EffectivePricingDecisionCanary && !inEffectivePricingCanary(s.secretKey, decision.ID, requestFingerprint, decision.CanaryPercent) {
+		if decision.Status == EffectivePricingDecisionCanary && !inEffectivePricingCanary(s.secretKey, decision.ID, cohortKey, decision.CanaryPercent) {
 			continue
 		}
 		for index, candidate := range candidates {
@@ -249,15 +253,15 @@ func (s *Service) effectivePricingDecisionByID(ctx context.Context, id string) (
 	return EffectivePricingDecision{}, fmt.Errorf("effective pricing decision %q not found", id)
 }
 
-func inEffectivePricingCanary(secret, decisionID, fingerprint string, percent int) bool {
-	if percent <= 0 || strings.TrimSpace(fingerprint) == "" {
+func inEffectivePricingCanary(secret, decisionID, cohortKey string, percent int) bool {
+	if percent <= 0 || strings.TrimSpace(cohortKey) == "" {
 		return false
 	}
 	if percent >= 100 {
 		return true
 	}
 	service := &Service{secretKey: secret}
-	key := service.gatewayAffinityScopeKey("canary", GatewayAffinityInput{CredentialID: decisionID, StickyKey: fingerprint})
-	value, err := strconv.ParseUint(key[len(key)-2:], 16, 8)
-	return err == nil && int(value)%100 < percent
+	key := service.gatewayAffinityScopeKey(AffinityBindingAccount, GatewayAffinityInput{CredentialID: decisionID, StickyKey: cohortKey})
+	value, err := strconv.ParseUint(key[len(key)-16:], 16, 64)
+	return err == nil && value%10_000 < uint64(percent)*100
 }

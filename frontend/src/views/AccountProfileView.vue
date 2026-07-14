@@ -63,7 +63,9 @@ const copied = ref(false)
 const unbindingProvider = ref('')
 const bindingProvider = ref('')
 const sessionSaving = ref(false)
-const activeTab = ref<'profile' | 'login' | 'security'>('profile')
+type AccountTab = 'profile' | 'login' | 'security'
+const accountTabOrder: AccountTab[] = ['profile', 'login', 'security']
+const activeTab = ref<AccountTab>('profile')
 
 const initials = computed(() => (displayName.value || profile.value?.email || profile.value?.id || 'AR').slice(0, 2).toUpperCase())
 const passwordValid = computed(() => newPassword.value.length >= 10 && newPassword.value === confirmPassword.value)
@@ -74,6 +76,23 @@ const externalLoginMethods = computed(() => profile.value?.login_methods.filter(
 function clearFeedback() {
 	notice.value = ''
 	error.value = ''
+}
+
+function selectAccountTab(tab: AccountTab) {
+	activeTab.value = tab
+}
+
+function handleAccountTabKeydown(event: KeyboardEvent, tab: AccountTab) {
+	const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0
+	let nextIndex = accountTabOrder.indexOf(tab)
+	if (event.key === 'Home') nextIndex = 0
+	else if (event.key === 'End') nextIndex = accountTabOrder.length - 1
+	else if (direction) nextIndex = (nextIndex + direction + accountTabOrder.length) % accountTabOrder.length
+	else return
+	event.preventDefault()
+	const nextTab = accountTabOrder[nextIndex]
+	selectAccountTab(nextTab)
+	window.requestAnimationFrame(() => document.getElementById(`account-tab-${nextTab}`)?.focus())
 }
 
 function readableError(err: unknown) {
@@ -409,13 +428,13 @@ onMounted(async () => {
 
 			<div v-if="profile.managed_by_config" class="notice info">{{ t('account.managedByConfig') }}</div>
 
-			<nav class="account-tabs" :aria-label="t('account.tabsLabel')">
-				<button type="button" data-tab="profile" :class="{ active: activeTab === 'profile' }" :aria-selected="activeTab === 'profile'" @click="activeTab = 'profile'"><UserRound :size="17" />{{ t('account.profileTab') }}</button>
-				<button type="button" data-tab="login" :class="{ active: activeTab === 'login' }" :aria-selected="activeTab === 'login'" @click="activeTab = 'login'"><KeyRound :size="17" />{{ t('account.loginTab') }}</button>
-				<button type="button" data-tab="security" :class="{ active: activeTab === 'security' }" :aria-selected="activeTab === 'security'" @click="activeTab = 'security'"><ShieldCheck :size="17" />{{ t('account.securityTab') }}</button>
+			<nav class="account-tabs" role="tablist" :aria-label="t('account.tabsLabel')">
+				<button id="account-tab-profile" type="button" role="tab" data-tab="profile" aria-controls="account-panel-profile" :tabindex="activeTab === 'profile' ? 0 : -1" :class="{ active: activeTab === 'profile' }" :aria-selected="activeTab === 'profile'" @click="selectAccountTab('profile')" @keydown="handleAccountTabKeydown($event, 'profile')"><UserRound :size="17" />{{ t('account.profileTab') }}</button>
+				<button id="account-tab-login" type="button" role="tab" data-tab="login" aria-controls="account-panel-login" :tabindex="activeTab === 'login' ? 0 : -1" :class="{ active: activeTab === 'login' }" :aria-selected="activeTab === 'login'" @click="selectAccountTab('login')" @keydown="handleAccountTabKeydown($event, 'login')"><KeyRound :size="17" />{{ t('account.loginTab') }}</button>
+				<button id="account-tab-security" type="button" role="tab" data-tab="security" aria-controls="account-panel-security" :tabindex="activeTab === 'security' ? 0 : -1" :class="{ active: activeTab === 'security' }" :aria-selected="activeTab === 'security'" @click="selectAccountTab('security')" @keydown="handleAccountTabKeydown($event, 'security')"><ShieldCheck :size="17" />{{ t('account.securityTab') }}</button>
 			</nav>
 
-			<section v-if="activeTab === 'profile'" class="panel account-section" data-section="account-profile">
+			<section v-if="activeTab === 'profile'" id="account-panel-profile" class="panel account-section" role="tabpanel" aria-labelledby="account-tab-profile" data-section="account-profile">
 				<div class="panel-header"><div><h2>{{ t('account.profileAndAvatar') }}</h2><p>{{ t('account.profileHelp') }}</p></div></div>
 				<div class="panel-body profile-editor-grid">
 					<div class="avatar-editor">
@@ -430,7 +449,7 @@ onMounted(async () => {
 				</div>
 			</section>
 
-			<section v-else-if="activeTab === 'login'" class="panel account-section" data-section="account-login-methods">
+			<section v-else-if="activeTab === 'login'" id="account-panel-login" class="panel account-section" role="tabpanel" aria-labelledby="account-tab-login" data-section="account-login-methods">
 				<div class="panel-header"><div><h2>{{ t('account.loginMethods') }}</h2><p>{{ t('account.loginMethodsHelp') }}</p></div></div>
 				<div class="login-method-group">
 					<div class="method-group-heading"><strong>{{ t('account.primaryCredential') }}</strong><span>{{ t('account.primaryCredentialHelp') }}</span></div>
@@ -451,7 +470,7 @@ onMounted(async () => {
 				</div>
 			</section>
 
-			<template v-else>
+			<div v-else id="account-panel-security" role="tabpanel" aria-labelledby="account-tab-security">
 			<section class="panel account-section security-overview" data-section="account-security">
 				<div class="panel-header"><div><h2>{{ t('account.securityOverview') }}</h2><p>{{ t('account.securityOverviewHelp') }}</p></div></div>
 				<div class="security-overview-list">
@@ -494,7 +513,7 @@ onMounted(async () => {
 				<div class="panel-header"><div><h2>{{ t('account.sessionManagement') }}</h2><p>{{ t('account.sessionManagementHelp') }}</p></div><MonitorSmartphone :size="20" /></div>
 				<div class="panel-body session-action"><div><strong>{{ t('account.revokeOtherSessions') }}</strong><p>{{ t('account.revokeOtherSessionsHelp') }}</p></div><button class="button secondary" type="button" :disabled="profile.managed_by_config || sessionSaving" @click="revokeOtherSessions"><RefreshCw :size="16" />{{ sessionSaving ? t('common.saving') : t('account.revokeOtherSessions') }}</button></div>
 			</section>
-			</template>
+			</div>
 		</template>
 	</main>
 </template>

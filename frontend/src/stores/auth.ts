@@ -72,8 +72,8 @@ export const useAuthStore = defineStore('auth', () => {
 		localStorage.setItem(USER_KEY, JSON.stringify(user.value))
 	}
 
-	function replaceSessionToken(value: string) {
-		const nextToken = value.trim()
+	function replaceSessionToken(value?: string) {
+		const nextToken = value?.trim()
 		if (!nextToken) return
 		token.value = nextToken
 		localStorage.setItem(TOKEN_KEY, nextToken)
