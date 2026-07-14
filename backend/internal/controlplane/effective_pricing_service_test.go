@@ -294,7 +294,7 @@ func TestEffectivePricingDecisionCacheQualityTiebreaker(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 			repo := NewMemoryRepository()

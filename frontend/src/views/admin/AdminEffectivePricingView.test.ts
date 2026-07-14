@@ -37,6 +37,8 @@ describe('AdminEffectivePricingView', () => {
         provider_account_name: 'Procurement A', upstream_model: 'model-a', protocol: 'openai_chat_completions',
         currency: 'USD', quoted_multiplier: 0.2, billed_multiplier: 0.6, effective_multiplier: 0.5,
         effective_cost_micros_per_1m: 500000, request_count: 1000, error_rate: 0.01, p95_latency_ms: 420,
+        uncached_cost_micros_per_1m: 1000000, cache_savings_micros_per_1m: 500000,
+        cache_savings_rate: 0.5, cache_economics_available: true,
         metrics_coverage: 0.98, eligible_request_hit_rate: 0.7, cache_token_hit_rate: 0.65,
         cache_write_read_ratio: 0.2, billing_consistency_rate: 0.99, affinity_consistency_rate: 0.95,
         cache_support_status: 'billed_verified', pool_affinity_grade: 'verified', cost_confidence: 'exact',
@@ -60,10 +62,12 @@ describe('AdminEffectivePricingView', () => {
     expect(wrapper.text()).toContain('Channel A')
     expect(wrapper.text()).toContain('0.50x')
     expect(wrapper.text()).toContain('420 ms')
+    expect(wrapper.text()).toContain('Net cache savings 50%')
     expect(wrapper.findAll('.ep-table tbody tr')).toHaveLength(1)
 
     await wrapper.find('.ep-table tbody button').trigger('click')
     expect(wrapper.find('.evidence-drawer').exists()).toBe(true)
+    expect(wrapper.get('.evidence-drawer').text()).toContain('Uncached equivalent cost')
     await wrapper.get('.evidence-drawer .icon-button').trigger('click')
 
     const tabs = wrapper.findAll('.effective-tabs button')
@@ -107,8 +111,8 @@ describe('AdminEffectivePricingView', () => {
       ...initialReport,
       rows: [
         { ...baseRow, provider_account_id: 'account-a', provider_account_name: 'Procurement A', upstream_model: 'upstream-a', cache_token_hit_rate: 0.11, error_rate: 0.011, p95_latency_ms: 111 },
-        { ...baseRow, provider_account_id: 'account-a', provider_account_name: 'Procurement A', upstream_model: 'upstream-b', cache_token_hit_rate: 0.22, error_rate: 0.022, p95_latency_ms: 222 },
-        { ...baseRow, provider_id: 'provider-b', provider_name: 'Channel B', provider_account_id: 'account-b', provider_account_name: 'Procurement B', upstream_model: 'upstream-b', cache_token_hit_rate: 0.77, error_rate: 0.033, p95_latency_ms: 333 }
+        { ...baseRow, provider_account_id: 'account-a', provider_account_name: 'Procurement A', upstream_model: 'upstream-b', cache_token_hit_rate: 0.22, cache_savings_rate: 0.1, error_rate: 0.022, p95_latency_ms: 222 },
+        { ...baseRow, provider_id: 'provider-b', provider_name: 'Channel B', provider_account_id: 'account-b', provider_account_name: 'Procurement B', upstream_model: 'upstream-b', cache_token_hit_rate: 0.77, cache_savings_rate: 0.6, error_rate: 0.033, p95_latency_ms: 333 }
       ]
     })
     vi.mocked(control.getEffectivePricingDecisions).mockResolvedValue([{
@@ -132,6 +136,8 @@ describe('AdminEffectivePricingView', () => {
     expect(cardText).toContain('upstream-b')
     expect(cardText).toContain('22%')
     expect(cardText).toContain('77%')
+    expect(cardText).toContain('Net cache savings 10%')
+    expect(cardText).toContain('Net cache savings 60%')
     expect(cardText).toContain('222 ms')
     expect(cardText).toContain('333 ms')
     expect(cardText).not.toContain('111 ms')
