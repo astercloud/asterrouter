@@ -135,6 +135,14 @@ bash scripts/dev.sh
 
 The frontend runs at `http://localhost:5173` and proxies API traffic to the backend at `http://localhost:8080`.
 
+To expose the one-click demo entry on the sign-in page, start the isolated demo mode explicitly:
+
+```bash
+bash scripts/dev.sh --demo
+```
+
+Demo mode enables the built-in demo account and must only be used locally or on an isolated public demo instance. Docker users can enable it with `ASTER_DEMO_MODE=true docker compose up --build`; production instances should keep it disabled.
+
 Run backend tests:
 
 ```bash

@@ -138,6 +138,9 @@ jobs:
       - name: Check public documentation links
         working-directory: frontend
         run: npm run check:public-doc-links
+      - name: Check workflow pipeline failure propagation
+        working-directory: frontend
+        run: npm run check:workflow-pipefail
       - name: Check Enterprise surface
         working-directory: frontend
         run: npm run check:enterprise-surface

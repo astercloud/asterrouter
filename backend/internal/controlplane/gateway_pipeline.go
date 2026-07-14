@@ -13,20 +13,38 @@ type GatewayExecutionPlan struct {
 	GatewayModelID  string                           `json:"gateway_model_id"`
 	RouteGroup      string                           `json:"route_group"`
 	Candidates      []GatewayProvider                `json:"-"`
+	Exclusions      []GatewayCandidateExclusion      `json:"exclusions"`
 	HasRoutes       bool                             `json:"has_routes"`
 	RejectionReason string                           `json:"rejection_reason,omitempty"`
 }
 
+type GatewayCandidateExclusion struct {
+	RouteID           string `json:"route_id"`
+	ProviderID        string `json:"provider_id,omitempty"`
+	ProviderAccountID string `json:"provider_account_id,omitempty"`
+	UpstreamModel     string `json:"upstream_model,omitempty"`
+	Reason            string `json:"reason"`
+}
+
 func (s *Service) AuthorizeCanonicalGatewayRequest(ctx context.Context, credential gatewaycore.CredentialEnvelope, request gatewaycore.CanonicalRequest) (GatewayAuthContext, gatewaycore.CanonicalAuthContext, error) {
-	if request.Protocol == "" || request.Operation == "" || request.Lane == "" || strings.TrimSpace(request.Model) == "" {
+	if request.Protocol == "" || request.Operation == "" || request.Modality == "" || request.Lane == "" {
 		return GatewayAuthContext{}, gatewaycore.CanonicalAuthContext{}, gatewaycore.ErrInvalidCanonicalRequest
 	}
-	if request.Lane != gatewaycore.LaneDirect {
-		return GatewayAuthContext{}, gatewaycore.CanonicalAuthContext{}, ErrGatewayForbidden
+	if request.Protocol != gatewaycore.ProtocolOpenAIModels && strings.TrimSpace(request.Model) == "" {
+		return GatewayAuthContext{}, gatewaycore.CanonicalAuthContext{}, gatewaycore.ErrInvalidCanonicalRequest
 	}
-	auth, err := s.AuthorizeGatewayCredential(ctx, credential.BearerToken, credential.SignedContext, request.Model)
+	var auth GatewayAuthContext
+	var err error
+	if request.Model == "" {
+		auth, err = s.AuthenticateGatewayCredential(ctx, credential.BearerToken, credential.SignedContext)
+	} else {
+		auth, err = s.AuthorizeGatewayCredential(ctx, credential.BearerToken, credential.SignedContext, request.Model)
+	}
 	if err != nil {
 		return GatewayAuthContext{}, gatewaycore.CanonicalAuthContext{}, err
+	}
+	if !apiKeyAllowsCanonicalRequest(auth.APIKey, request) {
+		return GatewayAuthContext{}, gatewaycore.CanonicalAuthContext{}, ErrGatewayPolicyForbidden
 	}
 	return auth, s.canonicalAuthContext(auth), nil
 }
@@ -49,14 +67,45 @@ func (s *Service) PlanCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 	if err != nil {
 		return GatewayExecutionPlan{}, err
 	}
+	exclusions, err := s.gatewayCandidateExclusions(ctx, resolved, candidates)
+	if err != nil {
+		return GatewayExecutionPlan{}, err
+	}
+	rejectionReason := ""
+	if len(candidates) == 0 && hasRoutes {
+		rejectionReason = "all_candidates_excluded"
+	}
 	return GatewayExecutionPlan{
-		Request:        request,
-		Auth:           auth,
-		GatewayModelID: resolved.GatewayModel.ID,
-		RouteGroup:     resolved.RouteGroup,
-		Candidates:     candidates,
-		HasRoutes:      hasRoutes,
+		Request:         request,
+		Auth:            auth,
+		GatewayModelID:  resolved.GatewayModel.ID,
+		RouteGroup:      resolved.RouteGroup,
+		Candidates:      candidates,
+		Exclusions:      exclusions,
+		HasRoutes:       hasRoutes,
+		RejectionReason: rejectionReason,
 	}, nil
+}
+
+func (s *Service) gatewayCandidateExclusions(ctx context.Context, resolved ResolvedGatewayModel, candidates []GatewayProvider) ([]GatewayCandidateExclusion, error) {
+	included := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.RouteID != "" {
+			included[candidate.RouteID] = struct{}{}
+		}
+	}
+	skipped, err := s.skippedSimulationCandidates(ctx, resolved, included, 1)
+	if err != nil {
+		return nil, err
+	}
+	exclusions := make([]GatewayCandidateExclusion, 0, len(skipped))
+	for _, candidate := range skipped {
+		exclusions = append(exclusions, GatewayCandidateExclusion{
+			RouteID: candidate.RouteID, ProviderID: candidate.ProviderID, ProviderAccountID: candidate.ProviderAccountID,
+			UpstreamModel: candidate.UpstreamModel, Reason: candidate.Reason,
+		})
+	}
+	return exclusions, nil
 }
 
 func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.CanonicalAuthContext {
@@ -72,9 +121,21 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 			source = gatewaycore.CredentialSourceJWTJWKS
 		}
 	}
-	tenantID := strings.TrimSpace(auth.APIKey.CustomerID)
-	principalType := strings.TrimSpace(auth.APIKey.KeyType)
-	principalID := strings.TrimSpace(auth.APIKey.ID)
+	tenantID := strings.TrimSpace(auth.APIKey.TenantID)
+	if tenantID == "" {
+		tenantID = gatewayDefaultTenantID
+	}
+	if auth.APIKey.CustomerID != "" && auth.APIKey.TenantID == "" {
+		tenantID = auth.APIKey.CustomerID
+	}
+	principalType := strings.TrimSpace(auth.APIKey.PrincipalType)
+	if principalType == "" {
+		principalType = strings.TrimSpace(auth.APIKey.KeyType)
+	}
+	principalID := strings.TrimSpace(auth.APIKey.PrincipalReference)
+	if principalID == "" {
+		principalID = strings.TrimSpace(auth.APIKey.ID)
+	}
 	if auth.APIKey.OwnerUserID != "" {
 		principalID = auth.APIKey.OwnerUserID
 	}
@@ -88,6 +149,7 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 		principalType = auth.GatewayPrincipal.PrincipalType
 		principalID = auth.GatewayPrincipal.ID
 	}
+	keyPolicy := effectiveAPIKeyPolicy(auth.APIKey)
 	policyID := ""
 	policyVersion := 0
 	if auth.Policy != nil {
@@ -112,14 +174,24 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 		ExternalSubjectReference: auth.ExternalSubjectReference,
 		PolicyID:                 policyID,
 		PolicyVersion:            policyVersion,
+		Scopes:                   append([]string(nil), keyPolicy.scopes...),
 		AllowedModels:            allowedModels,
+		AllowedModalities:        append([]string(nil), keyPolicy.allowedModalities...),
+		AllowedOperations:        append([]string(nil), keyPolicy.allowedOperations...),
+		AllowedCIDRs:             append([]string(nil), keyPolicy.allowedCIDRs...),
 		Limits: gatewaycore.CanonicalLimits{
-			QPSLimit:           auth.effectiveQPSLimit(),
-			MonthlyTokenLimit:  auth.effectiveMonthlyTokenLimit(),
-			MonthlyBudgetCents: auth.effectiveMonthlyBudgetCents(),
+			QPSLimit:                 auth.effectiveQPSLimit(),
+			RPMLimit:                 auth.APIKey.RPMLimit,
+			TPMLimit:                 auth.APIKey.TPMLimit,
+			ConcurrencyLimit:         auth.APIKey.ConcurrencyLimit,
+			MonthlyTokenLimit:        auth.effectiveMonthlyTokenLimit(),
+			MonthlyBudgetCents:       auth.effectiveMonthlyBudgetCents(),
+			MonthlyImageLimit:        auth.APIKey.MonthlyImageLimit,
+			MonthlyVideoSecondsLimit: auth.APIKey.MonthlyVideoSecondsLimit,
+			MonthlyAudioSecondsLimit: auth.APIKey.MonthlyAudioSecondsLimit,
 		},
-		LanePolicy:     "direct_only",
-		ArtifactPolicy: "proxy_only",
+		LanePolicy:     keyPolicy.lanePolicy,
+		ArtifactPolicy: keyPolicy.artifactPolicy,
 	}
 }
 

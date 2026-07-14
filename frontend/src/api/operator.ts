@@ -12,7 +12,7 @@ export async function deleteOperatorResource(resource:OperatorResource,id:string
 export async function getOperatorBalances():Promise<OperatorBalanceEntry[]>{return (await apiClient.get<OperatorBalanceEntry[]>('/operator/balance-entries')).data || []}
 export async function createOperatorBalance(payload:Record<string,unknown>):Promise<OperatorBalanceEntry>{return (await apiClient.post<OperatorBalanceEntry>('/operator/balance-entries',payload)).data}
 export async function getOperatorCustomerKeys():Promise<APIKeyRecord[]>{return (await apiClient.get<APIKeyRecord[]>('/operator/customer-keys')).data || []}
-export async function rotateOperatorCustomerKey(id:string):Promise<APIKeyCreateResponse>{return (await apiClient.post<APIKeyCreateResponse>(`/operator/customer-keys/${id}/rotate`)).data}
+export async function rotateOperatorCustomerKey(id:string,gracePeriodSeconds=0):Promise<APIKeyCreateResponse>{return (await apiClient.post<APIKeyCreateResponse>(`/operator/customer-keys/${id}/rotate`,{grace_period_seconds:gracePeriodSeconds})).data}
 export async function disableOperatorCustomerKey(id:string):Promise<void>{await apiClient.post(`/operator/customer-keys/${id}/disable`)}
 export async function createOperatorCustomerKey(customerID:string,payload:APIKeyCreateRequest):Promise<APIKeyCreateResponse>{return (await apiClient.post<APIKeyCreateResponse>(`/operator/customers/${customerID}/keys`,payload)).data}
 export async function getOperatorUsage(params?:Record<string,unknown>):Promise<UsageReport>{return (await apiClient.get<UsageReport>('/operator/usage',{params})).data}

@@ -43,6 +43,10 @@ test('@smoke @surface-smoke anonymous protected navigation redirects to login', 
   const loginURL = new URL(page.url())
   expect(loginURL.searchParams.get('redirect')).toBe(protectedPath)
   await expect(page.getByRole('heading', { level: 2, name: 'Welcome back' })).toBeVisible()
+  if (expectedDemoMode) {
+    await expect(page.getByText('Experience AsterRouter now')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Try the demo' })).toBeVisible()
+  }
   await expect(page.getByLabel('Username')).toHaveValue('admin')
   await expect(page.locator('input#password')).toHaveAttribute('type', 'password')
   expect(errors).toEqual([])
@@ -66,6 +70,36 @@ test('@smoke @surface-smoke login persists and opens the enabled deployment surf
     await expect(page).toHaveURL(new RegExp(`${path}$`))
     await expect(page.locator('main')).toBeVisible()
   }
+  expect(errors).toEqual([])
+})
+
+test('@smoke @surface-smoke demo settings can switch between all product modes', async ({ page }, testInfo) => {
+  test.skip(!expectedDemoMode, 'Deployment profiles remain immutable outside demo mode.')
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'The profile mutation contract runs once; responsive layout is covered separately.')
+
+  const errors = captureBrowserErrors(page)
+  await loginDemo(page)
+  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const headers = { Authorization: `Bearer ${token}` }
+  const allProfiles = ['enterprise', 'personal', 'relay_operator', 'platform']
+
+  try {
+    await page.goto('/admin/settings')
+    await page.getByRole('button', { name: 'Gateway services' }).click()
+    await expect(page.getByText('Switch demo experience')).toBeVisible()
+    await expect(page.locator('button[data-profile]')).toHaveCount(4)
+
+    await page.locator('button[data-profile="platform"]').click()
+    await expect(page).toHaveURL(/\/platform\/overview$/)
+    const settings = await page.request.get('/api/v1/settings/public')
+    await expect(settings.json()).resolves.toMatchObject({ data: { default_profile: 'platform', enabled_profiles: expect.arrayContaining(allProfiles) } })
+  } finally {
+    await page.request.put('/api/v1/system/profiles', {
+      headers,
+      data: { enabled_profiles: allProfiles, default_profile: 'personal' }
+    })
+  }
+
   expect(errors).toEqual([])
 })
 

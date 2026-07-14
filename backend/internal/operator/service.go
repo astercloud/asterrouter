@@ -222,11 +222,15 @@ func (s *Service) ListCustomerKeys(ctx context.Context, customerID ...string) ([
 }
 
 func (s *Service) RotateCustomerKey(ctx context.Context, actor, id string) (controlplane.APIKeyCreateResponse, error) {
+	return s.RotateCustomerKeyWithGrace(ctx, actor, id, 0)
+}
+
+func (s *Service) RotateCustomerKeyWithGrace(ctx context.Context, actor, id string, gracePeriodSeconds int) (controlplane.APIKeyCreateResponse, error) {
 	key, err := s.customerKey(ctx, id)
 	if err != nil {
 		return controlplane.APIKeyCreateResponse{}, err
 	}
-	return s.control.RotateAPIKey(ctx, actor, key.ID)
+	return s.control.RotateAPIKeyWithGrace(ctx, actor, key.ID, gracePeriodSeconds)
 }
 
 func (s *Service) DisableCustomerKey(ctx context.Context, actor, id string) error {

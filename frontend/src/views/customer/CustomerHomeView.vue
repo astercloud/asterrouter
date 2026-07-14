@@ -6,6 +6,7 @@ import { useRoute } from 'vue-router'
 import { getPortalWorkspace } from '@/api/control'
 import { getCustomerBilling, type CustomerBillingOverview } from '@/api/customer'
 import type { PortalWorkspace } from '@/types'
+import { apiKeyLifecycleStatus } from '@/utils/apiKeys'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -14,7 +15,7 @@ const error = ref('')
 const billing = ref<CustomerBillingOverview | null>(null)
 const workspace = ref<PortalWorkspace | null>(null)
 const activePanel = computed(() => route.meta.customerPanel === 'usage' ? 'usage' : 'overview')
-const activeKeys = computed(() => (workspace.value?.api_keys || []).filter((item) => item.status === 'active').length)
+const activeKeys = computed(() => (workspace.value?.api_keys || []).filter((item) => apiKeyLifecycleStatus(item) === 'active').length)
 
 async function load() {
   loading.value = true

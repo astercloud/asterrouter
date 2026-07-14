@@ -209,6 +209,13 @@ func (s *Service) UpdatePlatformAPIKey(ctx context.Context, actor, id string, re
 }
 
 func (s *Service) RotatePlatformAPIKey(ctx context.Context, actor, id string) (APIKeyCreateResponse, error) {
+	return s.RotatePlatformAPIKeyWithGrace(ctx, actor, id, 0)
+}
+
+func (s *Service) RotatePlatformAPIKeyWithGrace(ctx context.Context, actor, id string, gracePeriodSeconds int) (APIKeyCreateResponse, error) {
+	if gracePeriodSeconds < 0 || gracePeriodSeconds > 86400 {
+		return APIKeyCreateResponse{}, errors.New("grace_period_seconds must be between 0 and 86400")
+	}
 	key, err := s.apiKeyByID(ctx, id)
 	if err != nil {
 		return APIKeyCreateResponse{}, err
@@ -220,7 +227,7 @@ func (s *Service) RotatePlatformAPIKey(ctx context.Context, actor, id string) (A
 	if err != nil {
 		return APIKeyCreateResponse{}, err
 	}
-	return s.rotateAPIKey(ctx, actor, key, &identity)
+	return s.rotateAPIKey(ctx, actor, key, &identity, time.Duration(gracePeriodSeconds)*time.Second)
 }
 
 func (s *Service) DisablePlatformAPIKey(ctx context.Context, actor, id string) error {
@@ -415,6 +422,10 @@ func normalizePlatformSlug(value string) string {
 }
 
 func (s *Service) auditPlatform(ctx context.Context, actor, action, resourceType, resourceID, summary string, tenant *PlatformTenant, principal *GatewayPrincipal) error {
+	return s.repo.AddAuditLog(ctx, s.newPlatformAuditLog(actor, action, resourceType, resourceID, summary, tenant, principal))
+}
+
+func (s *Service) newPlatformAuditLog(actor, action, resourceType, resourceID, summary string, tenant *PlatformTenant, principal *GatewayPrincipal) AuditLog {
 	if strings.TrimSpace(actor) == "" {
 		actor = "local-admin"
 	}
@@ -427,5 +438,5 @@ func (s *Service) auditPlatform(ctx context.Context, actor, action, resourceType
 		event.GatewayPrincipalID = principal.ID
 		event.GatewayPrincipalName = principal.Name
 	}
-	return s.repo.AddAuditLog(ctx, event)
+	return event
 }

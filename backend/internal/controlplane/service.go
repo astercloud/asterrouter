@@ -32,10 +32,12 @@ const (
 var (
 	ErrGatewayUnauthorized     = errors.New("invalid gateway api key")
 	ErrGatewayForbidden        = errors.New("gateway api key is not allowed to use this model")
+	ErrGatewayPolicyForbidden  = errors.New("gateway credential policy does not allow this request")
 	ErrGatewayRouteUnavailable = errors.New("no schedulable gateway route is available for this model")
 	ErrGatewayRateLimited      = errors.New("gateway api key qps limit exceeded")
 	ErrGatewayQuotaExceeded    = errors.New("gateway api key monthly token quota exceeded")
 	ErrGatewayBudgetExceeded   = errors.New("workspace key monthly budget exceeded")
+	ErrGatewayCapacityLimited  = errors.New("gateway credential capacity limit exceeded")
 )
 
 type Service struct {
@@ -46,6 +48,9 @@ type Service struct {
 	alertDispatcher                AlertDispatcher
 	customerNotificationDispatcher CustomerNotificationDispatcher
 	usageObserver                  UsageObserver
+	credentialCapacityStore        CredentialCapacityStore
+	outboxPublisherMu              sync.RWMutex
+	outboxPublisher                TransactionalOutboxPublisher
 	rateMu                         sync.Mutex
 	rateWindows                    map[string][]time.Time
 	jwksMu                         sync.Mutex
@@ -80,7 +85,8 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 	if len(secretKey) > 0 && strings.TrimSpace(secretKey[0]) != "" {
 		key = strings.TrimSpace(secretKey[0])
 	}
-	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, now: time.Now, rateWindows: map[string][]time.Time{}, externalAuthJWKSFetcher: fetchExternalAuthJWKS, externalAuthJWKSCache: map[string]externalAuthJWKSCacheEntry{}, platformUsageHTTPClient: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+	capacityStore, _ := repo.(CredentialCapacityStore)
+	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, now: time.Now, rateWindows: map[string][]time.Time{}, credentialCapacityStore: capacityStore, externalAuthJWKSFetcher: fetchExternalAuthJWKS, externalAuthJWKSCache: map[string]externalAuthJWKSCacheEntry{}, platformUsageHTTPClient: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("platform usage sink redirects are not allowed")
 	}}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler()}
 }
@@ -192,8 +198,8 @@ func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {
 			activeProviders++
 		}
 	}
-	for _, key := range keys {
-		if key.Status == APIKeyStatusActive {
+	for _, key := range presentAPIKeys(keys, s.nowUTC()) {
+		if key.LifecycleStatus == APIKeyLifecycleActive {
 			activeKeys++
 		}
 	}
@@ -231,9 +237,9 @@ func (s *Service) PlatformDashboard(ctx context.Context) (Dashboard, error) {
 			activeProviders++
 		}
 	}
-	for _, key := range keys {
+	for _, key := range presentAPIKeys(keys, s.nowUTC()) {
 		if key.ProfileScope == ProfileScopePlatform {
-			if key.Status == APIKeyStatusActive {
+			if key.LifecycleStatus == APIKeyLifecycleActive {
 				activeKeys++
 			}
 		}
@@ -720,7 +726,11 @@ func (s *Service) checkProviderAccountConfiguration(account ProviderAccount, pro
 }
 
 func (s *Service) ListAPIKeys(ctx context.Context) ([]APIKeyRecord, error) {
-	return s.repo.ListAPIKeys(ctx)
+	keys, err := s.repo.ListAPIKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return presentAPIKeys(keys, s.nowUTC()), nil
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCreateRequest) (APIKeyCreateResponse, error) {
@@ -739,8 +749,9 @@ func (s *Service) createAPIKey(ctx context.Context, actor string, req APIKeyCrea
 	if len(models) == 0 {
 		return APIKeyCreateResponse{}, errors.New("model_allowlist must not be empty")
 	}
-	if req.QPSLimit < 0 || req.MonthlyTokenLimit < 0 {
-		return APIKeyCreateResponse{}, errors.New("limits must be greater than or equal to 0")
+	keyPolicy, err := normalizeAPIKeyPolicy(apiKeyPolicyFromCreateRequest(req))
+	if err != nil {
+		return APIKeyCreateResponse{}, err
 	}
 	if err := s.validateGovernancePolicyReference(ctx, req.PolicyID); err != nil {
 		return APIKeyCreateResponse{}, err
@@ -761,28 +772,24 @@ func (s *Service) createAPIKey(ctx context.Context, actor string, req APIKeyCrea
 	hash := hashAPIKey(rawKey)
 	now := time.Now().UTC()
 	record := APIKeyRecord{
-		ID:                "key_" + randomID(10),
-		Name:              name,
-		KeyHash:           hash,
-		Fingerprint:       fingerprint(hash),
-		Prefix:            prefix(rawKey, 10),
-		Status:            APIKeyStatusActive,
-		KeyType:           keyType,
-		CustomerID:        customerID,
-		OwnerUserID:       ownerUserID,
-		PolicyID:          strings.TrimSpace(req.PolicyID),
-		ModelAllowlist:    models,
-		QPSLimit:          req.QPSLimit,
-		MonthlyTokenLimit: req.MonthlyTokenLimit,
-		ExpiresAt:         expiresAt,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		ID:             "key_" + randomID(10),
+		Name:           name,
+		KeyHash:        hash,
+		Fingerprint:    fingerprint(hash),
+		Prefix:         prefix(rawKey, 10),
+		Status:         APIKeyStatusActive,
+		KeyType:        keyType,
+		CustomerID:     customerID,
+		OwnerUserID:    ownerUserID,
+		PolicyID:       strings.TrimSpace(req.PolicyID),
+		ModelAllowlist: models,
+		ExpiresAt:      expiresAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
-	if platformIdentity != nil {
-		record.ProfileScope = ProfileScopePlatform
-		record.PlatformTenantID = platformIdentity.tenant.ID
-		record.GatewayPrincipalID = platformIdentity.principal.ID
-	}
+	record.LifecycleStatus = APIKeyLifecycleActive
+	applyAPIKeyPolicy(&record, keyPolicy)
+	applyAPIKeyPrincipal(&record, platformIdentity)
 	if err := s.repo.SaveAPIKey(ctx, record); err != nil {
 		return APIKeyCreateResponse{}, err
 	}
@@ -821,8 +828,9 @@ func (s *Service) updateAPIKey(ctx context.Context, actor string, key APIKeyReco
 	if len(models) == 0 {
 		return APIKeyRecord{}, errors.New("model_allowlist must not be empty")
 	}
-	if req.QPSLimit < 0 || req.MonthlyTokenLimit < 0 {
-		return APIKeyRecord{}, errors.New("limits must be greater than or equal to 0")
+	keyPolicy, err := normalizeAPIKeyPolicy(apiKeyPolicyForUpdate(key, req))
+	if err != nil {
+		return APIKeyRecord{}, err
 	}
 	if err := s.validateGovernancePolicyReference(ctx, req.PolicyID); err != nil {
 		return APIKeyRecord{}, err
@@ -860,23 +868,27 @@ func (s *Service) updateAPIKey(ctx context.Context, actor string, key APIKeyReco
 	key.Name = name
 	key.PolicyID = strings.TrimSpace(req.PolicyID)
 	key.ModelAllowlist = models
-	key.QPSLimit = req.QPSLimit
-	key.MonthlyTokenLimit = req.MonthlyTokenLimit
 	key.ExpiresAt = expiresAt
 	key.Status = status
 	key.KeyType = keyType
 	key.CustomerID = customerID
 	key.OwnerUserID = ownerUserID
+	applyAPIKeyPolicy(&key, keyPolicy)
+	var platformIdentity *platformCredentialIdentity
+	if key.ProfileScope == ProfileScopePlatform {
+		identity, identityErr := s.activePlatformCredentialIdentity(ctx, key.PlatformTenantID, key.GatewayPrincipalID)
+		if identityErr != nil {
+			return APIKeyRecord{}, identityErr
+		}
+		platformIdentity = &identity
+	}
+	applyAPIKeyPrincipal(&key, platformIdentity)
 	key.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveAPIKey(ctx, key); err != nil {
 		return APIKeyRecord{}, err
 	}
-	if key.ProfileScope == ProfileScopePlatform {
-		identity, err := s.activePlatformCredentialIdentity(ctx, key.PlatformTenantID, key.GatewayPrincipalID)
-		if err != nil {
-			return APIKeyRecord{}, err
-		}
-		if err := s.auditPlatform(ctx, actor, "update", "api_key", key.ID, fmt.Sprintf("Updated platform API key %s policy", key.Name), &identity.tenant, &identity.principal); err != nil {
+	if platformIdentity != nil {
+		if err := s.auditPlatform(ctx, actor, "update", "api_key", key.ID, fmt.Sprintf("Updated platform API key %s policy", key.Name), &platformIdentity.tenant, &platformIdentity.principal); err != nil {
 			return APIKeyRecord{}, err
 		}
 		return key, nil
@@ -927,6 +939,13 @@ func (s *Service) validateAPIKeyOwner(ctx context.Context, keyType string, owner
 }
 
 func (s *Service) RotateAPIKey(ctx context.Context, actor string, id string) (APIKeyCreateResponse, error) {
+	return s.RotateAPIKeyWithGrace(ctx, actor, id, 0)
+}
+
+func (s *Service) RotateAPIKeyWithGrace(ctx context.Context, actor string, id string, gracePeriodSeconds int) (APIKeyCreateResponse, error) {
+	if gracePeriodSeconds < 0 || gracePeriodSeconds > 86400 {
+		return APIKeyCreateResponse{}, errors.New("grace_period_seconds must be between 0 and 86400")
+	}
 	key, err := s.apiKeyByID(ctx, id)
 	if err != nil {
 		return APIKeyCreateResponse{}, err
@@ -934,32 +953,68 @@ func (s *Service) RotateAPIKey(ctx context.Context, actor string, id string) (AP
 	if key.ProfileScope == ProfileScopePlatform {
 		return APIKeyCreateResponse{}, errors.New("platform API keys must be rotated through the platform control plane")
 	}
-	return s.rotateAPIKey(ctx, actor, key, nil)
+	return s.rotateAPIKey(ctx, actor, key, nil, time.Duration(gracePeriodSeconds)*time.Second)
 }
 
-func (s *Service) rotateAPIKey(ctx context.Context, actor string, key APIKeyRecord, platformIdentity *platformCredentialIdentity) (APIKeyCreateResponse, error) {
+func (s *Service) rotateAPIKey(ctx context.Context, actor string, key APIKeyRecord, platformIdentity *platformCredentialIdentity, gracePeriod time.Duration) (APIKeyCreateResponse, error) {
+	if key.ReplacedByKeyID != "" {
+		return APIKeyCreateResponse{}, ErrAPIKeyAlreadyRotated
+	}
 	rawKey := "ar_" + randomToken(32)
 	hash := hashAPIKey(rawKey)
-	now := time.Now().UTC()
-	key.KeyHash = hash
-	key.Fingerprint = fingerprint(hash)
-	key.Prefix = prefix(rawKey, 10)
-	key.Status = APIKeyStatusActive
-	key.LastUsedAt = nil
+	now := s.nowUTC()
+	expectedUpdatedAt := key.UpdatedAt
+	if key.RotationFamilyID == "" {
+		key.RotationFamilyID = "key_family_" + randomID(10)
+	}
+	replacement := key
+	replacement.ID = "key_" + randomID(10)
+	replacement.KeyHash = hash
+	replacement.Fingerprint = fingerprint(hash)
+	replacement.Prefix = prefix(rawKey, 10)
+	replacement.Status = APIKeyStatusActive
+	replacement.ReplacesKeyID = key.ID
+	replacement.ReplacedByKeyID = ""
+	replacement.RotationGraceExpiresAt = nil
+	replacement.LastUsedAt = nil
+	replacement.LifecycleStatus = APIKeyLifecycleActive
+	replacement.CreatedAt = now
+	replacement.UpdatedAt = now
+	graceExpiresAt := now.Add(gracePeriod)
+	key.ReplacedByKeyID = replacement.ID
+	key.RotationGraceExpiresAt = &graceExpiresAt
 	key.UpdatedAt = now
-	if err := s.repo.SaveAPIKey(ctx, key); err != nil {
-		return APIKeyCreateResponse{}, err
+	if gracePeriod <= 0 {
+		key.Status = APIKeyStatusDisabled
 	}
+	audit := s.newAuditLog(actor, "rotate", "api_key", replacement.ID, fmt.Sprintf("Rotated API key %s from %s", replacement.Name, key.ID))
 	if platformIdentity != nil {
-		if err := s.auditPlatform(ctx, actor, "rotate", "api_key", key.ID, fmt.Sprintf("Rotated platform API key %s", key.Name), &platformIdentity.tenant, &platformIdentity.principal); err != nil {
-			return APIKeyCreateResponse{}, err
-		}
-		return APIKeyCreateResponse{Record: key, Key: rawKey}, nil
+		audit = s.newPlatformAuditLog(actor, "rotate", "api_key", replacement.ID, fmt.Sprintf("Rotated platform API key %s from %s", replacement.Name, key.ID), &platformIdentity.tenant, &platformIdentity.principal)
 	}
-	if err := s.audit(ctx, actor, "rotate", "api_key", key.ID, fmt.Sprintf("Rotated API key %s", key.Name)); err != nil {
+	if err := s.repo.RotateAPIKeyPair(ctx, key, replacement, audit, expectedUpdatedAt); err != nil {
 		return APIKeyCreateResponse{}, err
 	}
-	return APIKeyCreateResponse{Record: key, Key: rawKey}, nil
+	return APIKeyCreateResponse{Record: replacement, Key: rawKey}, nil
+}
+
+func presentAPIKeys(keys []APIKeyRecord, now time.Time) []APIKeyRecord {
+	for index := range keys {
+		keys[index].LifecycleStatus = apiKeyLifecycleStatus(keys[index], now)
+	}
+	return keys
+}
+
+func apiKeyLifecycleStatus(key APIKeyRecord, now time.Time) string {
+	if key.ReplacedByKeyID != "" {
+		if key.RotationGraceExpiresAt != nil && now.Before(*key.RotationGraceExpiresAt) {
+			return APIKeyLifecycleRetiring
+		}
+		return APIKeyLifecycleRetired
+	}
+	if key.Status == APIKeyStatusActive {
+		return APIKeyLifecycleActive
+	}
+	return APIKeyLifecycleDisabled
 }
 
 func (s *Service) DisableAPIKey(ctx context.Context, actor string, id string) error {
@@ -993,6 +1048,10 @@ func (s *Service) AuditLogSummaryQuery(ctx context.Context, query AuditLogQuery)
 }
 
 func (s *Service) AuthenticateGatewayKey(ctx context.Context, rawKey string) (GatewayAuthContext, error) {
+	return s.authenticateGatewayKey(ctx, rawKey, true)
+}
+
+func (s *Service) authenticateGatewayKey(ctx context.Context, rawKey string, recordLastUsed bool) (GatewayAuthContext, error) {
 	rawKey = strings.TrimSpace(rawKey)
 	if rawKey == "" {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
@@ -1004,8 +1063,11 @@ func (s *Service) AuthenticateGatewayKey(ctx context.Context, rawKey string) (Ga
 	if !ok || key.Status != APIKeyStatusActive {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
-	now := time.Now().UTC()
+	now := s.nowUTC()
 	if key.ExpiresAt != nil && now.After(*key.ExpiresAt) {
+		return GatewayAuthContext{}, ErrGatewayUnauthorized
+	}
+	if key.ReplacedByKeyID != "" && (key.RotationGraceExpiresAt == nil || !now.Before(*key.RotationGraceExpiresAt)) {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
 	var platformTenant *PlatformTenant
@@ -1018,11 +1080,13 @@ func (s *Service) AuthenticateGatewayKey(ctx context.Context, rawKey string) (Ga
 		platformTenant = &identity.tenant
 		gatewayPrincipal = &identity.principal
 	}
-	if err := s.repo.UpdateAPIKeyLastUsed(ctx, key.ID, now); err != nil {
-		return GatewayAuthContext{}, err
+	if recordLastUsed {
+		if err := s.repo.UpdateAPIKeyLastUsed(ctx, key.ID, now); err != nil {
+			return GatewayAuthContext{}, err
+		}
+		key.LastUsedAt = &now
+		key.UpdatedAt = now
 	}
-	key.LastUsedAt = &now
-	key.UpdatedAt = now
 	policy, policySource, err := s.effectiveGatewayPolicy(ctx, key)
 	if err != nil {
 		return GatewayAuthContext{}, err
@@ -1037,6 +1101,10 @@ func (s *Service) AuthorizeGatewayModel(ctx context.Context, rawKey string, mode
 // AuthenticateGatewayCredential accepts exactly one trusted public-gateway
 // credential source. Control-plane routes intentionally do not use it.
 func (s *Service) AuthenticateGatewayCredential(ctx context.Context, rawKey, signedContext string) (GatewayAuthContext, error) {
+	return s.authenticateGatewayCredential(ctx, rawKey, signedContext, true)
+}
+
+func (s *Service) authenticateGatewayCredential(ctx context.Context, rawKey, signedContext string, recordLastUsed bool) (GatewayAuthContext, error) {
 	if strings.TrimSpace(signedContext) != "" {
 		if strings.TrimSpace(rawKey) != "" {
 			return GatewayAuthContext{}, ErrGatewayUnauthorized
@@ -1046,7 +1114,7 @@ func (s *Service) AuthenticateGatewayCredential(ctx context.Context, rawKey, sig
 	if isExternalJWTToken(rawKey) {
 		return s.AuthenticateExternalJWT(ctx, rawKey)
 	}
-	return s.AuthenticateGatewayKey(ctx, rawKey)
+	return s.authenticateGatewayKey(ctx, rawKey, recordLastUsed)
 }
 
 func isExternalJWTToken(value string) bool {
@@ -1142,6 +1210,10 @@ func (s *Service) GatewayModelsForCredential(ctx context.Context, rawKey, signed
 	if err != nil {
 		return nil, err
 	}
+	return s.GatewayModelsForAuth(ctx, auth)
+}
+
+func (s *Service) GatewayModelsForAuth(ctx context.Context, auth GatewayAuthContext) ([]string, error) {
 	models, err := s.GatewayModels(ctx)
 	if err != nil {
 		return nil, err
@@ -1180,42 +1252,51 @@ func (s *Service) RecordGatewayCall(ctx context.Context, auth GatewayAuthContext
 }
 
 type GatewayUsageInput struct {
-	Model             string
-	UpstreamModel     string
-	ProviderID        string
-	ProviderAccountID string
-	Status            string
-	ErrorType         string
-	LatencyMS         int64
-	InputTokens       int
-	OutputTokens      int
-	CostCents         int
+	OperationID        string
+	AttemptID          string
+	UsageVersion       int
+	UsageSource        string
+	RequestFingerprint string
+	Model              string
+	UpstreamModel      string
+	ProviderID         string
+	ProviderAccountID  string
+	Status             string
+	ErrorType          string
+	LatencyMS          int64
+	InputTokens        int
+	OutputTokens       int
+	CostCents          int
 }
 
 type GatewayTraceInput struct {
-	Model             string
-	Stream            bool
-	MessageCount      int
-	ProviderID        string
-	ProviderAccountID string
-	GatewayModelID    string
-	RouteID           string
-	RouteGroup        string
-	UpstreamModel     string
-	RouteSource       string
-	RouteReason       string
-	Status            string
-	HTTPStatus        int
-	ErrorType         string
-	LatencyMS         int64
-	InputTokens       int
-	OutputTokens      int
-	RequestSummary    string
-	ResponseSummary   string
-	RouteAttempts     string
+	OperationID        string
+	AttemptID          string
+	RequestFingerprint string
+	Model              string
+	Stream             bool
+	MessageCount       int
+	ProviderID         string
+	ProviderAccountID  string
+	GatewayModelID     string
+	RouteID            string
+	RouteGroup         string
+	UpstreamModel      string
+	RouteSource        string
+	RouteReason        string
+	Status             string
+	HTTPStatus         int
+	ErrorType          string
+	LatencyMS          int64
+	InputTokens        int
+	OutputTokens       int
+	RequestSummary     string
+	ResponseSummary    string
+	RouteAttempts      string
 }
 
 func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContext, in GatewayUsageInput) error {
+	normalizeUsageLedgerInput(&in)
 	status := strings.TrimSpace(in.Status)
 	if status == "" {
 		status = "accepted"
@@ -1227,34 +1308,53 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 		}
 	}
 	record := UsageRecord{
-		ID:                "usage_" + randomID(12),
-		APIKeyID:          auth.APIKey.ID,
-		CustomerID:        auth.APIKey.CustomerID,
-		APIFingerprint:    auth.APIKey.Fingerprint,
-		Model:             strings.TrimSpace(in.Model),
-		UpstreamModel:     strings.TrimSpace(in.UpstreamModel),
-		ProviderID:        strings.TrimSpace(in.ProviderID),
-		ProviderAccountID: strings.TrimSpace(in.ProviderAccountID),
-		Status:            status,
-		ErrorType:         strings.TrimSpace(in.ErrorType),
-		LatencyMS:         in.LatencyMS,
-		InputTokens:       nonNegative(in.InputTokens),
-		OutputTokens:      nonNegative(in.OutputTokens),
-		CostCents:         costCents,
-		CreatedAt:         s.nowUTC(),
+		ID:                 "usage_" + randomID(12),
+		OperationID:        strings.TrimSpace(in.OperationID),
+		AttemptID:          strings.TrimSpace(in.AttemptID),
+		UsageVersion:       in.UsageVersion,
+		UsageSource:        strings.TrimSpace(in.UsageSource),
+		RequestFingerprint: strings.TrimSpace(in.RequestFingerprint),
+		APIKeyID:           auth.APIKey.ID,
+		CustomerID:         auth.APIKey.CustomerID,
+		APIFingerprint:     auth.APIKey.Fingerprint,
+		Model:              strings.TrimSpace(in.Model),
+		UpstreamModel:      strings.TrimSpace(in.UpstreamModel),
+		ProviderID:         strings.TrimSpace(in.ProviderID),
+		ProviderAccountID:  strings.TrimSpace(in.ProviderAccountID),
+		Status:             status,
+		ErrorType:          strings.TrimSpace(in.ErrorType),
+		LatencyMS:          in.LatencyMS,
+		InputTokens:        nonNegative(in.InputTokens),
+		OutputTokens:       nonNegative(in.OutputTokens),
+		CostCents:          costCents,
+		CreatedAt:          s.nowUTC(),
 	}
 	applyGatewayPlatformSnapshotToUsage(&record, auth)
+	if record.OperationID != "" {
+		record.ID = "usage_" + usageLedgerDigest(record)
+	}
 	events, err := s.platformUsageDeliveryEventsForRecord(ctx, record)
 	if err != nil {
 		return err
 	}
-	if len(events) > 0 {
+	applied := true
+	if record.OperationID != "" {
+		billing, outbox, ledgerErr := usageLedgerRecords(record)
+		if ledgerErr != nil {
+			return ledgerErr
+		}
+		record.ID = billing.UsageRecordID
+		applied, err = s.repo.ApplyUsageLedger(ctx, record, billing, outbox, events)
+	} else if len(events) > 0 {
 		err = s.repo.SaveUsageRecordAndEnqueuePlatformUsage(ctx, record, events)
 	} else {
 		err = s.repo.SaveUsageRecord(ctx, record)
 	}
 	if err != nil {
 		return err
+	}
+	if !applied {
+		return nil
 	}
 	if s.usageObserver != nil {
 		if err := s.usageObserver.OnGatewayUsage(ctx, record); err != nil {
@@ -1279,35 +1379,38 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 	}
 	policyID, policyName, policySource, policyVersion, policySnapshot := gatewayTracePolicyEvidence(auth)
 	trace := GatewayTrace{
-		ID:                "trace_" + randomID(12),
-		APIKeyID:          auth.APIKey.ID,
-		APIFingerprint:    auth.APIKey.Fingerprint,
-		Model:             strings.TrimSpace(in.Model),
-		Stream:            in.Stream,
-		MessageCount:      nonNegative(in.MessageCount),
-		ProviderID:        strings.TrimSpace(in.ProviderID),
-		ProviderAccountID: strings.TrimSpace(in.ProviderAccountID),
-		GatewayModelID:    strings.TrimSpace(in.GatewayModelID),
-		RouteID:           strings.TrimSpace(in.RouteID),
-		RouteGroup:        strings.TrimSpace(in.RouteGroup),
-		UpstreamModel:     strings.TrimSpace(in.UpstreamModel),
-		RouteSource:       strings.TrimSpace(in.RouteSource),
-		RouteReason:       strings.TrimSpace(in.RouteReason),
-		PolicyID:          policyID,
-		PolicyName:        policyName,
-		PolicySource:      policySource,
-		PolicyVersion:     policyVersion,
-		PolicySnapshot:    policySnapshot,
-		Status:            status,
-		HTTPStatus:        nonNegative(in.HTTPStatus),
-		ErrorType:         strings.TrimSpace(in.ErrorType),
-		LatencyMS:         in.LatencyMS,
-		InputTokens:       nonNegative(in.InputTokens),
-		OutputTokens:      nonNegative(in.OutputTokens),
-		RequestSummary:    strings.TrimSpace(in.RequestSummary),
-		ResponseSummary:   strings.TrimSpace(in.ResponseSummary),
-		RouteAttempts:     strings.TrimSpace(in.RouteAttempts),
-		CreatedAt:         time.Now().UTC(),
+		ID:                 "trace_" + randomID(12),
+		OperationID:        strings.TrimSpace(in.OperationID),
+		AttemptID:          strings.TrimSpace(in.AttemptID),
+		RequestFingerprint: strings.TrimSpace(in.RequestFingerprint),
+		APIKeyID:           auth.APIKey.ID,
+		APIFingerprint:     auth.APIKey.Fingerprint,
+		Model:              strings.TrimSpace(in.Model),
+		Stream:             in.Stream,
+		MessageCount:       nonNegative(in.MessageCount),
+		ProviderID:         strings.TrimSpace(in.ProviderID),
+		ProviderAccountID:  strings.TrimSpace(in.ProviderAccountID),
+		GatewayModelID:     strings.TrimSpace(in.GatewayModelID),
+		RouteID:            strings.TrimSpace(in.RouteID),
+		RouteGroup:         strings.TrimSpace(in.RouteGroup),
+		UpstreamModel:      strings.TrimSpace(in.UpstreamModel),
+		RouteSource:        strings.TrimSpace(in.RouteSource),
+		RouteReason:        strings.TrimSpace(in.RouteReason),
+		PolicyID:           policyID,
+		PolicyName:         policyName,
+		PolicySource:       policySource,
+		PolicyVersion:      policyVersion,
+		PolicySnapshot:     policySnapshot,
+		Status:             status,
+		HTTPStatus:         nonNegative(in.HTTPStatus),
+		ErrorType:          strings.TrimSpace(in.ErrorType),
+		LatencyMS:          in.LatencyMS,
+		InputTokens:        nonNegative(in.InputTokens),
+		OutputTokens:       nonNegative(in.OutputTokens),
+		RequestSummary:     strings.TrimSpace(in.RequestSummary),
+		ResponseSummary:    strings.TrimSpace(in.ResponseSummary),
+		RouteAttempts:      strings.TrimSpace(in.RouteAttempts),
+		CreatedAt:          time.Now().UTC(),
 	}
 	applyGatewayPlatformSnapshotToTrace(&trace, auth)
 	return s.repo.SaveGatewayTrace(ctx, trace)
@@ -1784,18 +1887,22 @@ func (s *Service) Health(ctx context.Context) error {
 }
 
 func (s *Service) audit(ctx context.Context, actor, action, resourceType, resourceID, summary string) error {
+	return s.repo.AddAuditLog(ctx, s.newAuditLog(actor, action, resourceType, resourceID, summary))
+}
+
+func (s *Service) newAuditLog(actor, action, resourceType, resourceID, summary string) AuditLog {
 	if strings.TrimSpace(actor) == "" {
 		actor = "local-admin"
 	}
-	return s.repo.AddAuditLog(ctx, AuditLog{
+	return AuditLog{
 		ID:           "audit_" + randomID(12),
 		Actor:        actor,
 		Action:       action,
 		ResourceType: resourceType,
 		ResourceID:   resourceID,
 		Summary:      summary,
-		CreatedAt:    time.Now().UTC(),
-	})
+		CreatedAt:    s.nowUTC(),
+	}
 }
 
 func (s *Service) providerByID(ctx context.Context, id string) (ProviderConnection, error) {

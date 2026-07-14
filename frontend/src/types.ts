@@ -611,10 +611,31 @@ export interface APIKeyRecord {
   profile_scope: string
   platform_tenant_id: string
   gateway_principal_id: string
+  tenant_id: string
+  principal_type: string
+  principal_reference: string
   policy_id: string
+  scopes: string[]
   model_allowlist: string[]
+  allowed_modalities: string[]
+  allowed_operations: string[]
   qps_limit: number
+  rpm_limit: number
+  tpm_limit: number
+  concurrency_limit: number
   monthly_token_limit: number
+  monthly_budget_cents: number
+  monthly_image_limit: number
+  monthly_video_seconds_limit: number
+  monthly_audio_seconds_limit: number
+  allowed_cidrs: string[]
+  lane_policy: string
+  artifact_policy: string
+  rotation_family_id: string
+  replaces_key_id: string
+  replaced_by_key_id: string
+  rotation_grace_expires_at?: string
+  lifecycle_status?: string
   expires_at?: string
   last_used_at?: string
   created_at: string
@@ -627,6 +648,19 @@ export interface APIKeyCreateRequest {
   model_allowlist: string[]
   qps_limit: number
   monthly_token_limit: number
+  scopes?: string[]
+  allowed_modalities?: string[]
+  allowed_operations?: string[]
+  rpm_limit?: number
+  tpm_limit?: number
+  concurrency_limit?: number
+  monthly_budget_cents?: number
+  monthly_image_limit?: number
+  monthly_video_seconds_limit?: number
+  monthly_audio_seconds_limit?: number
+  allowed_cidrs?: string[]
+  lane_policy?: string
+  artifact_policy?: string
   expires_at: string
   key_type?: string
   customer_id?: string
@@ -641,6 +675,19 @@ export interface APIKeyUpdateRequest {
   model_allowlist: string[]
   qps_limit: number
   monthly_token_limit: number
+  scopes?: string[]
+  allowed_modalities?: string[]
+  allowed_operations?: string[]
+  rpm_limit?: number
+  tpm_limit?: number
+  concurrency_limit?: number
+  monthly_budget_cents?: number
+  monthly_image_limit?: number
+  monthly_video_seconds_limit?: number
+  monthly_audio_seconds_limit?: number
+  allowed_cidrs?: string[]
+  lane_policy?: string
+  artifact_policy?: string
   expires_at: string
   status: string
   key_type?: string
@@ -648,6 +695,10 @@ export interface APIKeyUpdateRequest {
   owner_user_id?: string
   platform_tenant_id?: string
   gateway_principal_id?: string
+}
+
+export interface APIKeyRotateRequest {
+  grace_period_seconds: number
 }
 
 export interface PlatformTenant {
@@ -1184,6 +1235,11 @@ export interface SidecarRuntimeStatus {
 
 export interface UsageRecord {
   id: string
+  operation_id: string
+  attempt_id: string
+  usage_version: number
+  usage_source: string
+  request_fingerprint: string
   api_key_id: string
   customer_id: string
   profile_scope: string
@@ -1292,6 +1348,9 @@ export interface GatewayTraceSummary {
 
 export interface GatewayTrace {
   id: string
+  operation_id: string
+  attempt_id: string
+  request_fingerprint: string
   api_key_id: string
   api_fingerprint: string
   profile_scope: string

@@ -10,6 +10,7 @@ import {
   rotatePortalAPIKey
 } from '@/api/control'
 import type { APIKeyCreateRequest, APIKeyRecord, PortalWorkspace } from '@/types'
+import { apiKeyLifecycleClass, apiKeyLifecycleLabelKey, apiKeyLifecycleStatus, canDisableAPIKey, canRotateAPIKey } from '@/utils/apiKeys'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -33,7 +34,7 @@ const usage = computed(() => workspace.value?.usage)
 const recentTraces = computed(() => workspace.value?.recent_traces || [])
 const alerts = computed(() => workspace.value?.alerts || [])
 const canManageKeys = computed(() => Boolean(workspace.value?.can_manage_keys))
-const activeKeys = computed(() => apiKeys.value.filter((key) => key.status === 'active').length)
+const activeKeys = computed(() => apiKeys.value.filter((key) => apiKeyLifecycleStatus(key) === 'active').length)
 const modelOptions = computed(() => workspace.value?.models || [])
 const activePanel = computed(() => (typeof route.meta.portalPanel === 'string' ? route.meta.portalPanel : 'overview'))
 
@@ -301,16 +302,16 @@ onMounted(load)
                   <span>{{ key.monthly_token_limit || t('apiKeys.unlimited') }} {{ t('usage.tokens') }}</span>
                 </td>
                 <td>
-                  <span class="pill" :class="key.status === 'active' ? 'status-success' : 'status-warning'">{{ key.status }}</span>
+                  <span class="pill" :class="apiKeyLifecycleClass(key)">{{ t(apiKeyLifecycleLabelKey(key)) }}</span>
                   <span>{{ formatDate(key.last_used_at) }}</span>
                 </td>
                 <td>
                   <div class="row-actions">
-                    <button class="button secondary" type="button" :disabled="!canManageKeys || saving" @click="rotateKey(key)">
+                    <button class="button secondary" type="button" :disabled="!canManageKeys || saving || !canRotateAPIKey(key)" @click="rotateKey(key)">
                       <RotateCw :size="15" />
                       {{ t('apiKeys.rotate') }}
                     </button>
-                    <button class="button secondary" type="button" :disabled="!canManageKeys || saving || key.status !== 'active'" @click="disableKey(key)">
+                    <button class="button secondary" type="button" :disabled="!canManageKeys || saving || !canDisableAPIKey(key)" @click="disableKey(key)">
                       {{ t('apiKeys.disable') }}
                     </button>
                   </div>

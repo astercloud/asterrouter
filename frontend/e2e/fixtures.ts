@@ -149,7 +149,7 @@ export async function loginDemo(page: Page): Promise<void> {
     await expect(page).not.toHaveURL(/\/login/)
     return
   }
-  const demoButton = page.getByRole('button', { name: 'Enter demo mode' })
+  const demoButton = page.getByRole('button', { name: 'Try the demo' })
   await expect(demoButton).toBeVisible()
   await demoButton.click()
   const entry = demoEntryForProfile[process.env.ASTER_E2E_EXPECT_PROFILE || ''] || demoEntryForProfile.personal

@@ -178,6 +178,15 @@
   --shadow-lg: 0 16px 46px rgba(0, 0, 0, 0.38);
 }
 
+:root[data-theme="dark"] .demo-experience {
+  border-color: var(--primary-700);
+  background: color-mix(in srgb, var(--primary-950) 70%, var(--surface));
+}
+
+:root[data-theme="dark"] .demo-experience-label {
+  color: var(--primary-300);
+}
+
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
@@ -3162,15 +3171,58 @@ button.pill:hover {
   text-align: center;
 }
 
-.demo-mode-notice {
+.demo-experience {
   display: grid;
-  gap: 5px;
-  margin-bottom: 16px;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding: 18px;
+  border: 1px solid var(--primary-200);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--primary-50) 78%, var(--surface));
 }
 
-.demo-mode-notice strong,
-.demo-mode-notice span {
-  display: block;
+.demo-experience-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.demo-experience-label {
+  color: var(--primary-700);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.demo-experience-copy strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.demo-experience-copy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.demo-experience-action {
+  margin-top: 0;
+}
+
+.auth-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 18px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  height: 1px;
+  background: var(--border);
+  content: '';
 }
 
 .auth-title h2 {

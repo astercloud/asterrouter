@@ -2,6 +2,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Activity, Edit3, Plus, RefreshCw, RotateCw, Save, Search, ShieldOff, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import APIKeyRotationDialog from '@/components/APIKeyRotationDialog.vue'
+import { apiKeyLifecycleClass, apiKeyLifecycleLabelKey, apiKeyLifecycleStatus, canDisableAPIKey, canRotateAPIKey } from '@/utils/apiKeys'
 import {
   createAPIKey,
   disableAPIKey,
@@ -30,6 +32,8 @@ const detailUsage = ref<UsageReport | null>(null)
 const detailTraces = ref<GatewayTrace[]>([])
 const detailPolicyExplanation = ref<GatewayPolicyExplanation | null>(null)
 const oneTimeKey = ref('')
+const rotationTarget = ref<APIKeyRecord | null>(null)
+const rotationSaving = ref(false)
 const apiKeys = ref<APIKeyRecord[]>([])
 const policies = ref<GovernancePolicy[]>([])
 const users = ref<WorkspaceUser[]>([])
@@ -55,7 +59,7 @@ const activePolicies = computed(() => policies.value.filter((item) => item.statu
 const filteredKeys = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   return apiKeys.value.filter((key) => {
-    if (statusFilter.value && key.status !== statusFilter.value) return false
+    if (statusFilter.value && apiKeyLifecycleStatus(key) !== statusFilter.value) return false
     if (!keyword) return true
     const policy = key.policy_id ? policyByID.value.get(key.policy_id)?.name || key.policy_id : ''
     return [key.name, key.fingerprint, key.prefix, key.key_type, key.owner_user_id, key.customer_id, policy, key.model_allowlist.join(' ')].some((value) =>
@@ -66,8 +70,9 @@ const filteredKeys = computed(() => {
 
 const summary = computed(() => ({
   total: apiKeys.value.length,
-  active: apiKeys.value.filter((item) => item.status === 'active').length,
-  disabled: apiKeys.value.filter((item) => item.status === 'disabled').length,
+  active: apiKeys.value.filter((item) => apiKeyLifecycleStatus(item) === 'active').length,
+  retiring: apiKeys.value.filter((item) => apiKeyLifecycleStatus(item) === 'retiring').length,
+  disabled: apiKeys.value.filter((item) => ['disabled', 'retired'].includes(apiKeyLifecycleStatus(item))).length,
   policies: new Set(apiKeys.value.map((item) => item.policy_id).filter(Boolean)).size
 }))
 
@@ -190,17 +195,26 @@ async function save() {
   }
 }
 
-async function rotate(key: APIKeyRecord) {
+function openRotation(key: APIKeyRecord) {
+  rotationTarget.value = key
+}
+
+async function confirmRotation(gracePeriodSeconds: number) {
+  if (!rotationTarget.value) return
+  rotationSaving.value = true
   error.value = ''
   message.value = ''
   oneTimeKey.value = ''
   try {
-    const rotated = await rotateAPIKey(key.id)
+    const rotated = await rotateAPIKey(rotationTarget.value.id, gracePeriodSeconds)
     oneTimeKey.value = rotated.key
     message.value = t('apiKeys.rotated')
+    rotationTarget.value = null
     await load()
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    rotationSaving.value = false
   }
 }
 
@@ -261,6 +275,7 @@ onMounted(load)
     <div class="crud-summary">
       <span><strong>{{ summary.total }}</strong>{{ t('apiKeys.keys') }}</span>
       <span><strong>{{ summary.active }}</strong>{{ t('dashboard.active') }}</span>
+      <span><strong>{{ summary.retiring }}</strong>{{ t('apiKeys.retiring') }}</span>
       <span><strong>{{ summary.disabled }}</strong>{{ t('providers.disabled') }}</span>
       <span><strong>{{ summary.policies }}</strong>{{ t('apiKeys.boundPolicies') }}</span>
     </div>
@@ -272,8 +287,10 @@ onMounted(load)
       </label>
       <select v-model="statusFilter">
         <option value="">{{ t('providers.allStatuses') }}</option>
-        <option value="active">active</option>
-        <option value="disabled">disabled</option>
+        <option value="active">{{ t('apiKeys.lifecycle.active') }}</option>
+        <option value="retiring">{{ t('apiKeys.lifecycle.retiring') }}</option>
+        <option value="retired">{{ t('apiKeys.lifecycle.retired') }}</option>
+        <option value="disabled">{{ t('apiKeys.lifecycle.disabled') }}</option>
       </select>
       <button class="button secondary" type="button" :disabled="loading" @click="load">
         <RefreshCw :size="17" />
@@ -310,7 +327,7 @@ onMounted(load)
                 <span>{{ key.key_type }} · {{ key.owner_user_id || key.customer_id || key.prefix }}</span>
               </td>
               <td>{{ key.fingerprint }}</td>
-              <td><span class="pill" :class="key.status === 'active' ? 'status-success' : 'status-danger'">{{ key.status }}</span></td>
+              <td><span class="pill" :class="apiKeyLifecycleClass(key)">{{ t(apiKeyLifecycleLabelKey(key)) }}</span></td>
               <td>
                 <strong>{{ key.policy_id ? policyByID.get(key.policy_id)?.name || key.policy_id : t('policies.inherit') }}</strong>
                 <span>{{ key.policy_id ? t('policies.explicitBinding') : t('policies.scopeFallback') }}</span>
@@ -325,7 +342,7 @@ onMounted(load)
               <td>{{ formatDate(key.last_used_at) }}</td>
               <td>
                 <div class="row-actions">
-                  <button class="button secondary" type="button" @click="openEdit(key)">
+                  <button class="button secondary" type="button" :disabled="!canRotateAPIKey(key)" @click="openEdit(key)">
                     <Edit3 :size="15" />
                     {{ t('common.edit') }}
                   </button>
@@ -333,11 +350,11 @@ onMounted(load)
                     <Activity :size="15" />
                     {{ t('common.details') }}
                   </button>
-                  <button class="button secondary" type="button" @click="rotate(key)">
+                  <button class="button secondary" type="button" :disabled="!canRotateAPIKey(key)" @click="openRotation(key)">
                     <RotateCw :size="15" />
                     {{ t('apiKeys.rotate') }}
                   </button>
-                  <button v-if="key.status === 'active'" class="button danger" type="button" @click="disable(key.id)">
+                  <button v-if="canDisableAPIKey(key)" class="button danger" type="button" @click="disable(key.id)">
                     <ShieldOff :size="15" />
                     {{ t('apiKeys.disable') }}
                   </button>
@@ -627,5 +644,12 @@ onMounted(load)
         </div>
       </section>
     </div>
+    <APIKeyRotationDialog
+      :open="rotationTarget !== null"
+      :key-name="rotationTarget?.name || ''"
+      :saving="rotationSaving"
+      @cancel="rotationTarget = null"
+      @confirm="confirmRotation"
+    />
   </main>
 </template>

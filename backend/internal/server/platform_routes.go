@@ -227,7 +227,12 @@ func registerPlatformAPIKeyRoutes(platform *gin.RouterGroup, control *controlpla
 			httpx.Error(c, http.StatusNotFound, 1507, "platform api key not found")
 			return
 		}
-		data, err := control.RotatePlatformAPIKey(c.Request.Context(), actor(c), c.Param("id"))
+		req, err := bindAPIKeyRotateRequest(c)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1506, "invalid api key rotation payload")
+			return
+		}
+		data, err := control.RotatePlatformAPIKeyWithGrace(c.Request.Context(), actor(c), c.Param("id"), req.GracePeriodSeconds)
 		if err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1507, err.Error())
 			return

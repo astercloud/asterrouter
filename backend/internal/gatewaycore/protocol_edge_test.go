@@ -84,10 +84,66 @@ func TestCanonicalizeOpenAIChatProducesStableSafeEnvelope(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeOpenAIModelsProducesCanonicalEnvelope(t *testing.T) {
+	got, err := CanonicalizeOpenAIModels(http.Header{"X-Request-Id": []string{"models-1"}})
+	if err != nil {
+		t.Fatalf("CanonicalizeOpenAIModels(): %v", err)
+	}
+	if got.ID != "op_models-1" || got.Protocol != ProtocolOpenAIModels || got.Operation != "list_models" || got.Modality != "metadata" || got.Lane != LaneDirect || got.Model != "" || len(got.Fingerprint) != 64 {
+		t.Fatalf("canonical models request = %+v", got)
+	}
+}
+
+func TestCanonicalizeDurableJobNormalizesPayloadForIdempotency(t *testing.T) {
+	header := http.Header{"X-Client-Request-Id": []string{"job-request-1"}, "Idempotency-Key": []string{"job-idem-1"}}
+	first, err := CanonicalizeDurableJob([]byte(`{"model":"image-model","operation":"image_generation","modality":"image","input":{"prompt":"synthetic","count":1}}`), header)
+	if err != nil {
+		t.Fatalf("CanonicalizeDurableJob(first): %v", err)
+	}
+	second, err := CanonicalizeDurableJob([]byte(`{
+  "input": {"count": 1, "prompt": "synthetic"},
+  "modality": "IMAGE",
+  "operation": "IMAGE_GENERATION",
+  "model": "image-model"
+}`), header)
+	if err != nil {
+		t.Fatalf("CanonicalizeDurableJob(second): %v", err)
+	}
+	if first.ID != "op_job-request-1" || first.Protocol != ProtocolAsterJobs || first.Lane != LaneDurable || first.Operation != "image_generation" || first.Modality != "image" || first.IdempotencyKey != "job-idem-1" {
+		t.Fatalf("canonical job request = %+v", first)
+	}
+	if first.Fingerprint != second.Fingerprint || string(first.Payload) != string(second.Payload) {
+		t.Fatalf("normalized payloads differ first=%s second=%s", first.Payload, second.Payload)
+	}
+}
+
+func TestCanonicalizeDurableJobRejectsInvalidPayloadAndConflictingRequestIDs(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		header http.Header
+	}{
+		{name: "missing input", body: `{"model":"image-model","operation":"image_generation","modality":"image"}`},
+		{name: "null input", body: `{"model":"image-model","operation":"image_generation","modality":"image","input":null}`},
+		{name: "invalid operation", body: `{"model":"image-model","operation":"Image Generate","modality":"image","input":{}}`},
+		{name: "conflicting request ids", body: `{"model":"image-model","operation":"image_generation","modality":"image","input":{}}`, header: http.Header{"X-Request-Id": []string{"one"}, "X-Client-Request-Id": []string{"two"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := CanonicalizeDurableJob([]byte(test.body), test.header); !errors.Is(err, ErrInvalidCanonicalRequest) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestCanonicalizeOpenAIChatRejectsInvalidInput(t *testing.T) {
 	for _, raw := range [][]byte{nil, []byte(`[]`), []byte(`{"messages":[]}`), []byte(`{"model":`)} {
 		if _, err := CanonicalizeOpenAIChat(raw, http.Header{}); !errors.Is(err, ErrInvalidCanonicalRequest) {
 			t.Fatalf("payload %q error = %v", raw, err)
 		}
+	}
+	if _, err := CanonicalizeOpenAIChat([]byte(`{"model":"model-a"}`), http.Header{"X-Request-Id": []string{"request\nforged"}}); !errors.Is(err, ErrInvalidCanonicalRequest) {
+		t.Fatalf("unsafe request id error = %v", err)
 	}
 }

@@ -19,8 +19,8 @@ export async function updatePlatformAPIKey(id: string, payload: APIKeyUpdateRequ
   return (await apiClient.put<APIKeyRecord>(`/platform/api-keys/${encodeURIComponent(id)}`, payload)).data
 }
 
-export async function rotatePlatformAPIKey(id: string): Promise<APIKeyCreateResponse> {
-  return (await apiClient.post<APIKeyCreateResponse>(`/platform/api-keys/${encodeURIComponent(id)}/rotate`)).data
+export async function rotatePlatformAPIKey(id: string, gracePeriodSeconds = 0): Promise<APIKeyCreateResponse> {
+  return (await apiClient.post<APIKeyCreateResponse>(`/platform/api-keys/${encodeURIComponent(id)}/rotate`, { grace_period_seconds: gracePeriodSeconds })).data
 }
 
 export async function disablePlatformAPIKey(id: string): Promise<void> {

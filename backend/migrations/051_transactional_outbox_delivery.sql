@@ -1,0 +1,4 @@
+ALTER TABLE transactional_outbox ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 20;
+ALTER TABLE transactional_outbox ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+ALTER TABLE transactional_outbox ADD COLUMN IF NOT EXISTS lease_token TEXT NOT NULL DEFAULT '';
+ALTER TABLE transactional_outbox ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT '';

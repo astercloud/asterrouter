@@ -135,6 +135,14 @@ bash scripts/dev.sh
 
 前端运行在 `http://localhost:5173`，并把 API 请求代理到 `http://localhost:8080`。
 
+需要体验登录页的一键 Demo 时，使用显式演示模式启动：
+
+```bash
+bash scripts/dev.sh --demo
+```
+
+演示模式会开放内置演示账号并在登录页显示“一键体验 Demo”，只应在本地或隔离的公开演示实例使用。Docker 可通过 `ASTER_DEMO_MODE=true docker compose up --build` 启用；生产实例应保持关闭。
+
 运行后端测试：
 
 ```bash

@@ -38,6 +38,7 @@ frontend() {
   (
     cd "${ROOT_DIR}/frontend"
     npm run check:public-doc-links
+    npm run check:workflow-pipefail
     npm run check:enterprise-surface
     npm run typecheck
     npm run test:unit:coverage

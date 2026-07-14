@@ -106,8 +106,8 @@ describe('API module contracts', () => {
     const updatePayload: APIKeyUpdateRequest = { ...createPayload, status: 'active' }
     await platform.updatePlatformAPIKey('key / 1', updatePayload)
     expect(client.put).toHaveBeenLastCalledWith('/platform/api-keys/key%20%2F%201', updatePayload)
-    await platform.rotatePlatformAPIKey('key / 1')
-    expect(client.post).toHaveBeenLastCalledWith('/platform/api-keys/key%20%2F%201/rotate')
+    await platform.rotatePlatformAPIKey('key / 1', 3600)
+    expect(client.post).toHaveBeenLastCalledWith('/platform/api-keys/key%20%2F%201/rotate', { grace_period_seconds: 3600 })
     await platform.disablePlatformAPIKey('key / 1')
     expect(client.post).toHaveBeenLastCalledWith('/platform/api-keys/key%20%2F%201/disable')
 
@@ -233,8 +233,8 @@ describe('API module contracts', () => {
     expect(client.post).toHaveBeenLastCalledWith('/operator/balance-entries', { customer_id: 'customer-1', amount_cents: 100 })
     await operator.getOperatorCustomerKeys()
     expect(client.get).toHaveBeenLastCalledWith('/operator/customer-keys')
-    await operator.rotateOperatorCustomerKey('key-1')
-    expect(client.post).toHaveBeenLastCalledWith('/operator/customer-keys/key-1/rotate')
+    await operator.rotateOperatorCustomerKey('key-1', 300)
+    expect(client.post).toHaveBeenLastCalledWith('/operator/customer-keys/key-1/rotate', { grace_period_seconds: 300 })
     await operator.disableOperatorCustomerKey('key-1')
     expect(client.post).toHaveBeenLastCalledWith('/operator/customer-keys/key-1/disable')
     const keyPayload = { name: 'Customer Key', policy_id: '', model_allowlist: ['model'], qps_limit: 1, monthly_token_limit: 100, expires_at: '' }

@@ -2,6 +2,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Edit3, KeyRound, Plus, RefreshCw, RotateCw, ShieldOff, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import APIKeyRotationDialog from '@/components/APIKeyRotationDialog.vue'
+import { apiKeyLifecycleClass, apiKeyLifecycleLabelKey, apiKeyLifecycleStatus, canDisableAPIKey, canRotateAPIKey } from '@/utils/apiKeys'
 import { getGovernancePolicies } from '@/api/control'
 import { createPlatformAPIKey, disablePlatformAPIKey, getGatewayPrincipals, getPlatformAPIKeys, getPlatformTenants, rotatePlatformAPIKey, updatePlatformAPIKey } from '@/api/platform'
 import type { APIKeyCreateRequest, APIKeyRecord, GatewayPrincipal, GovernancePolicy, PlatformTenant } from '@/types'
@@ -18,6 +20,8 @@ const policies = ref<GovernancePolicy[]>([])
 const tenants = ref<PlatformTenant[]>([])
 const principals = ref<GatewayPrincipal[]>([])
 const oneTimeKey = ref('')
+const rotationTarget = ref<APIKeyRecord | null>(null)
+const rotationSaving = ref(false)
 const modelsText = ref('')
 const status = ref('active')
 const form = reactive<APIKeyCreateRequest>({
@@ -37,8 +41,9 @@ const activeTenants = computed(() => tenants.value.filter((tenant) => tenant.sta
 const availablePrincipals = computed(() => principals.value.filter((principal) => principal.status === 'active' && principal.tenant_id === form.platform_tenant_id))
 const summary = computed(() => ({
   total: keys.value.length,
-  active: keys.value.filter((key) => key.status === 'active').length,
-  disabled: keys.value.filter((key) => key.status === 'disabled').length
+  active: keys.value.filter((key) => apiKeyLifecycleStatus(key) === 'active').length,
+  retiring: keys.value.filter((key) => apiKeyLifecycleStatus(key) === 'retiring').length,
+  disabled: keys.value.filter((key) => ['disabled', 'retired'].includes(apiKeyLifecycleStatus(key))).length
 }))
 
 function splitModels(value: string): string[] {
@@ -126,16 +131,25 @@ async function save() {
   }
 }
 
-async function rotate(key: APIKeyRecord) {
+function openRotation(key: APIKeyRecord) {
+  rotationTarget.value = key
+}
+
+async function confirmRotation(gracePeriodSeconds: number) {
+  if (!rotationTarget.value) return
+  rotationSaving.value = true
   error.value = ''
   message.value = ''
   oneTimeKey.value = ''
   try {
-    oneTimeKey.value = (await rotatePlatformAPIKey(key.id)).key
+    oneTimeKey.value = (await rotatePlatformAPIKey(rotationTarget.value.id, gracePeriodSeconds)).key
     message.value = t('apiKeys.rotated')
+    rotationTarget.value = null
     await load()
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    rotationSaving.value = false
   }
 }
 
@@ -176,6 +190,7 @@ onMounted(load)
     <div class="crud-summary">
       <span><strong>{{ summary.total }}</strong>{{ t('apiKeys.keys') }}</span>
       <span><strong>{{ summary.active }}</strong>{{ t('dashboard.active') }}</span>
+      <span><strong>{{ summary.retiring }}</strong>{{ t('apiKeys.retiring') }}</span>
       <span><strong>{{ summary.disabled }}</strong>{{ t('providers.disabled') }}</span>
     </div>
     <div v-if="message" class="notice success">{{ message }}</div>
@@ -195,10 +210,10 @@ onMounted(load)
             <tr v-for="key in keys" :key="key.id">
               <td><strong>{{ key.name }}</strong><span>{{ key.fingerprint }}</span><span>{{ key.platform_tenant_id }}</span></td>
               <td>{{ key.key_type }}</td>
-              <td><span class="pill" :class="key.status === 'active' ? 'status-success' : 'status-danger'">{{ key.status }}</span></td>
+              <td><span class="pill" :class="apiKeyLifecycleClass(key)">{{ t(apiKeyLifecycleLabelKey(key)) }}</span></td>
               <td><div class="chip-list"><span v-for="model in key.model_allowlist.slice(0, 3)" :key="model" class="pill">{{ model }}</span><span v-if="key.model_allowlist.length > 3" class="pill">+{{ key.model_allowlist.length - 3 }}</span></div></td>
               <td>{{ formatDate(key.last_used_at) }}</td>
-              <td><div class="row-actions"><button class="button secondary" type="button" @click="openEdit(key)"><Edit3 :size="15" />{{ t('common.edit') }}</button><button class="button secondary" type="button" @click="rotate(key)"><RotateCw :size="15" />{{ t('apiKeys.rotate') }}</button><button v-if="key.status === 'active'" class="button danger" type="button" @click="disable(key)"><ShieldOff :size="15" />{{ t('apiKeys.disable') }}</button></div></td>
+              <td><div class="row-actions"><button class="button secondary" type="button" :disabled="!canRotateAPIKey(key)" @click="openEdit(key)"><Edit3 :size="15" />{{ t('common.edit') }}</button><button class="button secondary" type="button" :disabled="!canRotateAPIKey(key)" @click="openRotation(key)"><RotateCw :size="15" />{{ t('apiKeys.rotate') }}</button><button v-if="canDisableAPIKey(key)" class="button danger" type="button" @click="disable(key)"><ShieldOff :size="15" />{{ t('apiKeys.disable') }}</button></div></td>
             </tr>
             <tr v-if="!keys.length"><td colspan="6" class="empty-cell">{{ loading ? t('common.loading') : t('apiKeys.empty') }}</td></tr>
           </tbody>
@@ -224,5 +239,12 @@ onMounted(load)
         <footer class="modal-footer"><button class="button secondary" type="button" @click="modalOpen = false">{{ t('common.cancel') }}</button><button class="button" type="button" :disabled="saving" @click="save">{{ saving ? t('common.saving') : t('common.save') }}</button></footer>
       </section>
     </div>
+    <APIKeyRotationDialog
+      :open="rotationTarget !== null"
+      :key-name="rotationTarget?.name || ''"
+      :saving="rotationSaving"
+      @cancel="rotationTarget = null"
+      @confirm="confirmRotation"
+    />
   </main>
 </template>

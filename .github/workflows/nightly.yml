@@ -34,7 +34,9 @@ jobs:
         env:
           ASTER_GATEWAY_SOAK: '1'
           ASTER_GATEWAY_SOAK_DURATION: 30m
-        run: go test -count=1 -timeout=35m -run '^TestGatewayNormalAndStreamingSoak$' -v ./internal/server | tee ${{ runner.temp }}/asterrouter-test-artifacts/gateway-soak.txt
+        run: |
+          set -o pipefail
+          go test -count=1 -timeout=35m -run '^TestGatewayNormalAndStreamingSoak$' -v ./internal/server | tee "${{ runner.temp }}/asterrouter-test-artifacts/gateway-soak.txt"
       - name: Upload benchmark evidence
         uses: actions/upload-artifact@v7
         with:

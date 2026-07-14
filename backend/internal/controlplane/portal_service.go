@@ -28,6 +28,7 @@ func (s *Service) PortalWorkspace(ctx context.Context, actor string) (PortalWork
 	if err != nil {
 		return PortalWorkspace{}, err
 	}
+	allKeys = presentAPIKeys(allKeys, s.nowUTC())
 	keys := make([]APIKeyRecord, 0)
 	keyIDs := make([]string, 0)
 	for _, key := range allKeys {
@@ -84,6 +85,10 @@ func (s *Service) CreatePortalAPIKey(ctx context.Context, actor string, req APIK
 }
 
 func (s *Service) RotatePortalAPIKey(ctx context.Context, actor string, id string) (APIKeyCreateResponse, error) {
+	return s.RotatePortalAPIKeyWithGrace(ctx, actor, id, 0)
+}
+
+func (s *Service) RotatePortalAPIKeyWithGrace(ctx context.Context, actor string, id string, gracePeriodSeconds int) (APIKeyCreateResponse, error) {
 	scope, key, err := s.portalAPIKeyAccess(ctx, actor, id)
 	if err != nil {
 		return APIKeyCreateResponse{}, err
@@ -91,7 +96,7 @@ func (s *Service) RotatePortalAPIKey(ctx context.Context, actor string, id strin
 	if !scope.CanManageKeys {
 		return APIKeyCreateResponse{}, errors.New("portal principal cannot manage workspace keys")
 	}
-	return s.RotateAPIKey(ctx, portalActor(scope.Actor), key.ID)
+	return s.RotateAPIKeyWithGrace(ctx, portalActor(scope.Actor), key.ID, gracePeriodSeconds)
 }
 
 func (s *Service) DisablePortalAPIKey(ctx context.Context, actor string, id string) error {

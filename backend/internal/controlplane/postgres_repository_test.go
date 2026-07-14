@@ -31,7 +31,13 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	key := APIKeyRecord{
 		ID: "key-postgres", Name: "Postgres Key", KeyHash: "hash-postgres", Fingerprint: "fingerprint",
 		Prefix: "ast_test", Status: APIKeyStatusActive, KeyType: APIKeyTypeWorkspace,
-		ModelAllowlist: []string{"model-a"}, CreatedAt: now, UpdatedAt: now,
+		TenantID: gatewayDefaultTenantID, PrincipalType: APIKeyTypeService, PrincipalReference: "service-postgres",
+		Scopes: []string{GatewayScopeInvoke}, ModelAllowlist: []string{"model-a"}, AllowedModalities: []string{GatewayModalityText},
+		AllowedOperations: []string{GatewayOperationChatCompletion}, QPSLimit: 2, RPMLimit: 30, TPMLimit: 4000,
+		ConcurrencyLimit: 3, MonthlyTokenLimit: 5000, MonthlyBudgetCents: 600,
+		MonthlyImageLimit: 7, MonthlyVideoSecondsLimit: 8, MonthlyAudioSecondsLimit: 9,
+		AllowedCIDRs: []string{"192.0.2.0/24"}, LanePolicy: GatewayLanePolicyDirectAndDurable,
+		ArtifactPolicy: GatewayArtifactPolicyManaged, RotationFamilyID: "key-family-postgres", CreatedAt: now, UpdatedAt: now,
 	}
 	if err := repo.SaveAPIKey(ctx, key); err != nil {
 		t.Fatalf("SaveAPIKey(): %v", err)
@@ -64,7 +70,12 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindAPIKeyByHash(): %v", err)
 	}
-	if !ok || found.ID != key.ID || len(found.ModelAllowlist) != 1 || found.ModelAllowlist[0] != "model-a" {
+	if !ok || found.ID != key.ID || len(found.ModelAllowlist) != 1 || found.ModelAllowlist[0] != "model-a" ||
+		found.TenantID != gatewayDefaultTenantID || found.PrincipalReference != "service-postgres" || found.RPMLimit != 30 ||
+		found.TPMLimit != 4000 || found.ConcurrencyLimit != 3 || found.MonthlyBudgetCents != 600 ||
+		found.MonthlyImageLimit != 7 || found.MonthlyVideoSecondsLimit != 8 || found.MonthlyAudioSecondsLimit != 9 ||
+		len(found.AllowedCIDRs) != 1 || found.LanePolicy != GatewayLanePolicyDirectAndDurable ||
+		found.ArtifactPolicy != GatewayArtifactPolicyManaged || found.RotationFamilyID != "key-family-postgres" {
 		t.Fatalf("persisted key ok=%t key=%#v", ok, found)
 	}
 	users, err := reopened.ListWorkspaceUsers(ctx)

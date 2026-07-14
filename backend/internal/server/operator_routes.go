@@ -53,7 +53,12 @@ func registerOperatorRoutes(group *gin.RouterGroup, svc *operatorcore.Service) {
 		operatorResponse(c, data, err)
 	})
 	group.POST("/customer-keys/:id/rotate", func(c *gin.Context) {
-		data, err := svc.RotateCustomerKey(c.Request.Context(), actor(c), c.Param("id"))
+		req, err := bindAPIKeyRotateRequest(c)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1600, "invalid api key rotation payload")
+			return
+		}
+		data, err := svc.RotateCustomerKeyWithGrace(c.Request.Context(), actor(c), c.Param("id"), req.GracePeriodSeconds)
 		operatorResponse(c, data, err)
 	})
 	group.POST("/customer-keys/:id/disable", func(c *gin.Context) {

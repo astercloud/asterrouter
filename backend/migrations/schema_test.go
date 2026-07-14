@@ -134,7 +134,11 @@ func TestV030LegacySchemaUpgradesWithCandidateRuntime(t *testing.T) {
 		t.Fatalf("upgraded users=%+v err=%v", users, err)
 	}
 	key, found, err := candidate.FindAPIKeyByHash(ctx, "v030-key-hash")
-	if err != nil || !found || key.ID != "key-v030" || key.OwnerUserID != "user-v030" {
+	if err != nil || !found || key.ID != "key-v030" || key.OwnerUserID != "user-v030" ||
+		!reflect.DeepEqual(key.Scopes, []string{controlplane.GatewayScopeInvoke, controlplane.GatewayScopeModelsRead}) ||
+		!reflect.DeepEqual(key.AllowedModalities, []string{controlplane.GatewayModalityMetadata, controlplane.GatewayModalityText}) ||
+		!reflect.DeepEqual(key.AllowedOperations, []string{controlplane.GatewayOperationListModels, controlplane.GatewayOperationChatCompletion}) ||
+		key.LanePolicy != controlplane.GatewayLanePolicyDirectOnly || key.ArtifactPolicy != controlplane.GatewayArtifactPolicyProxyOnly {
 		t.Fatalf("upgraded key=%+v found=%t err=%v", key, found, err)
 	}
 	usage, err := candidate.QueryUsageRecords(ctx, controlplane.UsageQuery{APIKeyID: "key-v030", Limit: 10})

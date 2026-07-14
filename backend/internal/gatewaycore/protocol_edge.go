@@ -86,16 +86,9 @@ func CanonicalizeOpenAIChat(raw []byte, header http.Header) (CanonicalRequest, e
 	if payload.Model == "" {
 		return CanonicalRequest{}, fmt.Errorf("%w: model is required", ErrInvalidCanonicalRequest)
 	}
-	requestID := strings.TrimSpace(header.Get("X-Request-ID"))
-	if len(requestID) > maxRequestIDBytes {
-		return CanonicalRequest{}, fmt.Errorf("%w: request id is too long", ErrInvalidCanonicalRequest)
-	}
-	if requestID == "" {
-		generated, err := randomRequestID()
-		if err != nil {
-			return CanonicalRequest{}, err
-		}
-		requestID = generated
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
 	}
 	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
 	if len(idempotencyKey) > maxIdempotencyBytes {
@@ -126,10 +119,134 @@ func CanonicalizeOpenAIChat(raw []byte, header http.Header) (CanonicalRequest, e
 	}, nil
 }
 
+func CanonicalizeOpenAIModels(header http.Header) (CanonicalRequest, error) {
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	fingerprint := sha256.Sum256([]byte("GET /v1/models"))
+	return CanonicalRequest{
+		ID:              "op_" + requestID,
+		ClientRequestID: requestID,
+		Fingerprint:     hex.EncodeToString(fingerprint[:]),
+		Protocol:        ProtocolOpenAIModels,
+		Operation:       "list_models",
+		Modality:        "metadata",
+		Lane:            LaneDirect,
+	}, nil
+}
+
+func CanonicalizeDurableJob(raw []byte, header http.Header) (CanonicalRequest, error) {
+	var payload struct {
+		Model     string          `json:"model"`
+		Operation string          `json:"operation"`
+		Modality  string          `json:"modality"`
+		Input     json.RawMessage `json:"input"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	payload.Model = strings.TrimSpace(payload.Model)
+	payload.Operation = strings.ToLower(strings.TrimSpace(payload.Operation))
+	payload.Modality = strings.ToLower(strings.TrimSpace(payload.Modality))
+	if payload.Model == "" || !validCanonicalToken(payload.Operation) || !validCanonicalToken(payload.Modality) || len(payload.Input) == 0 || string(payload.Input) == "null" {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidCanonicalRequest)
+	}
+	var normalized any
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	normalizedObject, ok := normalized.(map[string]any)
+	if !ok {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	normalizedObject["model"] = payload.Model
+	normalizedObject["operation"] = payload.Operation
+	normalizedObject["modality"] = payload.Modality
+	canonicalPayload, err := json.Marshal(normalized)
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(canonicalPayload)
+	return CanonicalRequest{
+		ID:              "op_" + requestID,
+		ClientRequestID: requestID,
+		Fingerprint:     hex.EncodeToString(fingerprint[:]),
+		Protocol:        ProtocolAsterJobs,
+		Operation:       payload.Operation,
+		Modality:        payload.Modality,
+		Lane:            LaneDurable,
+		Model:           payload.Model,
+		IdempotencyKey:  idempotencyKey,
+		Payload:         canonicalPayload,
+	}, nil
+}
+
+func canonicalRequestID(header http.Header) (string, error) {
+	clientRequestID := strings.TrimSpace(header.Get("X-Client-Request-ID"))
+	requestID := strings.TrimSpace(header.Get("X-Request-ID"))
+	if clientRequestID != "" && requestID != "" && clientRequestID != requestID {
+		return "", fmt.Errorf("%w: conflicting request ids", ErrInvalidCanonicalRequest)
+	}
+	if clientRequestID != "" {
+		requestID = clientRequestID
+	}
+	if requestID != "" && (!validRequestID(requestID) || len(requestID) > maxRequestIDBytes) {
+		return "", fmt.Errorf("%w: request id contains unsupported characters or is too long", ErrInvalidCanonicalRequest)
+	}
+	if requestID != "" {
+		return requestID, nil
+	}
+	generated, err := randomRequestID()
+	if err != nil {
+		return "", err
+	}
+	return generated, nil
+}
+
+func validCanonicalToken(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for index, char := range value {
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
+			continue
+		}
+		if index > 0 && (char == ':' || char == '_' || char == '-') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func randomRequestID() (string, error) {
 	var value [12]byte
 	if _, err := rand.Read(value[:]); err != nil {
 		return "", fmt.Errorf("generate gateway request id: %w", err)
 	}
 	return hex.EncodeToString(value[:]), nil
+}
+
+func validRequestID(value string) bool {
+	for _, char := range value {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' {
+			continue
+		}
+		switch char {
+		case '-', '_', '.', ':':
+			continue
+		default:
+			return false
+		}
+	}
+	return value != ""
 }

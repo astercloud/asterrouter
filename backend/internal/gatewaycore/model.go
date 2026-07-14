@@ -11,6 +11,7 @@ const (
 	ProtocolAnthropicMessages Protocol = "anthropic_messages"
 	ProtocolGeminiGenerate    Protocol = "gemini_generate_content"
 	ProtocolRealtime          Protocol = "realtime"
+	ProtocolAsterJobs         Protocol = "aster_jobs"
 )
 
 type Lane string
@@ -47,16 +48,20 @@ type CanonicalRequest struct {
 	MessageCount    int             `json:"message_count"`
 	IdempotencyKey  string          `json:"idempotency_key,omitempty"`
 	StickyKey       string          `json:"sticky_key,omitempty"`
+	SourceIP        string          `json:"-"`
 	Payload         json.RawMessage `json:"-"`
 }
 
 type CanonicalLimits struct {
-	QPSLimit           int `json:"qps_limit"`
-	RPMLimit           int `json:"rpm_limit"`
-	TPMLimit           int `json:"tpm_limit"`
-	ConcurrencyLimit   int `json:"concurrency_limit"`
-	MonthlyTokenLimit  int `json:"monthly_token_limit"`
-	MonthlyBudgetCents int `json:"monthly_budget_cents"`
+	QPSLimit                 int `json:"qps_limit"`
+	RPMLimit                 int `json:"rpm_limit"`
+	TPMLimit                 int `json:"tpm_limit"`
+	ConcurrencyLimit         int `json:"concurrency_limit"`
+	MonthlyTokenLimit        int `json:"monthly_token_limit"`
+	MonthlyBudgetCents       int `json:"monthly_budget_cents"`
+	MonthlyImageLimit        int `json:"monthly_image_limit"`
+	MonthlyVideoSecondsLimit int `json:"monthly_video_seconds_limit"`
+	MonthlyAudioSecondsLimit int `json:"monthly_audio_seconds_limit"`
 }
 
 type CanonicalAuthContext struct {
@@ -71,7 +76,11 @@ type CanonicalAuthContext struct {
 	ExternalSubjectReference string           `json:"external_subject_reference,omitempty"`
 	PolicyID                 string           `json:"policy_id,omitempty"`
 	PolicyVersion            int              `json:"policy_version,omitempty"`
+	Scopes                   []string         `json:"scopes"`
 	AllowedModels            []string         `json:"allowed_models"`
+	AllowedModalities        []string         `json:"allowed_modalities"`
+	AllowedOperations        []string         `json:"allowed_operations"`
+	AllowedCIDRs             []string         `json:"allowed_cidrs"`
 	Limits                   CanonicalLimits  `json:"limits"`
 	LanePolicy               string           `json:"lane_policy"`
 	ArtifactPolicy           string           `json:"artifact_policy"`

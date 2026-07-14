@@ -355,7 +355,12 @@ func registerAPIKeyAdminRoutes(admin *gin.RouterGroup, control *controlplane.Ser
 			httpx.Error(c, http.StatusForbidden, 1451, err.Error())
 			return
 		}
-		data, err := control.RotateAPIKey(c.Request.Context(), actor(c), c.Param("id"))
+		req, err := bindAPIKeyRotateRequest(c)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1506, "invalid api key rotation payload")
+			return
+		}
+		data, err := control.RotateAPIKeyWithGrace(c.Request.Context(), actor(c), c.Param("id"), req.GracePeriodSeconds)
 		if err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1507, err.Error())
 			return

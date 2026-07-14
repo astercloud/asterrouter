@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 	"github.com/gin-gonic/gin"
 )
 
@@ -14,10 +15,28 @@ func writeGatewayError(c *gin.Context, err error) {
 		openAIError(c, http.StatusUnauthorized, "invalid_api_key", "invalid or missing gateway api key")
 	case errors.Is(err, controlplane.ErrGatewayForbidden):
 		openAIError(c, http.StatusForbidden, "model_not_allowed", "gateway api key is not allowed to use this model")
+	case errors.Is(err, controlplane.ErrGatewayPolicyForbidden):
+		openAIError(c, http.StatusForbidden, "policy_not_allowed", "gateway credential policy does not allow this request")
+	case errors.Is(err, controlplane.ErrGatewayIdempotencyConflict):
+		openAIError(c, http.StatusConflict, "idempotency_conflict", "idempotency key was already used for a different request")
+	case errors.Is(err, controlplane.ErrGatewayIdempotencyReplay):
+		openAIError(c, http.StatusConflict, "idempotency_replay_unavailable", "direct request with this idempotency key was already accepted")
+	case errors.Is(err, controlplane.ErrAIJobIdempotencyRequired):
+		openAIError(c, http.StatusBadRequest, "idempotency_key_required", "durable job creation requires an Idempotency-Key header")
+	case errors.Is(err, controlplane.ErrAIJobCapabilityMismatch):
+		openAIError(c, http.StatusBadRequest, "capability_mismatch", "gateway model does not support the requested job capability")
+	case errors.Is(err, controlplane.ErrAIJobNotCancelable):
+		openAIError(c, http.StatusConflict, "job_not_cancelable", "ai job is already in a non-cancelable terminal state")
+	case errors.Is(err, controlplane.ErrAIJobStateConflict):
+		openAIError(c, http.StatusConflict, "job_state_conflict", "ai job state changed concurrently")
+	case errors.Is(err, gatewaycore.ErrInvalidCanonicalRequest):
+		openAIError(c, http.StatusBadRequest, "invalid_request_error", "invalid gateway request")
 	case errors.Is(err, controlplane.ErrGatewayRouteUnavailable):
 		openAIError(c, http.StatusServiceUnavailable, "route_unavailable", "no schedulable provider account is available for this model")
 	case errors.Is(err, controlplane.ErrGatewayRateLimited):
 		openAIError(c, http.StatusTooManyRequests, "rate_limit_exceeded", "gateway api key qps limit exceeded")
+	case errors.Is(err, controlplane.ErrGatewayCapacityLimited):
+		openAIError(c, http.StatusTooManyRequests, "capacity_limit_exceeded", "gateway credential capacity limit exceeded")
 	case errors.Is(err, controlplane.ErrGatewayQuotaExceeded):
 		openAIError(c, http.StatusTooManyRequests, "insufficient_quota", "gateway api key monthly token quota exceeded")
 	case errors.Is(err, controlplane.ErrGatewayBudgetExceeded):

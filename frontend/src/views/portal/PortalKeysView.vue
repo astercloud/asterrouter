@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { createPortalAPIKey, disablePortalAPIKey, getPortalWorkspace, rotatePortalAPIKey } from '@/api/control'
 import { useAppStore } from '@/stores/app'
 import type { APIKeyCreateRequest, APIKeyRecord, PortalWorkspace } from '@/types'
+import { apiKeyLifecycleClass, apiKeyLifecycleLabelKey, apiKeyLifecycleStatus, canDisableAPIKey, canRotateAPIKey } from '@/utils/apiKeys'
 
 const { t } = useI18n()
 const app = useAppStore()
@@ -30,7 +31,7 @@ const form = reactive<APIKeyCreateRequest>({
 })
 
 const apiKeys = computed(() => workspace.value?.api_keys || [])
-const activeKeys = computed(() => apiKeys.value.filter((key) => key.status === 'active'))
+const activeKeys = computed(() => apiKeys.value.filter((key) => apiKeyLifecycleStatus(key) === 'active'))
 const canManageKeys = computed(() => Boolean(workspace.value?.can_manage_keys))
 const models = computed(() => workspace.value?.models || [])
 const filteredKeys = computed(() => {
@@ -237,7 +238,7 @@ onMounted(() => {
       <section class="panel portal-global-key">
         <div class="panel-header split-header">
           <div><h2>{{ t('portalKeys.globalTitle') }}</h2><p>{{ t('portalKeys.globalHelp') }}</p></div>
-          <button v-if="selectedKey" class="button secondary compact-button" type="button" :disabled="saving || !canManageKeys" @click="rotateKey(selectedKey)"><RotateCw :size="15" />{{ t('portalKeys.rotate') }}</button>
+          <button v-if="selectedKey" class="button secondary compact-button" type="button" :disabled="saving || !canManageKeys || !canRotateAPIKey(selectedKey)" @click="rotateKey(selectedKey)"><RotateCw :size="15" />{{ t('portalKeys.rotate') }}</button>
         </div>
         <div class="panel-body">
           <div v-if="selectedKey" class="global-key-line"><span>Key</span><code>{{ displayedGlobalKey }}</code><button class="button secondary compact-button" type="button" :disabled="!revealedSecret || revealedKeyID !== selectedKey.id" @click="copyText(revealedSecret, 'key')"><Check v-if="copied === 'key'" :size="15" /><Copy v-else :size="15" />{{ t('common.copy') }}</button></div>
@@ -262,8 +263,8 @@ onMounted(() => {
                 <td><span>{{ key.policy_id || t('portalKeys.defaultPolicy') }}</span></td>
                 <td><span>{{ key.qps_limit || t('portalKeys.unlimited') }} QPS</span><span>{{ key.monthly_token_limit || t('portalKeys.unlimited') }} {{ t('usage.tokens') }}</span></td>
                 <td><span>{{ formatDate(key.last_used_at) }}</span></td>
-                <td><span class="pill" :class="key.status === 'active' ? 'status-success' : 'status-warning'">{{ key.status }}</span></td>
-                <td><div class="row-actions"><button class="icon-button" type="button" :title="t('portalKeys.rotate')" :disabled="saving || !canManageKeys" @click="rotateKey(key)"><RotateCw :size="15" /></button><button class="icon-button danger-icon" type="button" :title="t('portalKeys.disable')" :disabled="saving || !canManageKeys || key.status !== 'active'" @click="disableKey(key)"><Trash2 :size="15" /></button></div></td>
+                <td><span class="pill" :class="apiKeyLifecycleClass(key)">{{ t(apiKeyLifecycleLabelKey(key)) }}</span></td>
+                <td><div class="row-actions"><button class="icon-button" type="button" :title="t('portalKeys.rotate')" :disabled="saving || !canManageKeys || !canRotateAPIKey(key)" @click="rotateKey(key)"><RotateCw :size="15" /></button><button class="icon-button danger-icon" type="button" :title="t('portalKeys.disable')" :disabled="saving || !canManageKeys || !canDisableAPIKey(key)" @click="disableKey(key)"><Trash2 :size="15" /></button></div></td>
               </tr>
               <tr v-if="!filteredKeys.length"><td colspan="8" class="empty-cell">{{ search ? t('portalKeys.noSearchResults') : t('portalKeys.emptyList') }}</td></tr>
             </tbody>

@@ -11,17 +11,20 @@ if [ -f "${ROOT_DIR}/.env" ]; then
 fi
 
 KILL_OCCUPIED="${ASTER_DEV_KILL_OCCUPIED:-1}"
+DEMO_MODE="${ASTER_DEMO_MODE:-false}"
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/dev.sh [--kill-occupied|--no-kill-occupied]
+Usage: ./scripts/dev.sh [--demo] [--kill-occupied|--no-kill-occupied]
 
 Options:
+  --demo              Enable the built-in one-click demo account.
   --kill-occupied     Gracefully stop processes listening on the selected ports (default).
   --no-kill-occupied  Refuse to start when a selected port is already occupied.
   -h, --help          Show this help message.
 
 Environment:
+  ASTER_DEMO_MODE=true       Enable the built-in one-click demo account.
   ASTER_DEV_KILL_OCCUPIED=1  Enable automatic port cleanup (default).
   ASTER_DEV_KILL_OCCUPIED=0  Disable automatic port cleanup.
 EOF
@@ -29,6 +32,9 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --demo)
+      DEMO_MODE=true
+      ;;
     --kill-occupied)
       KILL_OCCUPIED=1
       ;;
@@ -142,11 +148,15 @@ require_free_port "FRONTEND" "${FRONTEND_PORT}"
 
 echo "AsterRouter API: ${BACKEND_URL}"
 echo "AsterRouter UI:  http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+if [ "${DEMO_MODE}" = "true" ]; then
+  echo "Demo login:      enabled"
+fi
 
 (
   cd "${ROOT_DIR}/backend"
   ASTER_ADDR="${ASTER_ADDR:-${BACKEND_HOST}:${BACKEND_PORT}}" \
     ASTER_FRONTEND_DIR="${ASTER_FRONTEND_DIR:-../frontend/dist}" \
+    ASTER_DEMO_MODE="${DEMO_MODE}" \
     go run ./cmd/asterrouter
 ) &
 PIDS+=("$!")

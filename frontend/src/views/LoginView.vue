@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Eye, EyeOff, Lock, LogIn, UserRound } from '@lucide/vue'
+import { Eye, EyeOff, Lock, LogIn, Play, UserRound } from '@lucide/vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -102,14 +102,24 @@ function changeLocale(event: Event) {
       </div>
 
       <section class="auth-card">
-        <div v-if="demoMode" class="notice demo-mode-notice">
-          <strong>{{ t('auth.demoMode') }}</strong>
-          <span>{{ t('auth.demoModeHelp') }}</span>
-        </div>
         <div class="auth-title">
           <h2>{{ t('auth.welcomeBack') }}</h2>
           <p>{{ t('auth.signInToAccount') }}</p>
         </div>
+
+        <section v-if="demoMode" class="demo-experience" aria-labelledby="demo-experience-title">
+          <div class="demo-experience-copy">
+            <span class="demo-experience-label">{{ t('auth.demoMode') }}</span>
+            <strong id="demo-experience-title">{{ t('auth.demoModeTitle') }}</strong>
+            <p>{{ t('auth.demoModeHelp') }}</p>
+          </div>
+          <button class="button auth-submit demo-experience-action" type="button" :disabled="auth.loading" @click="enterDemo">
+            <Play :size="18" aria-hidden="true" />
+            {{ auth.loading ? t('auth.demoSigningIn') : t('auth.enterDemo') }}
+          </button>
+        </section>
+
+        <div v-if="demoMode" class="auth-divider"><span>{{ t('auth.accountSignIn') }}</span></div>
 
         <div v-if="actionMessage" class="notice success">{{ actionMessage }}</div>
         <form v-if="authMode !== 'login' && !mfaChallenge" class="auth-form" @submit.prevent="submitAccountAction">
@@ -177,10 +187,6 @@ function changeLocale(event: Event) {
           <button class="button auth-submit" type="submit" :disabled="auth.loading || (app.publicSettings?.turnstile_enabled && !turnstileToken)">
             <LogIn :size="18" />
             {{ auth.loading ? t('auth.signingIn') : t('auth.signIn') }}
-          </button>
-          <button v-if="demoMode" class="button secondary auth-submit" type="button" :disabled="auth.loading" @click="enterDemo">
-            <LogIn :size="18" />
-            {{ auth.loading ? t('auth.signingIn') : t('auth.enterDemo') }}
           </button>
 			<div class="auth-secondary-actions"><button type="button" @click="authMode = 'forgot'">{{ t('auth.forgotPassword') }}</button><button v-if="app.publicSettings?.registration_enabled" type="button" @click="authMode = 'register'">{{ t('auth.createAccount') }}</button></div>
 			<button v-if="app.publicSettings?.oidc_enabled" class="button secondary auth-submit" type="button" :disabled="app.publicSettings?.login_agreement_enabled && !agreementAccepted" @click="loginWithOIDC">

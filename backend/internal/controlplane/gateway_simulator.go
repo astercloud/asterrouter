@@ -57,9 +57,9 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 		result.Summary = "no model routes exist for the resolved route group"
 		return result, nil
 	}
-	rankedByRouteID := make(map[string]rankedModelRouteCandidate, len(ranked))
+	rankedByRouteID := make(map[string]struct{}, len(ranked))
 	for _, candidate := range ranked {
-		rankedByRouteID[candidate.route.ID] = candidate
+		rankedByRouteID[candidate.route.ID] = struct{}{}
 	}
 	for index, candidate := range ranked {
 		provider := GatewayProvider{
@@ -85,7 +85,7 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 	return result, nil
 }
 
-func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved ResolvedGatewayModel, ranked map[string]rankedModelRouteCandidate, rankStart int) ([]GatewaySimulationCandidate, error) {
+func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved ResolvedGatewayModel, ranked map[string]struct{}, rankStart int) ([]GatewaySimulationCandidate, error) {
 	routes, err := s.repo.ListModelRoutes(ctx)
 	if err != nil {
 		return nil, err

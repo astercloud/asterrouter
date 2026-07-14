@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { createPortalAPIKey, getPortalWorkspace, rotatePortalAPIKey } from '@/api/control'
 import { useAppStore } from '@/stores/app'
 import type { APIKeyRecord, PortalWorkspace } from '@/types'
+import { apiKeyLifecycleStatus } from '@/utils/apiKeys'
 
 type ConfigTarget = 'claude-code' | 'codex' | 'gemini-cli' | 'cursor' | 'opencode' | 'openclaw' | 'hermes' | 'curl' | 'python' | 'anthropic'
 type CCSwitchTarget = 'codex' | 'claude-code' | 'gemini-cli' | 'opencode' | 'openclaw' | 'hermes'
@@ -85,7 +86,7 @@ const configTarget = ref<ConfigTarget>('codex')
 const ccSwitchTarget = ref<CCSwitchTarget>('codex')
 const installMethod = ref<InstallMethod>('npm')
 
-const activeKeys = computed(() => (workspace.value?.api_keys || []).filter((key) => key.status === 'active'))
+const activeKeys = computed(() => (workspace.value?.api_keys || []).filter((key) => apiKeyLifecycleStatus(key) === 'active'))
 const selectedKey = computed(() => activeKeys.value.find((key) => key.id === selectedKeyID.value) || null)
 const canManageKeys = computed(() => Boolean(workspace.value?.can_manage_keys))
 const siteName = computed(() => app.siteName || 'AsterRouter')

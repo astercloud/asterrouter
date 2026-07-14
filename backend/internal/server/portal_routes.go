@@ -42,7 +42,12 @@ func registerPortalRoutes(portal *gin.RouterGroup, control *controlplane.Service
 		httpx.OK(c, data)
 	})
 	portal.POST("/api-keys/:id/rotate", func(c *gin.Context) {
-		data, err := control.RotatePortalAPIKey(c.Request.Context(), actor(c), c.Param("id"))
+		req, err := bindAPIKeyRotateRequest(c)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1201, "invalid api key rotation payload")
+			return
+		}
+		data, err := control.RotatePortalAPIKeyWithGrace(c.Request.Context(), actor(c), c.Param("id"), req.GracePeriodSeconds)
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, controlplane.ErrPortalAPIKeyNotFound) {

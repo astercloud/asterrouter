@@ -10,10 +10,36 @@ const (
 	APIKeyStatusActive   = "active"
 	APIKeyStatusDisabled = "disabled"
 
+	APIKeyLifecycleActive   = "active"
+	APIKeyLifecycleRetiring = "retiring"
+	APIKeyLifecycleRetired  = "retired"
+	APIKeyLifecycleDisabled = "disabled"
+
 	APIKeyTypeWorkspace = "workspace"
 	APIKeyTypeUser      = "user"
 	APIKeyTypeCustomer  = "customer"
 	APIKeyTypeService   = "service"
+
+	GatewayScopeInvoke     = "gateway:invoke"
+	GatewayScopeModelsRead = "models:read"
+	GatewayScopeJobsRead   = "jobs:read"
+	GatewayScopeJobsCancel = "jobs:cancel"
+
+	GatewayOperationListModels     = "list_models"
+	GatewayOperationChatCompletion = "chat_completion"
+
+	GatewayModalityMetadata = "metadata"
+	GatewayModalityText     = "text"
+
+	GatewayLanePolicyDirectOnly       = "direct_only"
+	GatewayLanePolicyDurableOnly      = "durable_only"
+	GatewayLanePolicyDirectAndDurable = "direct_and_durable"
+
+	GatewayArtifactPolicyProxyOnly    = "proxy_only"
+	GatewayArtifactPolicyTemporary    = "temporary"
+	GatewayArtifactPolicyManaged      = "managed"
+	GatewayArtifactPolicyCustomerSink = "customer_sink"
+	GatewayArtifactPolicyMetadataOnly = "metadata_only"
 
 	ProfileScopePlatform = "platform"
 
@@ -278,55 +304,106 @@ type ModelPricingRequest struct {
 }
 
 type APIKeyRecord struct {
-	ID                 string     `json:"id"`
-	Name               string     `json:"name"`
-	KeyHash            string     `json:"-"`
-	Fingerprint        string     `json:"fingerprint"`
-	Prefix             string     `json:"prefix"`
-	Status             string     `json:"status"`
-	KeyType            string     `json:"key_type"`
-	CustomerID         string     `json:"customer_id"`
-	OwnerUserID        string     `json:"owner_user_id"`
-	ProfileScope       string     `json:"profile_scope"`
-	PlatformTenantID   string     `json:"platform_tenant_id"`
-	GatewayPrincipalID string     `json:"gateway_principal_id"`
-	PolicyID           string     `json:"policy_id"`
-	ModelAllowlist     []string   `json:"model_allowlist"`
-	QPSLimit           int        `json:"qps_limit"`
-	MonthlyTokenLimit  int        `json:"monthly_token_limit"`
-	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                       string     `json:"id"`
+	Name                     string     `json:"name"`
+	KeyHash                  string     `json:"-"`
+	Fingerprint              string     `json:"fingerprint"`
+	Prefix                   string     `json:"prefix"`
+	Status                   string     `json:"status"`
+	KeyType                  string     `json:"key_type"`
+	CustomerID               string     `json:"customer_id"`
+	OwnerUserID              string     `json:"owner_user_id"`
+	ProfileScope             string     `json:"profile_scope"`
+	PlatformTenantID         string     `json:"platform_tenant_id"`
+	GatewayPrincipalID       string     `json:"gateway_principal_id"`
+	TenantID                 string     `json:"tenant_id"`
+	PrincipalType            string     `json:"principal_type"`
+	PrincipalReference       string     `json:"principal_reference"`
+	PolicyID                 string     `json:"policy_id"`
+	Scopes                   []string   `json:"scopes"`
+	ModelAllowlist           []string   `json:"model_allowlist"`
+	AllowedModalities        []string   `json:"allowed_modalities"`
+	AllowedOperations        []string   `json:"allowed_operations"`
+	QPSLimit                 int        `json:"qps_limit"`
+	RPMLimit                 int        `json:"rpm_limit"`
+	TPMLimit                 int        `json:"tpm_limit"`
+	ConcurrencyLimit         int        `json:"concurrency_limit"`
+	MonthlyTokenLimit        int        `json:"monthly_token_limit"`
+	MonthlyBudgetCents       int        `json:"monthly_budget_cents"`
+	MonthlyImageLimit        int        `json:"monthly_image_limit"`
+	MonthlyVideoSecondsLimit int        `json:"monthly_video_seconds_limit"`
+	MonthlyAudioSecondsLimit int        `json:"monthly_audio_seconds_limit"`
+	AllowedCIDRs             []string   `json:"allowed_cidrs"`
+	LanePolicy               string     `json:"lane_policy"`
+	ArtifactPolicy           string     `json:"artifact_policy"`
+	RotationFamilyID         string     `json:"rotation_family_id"`
+	ReplacesKeyID            string     `json:"replaces_key_id"`
+	ReplacedByKeyID          string     `json:"replaced_by_key_id"`
+	RotationGraceExpiresAt   *time.Time `json:"rotation_grace_expires_at,omitempty"`
+	LifecycleStatus          string     `json:"lifecycle_status"`
+	ExpiresAt                *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt               *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
 type APIKeyCreateRequest struct {
-	Name               string   `json:"name"`
-	PolicyID           string   `json:"policy_id"`
-	ModelAllowlist     []string `json:"model_allowlist"`
-	QPSLimit           int      `json:"qps_limit"`
-	MonthlyTokenLimit  int      `json:"monthly_token_limit"`
-	ExpiresAt          string   `json:"expires_at"`
-	KeyType            string   `json:"key_type"`
-	CustomerID         string   `json:"customer_id"`
-	OwnerUserID        string   `json:"owner_user_id"`
-	PlatformTenantID   string   `json:"platform_tenant_id"`
-	GatewayPrincipalID string   `json:"gateway_principal_id"`
+	Name                     string   `json:"name"`
+	PolicyID                 string   `json:"policy_id"`
+	Scopes                   []string `json:"scopes"`
+	ModelAllowlist           []string `json:"model_allowlist"`
+	AllowedModalities        []string `json:"allowed_modalities"`
+	AllowedOperations        []string `json:"allowed_operations"`
+	QPSLimit                 int      `json:"qps_limit"`
+	RPMLimit                 int      `json:"rpm_limit"`
+	TPMLimit                 int      `json:"tpm_limit"`
+	ConcurrencyLimit         int      `json:"concurrency_limit"`
+	MonthlyTokenLimit        int      `json:"monthly_token_limit"`
+	MonthlyBudgetCents       int      `json:"monthly_budget_cents"`
+	MonthlyImageLimit        int      `json:"monthly_image_limit"`
+	MonthlyVideoSecondsLimit int      `json:"monthly_video_seconds_limit"`
+	MonthlyAudioSecondsLimit int      `json:"monthly_audio_seconds_limit"`
+	AllowedCIDRs             []string `json:"allowed_cidrs"`
+	LanePolicy               string   `json:"lane_policy"`
+	ArtifactPolicy           string   `json:"artifact_policy"`
+	ExpiresAt                string   `json:"expires_at"`
+	KeyType                  string   `json:"key_type"`
+	CustomerID               string   `json:"customer_id"`
+	OwnerUserID              string   `json:"owner_user_id"`
+	PlatformTenantID         string   `json:"platform_tenant_id"`
+	GatewayPrincipalID       string   `json:"gateway_principal_id"`
 }
 
 type APIKeyUpdateRequest struct {
-	Name               string   `json:"name"`
-	PolicyID           string   `json:"policy_id"`
-	ModelAllowlist     []string `json:"model_allowlist"`
-	QPSLimit           int      `json:"qps_limit"`
-	MonthlyTokenLimit  int      `json:"monthly_token_limit"`
-	ExpiresAt          string   `json:"expires_at"`
-	Status             string   `json:"status"`
-	KeyType            string   `json:"key_type"`
-	CustomerID         string   `json:"customer_id"`
-	OwnerUserID        string   `json:"owner_user_id"`
-	PlatformTenantID   string   `json:"platform_tenant_id"`
-	GatewayPrincipalID string   `json:"gateway_principal_id"`
+	Name                     string   `json:"name"`
+	PolicyID                 string   `json:"policy_id"`
+	Scopes                   []string `json:"scopes"`
+	ModelAllowlist           []string `json:"model_allowlist"`
+	AllowedModalities        []string `json:"allowed_modalities"`
+	AllowedOperations        []string `json:"allowed_operations"`
+	QPSLimit                 int      `json:"qps_limit"`
+	RPMLimit                 int      `json:"rpm_limit"`
+	TPMLimit                 int      `json:"tpm_limit"`
+	ConcurrencyLimit         int      `json:"concurrency_limit"`
+	MonthlyTokenLimit        int      `json:"monthly_token_limit"`
+	MonthlyBudgetCents       int      `json:"monthly_budget_cents"`
+	MonthlyImageLimit        int      `json:"monthly_image_limit"`
+	MonthlyVideoSecondsLimit int      `json:"monthly_video_seconds_limit"`
+	MonthlyAudioSecondsLimit int      `json:"monthly_audio_seconds_limit"`
+	AllowedCIDRs             []string `json:"allowed_cidrs"`
+	LanePolicy               string   `json:"lane_policy"`
+	ArtifactPolicy           string   `json:"artifact_policy"`
+	ExpiresAt                string   `json:"expires_at"`
+	Status                   string   `json:"status"`
+	KeyType                  string   `json:"key_type"`
+	CustomerID               string   `json:"customer_id"`
+	OwnerUserID              string   `json:"owner_user_id"`
+	PlatformTenantID         string   `json:"platform_tenant_id"`
+	GatewayPrincipalID       string   `json:"gateway_principal_id"`
+}
+
+type APIKeyRotateRequest struct {
+	GracePeriodSeconds int `json:"grace_period_seconds"`
 }
 
 // PlatformTenant owns the gateway relationship with a product, partner, or
@@ -529,6 +606,11 @@ type Dashboard struct {
 
 type UsageRecord struct {
 	ID                        string    `json:"id"`
+	OperationID               string    `json:"operation_id"`
+	AttemptID                 string    `json:"attempt_id"`
+	UsageVersion              int       `json:"usage_version"`
+	UsageSource               string    `json:"usage_source"`
+	RequestFingerprint        string    `json:"request_fingerprint"`
 	APIKeyID                  string    `json:"api_key_id"`
 	CustomerID                string    `json:"customer_id"`
 	ProfileScope              string    `json:"profile_scope"`
@@ -541,13 +623,29 @@ type UsageRecord struct {
 	APIFingerprint            string    `json:"api_fingerprint"`
 	Model                     string    `json:"model"`
 	UpstreamModel             string    `json:"upstream_model"`
+	Protocol                  string    `json:"protocol"`
 	ProviderID                string    `json:"provider_id"`
 	ProviderAccountID         string    `json:"provider_account_id"`
 	Status                    string    `json:"status"`
 	ErrorType                 string    `json:"error_type"`
 	LatencyMS                 int64     `json:"latency_ms"`
+	TTFTMS                    *int64    `json:"ttft_ms,omitempty"`
 	InputTokens               int       `json:"input_tokens"`
 	OutputTokens              int       `json:"output_tokens"`
+	TotalInputTokens          *int      `json:"total_input_tokens,omitempty"`
+	UncachedInputTokens       *int      `json:"uncached_input_tokens,omitempty"`
+	CacheReadTokens           *int      `json:"cache_read_tokens,omitempty"`
+	CacheWrite5mTokens        *int      `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens        *int      `json:"cache_write_1h_tokens,omitempty"`
+	CacheFieldsPresent        bool      `json:"cache_fields_present"`
+	UsageNormalizationStatus  string    `json:"usage_normalization_status"`
+	UpstreamRequestID         string    `json:"upstream_request_id"`
+	ProcurementCostMicros     *int64    `json:"procurement_cost_micros,omitempty"`
+	ProcurementCostCurrency   string    `json:"procurement_cost_currency"`
+	ProcurementCostSource     string    `json:"procurement_cost_source"`
+	ProcurementCostConfidence string    `json:"procurement_cost_confidence"`
+	ProcurementPriceID        string    `json:"procurement_price_id"`
+	ProviderBillingLineID     string    `json:"provider_billing_line_id"`
 	CostCents                 int       `json:"cost_cents"`
 	CreatedAt                 time.Time `json:"created_at"`
 }
@@ -642,6 +740,9 @@ type UsageQuery struct {
 
 type GatewayTrace struct {
 	ID                        string    `json:"id"`
+	OperationID               string    `json:"operation_id"`
+	AttemptID                 string    `json:"attempt_id"`
+	RequestFingerprint        string    `json:"request_fingerprint"`
 	APIKeyID                  string    `json:"api_key_id"`
 	APIFingerprint            string    `json:"api_fingerprint"`
 	ProfileScope              string    `json:"profile_scope"`
@@ -746,6 +847,7 @@ type GatewayAuthContext struct {
 }
 
 type GatewayProvider struct {
+	AttemptID        string
 	ID               string
 	Name             string
 	BaseURL          string

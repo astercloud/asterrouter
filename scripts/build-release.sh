@@ -120,7 +120,7 @@ release = {
     "version": version,
     "channel": "stable",
     "name": f"AsterRouter {version}",
-    "notes": "Deployment profile initialization is now transactional and fixed per instance, setup redirects through login after profile selection, and CI covers public documentation links plus profile setup journeys.",
+    "notes": "Adds API key policy and rotation flows, gateway credential capacity controls, protocol edge normalization, transactional operation/outbox and AI job foundations, plus explicit local demo-mode startup safeguards.",
     "published_at": build_date,
     "html_url": html_url,
     "assets": assets,

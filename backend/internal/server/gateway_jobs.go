@@ -1,0 +1,173 @@
+package server
+
+import (
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
+	"github.com/gin-gonic/gin"
+)
+
+type publicAIJobResponse struct {
+	ID             string                `json:"id"`
+	Object         string                `json:"object"`
+	OperationID    string                `json:"operation_id"`
+	Status         string                `json:"status"`
+	StatusVersion  int                   `json:"status_version"`
+	Capability     publicAIJobCapability `json:"capability"`
+	ArtifactPolicy string                `json:"artifact_policy"`
+	ErrorType      string                `json:"error_type,omitempty"`
+	CreatedAt      time.Time             `json:"created_at"`
+	UpdatedAt      time.Time             `json:"updated_at"`
+	CompletedAt    *time.Time            `json:"completed_at,omitempty"`
+	ExpiresAt      time.Time             `json:"expires_at"`
+	Links          map[string]string     `json:"links"`
+}
+
+type publicAIJobCapability struct {
+	Modality  string `json:"modality"`
+	Operation string `json:"operation"`
+	Model     string `json:"model"`
+}
+
+func registerGatewayJobRoutes(r *gin.Engine, control *controlplane.Service) {
+	registerGatewayJobEventRoute(r, control)
+
+	r.POST("/v1/jobs", func(c *gin.Context) {
+		if control == nil {
+			openAIError(c, http.StatusServiceUnavailable, "service_unavailable", "gateway control service is not available")
+			return
+		}
+		request, err := parseCanonicalDurableJobRequest(c)
+		if err != nil {
+			if errors.Is(err, errGatewayRequestTooLarge) {
+				openAIError(c, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body exceeds 16 MiB limit")
+				return
+			}
+			openAIError(c, http.StatusBadRequest, "invalid_request_error", "invalid durable job payload")
+			return
+		}
+		credential, err := gatewaycore.ExtractCredential(c.Request, gatewaycore.ProtocolAsterJobs)
+		if err != nil {
+			writeGatewayError(c, controlplane.ErrGatewayUnauthorized)
+			return
+		}
+		auth, canonicalAuth, err := control.AuthorizeCanonicalGatewayRequest(c.Request.Context(), credential, request)
+		if err != nil {
+			writeGatewayError(c, err)
+			return
+		}
+		if err := control.EnforceGatewayPolicy(c.Request.Context(), auth); err != nil {
+			writeGatewayError(c, err)
+			return
+		}
+		job, created, err := control.BeginDurableAIJob(c.Request.Context(), canonicalAuth, request)
+		if err != nil {
+			writeGatewayError(c, err)
+			return
+		}
+		c.Header("Location", "/v1/jobs/"+job.ID)
+		c.Header("X-AsterRouter-Operation-ID", job.OperationID)
+		status := http.StatusAccepted
+		if !created {
+			c.Header("Idempotent-Replayed", "true")
+			status = http.StatusOK
+		}
+		if !aiJobPublicTerminal(job.Status) {
+			c.Header("Retry-After", strconv.Itoa(controlplane.AIJobDefaultPollAfter))
+		}
+		c.JSON(status, newPublicAIJobResponse(job))
+	})
+
+	r.GET("/v1/jobs/:job_id", func(c *gin.Context) {
+		if control == nil {
+			openAIError(c, http.StatusServiceUnavailable, "service_unavailable", "gateway control service is not available")
+			return
+		}
+		auth, ok := authorizePublicAIJobAction(c, control, controlplane.GatewayScopeJobsRead)
+		if !ok {
+			return
+		}
+		job, found, err := control.AIJobForAuth(c.Request.Context(), auth, c.Param("job_id"))
+		if err != nil {
+			writeGatewayError(c, err)
+			return
+		}
+		if !found {
+			openAIError(c, http.StatusNotFound, "resource_not_found", "ai job not found")
+			return
+		}
+		c.JSON(http.StatusOK, newPublicAIJobResponse(job))
+	})
+
+	r.POST("/v1/jobs/:job_id/cancel", func(c *gin.Context) {
+		if control == nil {
+			openAIError(c, http.StatusServiceUnavailable, "service_unavailable", "gateway control service is not available")
+			return
+		}
+		auth, ok := authorizePublicAIJobAction(c, control, controlplane.GatewayScopeJobsCancel)
+		if !ok {
+			return
+		}
+		job, found, err := control.CancelAIJobForAuth(c.Request.Context(), auth, c.Param("job_id"))
+		if err != nil {
+			writeGatewayError(c, err)
+			return
+		}
+		if !found {
+			openAIError(c, http.StatusNotFound, "resource_not_found", "ai job not found")
+			return
+		}
+		c.JSON(http.StatusOK, newPublicAIJobResponse(job))
+	})
+}
+
+func parseCanonicalDurableJobRequest(c *gin.Context) (gatewaycore.CanonicalRequest, error) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, gatewayRequestBodyLimit)
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			return gatewaycore.CanonicalRequest{}, errGatewayRequestTooLarge
+		}
+		return gatewaycore.CanonicalRequest{}, err
+	}
+	request, err := gatewaycore.CanonicalizeDurableJob(rawBody, c.Request.Header)
+	if err != nil {
+		return gatewaycore.CanonicalRequest{}, err
+	}
+	request.SourceIP = gatewaySourceIP(c.Request)
+	return request, nil
+}
+
+func authorizePublicAIJobAction(c *gin.Context, control *controlplane.Service, scope string) (gatewaycore.CanonicalAuthContext, bool) {
+	credential, err := gatewaycore.ExtractCredential(c.Request, gatewaycore.ProtocolAsterJobs)
+	if err != nil {
+		writeGatewayError(c, controlplane.ErrGatewayUnauthorized)
+		return gatewaycore.CanonicalAuthContext{}, false
+	}
+	auth, err := control.AuthorizeGatewayCredentialScope(c.Request.Context(), credential, gatewaySourceIP(c.Request), scope)
+	if err != nil {
+		writeGatewayError(c, err)
+		return gatewaycore.CanonicalAuthContext{}, false
+	}
+	return auth, true
+}
+
+func newPublicAIJobResponse(job controlplane.AIJob) publicAIJobResponse {
+	return publicAIJobResponse{
+		ID: job.ID, Object: "ai_job", OperationID: job.OperationID, Status: job.Status, StatusVersion: job.StatusVersion,
+		Capability:     publicAIJobCapability{Modality: job.Modality, Operation: job.Operation, Model: job.Model},
+		ArtifactPolicy: job.ArtifactPolicy, ErrorType: job.ErrorType, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
+		CompletedAt: job.CompletedAt, ExpiresAt: job.ExpiresAt,
+		Links: map[string]string{"self": "/v1/jobs/" + job.ID, "events": "/v1/jobs/" + job.ID + "/events"},
+	}
+}
+
+func aiJobPublicTerminal(status string) bool {
+	return status == controlplane.AIJobStatusSucceeded || status == controlplane.AIJobStatusFailed || status == controlplane.AIJobStatusCanceled || status == controlplane.AIJobStatusExpired
+}

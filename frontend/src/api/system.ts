@@ -1,6 +1,19 @@
 import { apiClient } from './client'
 import type { S3BackupObject, SystemApplyResult, SystemArchiveInfo, SystemRestoreResult, SystemUpdateInfo } from '@/types'
 
+export interface SystemProfileBundle {
+  enabled_profiles: string[]
+  default_profile: string
+}
+
+export async function updateSystemProfiles(enabledProfiles: string[], defaultProfile: string): Promise<SystemProfileBundle> {
+  const response = await apiClient.put<SystemProfileBundle>('/system/profiles', {
+    enabled_profiles: enabledProfiles,
+    default_profile: defaultProfile
+  })
+  return response.data
+}
+
 export async function checkSystemUpdates(force = false): Promise<SystemUpdateInfo> {
   const response = await apiClient.get<SystemUpdateInfo>('/admin/system/check-updates', {
     params: { force }

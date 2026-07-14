@@ -6,6 +6,7 @@ import { useRoute } from 'vue-router'
 import { createAPIKey, disableAPIKey, getAPIKeys, getProviders, getUsageReport, rotateAPIKey } from '@/api/control'
 import { useAppStore } from '@/stores/app'
 import type { APIKeyCreateRequest, APIKeyRecord, ProviderConnection, UsageReport } from '@/types'
+import { apiKeyLifecycleClass, apiKeyLifecycleLabelKey, apiKeyLifecycleStatus, canDisableAPIKey, canRotateAPIKey } from '@/utils/apiKeys'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -35,7 +36,7 @@ const gatewayBaseUrl = computed(() => {
 })
 
 const activeProviders = computed(() => providers.value.filter((item) => item.status === 'active').length)
-const activeKeys = computed(() => apiKeys.value.filter((item) => item.status === 'active').length)
+const activeKeys = computed(() => apiKeys.value.filter((item) => apiKeyLifecycleStatus(item) === 'active').length)
 const activePanel = computed(() => (typeof route.meta.consolePanel === 'string' ? route.meta.consolePanel : 'overview'))
 const availableModels = computed(() => {
   const models = Array.from(new Set(providers.value.flatMap((item) => item.models || []).filter(Boolean))).slice(0, 12)
@@ -43,7 +44,9 @@ const availableModels = computed(() => {
 })
 const sortedKeys = computed(() =>
   [...apiKeys.value].sort((a, b) => {
-    if (a.status !== b.status) return a.status === 'active' ? -1 : 1
+    const statusOrder = { active: 0, retiring: 1, disabled: 2, retired: 3 }
+    const statusDifference = statusOrder[apiKeyLifecycleStatus(a)] - statusOrder[apiKeyLifecycleStatus(b)]
+    if (statusDifference !== 0) return statusDifference
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   })
 )
@@ -342,17 +345,17 @@ onMounted(load)
                   <span>{{ formatLimit(key.monthly_token_limit) }} {{ t('usage.tokens') }}</span>
                 </td>
                 <td>
-                  <span class="pill" :class="key.status === 'active' ? 'status-success' : 'status-warning'">{{ key.status }}</span>
+                  <span class="pill" :class="apiKeyLifecycleClass(key)">{{ t(apiKeyLifecycleLabelKey(key)) }}</span>
                   <span>{{ formatDate(key.expires_at) }}</span>
                 </td>
                 <td>{{ formatDate(key.last_used_at) }}</td>
                 <td>
                   <div class="row-actions">
-                    <button class="button secondary" type="button" :disabled="saving" @click="rotateKey(key)">
+                    <button class="button secondary" type="button" :disabled="saving || !canRotateAPIKey(key)" @click="rotateKey(key)">
                       <RotateCw :size="15" />
                       {{ t('apiKeys.rotate') }}
                     </button>
-                    <button class="button danger" type="button" :disabled="saving || key.status !== 'active'" @click="disableKey(key)">
+                    <button class="button danger" type="button" :disabled="saving || !canDisableAPIKey(key)" @click="disableKey(key)">
                       <ShieldOff :size="15" />
                       {{ t('apiKeys.disable') }}
                     </button>

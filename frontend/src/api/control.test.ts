@@ -95,7 +95,7 @@ describe('control API contracts', () => {
       { run: () => control.getAPIKeyPolicyExplanation('key-1'), method: 'get', args: ['/admin/api-keys/key-1/policy-explanation'] },
       { run: () => control.createAPIKey(payload), method: 'post', args: ['/admin/api-keys', payload] },
       { run: () => control.updateAPIKey('key-1', payload), method: 'put', args: ['/admin/api-keys/key-1', payload] },
-      { run: () => control.rotateAPIKey('key-1'), method: 'post', args: ['/admin/api-keys/key-1/rotate'] },
+      { run: () => control.rotateAPIKey('key-1', 3600), method: 'post', args: ['/admin/api-keys/key-1/rotate', { grace_period_seconds: 3600 }] },
       { run: () => control.disableAPIKey('key-1'), method: 'post', args: ['/admin/api-keys/key-1/disable'] },
       { run: () => control.acknowledgeAlert('alert-1'), method: 'post', args: ['/admin/alerts/alert-1/acknowledge'] },
       { run: () => control.resolveAlert('alert-1'), method: 'post', args: ['/admin/alerts/alert-1/resolve'] }
@@ -135,8 +135,8 @@ describe('control API contracts', () => {
       expect(client.get).toHaveBeenLastCalledWith(`${apiBase}/workspace`)
       await control.createPortalAPIKey(payload)
       expect(client.post).toHaveBeenLastCalledWith(`${apiBase}/api-keys`, payload)
-      await control.rotatePortalAPIKey('key-1')
-      expect(client.post).toHaveBeenLastCalledWith(`${apiBase}/api-keys/key-1/rotate`)
+      await control.rotatePortalAPIKey('key-1', 300)
+      expect(client.post).toHaveBeenLastCalledWith(`${apiBase}/api-keys/key-1/rotate`, { grace_period_seconds: 300 })
       await control.disablePortalAPIKey('key-1')
       expect(client.post).toHaveBeenLastCalledWith(`${apiBase}/api-keys/key-1/disable`)
     }

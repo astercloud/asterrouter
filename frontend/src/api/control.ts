@@ -320,8 +320,8 @@ export async function updateAPIKey(id: string, payload: APIKeyUpdateRequest): Pr
   return response.data
 }
 
-export async function rotateAPIKey(id: string): Promise<APIKeyCreateResponse> {
-  const response = await apiClient.post<APIKeyCreateResponse>(`/admin/api-keys/${id}/rotate`)
+export async function rotateAPIKey(id: string, gracePeriodSeconds = 0): Promise<APIKeyCreateResponse> {
+	const response = await apiClient.post<APIKeyCreateResponse>(`/admin/api-keys/${id}/rotate`, { grace_period_seconds: gracePeriodSeconds })
   return response.data
 }
 
@@ -424,8 +424,8 @@ export async function createPortalAPIKey(payload: APIKeyCreateRequest): Promise<
 	return response.data
 }
 
-export async function rotatePortalAPIKey(id: string): Promise<APIKeyCreateResponse> {
-	const response = await apiClient.post<APIKeyCreateResponse>(`${selfServiceAPIBase()}/api-keys/${id}/rotate`)
+export async function rotatePortalAPIKey(id: string, gracePeriodSeconds = 0): Promise<APIKeyCreateResponse> {
+	const response = await apiClient.post<APIKeyCreateResponse>(`${selfServiceAPIBase()}/api-keys/${id}/rotate`, { grace_period_seconds: gracePeriodSeconds })
 	return response.data
 }
 
