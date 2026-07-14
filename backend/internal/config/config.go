@@ -50,6 +50,15 @@ type Config struct {
 	AIJobQueueProfileLimit   int
 	AIJobQueueTenantLimit    int
 	AIJobQueuePrincipalLimit int
+	ArtifactStoreDriver      string
+	ArtifactLocalRoot        string
+	ArtifactS3Endpoint       string
+	ArtifactS3Region         string
+	ArtifactS3Bucket         string
+	ArtifactS3Prefix         string
+	ArtifactS3AccessKey      string
+	ArtifactS3SecretKey      string
+	ArtifactS3PathStyle      bool
 	AllowRestart             bool
 	DemoMode                 bool
 }
@@ -107,6 +116,15 @@ func Load() Config {
 		AIJobQueueProfileLimit:   getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_PROFILE_LIMIT"),
 		AIJobQueueTenantLimit:    getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_TENANT_LIMIT"),
 		AIJobQueuePrincipalLimit: getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_PRINCIPAL_LIMIT"),
+		ArtifactStoreDriver:      getEnv("ASTER_ARTIFACT_STORE_DRIVER", "none"),
+		ArtifactLocalRoot:        getEnv("ASTER_ARTIFACT_LOCAL_ROOT", "data/artifacts"),
+		ArtifactS3Endpoint:       strings.TrimSpace(os.Getenv("ASTER_ARTIFACT_S3_ENDPOINT")),
+		ArtifactS3Region:         getEnv("ASTER_ARTIFACT_S3_REGION", "auto"),
+		ArtifactS3Bucket:         strings.TrimSpace(os.Getenv("ASTER_ARTIFACT_S3_BUCKET")),
+		ArtifactS3Prefix:         strings.Trim(strings.TrimSpace(os.Getenv("ASTER_ARTIFACT_S3_PREFIX")), "/"),
+		ArtifactS3AccessKey:      strings.TrimSpace(os.Getenv("ASTER_ARTIFACT_S3_ACCESS_KEY")),
+		ArtifactS3SecretKey:      strings.TrimSpace(os.Getenv("ASTER_ARTIFACT_S3_SECRET_KEY")),
+		ArtifactS3PathStyle:      getBoolEnv("ASTER_ARTIFACT_S3_PATH_STYLE"),
 		AllowRestart:             getBoolEnv("ASTER_ALLOW_RESTART"),
 		DemoMode:                 getBoolEnv("ASTER_DEMO_MODE"),
 	}
@@ -168,6 +186,19 @@ func ValidateRuntime(cfg Config) error {
 	}
 	if len(cfg.Profiles) == 1 && cfg.DefaultProfile != "" && cfg.DefaultProfile != cfg.Profiles[0] {
 		return errors.New("ASTER_DEFAULT_PROFILE must match the single ASTER_PROFILES bootstrap profile")
+	}
+	switch strings.TrimSpace(cfg.ArtifactStoreDriver) {
+	case "", "none":
+	case "local":
+		if strings.TrimSpace(cfg.ArtifactLocalRoot) == "" {
+			return errors.New("ASTER_ARTIFACT_LOCAL_ROOT is required when ASTER_ARTIFACT_STORE_DRIVER=local")
+		}
+	case "s3":
+		if strings.TrimSpace(cfg.ArtifactS3Bucket) == "" || strings.TrimSpace(cfg.ArtifactS3AccessKey) == "" || strings.TrimSpace(cfg.ArtifactS3SecretKey) == "" {
+			return errors.New("ASTER_ARTIFACT_S3_BUCKET, ASTER_ARTIFACT_S3_ACCESS_KEY, and ASTER_ARTIFACT_S3_SECRET_KEY are required when ASTER_ARTIFACT_STORE_DRIVER=s3")
+		}
+	default:
+		return errors.New("ASTER_ARTIFACT_STORE_DRIVER must be none, local, or s3")
 	}
 	if cfg.BuildType != "release" {
 		return nil

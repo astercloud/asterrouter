@@ -206,3 +206,41 @@ func TestValidateRuntimeRejectsInvalidDurableAIJobQueueLimit(t *testing.T) {
 		t.Fatal("ValidateRuntime() accepted an invalid durable job queue limit")
 	}
 }
+
+func TestArtifactStoreConfigurationIsOptionalAndValidated(t *testing.T) {
+	if err := ValidateRuntime(Config{BuildType: "source", ArtifactStoreDriver: "none"}); err != nil {
+		t.Fatalf("optional artifact store: %v", err)
+	}
+	if err := ValidateRuntime(Config{BuildType: "source", ArtifactStoreDriver: "local", ArtifactLocalRoot: "data/artifacts"}); err != nil {
+		t.Fatalf("local artifact store: %v", err)
+	}
+	if err := ValidateRuntime(Config{BuildType: "source", ArtifactStoreDriver: "s3", ArtifactS3Bucket: "bucket", ArtifactS3AccessKey: "access", ArtifactS3SecretKey: "secret"}); err != nil {
+		t.Fatalf("S3 artifact store: %v", err)
+	}
+	for _, cfg := range []Config{
+		{BuildType: "source", ArtifactStoreDriver: "local"},
+		{BuildType: "source", ArtifactStoreDriver: "s3", ArtifactS3Bucket: "bucket"},
+		{BuildType: "source", ArtifactStoreDriver: "unsupported"},
+	} {
+		if err := ValidateRuntime(cfg); err == nil {
+			t.Fatalf("ValidateRuntime(%+v) accepted invalid artifact configuration", cfg)
+		}
+	}
+}
+
+func TestLoadArtifactStoreConfiguration(t *testing.T) {
+	t.Setenv("ASTER_ARTIFACT_STORE_DRIVER", "s3")
+	t.Setenv("ASTER_ARTIFACT_S3_ENDPOINT", "https://objects.example.test")
+	t.Setenv("ASTER_ARTIFACT_S3_REGION", "auto")
+	t.Setenv("ASTER_ARTIFACT_S3_BUCKET", "media")
+	t.Setenv("ASTER_ARTIFACT_S3_PREFIX", "/aster/artifacts/")
+	t.Setenv("ASTER_ARTIFACT_S3_ACCESS_KEY", "access")
+	t.Setenv("ASTER_ARTIFACT_S3_SECRET_KEY", "secret")
+	t.Setenv("ASTER_ARTIFACT_S3_PATH_STYLE", "true")
+	cfg := Load()
+	if cfg.ArtifactStoreDriver != "s3" || cfg.ArtifactS3Endpoint != "https://objects.example.test" || cfg.ArtifactS3Region != "auto" ||
+		cfg.ArtifactS3Bucket != "media" || cfg.ArtifactS3Prefix != "aster/artifacts" || cfg.ArtifactS3AccessKey != "access" ||
+		cfg.ArtifactS3SecretKey != "secret" || !cfg.ArtifactS3PathStyle {
+		t.Fatalf("Load() artifact config=%+v", cfg)
+	}
+}

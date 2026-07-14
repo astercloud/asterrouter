@@ -69,7 +69,9 @@ func (s *S3ArtifactStore) Put(ctx context.Context, key string, body io.Reader, s
 	}
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(s.config.Bucket), Key: aws.String(s.objectKey(key)), Body: body,
-		ContentType: aws.String(strings.TrimSpace(mediaType)),
+	}
+	if mediaType = strings.TrimSpace(mediaType); mediaType != "" {
+		input.ContentType = aws.String(mediaType)
 	}
 	if sizeBytes >= 0 {
 		input.ContentLength = aws.Int64(sizeBytes)
@@ -86,7 +88,7 @@ func (s *S3ArtifactStore) Open(ctx context.Context, key string, byteRange *Artif
 	}
 	input := &s3.GetObjectInput{Bucket: aws.String(s.config.Bucket), Key: aws.String(s.objectKey(key))}
 	if byteRange != nil {
-		if byteRange.Offset < 0 || byteRange.Length < 0 {
+		if byteRange.Offset < 0 || byteRange.Length < 0 || (byteRange.Length > 0 && byteRange.Offset > int64(^uint64(0)>>1)-byteRange.Length+1) {
 			return ArtifactRead{}, ErrArtifactUnavailable
 		}
 		end := ""
@@ -97,6 +99,9 @@ func (s *S3ArtifactStore) Open(ctx context.Context, key string, byteRange *Artif
 	}
 	result, err := s.client.GetObject(ctx, input)
 	if err != nil {
+		if artifactS3Unavailable(err) {
+			return ArtifactRead{}, ErrArtifactUnavailable
+		}
 		return ArtifactRead{}, fmt.Errorf("get S3 artifact: %w", err)
 	}
 	offset := int64(0)
@@ -105,6 +110,8 @@ func (s *S3ArtifactStore) Open(ctx context.Context, key string, byteRange *Artif
 		offset = byteRange.Offset
 		if parsed, ok := parseS3ContentRange(aws.ToString(result.ContentRange)); ok {
 			total = parsed
+		} else {
+			total = offset + aws.ToInt64(result.ContentLength)
 		}
 	}
 	size := aws.ToInt64(result.ContentLength)
@@ -113,6 +120,17 @@ func (s *S3ArtifactStore) Open(ctx context.Context, key string, byteRange *Artif
 		return ArtifactRead{}, ErrArtifactUnavailable
 	}
 	return ArtifactRead{Body: result.Body, Offset: offset, SizeBytes: size, TotalBytes: total}, nil
+}
+
+func artifactS3Unavailable(err error) bool {
+	type errorCoder interface {
+		ErrorCode() string
+	}
+	var coded errorCoder
+	if !errors.As(err, &coded) {
+		return false
+	}
+	return coded.ErrorCode() == "NoSuchKey" || coded.ErrorCode() == "NotFound" || coded.ErrorCode() == "InvalidRange" || coded.ErrorCode() == "RequestedRangeNotSatisfiable"
 }
 
 func (s *S3ArtifactStore) Delete(ctx context.Context, key string) error {

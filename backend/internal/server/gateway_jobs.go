@@ -36,6 +36,7 @@ type publicAIJobCapability struct {
 
 func registerGatewayJobRoutes(r *gin.Engine, control *controlplane.Service) {
 	registerGatewayJobEventRoute(r, control)
+	registerGatewayArtifactRoutes(r, control)
 
 	r.POST("/v1/jobs", func(c *gin.Context) {
 		if control == nil {
@@ -164,7 +165,7 @@ func newPublicAIJobResponse(job controlplane.AIJob) publicAIJobResponse {
 		Capability:     publicAIJobCapability{Modality: job.Modality, Operation: job.Operation, Model: job.Model},
 		ArtifactPolicy: job.ArtifactPolicy, ErrorType: job.ErrorType, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 		CompletedAt: job.CompletedAt, ExpiresAt: job.ExpiresAt,
-		Links: map[string]string{"self": "/v1/jobs/" + job.ID, "events": "/v1/jobs/" + job.ID + "/events"},
+		Links: map[string]string{"self": "/v1/jobs/" + job.ID, "events": "/v1/jobs/" + job.ID + "/events", "artifacts": "/v1/jobs/" + job.ID + "/artifacts"},
 	}
 }
 

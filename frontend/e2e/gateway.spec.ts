@@ -31,6 +31,17 @@ async function policyAlert(page: Page, adminToken: string, keyID: string, type: 
   return alert!
 }
 
+async function expectUsageCost(page: Page, adminToken: string, keyID: string, expectedCostCents: number) {
+  await expect.poll(async () => {
+    const usage = await envelope<{ recent: Array<Record<string, unknown>> }>(await page.request.get('/api/v1/admin/usage?limit=100', {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    }))
+    return usage.recent
+      .filter((item) => item.api_key_id === keyID && item.status !== 'error')
+      .reduce((sum, item) => sum + Number(item.cost_cents || 0), 0)
+  }, { message: `usage cost for ${keyID}` }).toBe(expectedCostCents)
+}
+
 test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API workflow is viewport-independent and runs once on desktop.')
 
@@ -174,6 +185,7 @@ test('@smoke @j05 quota and budget warn, deduplicate, escalate, and reject with 
   const budgetWarning = await policyAlert(page, token, budgetKey.record.id, 'api_key_budget')
   expect(budgetWarning).toMatchObject({ severity: 'warning', status: 'active' })
   expect(budgetWarning.metadata).toMatchObject({ current_month_cost_cents: '80', budget_used_percent: '80' })
+  await expectUsageCost(page, token, budgetKey.record.id, 80)
 
   expect((await invokeWithSyntheticUsage(page, budgetKey.key, budgetModel, 20)).status()).toBe(200)
   const budgetCritical = await policyAlert(page, token, budgetKey.record.id, 'api_key_budget')

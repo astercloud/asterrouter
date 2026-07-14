@@ -20,10 +20,12 @@ const (
 	APIKeyTypeCustomer  = "customer"
 	APIKeyTypeService   = "service"
 
-	GatewayScopeInvoke     = "gateway:invoke"
-	GatewayScopeModelsRead = "models:read"
-	GatewayScopeJobsRead   = "jobs:read"
-	GatewayScopeJobsCancel = "jobs:cancel"
+	GatewayScopeInvoke          = "gateway:invoke"
+	GatewayScopeModelsRead      = "models:read"
+	GatewayScopeJobsRead        = "jobs:read"
+	GatewayScopeJobsCancel      = "jobs:cancel"
+	GatewayScopeArtifactsRead   = "artifacts:read"
+	GatewayScopeArtifactsDelete = "artifacts:delete"
 
 	GatewayOperationListModels     = "list_models"
 	GatewayOperationChatCompletion = "chat_completion"

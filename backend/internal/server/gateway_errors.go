@@ -39,6 +39,16 @@ func writeGatewayError(c *gin.Context, err error) {
 		openAIError(c, http.StatusPaymentRequired, "budget_hold_failed", "request cost cannot be reserved without an applicable price")
 	case errors.Is(err, controlplane.ErrBillingHoldStateConflict):
 		openAIError(c, http.StatusConflict, "billing_hold_conflict", "request cost reservation state changed concurrently")
+	case errors.Is(err, controlplane.ErrArtifactStateConflict):
+		openAIError(c, http.StatusConflict, "artifact_state_conflict", "artifact state changed concurrently")
+	case errors.Is(err, controlplane.ErrArtifactTooLarge):
+		openAIError(c, http.StatusRequestEntityTooLarge, "artifact_too_large", "artifact exceeds the configured size limit")
+	case errors.Is(err, controlplane.ErrArtifactIntegrity):
+		openAIError(c, http.StatusUnprocessableEntity, "artifact_integrity_failed", "artifact integrity verification failed")
+	case errors.Is(err, controlplane.ErrArtifactUnavailable):
+		openAIError(c, http.StatusGone, "artifact_unavailable", "artifact content is unavailable")
+	case errors.Is(err, controlplane.ErrArtifactStoreRequired):
+		openAIError(c, http.StatusServiceUnavailable, "artifact_store_unavailable", "artifact content store is unavailable")
 	case errors.Is(err, gatewaycore.ErrInvalidCanonicalRequest):
 		openAIError(c, http.StatusBadRequest, "invalid_request_error", "invalid gateway request")
 	case errors.Is(err, controlplane.ErrGatewayRouteUnavailable):

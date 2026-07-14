@@ -118,6 +118,28 @@ func main() {
 		log.Fatalf("initialize DingTalk login: %v", err)
 	}
 	controlService := controlplane.NewService(controlRepo, "/v1", cfg.SecretKey)
+	switch strings.TrimSpace(cfg.ArtifactStoreDriver) {
+	case "local":
+		artifactStore, err := controlplane.NewLocalArtifactStore(cfg.ArtifactLocalRoot)
+		if err != nil {
+			log.Fatalf("initialize local artifact store: %v", err)
+		}
+		if err := controlService.SetArtifactStore(artifactStore); err != nil {
+			log.Fatalf("configure local artifact store: %v", err)
+		}
+	case "s3":
+		artifactStore, err := controlplane.NewS3ArtifactStore(context.Background(), controlplane.S3ArtifactStoreConfig{
+			Endpoint: cfg.ArtifactS3Endpoint, Region: cfg.ArtifactS3Region, Bucket: cfg.ArtifactS3Bucket,
+			Prefix: cfg.ArtifactS3Prefix, AccessKey: cfg.ArtifactS3AccessKey, SecretKey: cfg.ArtifactS3SecretKey,
+			PathStyle: cfg.ArtifactS3PathStyle,
+		})
+		if err != nil {
+			log.Fatalf("initialize S3 artifact store: %v", err)
+		}
+		if err := controlService.SetArtifactStore(artifactStore); err != nil {
+			log.Fatalf("configure S3 artifact store: %v", err)
+		}
+	}
 	if err := controlService.SetAIJobAdmissionLimits(controlplane.AIJobAdmissionLimits{
 		Profile: cfg.AIJobQueueProfileLimit, Tenant: cfg.AIJobQueueTenantLimit, Principal: cfg.AIJobQueuePrincipalLimit,
 	}); err != nil {
@@ -177,6 +199,9 @@ func main() {
 	})
 	go controlService.RunPlatformUsageDeliveryScheduler(monitorCtx, func(err error) {
 		log.Printf("platform usage delivery scheduler: %v", err)
+	})
+	go controlService.RunArtifactLifecycleScheduler(monitorCtx, 30*time.Second, 100, func(err error) {
+		log.Printf("artifact lifecycle scheduler: %v", err)
 	})
 	pluginService := plugins.NewServiceWithOptions(pluginRepo, plugins.ServiceOptions{
 		SecretKey: cfg.SecretKey,

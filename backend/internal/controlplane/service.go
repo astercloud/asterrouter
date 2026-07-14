@@ -54,6 +54,8 @@ type Service struct {
 	aiJobRuntimeMu                 sync.RWMutex
 	aiJobReadyIndex                AIJobReadyIndex
 	aiJobAdmissionLimits           AIJobAdmissionLimits
+	artifactStoreMu                sync.RWMutex
+	artifactStores                 map[string]ArtifactStore
 	outboxPublisherMu              sync.RWMutex
 	outboxPublisher                TransactionalOutboxPublisher
 	rateMu                         sync.Mutex
@@ -96,7 +98,7 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 		return errors.New("platform usage sink redirects are not allowed")
 	}}, providerCacheProbeHTTPClient: &http.Client{Timeout: providerProbeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider cache probe redirects are not allowed")
-	}}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: NewMemoryProviderCapacityStore()}
+	}}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: NewMemoryProviderCapacityStore(), artifactStores: map[string]ArtifactStore{}}
 }
 
 func (s *Service) nowUTC() time.Time {
