@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestAPIKeyQuotaAlertEscalatesAndDeduplicates(t *testing.T) {
@@ -41,6 +42,54 @@ func TestAPIKeyQuotaAlertEscalatesAndDeduplicates(t *testing.T) {
 	}
 	if len(alerts) != 1 || alerts[0].Severity != AlertSeverityCritical {
 		t.Fatalf("quota alert was not escalated in place: %+v", alerts)
+	}
+}
+
+func TestMonthlyPolicyBoundaryResetsUsageAndStartsNewAlertPeriod(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	now := time.Date(2026, time.January, 31, 23, 59, 59, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	created, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{
+		Name:              "Period Boundary Key",
+		ModelAllowlist:    []string{"model"},
+		MonthlyTokenLimit: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := svc.AuthenticateGatewayKey(ctx, created.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordGatewayUsage(ctx, auth, GatewayUsageInput{Model: "model", Status: "forwarded", InputTokens: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnforceGatewayPolicy(ctx, auth); !errors.Is(err, ErrGatewayQuotaExceeded) {
+		t.Fatalf("January quota enforcement err=%v", err)
+	}
+
+	now = time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC)
+	if err := svc.EnforceGatewayPolicy(ctx, auth); err != nil {
+		t.Fatalf("new monthly period should reset quota enforcement: %v", err)
+	}
+	if err := svc.RecordGatewayUsage(ctx, auth, GatewayUsageInput{Model: "model", Status: "forwarded", InputTokens: 80}); err != nil {
+		t.Fatal(err)
+	}
+	alerts, err := svc.ListAlertEventsQuery(ctx, AlertQuery{Type: AlertTypeAPIKeyQuota})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(alerts) != 2 {
+		t.Fatalf("monthly alerts=%+v", alerts)
+	}
+	seen := map[string]string{}
+	for _, alert := range alerts {
+		seen[alert.Metadata["quota_month"]] = alert.Severity
+	}
+	if seen["2026-01"] != AlertSeverityCritical || seen["2026-02"] != AlertSeverityWarning {
+		t.Fatalf("monthly alert periods=%+v", seen)
 	}
 }
 

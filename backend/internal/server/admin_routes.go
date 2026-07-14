@@ -21,7 +21,7 @@ func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, 
 	registerGatewayModelAdminRoutes(admin, control)
 	registerAPIKeyAdminRoutes(admin, control)
 	registerModelPricingAdminRoutes(admin, control)
-	registerObservabilityAdminRoutes(admin, control)
+	registerObservabilityAdminRoutesForScope(admin, control, "")
 	registerAlertAdminRoutes(admin, control)
 	registerCSVExportJobRoutes(admin.Group("/export-jobs"), control, exportJobs)
 }
@@ -375,9 +375,11 @@ func registerAPIKeyAdminRoutes(admin *gin.RouterGroup, control *controlplane.Ser
 	})
 }
 
-func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {
+func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *controlplane.Service, profileScope string) {
 	admin.GET("/audit-logs", func(c *gin.Context) {
-		data, err := control.ListAuditLogsQuery(c.Request.Context(), auditLogQuery(c))
+		query := auditLogQuery(c)
+		query.ProfileScope = profileScope
+		data, err := control.ListAuditLogsQuery(c.Request.Context(), query)
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1106, err.Error())
 			return
@@ -385,7 +387,9 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 		httpx.OK(c, data)
 	})
 	admin.GET("/audit-logs/summary", func(c *gin.Context) {
-		data, err := control.AuditLogSummaryQuery(c.Request.Context(), auditLogQuery(c))
+		query := auditLogQuery(c)
+		query.ProfileScope = profileScope
+		data, err := control.AuditLogSummaryQuery(c.Request.Context(), query)
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1106, err.Error())
 			return
@@ -393,7 +397,10 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 		httpx.OK(c, data)
 	})
 	admin.GET("/audit-logs/export", func(c *gin.Context) {
-		data, err := collectAuditLogsForExport(c, control)
+		query := auditLogQuery(c)
+		query.ProfileScope = profileScope
+		totalLimit, baseOffset := exportWindow(c)
+		data, err := collectAuditLogsForExportQuery(c.Request.Context(), control, query, totalLimit, baseOffset)
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1106, err.Error())
 			return
@@ -402,6 +409,7 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 	})
 	admin.GET("/usage", func(c *gin.Context) {
 		query, err := scopeUsageQuery(c.Request.Context(), control, principalAccess(c), usageQuery(c))
+		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1107, err.Error())
 			return
@@ -415,6 +423,7 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 	})
 	admin.GET("/usage/export", func(c *gin.Context) {
 		query, err := scopeUsageQuery(c.Request.Context(), control, principalAccess(c), usageQuery(c))
+		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1107, err.Error())
 			return
@@ -429,6 +438,7 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 	})
 	admin.GET("/cost-allocation", func(c *gin.Context) {
 		query, err := scopeUsageQuery(c.Request.Context(), control, principalAccess(c), usageQuery(c))
+		query.ProfileScope = profileScope
 		if err != nil {
 			writeCostAllocationError(c, err)
 			return
@@ -442,6 +452,7 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 	})
 	admin.GET("/cost-allocation/export", func(c *gin.Context) {
 		query, err := scopeUsageQuery(c.Request.Context(), control, principalAccess(c), usageQuery(c))
+		query.ProfileScope = profileScope
 		if err != nil {
 			writeCostAllocationError(c, err)
 			return
@@ -456,6 +467,7 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 	})
 	admin.GET("/gateway-traces", func(c *gin.Context) {
 		query, err := scopeGatewayTraceQuery(c.Request.Context(), control, principalAccess(c), gatewayTraceQuery(c))
+		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1109, err.Error())
 			return
@@ -469,6 +481,7 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 	})
 	admin.GET("/gateway-traces/summary", func(c *gin.Context) {
 		query, err := scopeGatewayTraceQuery(c.Request.Context(), control, principalAccess(c), gatewayTraceQuery(c))
+		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1109, err.Error())
 			return
@@ -482,6 +495,7 @@ func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlpl
 	})
 	admin.GET("/gateway-traces/export", func(c *gin.Context) {
 		query, err := scopeGatewayTraceQuery(c.Request.Context(), control, principalAccess(c), gatewayTraceQuery(c))
+		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1109, err.Error())
 			return

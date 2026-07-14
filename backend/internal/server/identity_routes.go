@@ -59,13 +59,13 @@ func registerIdentityAdminRoutes(admin *gin.RouterGroup, control *controlplane.S
 		httpx.OK(c, filterUsersForAccess(data, principalAccess(c)))
 	})
 	admin.POST("/users", func(c *gin.Context) {
-		if access := principalAccess(c); !access.Global && len(access.DepartmentIDs) > 0 {
-			httpx.Error(c, http.StatusForbidden, 1451, "department-scoped administrators cannot create unassigned users")
-			return
-		}
 		var req controlplane.WorkspaceUserRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1520, "invalid user payload")
+			return
+		}
+		if err := requireDepartmentAssignmentInAccess(req.DepartmentID, principalAccess(c), false); err != nil {
+			httpx.Error(c, http.StatusForbidden, 1451, err.Error())
 			return
 		}
 		data, err := control.CreateWorkspaceUser(c.Request.Context(), actor(c), req)
@@ -83,6 +83,10 @@ func registerIdentityAdminRoutes(admin *gin.RouterGroup, control *controlplane.S
 		var req controlplane.WorkspaceUserRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1520, "invalid user payload")
+			return
+		}
+		if err := requireDepartmentAssignmentInAccess(req.DepartmentID, principalAccess(c), true); err != nil {
+			httpx.Error(c, http.StatusForbidden, 1451, err.Error())
 			return
 		}
 		data, err := control.UpdateWorkspaceUser(c.Request.Context(), actor(c), c.Param("id"), req)

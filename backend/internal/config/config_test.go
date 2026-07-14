@@ -100,3 +100,62 @@ func TestDefaultPluginHostURLUsesLoopbackForWildcardListenAddress(t *testing.T) 
 		t.Fatalf("defaultPluginHostURL(0.0.0.0:18090) = %q", got)
 	}
 }
+
+func TestNormalizeProfilesRecognizesPlatform(t *testing.T) {
+	profiles := normalizeProfiles("platform, enterprise, platform, unknown")
+	want := []string{"platform", "enterprise"}
+	if len(profiles) != len(want) {
+		t.Fatalf("normalizeProfiles() = %v, want %v", profiles, want)
+	}
+	for index, profile := range want {
+		if profiles[index] != profile {
+			t.Fatalf("normalizeProfiles() = %v, want %v", profiles, want)
+		}
+	}
+}
+
+func TestValidateRuntimeRejectsMultipleBootstrapProfiles(t *testing.T) {
+	cfg := Config{BuildType: "source", Profiles: []string{"enterprise", "platform"}}
+	if err := ValidateRuntime(cfg); err == nil {
+		t.Fatal("ValidateRuntime() accepted multiple bootstrap profiles")
+	}
+}
+
+func TestValidateRuntimeAcceptsDeploymentRoleAndRejectsLegacyMismatch(t *testing.T) {
+	valid := Config{
+		BuildType:      "source",
+		DeploymentRole: "platform",
+		Profiles:       []string{"platform"},
+		DefaultProfile: "platform",
+	}
+	if err := ValidateRuntime(valid); err != nil {
+		t.Fatalf("ValidateRuntime() deployment role: %v", err)
+	}
+
+	mismatched := valid
+	mismatched.Profiles = []string{"enterprise"}
+	mismatched.DefaultProfile = "enterprise"
+	if err := ValidateRuntime(mismatched); err == nil {
+		t.Fatal("ValidateRuntime() accepted mismatched deployment role and legacy profile")
+	}
+
+	invalid := valid
+	invalid.DeploymentRole = "unknown"
+	if err := ValidateRuntime(invalid); err == nil {
+		t.Fatal("ValidateRuntime() accepted an unknown deployment role")
+	}
+}
+
+func TestLoadDeploymentRoleBootstrapsCompatibleProfiles(t *testing.T) {
+	t.Setenv("ASTER_DEPLOYMENT_ROLE", "platform")
+	t.Setenv("ASTER_PROFILES", "")
+	t.Setenv("ASTER_DEFAULT_PROFILE", "")
+
+	cfg := Load()
+	if cfg.DeploymentRole != "platform" || len(cfg.Profiles) != 1 || cfg.Profiles[0] != "platform" || cfg.DefaultProfile != "platform" {
+		t.Fatalf("Load() deployment role configuration = %+v", cfg)
+	}
+	if err := ValidateRuntime(cfg); err != nil {
+		t.Fatalf("ValidateRuntime() loaded deployment role: %v", err)
+	}
+}

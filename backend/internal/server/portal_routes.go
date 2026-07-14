@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
@@ -43,14 +44,22 @@ func registerPortalRoutes(portal *gin.RouterGroup, control *controlplane.Service
 	portal.POST("/api-keys/:id/rotate", func(c *gin.Context) {
 		data, err := control.RotatePortalAPIKey(c.Request.Context(), actor(c), c.Param("id"))
 		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1203, err.Error())
+			status := http.StatusBadRequest
+			if errors.Is(err, controlplane.ErrPortalAPIKeyNotFound) {
+				status = http.StatusNotFound
+			}
+			httpx.Error(c, status, 1203, err.Error())
 			return
 		}
 		httpx.OK(c, data)
 	})
 	portal.POST("/api-keys/:id/disable", func(c *gin.Context) {
 		if err := control.DisablePortalAPIKey(c.Request.Context(), actor(c), c.Param("id")); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1204, err.Error())
+			status := http.StatusBadRequest
+			if errors.Is(err, controlplane.ErrPortalAPIKeyNotFound) {
+				status = http.StatusNotFound
+			}
+			httpx.Error(c, status, 1204, err.Error())
 			return
 		}
 		httpx.OK(c, gin.H{"status": "disabled"})

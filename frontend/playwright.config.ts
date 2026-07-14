@@ -5,17 +5,25 @@ const backendPort = process.env.ASTER_E2E_BACKEND_PORT || '18080'
 const upstreamPort = process.env.ASTER_E2E_UPSTREAM_PORT || '19000'
 const externalURL = process.env.ASTER_E2E_EXTERNAL_URL
 const baseURL = externalURL || `http://127.0.0.1:${frontendPort}`
+const artifactDir = process.env.ASTER_E2E_ARTIFACT_DIR
+const artifactPath = (relative: string) => artifactDir ? `${artifactDir}/${relative}` : `./${relative}`
 
 export default defineConfig({
   testDir: './e2e',
-  outputDir: './test-results',
-  fullyParallel: true,
+  outputDir: artifactPath('test-results'),
+  fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
+  // Setup requires a dedicated empty runtime. It is executed by
+  // test-setup-browser-journey.sh, not against the reusable demo server.
+  grepInvert: process.env.ASTER_E2E_INCLUDE_SETUP === '1' ? undefined : /@setup/,
   retries: Number(process.env.ASTER_E2E_RETRIES || '0'),
-  workers: process.env.CI ? 2 : undefined,
+  // Several journeys temporarily update global registration settings while
+  // creating isolated synthetic users. Keep the default deterministic; an
+  // explicit worker count is required for a deliberate parallelism exercise.
+  workers: Number(process.env.ASTER_E2E_WORKERS || '1'),
   reporter: process.env.CI
-    ? [['line'], ['html', { outputFolder: 'playwright-report', open: 'never' }], ['junit', { outputFile: 'test-results/junit.xml' }]]
-    : [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]],
+    ? [['line'], ['html', { outputFolder: artifactPath('playwright-report'), open: 'never' }], ['junit', { outputFile: artifactPath('test-results/junit.xml') }]]
+    : [['list'], ['html', { outputFolder: artifactPath('playwright-report'), open: 'never' }]],
   use: {
     baseURL,
     trace: 'retain-on-failure',

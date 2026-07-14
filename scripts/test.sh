@@ -60,6 +60,7 @@ case "${1:-all}" in
   all)
     backend
     frontend
+    e2e
     ;;
   *)
     echo "Usage: $0 [backend|backend-checks|backend-coverage|frontend|e2e|all]" >&2

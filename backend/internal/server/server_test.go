@@ -20,7 +20,7 @@ import (
 
 func newTestRuntime(t *testing.T, cfg config.Config) (http.Handler, *controlplane.Service) {
 	t.Helper()
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("EnsureSeedData(): %v", err)
@@ -48,7 +48,7 @@ func newAuthTestHandler(t *testing.T) http.Handler {
 
 func newAuthTestRuntime(t *testing.T) (http.Handler, *controlplane.Service) {
 	t.Helper()
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("EnsureSeedData(): %v", err)
@@ -150,6 +150,62 @@ func TestLoginAllowsAdminSettingsAccess(t *testing.T) {
 	}
 }
 
+func TestAuthenticationResponsesExposeServerDerivedAllowedSurfaces(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	user, _, err := control.RegisterWorkspaceUser(t.Context(), "surface-summary@example.test", "synthetic-password-123", "Surface Summary", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := func() auth.LoginResult {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"surface-summary@example.test","password":"synthetic-password-123"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		var response struct {
+			Data auth.LoginResult `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("login status=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
+		}
+		return response.Data
+	}
+
+	initial := login()
+	if !containsSurface(initial.User.AllowedSurfaces, controlplane.SurfaceCustomer) || !containsSurface(initial.User.AllowedSurfaces, controlplane.SurfacePortal) || containsSurface(initial.User.AllowedSurfaces, controlplane.SurfaceRelayOperator) || containsSurface(initial.User.AllowedSurfaces, controlplane.SurfaceEnterprise) {
+		t.Fatalf("initial allowed surfaces=%v", initial.User.AllowedSurfaces)
+	}
+	if _, err := control.CreateRoleBinding(t.Context(), "tester", controlplane.RoleBindingRequest{
+		UserID: user.ID, Role: controlplane.RolePlatformAdmin, ScopeType: controlplane.RoleScopeSurface, ScopeID: controlplane.SurfaceRelayOperator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bound := login()
+	if !containsSurface(bound.User.AllowedSurfaces, controlplane.SurfaceRelayOperator) {
+		t.Fatalf("bound allowed surfaces=%v", bound.User.AllowedSurfaces)
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+bound.AccessToken)
+	meRec := httptest.NewRecorder()
+	handler.ServeHTTP(meRec, meReq)
+	var meResponse struct {
+		Data auth.User `json:"data"`
+	}
+	if err := json.Unmarshal(meRec.Body.Bytes(), &meResponse); err != nil || meRec.Code != http.StatusOK || !containsSurface(meResponse.Data.AllowedSurfaces, controlplane.SurfaceRelayOperator) {
+		t.Fatalf("auth/me status=%d body=%s response=%+v err=%v", meRec.Code, meRec.Body.String(), meResponse, err)
+	}
+}
+
+func containsSurface(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLoginAgreementIsEnforcedAfterPayloadBinding(t *testing.T) {
 	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
 	current, err := settingsService.Admin(context.Background())
@@ -226,7 +282,7 @@ func TestSetupProfileEndpoint(t *testing.T) {
 	systemService := system.NewService(system.Config{Version: "test", BuildType: "source"})
 	handler := New(Options{Config: config.Config{}, SettingsService: svc, ControlService: controlService, PluginService: pluginService, SystemService: systemService})
 
-	body := bytes.NewBufferString(`{"profiles":["enterprise","personal"],"default_profile":"personal"}`)
+	body := bytes.NewBufferString(`{"profile":"platform"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/profiles", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -239,7 +295,29 @@ func TestSetupProfileEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Admin(): %v", err)
 	}
-	if got.DefaultProfile != "personal" || len(got.EnabledProfiles) != 2 || !got.SetupCompleted {
+	if got.DefaultProfile != "platform" || len(got.EnabledProfiles) != 1 || got.EnabledProfiles[0] != "platform" || !got.SetupCompleted {
 		t.Fatalf("setup not persisted: %+v", got)
+	}
+}
+
+func TestSetupProfileEndpointRequiresOneValidProfile(t *testing.T) {
+	svc := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
+	handler := New(Options{
+		SettingsService: svc,
+		ControlService:  controlplane.NewService(controlplane.NewMemoryRepository(), "/v1"),
+		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
+	})
+
+	for _, body := range []string{
+		`{"profiles":["enterprise","platform"],"default_profile":"enterprise"}`,
+		`{"profile":"unsupported"}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/profiles", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s status=%d, want %d, response=%s", body, rec.Code, http.StatusBadRequest, rec.Body.String())
+		}
 	}
 }

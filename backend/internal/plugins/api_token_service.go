@@ -171,7 +171,7 @@ func validPluginAPIScope(scope string) bool {
 
 func validPluginAPISurface(surface string) bool {
 	switch surface {
-	case "personal", "relay_operator", "enterprise":
+	case "personal", "relay_operator", "enterprise", "platform":
 		return true
 	default:
 		return false

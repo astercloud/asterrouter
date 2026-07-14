@@ -37,24 +37,38 @@ func (s *Service) gatewayModelAllowed(auth GatewayAuthContext, model string) boo
 			return false
 		}
 		if len(auth.Policy.ModelAllowlist) > 0 {
-			return contains(auth.Policy.ModelAllowlist, model) || contains(auth.Policy.ModelAllowlist, baseModel)
+			if !contains(auth.Policy.ModelAllowlist, model) && !contains(auth.Policy.ModelAllowlist, baseModel) {
+				return false
+			}
 		}
 	}
 	return contains(auth.APIKey.ModelAllowlist, model) || contains(auth.APIKey.ModelAllowlist, baseModel)
 }
 
 func (auth GatewayAuthContext) effectiveQPSLimit() int {
-	if auth.Policy != nil && auth.Policy.QPSLimit > 0 {
-		return auth.Policy.QPSLimit
+	limit := auth.APIKey.QPSLimit
+	if auth.Policy != nil {
+		limit = minimumPositive(limit, auth.Policy.QPSLimit)
 	}
-	return auth.APIKey.QPSLimit
+	return limit
 }
 
 func (auth GatewayAuthContext) effectiveMonthlyTokenLimit() int {
-	if auth.Policy != nil && auth.Policy.MonthlyTokenLimit > 0 {
-		return auth.Policy.MonthlyTokenLimit
+	limit := auth.APIKey.MonthlyTokenLimit
+	if auth.Policy != nil {
+		limit = minimumPositive(limit, auth.Policy.MonthlyTokenLimit)
 	}
-	return auth.APIKey.MonthlyTokenLimit
+	return limit
+}
+
+func minimumPositive(left, right int) int {
+	if left <= 0 {
+		return right
+	}
+	if right <= 0 || left < right {
+		return left
+	}
+	return right
 }
 
 func (auth GatewayAuthContext) effectiveMonthlyBudgetCents() int {

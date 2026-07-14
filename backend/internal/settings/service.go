@@ -85,7 +85,7 @@ func (s *Service) Admin(ctx context.Context) (AdminSettings, error) {
 		merged[KeySetupCompleted] = "true"
 	}
 	if s.demoMode && len(s.enabledProfiles) == 0 && raw[KeyEnabledProfiles] == "" && raw[KeyDefaultProfile] == "" {
-		merged[KeyEnabledProfiles] = `["personal","relay_operator","enterprise"]`
+		merged[KeyEnabledProfiles] = `["personal","relay_operator","enterprise","platform"]`
 		merged[KeyDefaultProfile] = "personal"
 		merged[KeySetupCompleted] = "true"
 	}
@@ -93,6 +93,13 @@ func (s *Service) Admin(ctx context.Context) (AdminSettings, error) {
 }
 
 func (s *Service) Update(ctx context.Context, in AdminSettings) (AdminSettings, error) {
+	current, err := s.Admin(ctx)
+	if err != nil {
+		return AdminSettings{}, err
+	}
+	if profileConfigurationChanged(current, in) {
+		return AdminSettings{}, errors.New("deployment profile is fixed after installation; create a separate instance for a different business model")
+	}
 	values, err := valuesFromAdminSettings(in)
 	if err != nil {
 		return AdminSettings{}, err
@@ -128,10 +135,20 @@ func (s *Service) Update(ctx context.Context, in AdminSettings) (AdminSettings, 
 	return s.Admin(ctx)
 }
 
+func profileConfigurationChanged(current, next AdminSettings) bool {
+	if strings.TrimSpace(current.DefaultProfile) != strings.TrimSpace(next.DefaultProfile) {
+		return true
+	}
+	return !sameProfiles(normalizeProfiles(current.EnabledProfiles), normalizeProfiles(next.EnabledProfiles))
+}
+
 func (s *Service) ApplyProfiles(ctx context.Context, profiles []string, defaultProfile string) (AdminSettings, error) {
 	enabledProfiles := normalizeProfiles(profiles)
 	if len(enabledProfiles) == 0 {
 		return AdminSettings{}, errors.New("at least one profile is required")
+	}
+	if !s.demoMode && len(enabledProfiles) != 1 {
+		return AdminSettings{}, errors.New("exactly one deployment profile is supported; migrate to a separate instance before changing profiles")
 	}
 	defaultProfile = strings.TrimSpace(defaultProfile)
 	if defaultProfile == "" {
@@ -139,6 +156,16 @@ func (s *Service) ApplyProfiles(ctx context.Context, profiles []string, defaultP
 	}
 	if !containsString(enabledProfiles, defaultProfile) {
 		return AdminSettings{}, fmt.Errorf("default profile %q is not enabled", defaultProfile)
+	}
+	raw, err := s.repo.GetAll(ctx)
+	if err != nil {
+		return AdminSettings{}, err
+	}
+	if !s.demoMode && parseBool(raw[KeySetupCompleted]) {
+		current := normalizeProfiles(parseStringList(raw[KeyEnabledProfiles], nil))
+		if len(current) > 0 && (!sameProfiles(current, enabledProfiles) || strings.TrimSpace(raw[KeyDefaultProfile]) != defaultProfile) {
+			return AdminSettings{}, errors.New("deployment profile is fixed after installation; use a separate instance for a different business model")
+		}
 	}
 	encodedProfiles, _ := json.Marshal(enabledProfiles)
 	if err := s.repo.SetMultiple(ctx, map[string]string{
@@ -149,6 +176,69 @@ func (s *Service) ApplyProfiles(ctx context.Context, profiles []string, defaultP
 		return AdminSettings{}, err
 	}
 	return s.Admin(ctx)
+}
+
+func sameProfiles(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// ApplyInitialProfile completes a fresh installation with one primary product
+// profile. A deployment profile is immutable once setup is complete because
+// current Core resources do not carry an end-to-end profile scope.
+func (s *Service) ApplyInitialProfile(ctx context.Context, profile string) (AdminSettings, error) {
+	profile = strings.TrimSpace(profile)
+	if !isProfile(profile) {
+		return AdminSettings{}, fmt.Errorf("unsupported profile %q", profile)
+	}
+	raw, err := s.repo.GetAll(ctx)
+	if err != nil {
+		return AdminSettings{}, err
+	}
+	if parseBool(raw[KeySetupCompleted]) || raw[KeyEnabledProfiles] != "" || raw[KeyDefaultProfile] != "" {
+		return AdminSettings{}, errors.New("setup is already completed; create a separate instance for a different business model")
+	}
+	return s.ApplyProfiles(ctx, []string{profile}, profile)
+}
+
+// BootstrapProfile persists the configured non-interactive installation
+// profile exactly once. Environment configuration is bootstrap input only;
+// PostgreSQL becomes the source of truth immediately afterwards.
+func (s *Service) BootstrapProfile(ctx context.Context) error {
+	if len(s.enabledProfiles) == 0 {
+		return nil
+	}
+	if len(s.enabledProfiles) != 1 {
+		return errors.New("exactly one bootstrap profile is required")
+	}
+	raw, err := s.repo.GetAll(ctx)
+	if err != nil {
+		return err
+	}
+	if parseBool(raw[KeySetupCompleted]) || raw[KeyEnabledProfiles] != "" || raw[KeyDefaultProfile] != "" {
+		persistedProfiles := normalizeProfiles(parseStringList(raw[KeyEnabledProfiles], nil))
+		persistedDefault := strings.TrimSpace(raw[KeyDefaultProfile])
+		if len(persistedProfiles) != 1 || persistedDefault == "" || !containsString(persistedProfiles, persistedDefault) {
+			return errors.New("persisted deployment profile is incomplete or invalid; do not use bootstrap environment variables to repair an existing instance")
+		}
+		if persistedProfiles[0] != s.enabledProfiles[0] || persistedDefault != s.enabledProfiles[0] {
+			return fmt.Errorf("configured deployment role %q does not match persisted deployment profile %q; deploy a separate instance for a different business model", s.enabledProfiles[0], persistedDefault)
+		}
+		return nil
+	}
+	profile := s.enabledProfiles[0]
+	if s.defaultProfile != "" && s.defaultProfile != profile {
+		return errors.New("bootstrap default profile must match the enabled profile")
+	}
+	_, err = s.ApplyProfiles(ctx, []string{profile}, profile)
+	return err
 }
 
 func (s *Service) Health(ctx context.Context) error {
@@ -736,7 +826,7 @@ func isLocale(value string) bool {
 }
 
 func isProfile(value string) bool {
-	return value == "personal" || value == "relay_operator" || value == "enterprise"
+	return value == "personal" || value == "relay_operator" || value == "enterprise" || value == "platform"
 }
 
 func normalizeProfiles(values []string) []string {

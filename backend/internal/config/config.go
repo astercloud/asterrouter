@@ -19,6 +19,7 @@ type Config struct {
 	AdminUsername       string
 	AdminPassword       string
 	DatabaseURL         string
+	DeploymentRole      string
 	FrontendDir         string
 	DefaultProfile      string
 	Profiles            []string
@@ -54,6 +55,13 @@ func Load() Config {
 	addr := getEnv("ASTER_ADDR", ":8080")
 	profiles := normalizeProfiles(os.Getenv("ASTER_PROFILES"))
 	defaultProfile := normalizeProfile(os.Getenv("ASTER_DEFAULT_PROFILE"))
+	deploymentRole := strings.TrimSpace(os.Getenv("ASTER_DEPLOYMENT_ROLE"))
+	if normalizedRole := normalizeProfile(deploymentRole); normalizedRole != "" && len(profiles) == 0 {
+		profiles = []string{normalizedRole}
+		if defaultProfile == "" {
+			defaultProfile = normalizedRole
+		}
+	}
 	if defaultProfile == "" && len(profiles) > 0 {
 		defaultProfile = profiles[0]
 	}
@@ -65,6 +73,7 @@ func Load() Config {
 		AdminUsername:       getEnv("ASTER_ADMIN_USERNAME", "admin"),
 		AdminPassword:       strings.TrimSpace(os.Getenv("ASTER_ADMIN_PASSWORD")),
 		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		DeploymentRole:      deploymentRole,
 		FrontendDir:         getEnv("ASTER_FRONTEND_DIR", "../frontend/dist"),
 		DefaultProfile:      defaultProfile,
 		Profiles:            profiles,
@@ -128,6 +137,21 @@ func defaultString(value string, fallback string) string {
 }
 
 func ValidateRuntime(cfg Config) error {
+	if strings.TrimSpace(cfg.DeploymentRole) != "" {
+		deploymentRole := normalizeProfile(cfg.DeploymentRole)
+		if deploymentRole == "" {
+			return errors.New("ASTER_DEPLOYMENT_ROLE must be one of personal, relay_operator, enterprise, or platform")
+		}
+		if len(cfg.Profiles) != 1 || cfg.Profiles[0] != deploymentRole || cfg.DefaultProfile != deploymentRole {
+			return errors.New("ASTER_DEPLOYMENT_ROLE must match the legacy ASTER_PROFILES and ASTER_DEFAULT_PROFILE values when they are also set")
+		}
+	}
+	if len(cfg.Profiles) > 1 {
+		return errors.New("ASTER_PROFILES accepts one bootstrap profile; deploy a separate instance for a different business model")
+	}
+	if len(cfg.Profiles) == 1 && cfg.DefaultProfile != "" && cfg.DefaultProfile != cfg.Profiles[0] {
+		return errors.New("ASTER_DEFAULT_PROFILE must match the single ASTER_PROFILES bootstrap profile")
+	}
 	if cfg.BuildType != "release" {
 		return nil
 	}
@@ -171,7 +195,7 @@ func getEnv(key, fallback string) string {
 
 func normalizeProfile(value string) string {
 	switch strings.TrimSpace(value) {
-	case "personal", "relay_operator", "enterprise":
+	case "personal", "relay_operator", "enterprise", "platform":
 		return strings.TrimSpace(value)
 	default:
 		return ""

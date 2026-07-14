@@ -19,14 +19,22 @@ const (
 )
 
 type alertInput struct {
-	Type         string
-	Severity     string
-	Title        string
-	Summary      string
-	ResourceType string
-	ResourceID   string
-	DedupeKey    string
-	Metadata     map[string]string
+	Type                      string
+	Severity                  string
+	Title                     string
+	Summary                   string
+	ResourceType              string
+	ResourceID                string
+	DedupeKey                 string
+	Metadata                  map[string]string
+	ObservedAt                time.Time
+	ProfileScope              string
+	PlatformTenantID          string
+	PlatformTenantName        string
+	GatewayPrincipalID        string
+	GatewayPrincipalName      string
+	ExternalAuthIntegrationID string
+	ExternalSubjectReference  string
 }
 
 func (s *Service) ListAlertEventsQuery(ctx context.Context, query AlertQuery) ([]AlertEvent, error) {
@@ -42,13 +50,15 @@ func (s *Service) AlertEventByID(ctx context.Context, id string) (AlertEvent, er
 }
 
 func (s *Service) RecordRiskRuleAlert(ctx context.Context, apiKeyID, ruleID, ruleName, summary string, value, threshold float64) error {
-	return s.upsertAlert(ctx, alertInput{
+	input := alertInput{
 		Type: AlertTypeRiskRule, Severity: AlertSeverityWarning,
 		Title: "Gateway risk rule requires review", Summary: summary,
 		ResourceType: "api_key", ResourceID: apiKeyID,
 		DedupeKey: "risk_rule:" + strings.TrimSpace(ruleID) + ":" + strings.TrimSpace(apiKeyID),
 		Metadata:  map[string]string{"rule_id": ruleID, "rule_name": ruleName, "value": fmt.Sprintf("%.2f", value), "threshold": fmt.Sprintf("%.2f", threshold)},
-	})
+	}
+	s.applyPlatformAlertIdentityForKey(ctx, &input, apiKeyID)
+	return s.upsertAlert(ctx, input)
 }
 
 func (s *Service) AcknowledgeAlert(ctx context.Context, actor string, id string) (AlertEvent, error) {
@@ -59,7 +69,7 @@ func (s *Service) AcknowledgeAlert(ctx context.Context, actor string, id string)
 	if event.Status == AlertStatusResolved {
 		return AlertEvent{}, errors.New("resolved alert cannot be acknowledged")
 	}
-	now := time.Now().UTC()
+	now := s.nowUTC()
 	event.Status = AlertStatusAcknowledged
 	event.AcknowledgedAt = &now
 	event.AcknowledgedBy = normalizeActor(actor)
@@ -78,7 +88,7 @@ func (s *Service) ResolveAlert(ctx context.Context, actor string, id string) (Al
 	if err != nil {
 		return AlertEvent{}, err
 	}
-	now := time.Now().UTC()
+	now := s.nowUTC()
 	event.Status = AlertStatusResolved
 	event.ResolvedAt = &now
 	event.ResolvedBy = normalizeActor(actor)
@@ -97,7 +107,10 @@ func (s *Service) upsertAlert(ctx context.Context, input alertInput) error {
 	if input.DedupeKey == "" {
 		return errors.New("alert dedupe key is required")
 	}
-	now := time.Now().UTC()
+	now := input.ObservedAt.UTC()
+	if now.IsZero() {
+		now = s.nowUTC()
+	}
 	event, ok, err := s.repo.FindAlertByDedupeKey(ctx, input.DedupeKey)
 	if err != nil {
 		return err
@@ -125,6 +138,13 @@ func (s *Service) upsertAlert(ctx context.Context, input alertInput) error {
 	event.Summary = strings.TrimSpace(input.Summary)
 	event.ResourceType = strings.TrimSpace(input.ResourceType)
 	event.ResourceID = strings.TrimSpace(input.ResourceID)
+	event.ProfileScope = strings.TrimSpace(input.ProfileScope)
+	event.PlatformTenantID = strings.TrimSpace(input.PlatformTenantID)
+	event.PlatformTenantName = strings.TrimSpace(input.PlatformTenantName)
+	event.GatewayPrincipalID = strings.TrimSpace(input.GatewayPrincipalID)
+	event.GatewayPrincipalName = strings.TrimSpace(input.GatewayPrincipalName)
+	event.ExternalAuthIntegrationID = strings.TrimSpace(input.ExternalAuthIntegrationID)
+	event.ExternalSubjectReference = strings.TrimSpace(input.ExternalSubjectReference)
 	event.Metadata = cloneStringMap(input.Metadata)
 	event.LastSeenAt = now
 	if event.Title == "" {
@@ -150,7 +170,7 @@ func (s *Service) resolveAlertByDedupeKey(ctx context.Context, actor string, ded
 	if event.Status == AlertStatusResolved {
 		return nil
 	}
-	now := time.Now().UTC()
+	now := s.nowUTC()
 	event.Status = AlertStatusResolved
 	event.ResolvedAt = &now
 	event.ResolvedBy = normalizeActor(actor)
@@ -161,8 +181,9 @@ func (s *Service) resolveAlertByDedupeKey(ctx context.Context, actor string, ded
 	return s.repo.SaveAlertEvent(ctx, event)
 }
 
-func (s *Service) syncAPIKeyQuotaAlert(ctx context.Context, auth GatewayAuthContext, usedTokens int) error {
-	dedupeKey := apiKeyQuotaAlertDedupeKey(auth.APIKey.ID, time.Now().UTC())
+func (s *Service) syncAPIKeyQuotaAlert(ctx context.Context, auth GatewayAuthContext, usedTokens int, now time.Time) error {
+	now = now.UTC()
+	dedupeKey := apiKeyQuotaAlertDedupeKey(auth.APIKey.ID, now)
 	limit := auth.effectiveMonthlyTokenLimit()
 	if limit <= 0 {
 		return s.resolveAlertByDedupeKey(ctx, systemActor, dedupeKey, fmt.Sprintf("API key %s has no monthly token quota.", auth.APIKey.Name))
@@ -177,7 +198,7 @@ func (s *Service) syncAPIKeyQuotaAlert(ctx context.Context, auth GatewayAuthCont
 		severity = AlertSeverityCritical
 		title = "API key monthly token quota exhausted"
 	}
-	return s.upsertAlert(ctx, alertInput{
+	input := alertInput{
 		Type:         AlertTypeAPIKeyQuota,
 		Severity:     severity,
 		Title:        title,
@@ -191,25 +212,29 @@ func (s *Service) syncAPIKeyQuotaAlert(ctx context.Context, auth GatewayAuthCont
 			"monthly_token_limit":  strconv.Itoa(limit),
 			"current_month_tokens": strconv.Itoa(usedTokens),
 			"quota_used_percent":   strconv.Itoa(usedPercent),
-			"quota_month":          alertMonthKey(time.Now().UTC()),
+			"quota_month":          alertMonthKey(now),
 		},
-	})
+		ObservedAt: now,
+	}
+	applyGatewayPlatformSnapshotToAlertInput(&input, auth)
+	return s.upsertAlert(ctx, input)
 }
 
-func (s *Service) syncAPIKeyQuotaAlertForAuth(ctx context.Context, auth GatewayAuthContext) error {
+func (s *Service) syncAPIKeyQuotaAlertForAuth(ctx context.Context, auth GatewayAuthContext, now time.Time) error {
 	if auth.effectiveMonthlyTokenLimit() <= 0 {
 		return nil
 	}
-	used, err := s.repo.SumUsageTokensByAPIKeySince(ctx, auth.APIKey.ID, monthStart(time.Now().UTC()))
+	used, err := s.repo.SumUsageTokensByAPIKeySince(ctx, auth.APIKey.ID, monthStart(now))
 	if err != nil {
 		return err
 	}
-	return s.syncAPIKeyQuotaAlert(ctx, auth, used)
+	return s.syncAPIKeyQuotaAlert(ctx, auth, used, now)
 }
 
-func (s *Service) syncAPIKeyBudgetAlert(ctx context.Context, auth GatewayAuthContext, usedCents int) error {
+func (s *Service) syncAPIKeyBudgetAlert(ctx context.Context, auth GatewayAuthContext, usedCents int, now time.Time) error {
+	now = now.UTC()
 	limit := auth.effectiveMonthlyBudgetCents()
-	dedupeKey := "api_key_budget:" + auth.APIKey.ID + ":" + alertMonthKey(time.Now().UTC())
+	dedupeKey := "api_key_budget:" + auth.APIKey.ID + ":" + alertMonthKey(now)
 	if limit <= 0 {
 		return s.resolveAlertByDedupeKey(ctx, systemActor, dedupeKey, fmt.Sprintf("API key %s has no monthly budget policy.", auth.APIKey.Name))
 	}
@@ -223,22 +248,24 @@ func (s *Service) syncAPIKeyBudgetAlert(ctx context.Context, auth GatewayAuthCon
 		severity = AlertSeverityCritical
 		title = "API key monthly budget exhausted"
 	}
-	return s.upsertAlert(ctx, alertInput{Type: AlertTypeAPIKeyBudget, Severity: severity, Title: title, Summary: fmt.Sprintf("API key %s used %d of %d monthly cost cents (%d%%).", auth.APIKey.Name, usedCents, limit, usedPercent), ResourceType: "api_key", ResourceID: auth.APIKey.ID, DedupeKey: dedupeKey, Metadata: map[string]string{"api_key_name": auth.APIKey.Name, "api_key_fingerprint": auth.APIKey.Fingerprint, "monthly_budget_cents": strconv.Itoa(limit), "current_month_cost_cents": strconv.Itoa(usedCents), "budget_used_percent": strconv.Itoa(usedPercent), "budget_month": alertMonthKey(time.Now().UTC())}})
+	input := alertInput{Type: AlertTypeAPIKeyBudget, Severity: severity, Title: title, Summary: fmt.Sprintf("API key %s used %d of %d monthly cost cents (%d%%).", auth.APIKey.Name, usedCents, limit, usedPercent), ResourceType: "api_key", ResourceID: auth.APIKey.ID, DedupeKey: dedupeKey, Metadata: map[string]string{"api_key_name": auth.APIKey.Name, "api_key_fingerprint": auth.APIKey.Fingerprint, "monthly_budget_cents": strconv.Itoa(limit), "current_month_cost_cents": strconv.Itoa(usedCents), "budget_used_percent": strconv.Itoa(usedPercent), "budget_month": alertMonthKey(now)}, ObservedAt: now}
+	applyGatewayPlatformSnapshotToAlertInput(&input, auth)
+	return s.upsertAlert(ctx, input)
 }
 
-func (s *Service) syncAPIKeyBudgetAlertForAuth(ctx context.Context, auth GatewayAuthContext) error {
+func (s *Service) syncAPIKeyBudgetAlertForAuth(ctx context.Context, auth GatewayAuthContext, now time.Time) error {
 	if auth.effectiveMonthlyBudgetCents() <= 0 {
 		return nil
 	}
-	used, err := s.repo.SumUsageCostCentsByAPIKeySince(ctx, auth.APIKey.ID, monthStart(time.Now().UTC()))
+	used, err := s.repo.SumUsageCostCentsByAPIKeySince(ctx, auth.APIKey.ID, monthStart(now))
 	if err != nil {
 		return err
 	}
-	return s.syncAPIKeyBudgetAlert(ctx, auth, used)
+	return s.syncAPIKeyBudgetAlert(ctx, auth, used, now)
 }
 
 func (s *Service) syncGatewayErrorRateAlert(ctx context.Context, auth GatewayAuthContext) error {
-	windowEnd := time.Now().UTC()
+	windowEnd := s.nowUTC()
 	windowStart := windowEnd.Add(-gatewayErrorRateWindow)
 	dedupeKey := "gateway_error_rate:" + auth.APIKey.ID
 	aggregate, err := s.repo.SummarizeUsageRecords(ctx, UsageQuery{
@@ -261,7 +288,7 @@ func (s *Service) syncGatewayErrorRateAlert(ctx context.Context, auth GatewayAut
 		severity = AlertSeverityCritical
 		title = "Gateway error rate is critical"
 	}
-	return s.upsertAlert(ctx, alertInput{
+	input := alertInput{
 		Type:         AlertTypeGatewayErrorRate,
 		Severity:     severity,
 		Title:        title,
@@ -282,7 +309,46 @@ func (s *Service) syncGatewayErrorRateAlert(ctx context.Context, auth GatewayAut
 			"critical_threshold":    strconv.Itoa(gatewayErrorRateCriticalPercent),
 			"min_request_threshold": strconv.Itoa(gatewayErrorRateMinRequests),
 		},
-	})
+	}
+	applyGatewayPlatformSnapshotToAlertInput(&input, auth)
+	return s.upsertAlert(ctx, input)
+}
+
+func applyGatewayPlatformSnapshotToAlertInput(input *alertInput, auth GatewayAuthContext) {
+	if input == nil || auth.APIKey.ProfileScope != ProfileScopePlatform || auth.PlatformTenant == nil || auth.GatewayPrincipal == nil {
+		return
+	}
+	input.ProfileScope = ProfileScopePlatform
+	input.PlatformTenantID = auth.PlatformTenant.ID
+	input.PlatformTenantName = auth.PlatformTenant.Name
+	input.GatewayPrincipalID = auth.GatewayPrincipal.ID
+	input.GatewayPrincipalName = auth.GatewayPrincipal.Name
+	if auth.ExternalAuthIntegration != nil {
+		input.ExternalAuthIntegrationID = auth.ExternalAuthIntegration.ID
+		input.ExternalSubjectReference = auth.ExternalSubjectReference
+	}
+}
+
+func (s *Service) applyPlatformAlertIdentityForKey(ctx context.Context, input *alertInput, apiKeyID string) {
+	if input == nil {
+		return
+	}
+	key, err := s.apiKeyByID(ctx, apiKeyID)
+	if err != nil || key.ProfileScope != ProfileScopePlatform {
+		return
+	}
+	identity, err := s.platformCredentialIdentity(ctx, key.PlatformTenantID, key.GatewayPrincipalID)
+	if err != nil {
+		input.ProfileScope = ProfileScopePlatform
+		input.PlatformTenantID = key.PlatformTenantID
+		input.GatewayPrincipalID = key.GatewayPrincipalID
+		return
+	}
+	input.ProfileScope = ProfileScopePlatform
+	input.PlatformTenantID = identity.tenant.ID
+	input.PlatformTenantName = identity.tenant.Name
+	input.GatewayPrincipalID = identity.principal.ID
+	input.GatewayPrincipalName = identity.principal.Name
 }
 
 func (s *Service) syncProviderHealthAlert(ctx context.Context, provider ProviderConnection, check ProviderHealthCheck) error {

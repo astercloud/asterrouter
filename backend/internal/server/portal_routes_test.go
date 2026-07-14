@@ -2,12 +2,14 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/astercloud/asterrouter/backend/internal/auth"
+	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 )
 
@@ -91,6 +93,33 @@ func TestPortalChannelVisibilityOnlyHidesModelCatalog(t *testing.T) {
 	}
 	if len(workspace.APIKeys) != 1 || len(workspace.Alerts) != 1 {
 		t.Fatalf("non-channel portal data must be preserved: %+v", workspace)
+	}
+}
+
+func TestPortalForeignAPIKeyUsesNotFoundSemantics(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{AdminToken: "secret"})
+	owner, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{Email: "owner@example.test", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleDeveloper})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{Email: "viewer@example.test", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleDeveloper})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{Name: "Foreign key", KeyType: controlplane.APIKeyTypeUser, OwnerUserID: owner.ID, ModelAllowlist: []string{"model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, action := range []string{"rotate", "disable"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/portal/api-keys/"+foreign.Record.ID+"/"+action, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("X-Actor", viewer.Email)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s foreign key status=%d body=%s", action, rec.Code, rec.Body.String())
+		}
 	}
 }
 

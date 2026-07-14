@@ -6,11 +6,12 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
   backend-race-and-benchmark:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -19,10 +20,14 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Race detector
         working-directory: backend
-        run: go test -race -count=1 -timeout=15m ./...
+        run: |
+          set -o pipefail
+          mkdir -p "${{ runner.temp }}/asterrouter-test-artifacts"
+          go test -race -json -count=1 -timeout=15m ./... | tee "${{ runner.temp }}/asterrouter-test-artifacts/backend-race.json"
       - name: Gateway benchmarks
         env:
           ASTER_TEST_ARTIFACT_DIR: ${{ runner.temp }}/asterrouter-test-artifacts
+          ASTER_BENCHMARK_ENFORCE: '1'
         run: bash scripts/benchmark.sh
       - name: Gateway normal and streaming soak
         working-directory: backend
@@ -34,7 +39,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: gateway-benchmark
-          path: ${{ runner.temp }}/asterrouter-test-artifacts/gateway-benchmark.txt
+          path: |
+            ${{ runner.temp }}/asterrouter-test-artifacts/gateway-benchmark.txt
+            ${{ runner.temp }}/asterrouter-test-artifacts/gateway-benchmark.json
           if-no-files-found: error
       - name: Upload soak evidence
         uses: actions/upload-artifact@v7
@@ -42,9 +49,32 @@ jobs:
           name: gateway-soak
           path: ${{ runner.temp }}/asterrouter-test-artifacts/gateway-soak.txt
           if-no-files-found: error
+      - name: Upload backend test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-backend-test-results
+          path: ${{ runner.temp }}/asterrouter-test-artifacts/backend-race.json
+          if-no-files-found: ignore
 
   full-browser-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: asterrouter_nightly_e2e
+          POSTGRES_USER: asterrouter
+          POSTGRES_PASSWORD: asterrouter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U asterrouter -d asterrouter_nightly_e2e"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_nightly_e2e?sslmode=disable
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -62,11 +92,14 @@ jobs:
       - name: Install browsers
         working-directory: frontend
         run: npx playwright install --with-deps chromium firefox webkit
+      - name: Frontend unit and component tests
+        working-directory: frontend
+        run: npx vitest run --reporter=default --reporter=junit --outputFile.junit=test-results/vitest-junit.xml
       - name: Full browser suite
         working-directory: frontend
         env:
           ASTER_E2E_ALL_BROWSERS: '1'
-          ASTER_E2E_RETRIES: '1'
+          ASTER_E2E_RETRIES: '0'
         run: npm run test:e2e
       - name: Upload browser evidence
         if: always()
@@ -77,3 +110,50 @@ jobs:
             frontend/playwright-report
             frontend/test-results
           if-no-files-found: ignore
+
+      - name: Upload frontend test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-frontend-test-results
+          path: frontend/test-results
+          if-no-files-found: ignore
+
+  test-health:
+    needs:
+      - backend-race-and-benchmark
+      - full-browser-matrix
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Download current test results
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/current-test-results
+          pattern: nightly-*-test-results
+          merge-multiple: false
+      - name: Ensure test-result input exists
+        run: |
+          mkdir -p "${{ runner.temp }}/current-test-results"
+          : > "${{ runner.temp }}/current-test-results/empty-go.json"
+      - name: Download previous nightly test-health reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/collect-flaky-history.sh "${{ runner.temp }}/flaky-history"
+      - name: Generate flaky trend report
+        run: >-
+          node scripts/flaky-trend.mjs
+          --input "${{ runner.temp }}/current-test-results"
+          --history "${{ runner.temp }}/flaky-history"
+          --output "${{ runner.temp }}/test-health-report/flaky-trend.json"
+      - name: Upload test-health report
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-health-report
+          path: ${{ runner.temp }}/test-health-report/flaky-trend.json
+          if-no-files-found: error

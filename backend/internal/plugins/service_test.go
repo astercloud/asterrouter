@@ -54,6 +54,25 @@ func TestServiceFiltersCatalogAndActionsBySurface(t *testing.T) {
 	if err := svc.RequireSurface(ctx, "com.asterrouter.enterprise.audit-baseline", "enterprise"); err != nil {
 		t.Fatalf("RequireSurface(enterprise): %v", err)
 	}
+	platform, err := svc.CatalogForSurface(ctx, "platform")
+	if err != nil {
+		t.Fatalf("CatalogForSurface(platform): %v", err)
+	}
+	if findPluginForSurfaceTest(platform.Plugins, "com.asterrouter.core.gateway") == nil {
+		t.Fatal("gateway core is missing from the platform catalog")
+	}
+	if findPluginForSurfaceTest(platform.Plugins, "com.asterrouter.provider.openai-compatible") != nil {
+		t.Fatal("provider plugin leaked into the platform catalog before profile-scoped provider isolation exists")
+	}
+}
+
+func findPluginForSurfaceTest(plugins []Plugin, id string) *Plugin {
+	for index := range plugins {
+		if plugins[index].ID == id {
+			return &plugins[index]
+		}
+	}
+	return nil
 }
 
 func TestServiceEnablesFreeCorePlugin(t *testing.T) {

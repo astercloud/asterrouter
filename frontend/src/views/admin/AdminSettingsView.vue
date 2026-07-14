@@ -2,7 +2,6 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { AlertTriangle, Database, Download, FileText, KeyRound, Mail, Power, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, SlidersHorizontal, ToggleLeft, UserRound } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
 import { getAdminSettings, getDefaultEmailTemplates, previewEmailTemplate, runRetentionCleanup, testEmailTemplate, testSMTP, updateAdminSettings } from '@/api/settings'
 import {
   checkSystemUpdates,
@@ -20,13 +19,10 @@ import {
 	testBackupS3,
   rollbackSystemUpdate
 } from '@/api/system'
-import { setPublicSettingsCache } from '@/router'
 import { useAppStore } from '@/stores/app'
 import type { AdminSettings, S3BackupObject, SystemArchiveInfo, SystemUpdateInfo } from '@/types'
 
 const { t } = useI18n()
-const route = useRoute()
-const router = useRouter()
 const app = useAppStore()
 const loading = ref(false)
 const saving = ref(false)
@@ -39,9 +35,6 @@ const archiveAction = ref('')
 const backups = ref<SystemArchiveInfo[]>([])
 const remoteBackups = ref<S3BackupObject[]>([])
 const activeSettingsTab = ref<'general' | 'terms' | 'features' | 'security' | 'defaults' | 'gateway' | 'email' | 'backup'>('general')
-const originalEnabledProfiles = ref<string[]>([])
-const originalDefaultProfile = ref('')
-const profileConfirmOpen = ref(false)
 const smtpTestRecipient = ref('')
 const smtpTesting = ref(false)
 const s3Testing = ref(false)
@@ -176,54 +169,11 @@ const gatewayBaseUrl = computed(() => {
 const feishuCallbackUrl = computed(() => `${(form.public_base_url || window.location.origin).replace(/\/$/, '')}/api/v1/auth/feishu/callback`)
 function socialCallbackUrl(provider: string): string { return `${(form.public_base_url || window.location.origin).replace(/\/$/, '')}/api/v1/auth/oauth/${provider}/callback` }
 
-const normalizedCurrentProfiles = computed(() => normalizeProfileList(form.enabled_profiles))
-const normalizedOriginalProfiles = computed(() => normalizeProfileList(originalEnabledProfiles.value))
-const addedProfiles = computed(() =>
-  normalizedCurrentProfiles.value.filter((profile) => !normalizedOriginalProfiles.value.includes(profile))
-)
-const removedProfiles = computed(() =>
-  normalizedOriginalProfiles.value.filter((profile) => !normalizedCurrentProfiles.value.includes(profile))
-)
-const defaultProfileChanged = computed(() => form.default_profile !== originalDefaultProfile.value)
-const profileChanged = computed(() => {
-  return (
-    normalizedCurrentProfiles.value.join('|') !== normalizedOriginalProfiles.value.join('|') ||
-    defaultProfileChanged.value
-  )
-})
-
-function profileRoute(profile: string): string {
-  if (profile === 'personal') return '/console/overview'
-  if (profile === 'relay_operator') return '/operator/overview'
-  return '/admin/dashboard'
-}
-
-function currentSurfaceDisabled(settings: AdminSettings): boolean {
-  const profiles = settings.enabled_profiles || []
-  if (route.path.startsWith('/console')) return !profiles.includes('personal')
-  if (route.path.startsWith('/operator')) return !profiles.includes('relay_operator')
-  if (route.path.startsWith('/portal')) return !profiles.includes('enterprise')
-  if (route.path.startsWith('/admin')) return !profiles.includes('enterprise')
-  return false
-}
-
-function normalizeProfileList(profiles: string[]): string[] {
-  const order = ['personal', 'enterprise', 'relay_operator']
-  const unique = Array.from(new Set((profiles || []).filter(Boolean)))
-  return unique.sort((a, b) => {
-    const left = order.indexOf(a)
-    const right = order.indexOf(b)
-    if (left === -1 && right === -1) return a.localeCompare(b)
-    if (left === -1) return 1
-    if (right === -1) return -1
-    return left - right
-  })
-}
-
 function profileLabel(profile: string): string {
   if (profile === 'personal') return t('setup.personal')
   if (profile === 'relay_operator') return t('setup.relay')
   if (profile === 'enterprise') return t('setup.enterprise')
+  if (profile === 'platform') return t('setup.platform')
   return profile
 }
 
@@ -242,11 +192,8 @@ const updateSourceLabel = computed(() => {
 })
 
 function assignSettings(data: AdminSettings) {
-  Object.assign(form, data)
+	Object.assign(form, data)
 	for (const source of ['local','oidc','feishu','dingtalk','github','google']) form.auth_source_defaults[source] ||= { enabled: false, balance_cents: 0, concurrency: 5, rpm: 0 }
-  originalEnabledProfiles.value = normalizeProfileList(data.enabled_profiles || [])
-  originalDefaultProfile.value = data.default_profile || ''
-  profileConfirmOpen.value = false
 }
 
 function addLegalDocument() {
@@ -468,26 +415,16 @@ function formatArchiveSize(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
-async function save(confirmedProfileChange = false) {
-  if (profileChanged.value && confirmedProfileChange !== true) {
-    activeSettingsTab.value = 'gateway'
-    profileConfirmOpen.value = true
-    return
-  }
+async function save() {
   saving.value = true
   error.value = ''
   message.value = ''
   try {
-    profileConfirmOpen.value = false
     const nextSettings = await updateAdminSettings({ ...form })
 		restartReasons.value = nextSettings.runtime_restart_required ? nextSettings.runtime_restart_reasons : []
     assignSettings(nextSettings)
-    setPublicSettingsCache(nextSettings)
     await app.loadPublicSettings()
     message.value = t('common.saved')
-    if (currentSurfaceDisabled(nextSettings)) {
-      await router.replace(profileRoute(nextSettings.default_profile || nextSettings.enabled_profiles[0] || 'enterprise'))
-    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -518,20 +455,6 @@ function toggleLocale(locale: string) {
     set.add(locale)
   }
   form.enabled_locales = Array.from(set)
-}
-
-function toggleProfile(profile: string) {
-  const set = new Set(form.enabled_profiles)
-  if (set.has(profile)) {
-    if (set.size === 1) return
-    set.delete(profile)
-  } else {
-    set.add(profile)
-  }
-  form.enabled_profiles = Array.from(set)
-  if (!form.default_profile || !set.has(form.default_profile)) {
-    form.default_profile = form.enabled_profiles[0] || ''
-  }
 }
 
 onMounted(async () => {
@@ -650,48 +573,19 @@ onMounted(async () => {
           <h2>{{ t('settings.deployment') }}</h2>
         </div>
         <div class="panel-body">
-          <div class="notice profile-danger-notice">
+          <div class="notice">
             <strong>
               <AlertTriangle :size="15" />
-              {{ t('settings.profileDangerTitle') }}
+              {{ t('settings.profileFixedTitle') }}
             </strong>
-            <span>{{ t('settings.profileDangerHelp') }}</span>
+            <span>{{ t('settings.profileFixedHelp') }}</span>
           </div>
           <div class="field">
-            <label>{{ t('settings.enabledProfiles') }}</label>
+            <label>{{ t('settings.deploymentProfile') }}</label>
             <div class="status-line">
-              <button
-                class="pill"
-                type="button"
-                :class="{ 'status-success': form.enabled_profiles.includes('personal') }"
-                @click="toggleProfile('personal')"
-              >
-                {{ profileLabel('personal') }}
-              </button>
-              <button
-                class="pill"
-                type="button"
-                :class="{ 'status-success': form.enabled_profiles.includes('relay_operator') }"
-                @click="toggleProfile('relay_operator')"
-              >
-                {{ profileLabel('relay_operator') }}
-              </button>
-              <button
-                class="pill"
-                type="button"
-                :class="{ 'status-success': form.enabled_profiles.includes('enterprise') }"
-                @click="toggleProfile('enterprise')"
-              >
-                {{ profileLabel('enterprise') }}
-              </button>
+              <span class="pill status-success">{{ profileLabel(form.default_profile || form.enabled_profiles[0] || '-') }}</span>
             </div>
-            <span class="hint">{{ form.enabled_profiles.join(', ') || '-' }}</span>
-          </div>
-          <div class="field">
-            <label>{{ t('settings.defaultProfile') }}</label>
-            <select v-model="form.default_profile">
-              <option v-for="profile in form.enabled_profiles" :key="profile" :value="profile">{{ profileLabel(profile) }}</option>
-            </select>
+            <span class="hint">{{ t('settings.deploymentProfileHelp') }}</span>
           </div>
           <div class="field">
             <label>{{ t('settings.gatewayBasePath') }}</label>
@@ -884,60 +778,5 @@ onMounted(async () => {
       </div>
     </section>
 
-    <div v-if="profileConfirmOpen" class="modal-backdrop" @click.self="profileConfirmOpen = false">
-      <section class="modal-card" role="dialog" aria-modal="true" :aria-label="t('settings.profileChangeConfirmTitle')">
-        <header class="modal-header">
-          <div>
-            <h2>{{ t('settings.profileChangeConfirmTitle') }}</h2>
-            <p>{{ t('settings.profileChangeConfirmSubtitle') }}</p>
-          </div>
-          <span class="pill status-danger">
-            <AlertTriangle :size="16" />
-            {{ t('settings.profileChangeImpact') }}
-          </span>
-        </header>
-        <div class="modal-body profile-change-body">
-          <div class="notice profile-danger-notice">
-            <strong>
-              <AlertTriangle :size="15" />
-              {{ t('settings.currentSurfaceMayRedirect') }}
-            </strong>
-            <span>{{ t('settings.profileDangerHelp') }}</span>
-          </div>
-          <div class="setup-review-grid">
-            <div v-if="addedProfiles.length">
-              <label>{{ t('settings.profilesAdded') }}</label>
-              <div class="chip-list">
-                <span v-for="profile in addedProfiles" :key="profile" class="pill status-success">
-                  {{ profileLabel(profile) }}
-                </span>
-              </div>
-            </div>
-            <div v-if="removedProfiles.length">
-              <label>{{ t('settings.profilesRemoved') }}</label>
-              <div class="chip-list">
-                <span v-for="profile in removedProfiles" :key="profile" class="pill status-danger">
-                  {{ profileLabel(profile) }}
-                </span>
-              </div>
-            </div>
-            <div v-if="defaultProfileChanged">
-              <label>{{ t('settings.defaultProfileChanged') }}</label>
-              <strong>{{ profileLabel(originalDefaultProfile || '-') }} -> {{ profileLabel(form.default_profile || '-') }}</strong>
-              <span>{{ t('settings.defaultProfileChangedHelp') }}</span>
-            </div>
-          </div>
-        </div>
-        <footer class="modal-footer">
-          <button class="button secondary" type="button" @click="profileConfirmOpen = false">
-            {{ t('settings.keepEditing') }}
-          </button>
-          <button class="button danger" type="button" :disabled="saving" @click="save(true)">
-            <Save :size="17" />
-            {{ saving ? t('common.saving') : t('settings.confirmProfileChange') }}
-          </button>
-        </footer>
-      </section>
-    </div>
   </main>
 </template>

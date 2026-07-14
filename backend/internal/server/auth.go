@@ -65,6 +65,14 @@ func bearerToken(c *gin.Context) string {
 	return ""
 }
 
+func signedContextToken(c *gin.Context) string {
+	authHeader := c.GetHeader("Authorization")
+	if strings.HasPrefix(authHeader, "Aster-Context ") {
+		return strings.TrimSpace(strings.TrimPrefix(authHeader, "Aster-Context "))
+	}
+	return ""
+}
+
 func actor(c *gin.Context) string {
 	if value, ok := c.Get("actor"); ok {
 		if actorValue, ok := value.(string); ok && strings.TrimSpace(actorValue) != "" {

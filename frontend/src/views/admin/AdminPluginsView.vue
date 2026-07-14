@@ -86,7 +86,13 @@ const apiTokenRevokeID = ref('')
 const apiTokenModal = ref(false)
 const apiTokenSecret = ref('')
 const apiTokens = ref<PluginAPIToken[]>([])
-const currentPluginSurface = window.location.pathname.startsWith('/console') ? 'personal' : window.location.pathname.startsWith('/operator') ? 'relay_operator' : 'enterprise'
+const currentPluginSurface = window.location.pathname.startsWith('/console')
+  ? 'personal'
+  : window.location.pathname.startsWith('/operator')
+    ? 'relay_operator'
+    : window.location.pathname.startsWith('/platform')
+      ? 'platform'
+      : 'enterprise'
 const apiTokenForm = ref({
   name: '',
   pluginID: '',

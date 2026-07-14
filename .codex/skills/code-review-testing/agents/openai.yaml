@@ -1,0 +1,4 @@
+interface:
+  display_name: "AsterRouter Test Authoring"
+  short_description: "为 AsterRouter 变更选择分层测试并执行验证"
+  default_prompt: "Use $code-review-testing to add focused regression coverage for this AsterRouter change."

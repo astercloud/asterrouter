@@ -66,4 +66,51 @@ describe('router guards', () => {
 
     expect(router.currentRoute.value.fullPath).toBe('/console/overview')
   })
+
+  it('does not render unavailable administrator surfaces for a developer session', async () => {
+    localStorage.setItem('asterrouter_admin_token', 'token')
+    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'developer', allowed_surfaces: ['portal', 'customer'] })))
+    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'relay_operator', enabled_profiles: ['relay_operator', 'enterprise'] }))
+
+    await router.push('/admin/dashboard')
+    expect(router.currentRoute.value.fullPath).toBe('/customer/overview')
+
+    await router.push('/operator/overview')
+    expect(router.currentRoute.value.fullPath).toBe('/customer/overview')
+  })
+
+  it('honors server-derived surface bindings for a developer session', async () => {
+    localStorage.setItem('asterrouter_admin_token', 'token')
+    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'developer', allowed_surfaces: ['portal', 'customer', 'relay_operator'] })))
+    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'relay_operator', enabled_profiles: ['relay_operator'] }))
+
+    await router.push('/operator/overview')
+    expect(router.currentRoute.value.fullPath).toBe('/operator/overview')
+  })
+
+  it('uses the platform entry only for an explicitly bound platform operator', async () => {
+    localStorage.setItem('asterrouter_admin_token', 'token')
+    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({
+      role: 'platform_admin',
+      allowed_surfaces: ['platform']
+    })))
+    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'platform', enabled_profiles: ['platform'] }))
+
+    await router.push('/')
+
+    expect(router.currentRoute.value.fullPath).toBe('/platform/overview')
+  })
+
+  it('redirects an unbound user away from the enabled platform surface', async () => {
+    localStorage.setItem('asterrouter_admin_token', 'token')
+    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({
+      role: 'platform_admin',
+      allowed_surfaces: ['personal']
+    })))
+    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'personal', enabled_profiles: ['personal', 'platform'] }))
+
+    await router.push('/platform/overview')
+
+    expect(router.currentRoute.value.fullPath).toBe('/console/overview')
+  })
 })

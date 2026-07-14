@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, Building2, Check, Laptop, RadioTower, ShieldCheck } from '@lucide/vue'
+import { ArrowLeft, ArrowRight, Building2, Check, Laptop, PanelsTopLeft, RadioTower, ShieldCheck } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { applySetupProfiles } from '@/api/settings'
+import { applySetupProfile } from '@/api/settings'
 import { ApiClientError } from '@/api/client'
 import { setPublicSettingsCache } from '@/router'
 import { useAppStore } from '@/stores/app'
@@ -11,87 +11,94 @@ import { useAppStore } from '@/stores/app'
 const { t } = useI18n()
 const router = useRouter()
 const app = useAppStore()
-const selectedProfiles = ref<string[]>(['enterprise'])
-const defaultProfile = ref('enterprise')
+const selectedProfile = ref('')
 const currentStep = ref(0)
 const saving = ref(false)
 const error = ref('')
 
 const profiles = [
-  { id: 'enterprise', icon: Building2, title: 'setup.enterprise', desc: 'setup.enterpriseDesc', route: '/admin + /portal' },
-  { id: 'personal', icon: Laptop, title: 'setup.personal', desc: 'setup.personalDesc', route: '/console/overview' },
-  { id: 'relay_operator', icon: RadioTower, title: 'setup.relay', desc: 'setup.relayDesc', route: '/operator/overview' }
+  {
+    id: 'enterprise',
+    icon: Building2,
+    title: 'setup.enterprise',
+    desc: 'setup.enterpriseDesc',
+    owner: 'setup.enterpriseOwner',
+    route: '/admin + /portal',
+    includes: ['setup.enterpriseIncludes1', 'setup.enterpriseIncludes2', 'setup.enterpriseIncludes3'],
+    excludes: ['setup.enterpriseExcludes1', 'setup.enterpriseExcludes2', 'setup.enterpriseExcludes3']
+  },
+  {
+    id: 'personal',
+    icon: Laptop,
+    title: 'setup.personal',
+    desc: 'setup.personalDesc',
+    owner: 'setup.personalOwner',
+    route: '/console/overview',
+    includes: ['setup.personalIncludes1', 'setup.personalIncludes2', 'setup.personalIncludes3'],
+    excludes: ['setup.personalExcludes1', 'setup.personalExcludes2', 'setup.personalExcludes3']
+  },
+  {
+    id: 'relay_operator',
+    icon: RadioTower,
+    title: 'setup.relay',
+    desc: 'setup.relayDesc',
+    owner: 'setup.relayOwner',
+    route: '/operator + /customer',
+    includes: ['setup.relayIncludes1', 'setup.relayIncludes2', 'setup.relayIncludes3'],
+    excludes: ['setup.relayExcludes1', 'setup.relayExcludes2', 'setup.relayExcludes3']
+  },
+  {
+    id: 'platform',
+    icon: PanelsTopLeft,
+    title: 'setup.platform',
+    desc: 'setup.platformDesc',
+    owner: 'setup.platformOwner',
+    route: '/platform/overview',
+    includes: ['setup.platformIncludes1', 'setup.platformIncludes2', 'setup.platformIncludes3'],
+    excludes: ['setup.platformExcludes1', 'setup.platformExcludes2', 'setup.platformExcludes3']
+  }
 ]
 
 const steps = computed(() => [
   { id: 'profiles', title: t('setup.stepProfiles') },
-  { id: 'entry', title: t('setup.stepEntry') },
   { id: 'ready', title: t('setup.stepReady') }
 ])
-const selectedProfileItems = computed(() => profiles.filter((profile) => hasProfile(profile.id)))
-const defaultProfileItem = computed(() => profiles.find((profile) => profile.id === defaultProfile.value) || profiles[0])
-const canProceed = computed(() => selectedProfiles.value.length > 0)
+const selectedProfileItem = computed(() => profiles.find((profile) => profile.id === selectedProfile.value) || profiles[0])
+const canProceed = computed(() => Boolean(selectedProfile.value))
 
-function hasProfile(profile: string): boolean {
-  return selectedProfiles.value.includes(profile)
-}
-
-function toggleProfile(profile: string) {
-  if (hasProfile(profile)) {
-    if (selectedProfiles.value.length === 1) {
-      return
-    }
-    selectedProfiles.value = selectedProfiles.value.filter((item) => item !== profile)
-    if (defaultProfile.value === profile) {
-      defaultProfile.value = selectedProfiles.value[0] || ''
-    }
-    return
-  }
-  selectedProfiles.value = [...selectedProfiles.value, profile]
-  if (!defaultProfile.value) {
-    defaultProfile.value = profile
-  }
-}
-
-function defaultRoute(): string {
-  if (defaultProfile.value === 'personal') return '/console/overview'
-  if (defaultProfile.value === 'relay_operator') return '/operator/overview'
+function profileRoute(): string {
+  if (selectedProfile.value === 'personal') return '/console/overview'
+  if (selectedProfile.value === 'relay_operator') return '/operator/overview'
+  if (selectedProfile.value === 'platform') return '/platform/overview'
   return '/admin/dashboard'
 }
 
 function nextStep() {
   if (!canProceed.value) {
-    error.value = t('setup.selectAtLeastOne')
+    error.value = t('setup.selectOne')
     return
   }
   error.value = ''
-  if (currentStep.value < steps.value.length - 1) {
-    currentStep.value += 1
-  }
+  currentStep.value = 1
 }
 
 function previousStep() {
   error.value = ''
-  if (currentStep.value > 0) {
-    currentStep.value -= 1
-  }
+  currentStep.value = 0
 }
 
 async function submit() {
-  if (!selectedProfiles.value.length) {
-    error.value = t('setup.selectAtLeastOne')
+  if (!selectedProfile.value) {
+    error.value = t('setup.selectOne')
     return
-  }
-  if (!hasProfile(defaultProfile.value)) {
-    defaultProfile.value = selectedProfiles.value[0]
   }
   saving.value = true
   error.value = ''
   try {
-    const settings = await applySetupProfiles(selectedProfiles.value, defaultProfile.value)
+    const settings = await applySetupProfile(selectedProfile.value)
     setPublicSettingsCache(settings)
     await app.loadPublicSettings()
-    await router.push(defaultRoute())
+    await router.push(profileRoute())
   } catch (err) {
     if (err instanceof ApiClientError && (err.status === 0 || err.status === 404)) {
       error.value = t('setup.serviceUnavailable')
@@ -135,7 +142,7 @@ async function submit() {
               <h2>{{ t('setup.profileTitle') }}</h2>
               <p>{{ t('setup.profileHelp') }}</p>
             </div>
-            <span class="pill">{{ selectedProfiles.length }} {{ t('setup.selected') }}</span>
+            <span class="pill">{{ t('setup.singleProfile') }}</span>
           </div>
 
           <section class="setup-grid">
@@ -144,50 +151,25 @@ async function submit() {
               :key="profile.id"
               type="button"
               class="profile-card"
-              :class="{ active: hasProfile(profile.id), primary: defaultProfile === profile.id }"
-              @click="toggleProfile(profile.id)"
+              :class="{ active: selectedProfile === profile.id, primary: selectedProfile === profile.id }"
+              :aria-pressed="selectedProfile === profile.id"
+              @click="selectedProfile = profile.id"
             >
               <span class="profile-card-topline">
                 <component :is="profile.icon" :size="30" />
-                <span class="profile-check" :class="{ active: hasProfile(profile.id) }">
-                  <Check v-if="hasProfile(profile.id)" :size="15" />
+                <span class="profile-check" :class="{ active: selectedProfile === profile.id }">
+                  <Check v-if="selectedProfile === profile.id" :size="15" />
                 </span>
               </span>
               <h2>{{ t(profile.title) }}</h2>
               <p>{{ t(profile.desc) }}</p>
+              <span class="profile-owner">{{ t(profile.owner) }}</span>
               <span class="profile-route">{{ profile.route }}</span>
             </button>
           </section>
         </div>
 
         <div v-if="currentStep === 1" class="setup-step-panel">
-          <div class="setup-section-header">
-            <div>
-              <h2>{{ t('setup.entryTitle') }}</h2>
-              <p>{{ t('setup.entryHelp') }}</p>
-            </div>
-          </div>
-
-          <div class="setup-option-list">
-            <label
-              v-for="profile in selectedProfileItems"
-              :key="profile.id"
-              class="setup-option-row"
-              :class="{ active: defaultProfile === profile.id }"
-            >
-              <input v-model="defaultProfile" type="radio" name="default_profile" :value="profile.id" />
-              <span class="metric-icon">
-                <component :is="profile.icon" :size="18" />
-              </span>
-              <span>
-                <strong>{{ t(profile.title) }}</strong>
-                <small>{{ profile.route }}</small>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div v-if="currentStep === 2" class="setup-step-panel">
           <div class="setup-section-header">
             <div>
               <h2>{{ t('setup.readyTitle') }}</h2>
@@ -197,21 +179,39 @@ async function submit() {
 
           <div class="setup-review-grid">
             <div>
-              <label>{{ t('setup.enabledProfiles') }}</label>
+              <label>{{ t('setup.profile') }}</label>
               <div class="chip-list">
-                <span v-for="profile in selectedProfileItems" :key="profile.id" class="pill">{{ t(profile.title) }}</span>
+                <span class="pill">{{ t(selectedProfileItem.title) }}</span>
               </div>
             </div>
             <div>
-              <label>{{ t('setup.defaultProfile') }}</label>
-              <strong>{{ t(defaultProfileItem.title) }}</strong>
-              <span>{{ defaultProfileItem.route }}</span>
+              <label>{{ t('setup.businessOwner') }}</label>
+              <span>{{ t(selectedProfileItem.owner) }}</span>
             </div>
             <div>
-              <label>{{ t('setup.nextEntry') }}</label>
-              <strong>{{ defaultRoute() }}</strong>
-              <span>{{ t('setup.nextEntryHelp') }}</span>
+              <label>{{ t('setup.initialEntry') }}</label>
+              <strong>{{ profileRoute() }}</strong>
+              <span>{{ selectedProfileItem.route }}</span>
             </div>
+            <div>
+              <label>{{ t('setup.expansion') }}</label>
+              <span>{{ t('setup.expansionHelp') }}</span>
+            </div>
+          </div>
+
+          <div class="setup-review-boundaries">
+            <section>
+              <h3>{{ t('setup.includedScope') }}</h3>
+              <ul>
+                <li v-for="item in selectedProfileItem.includes" :key="item">{{ t(item) }}</li>
+              </ul>
+            </section>
+            <section>
+              <h3>{{ t('setup.excludedScope') }}</h3>
+              <ul>
+                <li v-for="item in selectedProfileItem.excludes" :key="item">{{ t(item) }}</li>
+              </ul>
+            </section>
           </div>
         </div>
 
@@ -234,7 +234,7 @@ async function submit() {
             {{ t('common.next') }}
             <ArrowRight :size="17" />
           </button>
-          <button v-else class="button" type="button" :disabled="saving || !selectedProfiles.length" @click="submit">
+          <button v-else class="button" type="button" :disabled="saving || !selectedProfile" @click="submit">
             <ArrowRight :size="17" />
             {{ saving ? t('common.saving') : t('setup.completeInstallation') }}
           </button>

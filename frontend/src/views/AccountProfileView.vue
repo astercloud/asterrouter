@@ -389,8 +389,8 @@ onMounted(async () => {
 						<div><strong>{{ t('account.avatar') }}</strong><p>{{ t('account.avatarHelp') }}</p><div class="account-actions"><input ref="fileInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif" @change="chooseAvatar" /><button class="button secondary" type="button" :disabled="profile.managed_by_config || avatarSaving" @click="fileInput?.click()"><Upload :size="16" />{{ t('account.uploadAvatar') }}</button><button class="button" type="button" :disabled="profile.managed_by_config || avatarSaving || !avatarDirty" @click="saveAvatar"><Save :size="16" />{{ t('common.save') }}</button><button class="button secondary" type="button" :disabled="profile.managed_by_config || avatarSaving || (!avatarDataURL && !savedAvatarDataURL)" @click="removeAvatar"><Trash2 :size="16" />{{ t('account.removeAvatar') }}</button></div></div>
 					</div>
 					<form class="profile-fields" @submit.prevent="saveProfile">
-						<div class="field"><label>{{ t('account.email') }}</label><input :value="profile.email || t('account.notAvailable')" disabled /></div>
-						<div class="field"><label>{{ t('account.displayName') }}</label><input v-model="displayName" maxlength="80" required :disabled="profile.managed_by_config" /></div>
+						<div class="field"><label for="account-email">{{ t('account.email') }}</label><input id="account-email" :value="profile.email || t('account.notAvailable')" disabled /></div>
+						<div class="field"><label for="account-display-name">{{ t('account.displayName') }}</label><input id="account-display-name" v-model="displayName" maxlength="80" required :disabled="profile.managed_by_config" /></div>
 						<button class="button profile-save" type="submit" :disabled="saving || profile.managed_by_config || !displayName.trim()"><Save :size="16" />{{ saving ? t('common.saving') : t('account.saveProfile') }}</button>
 					</form>
 				</div>
@@ -410,9 +410,9 @@ onMounted(async () => {
 			<section class="panel account-section">
 				<div class="panel-header"><div><h2>{{ t('account.changePassword') }}</h2><p>{{ t('account.passwordHelp') }}</p></div><LockKeyhole :size="20" /></div>
 				<form class="panel-body password-form" @submit.prevent="savePassword">
-					<div v-if="profile.password_enabled" class="field"><label>{{ t('account.currentPassword') }}</label><input v-model="currentPassword" type="password" autocomplete="current-password" :disabled="profile.managed_by_config" required /></div>
-					<div class="field"><label>{{ t('account.newPassword') }}</label><input v-model="newPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /><small>{{ t('account.passwordRule') }}</small></div>
-					<div class="field"><label>{{ t('account.confirmPassword') }}</label><input v-model="confirmPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /></div>
+					<div v-if="profile.password_enabled" class="field"><label for="account-current-password">{{ t('account.currentPassword') }}</label><input id="account-current-password" v-model="currentPassword" type="password" autocomplete="current-password" :disabled="profile.managed_by_config" required /></div>
+					<div class="field"><label for="account-new-password">{{ t('account.newPassword') }}</label><input id="account-new-password" v-model="newPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /><small>{{ t('account.passwordRule') }}</small></div>
+					<div class="field"><label for="account-confirm-password">{{ t('account.confirmPassword') }}</label><input id="account-confirm-password" v-model="confirmPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /></div>
 					<div class="form-actions"><button class="button" type="submit" :disabled="passwordSaving || (profile.password_enabled && !currentPassword) || !passwordValid || profile.managed_by_config"><KeyRound :size="16" />{{ passwordSaving ? t('common.saving') : profile.password_enabled ? t('account.changePassword') : t('account.setPassword') }}</button></div>
 				</form>
 			</section>
@@ -422,14 +422,14 @@ onMounted(async () => {
 				<div class="panel-body totp-body">
 					<div class="security-status"><span class="method-icon"><BadgeCheck v-if="profile.totp_enabled" :size="20" /><ShieldCheck v-else :size="20" /></span><div><strong>{{ profile.totp_enabled ? t('account.totpOn') : t('account.totpOff') }}</strong><p>{{ profile.totp_available || profile.totp_enabled ? t('account.totpStatusHelp') : t('account.totpUnavailable') }}</p></div><button v-if="!profile.totp_enabled && profile.totp_available && !totpSetup" class="button" type="button" :disabled="totpSaving" @click="startTOTP"><Camera :size="16" />{{ t('account.setupTOTP') }}</button></div>
 
-					<div v-if="totpSetup" class="totp-setup">
+						<div v-if="totpSetup" class="totp-setup">
 						<img :src="totpQRCode" :alt="t('account.qrCode')" />
-						<div class="totp-setup-copy"><h3>{{ t('account.scanCode') }}</h3><p>{{ t('account.scanCodeHelp') }}</p><code>{{ totpSetup.secret }}</code><details><summary>{{ t('account.manualURI') }}</summary><code class="uri-code">{{ totpSetup.provisioning_uri }}</code></details><div class="field"><label>{{ t('account.verificationCode') }}</label><input v-model="totpCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" /></div><button class="button" type="button" :disabled="totpSaving || totpCode.trim().length !== 6" @click="enableTOTP"><Check :size="16" />{{ t('account.confirmEnable') }}</button></div>
+						<div class="totp-setup-copy"><h3>{{ t('account.scanCode') }}</h3><p>{{ t('account.scanCodeHelp') }}</p><code>{{ totpSetup.secret }}</code><details><summary>{{ t('account.manualURI') }}</summary><code class="uri-code">{{ totpSetup.provisioning_uri }}</code></details><div class="field"><label for="account-totp-code">{{ t('account.verificationCode') }}</label><input id="account-totp-code" v-model="totpCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" /></div><button class="button" type="button" :disabled="totpSaving || totpCode.trim().length !== 6" @click="enableTOTP"><Check :size="16" />{{ t('account.confirmEnable') }}</button></div>
 					</div>
 
-					<div v-if="profile.totp_enabled" class="totp-enabled-actions">
+						<div v-if="profile.totp_enabled" class="totp-enabled-actions">
 						<button class="button secondary" type="button" :disabled="totpSaving" @click="refreshRecoveryCodes"><RefreshCw :size="16" />{{ t('account.regenerateCodes') }}</button>
-						<div class="disable-totp"><div class="field"><label>{{ t('account.verificationCode') }}</label><input v-model="disableCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" /></div><button class="button danger" type="button" :disabled="totpSaving || !disableCode.trim()" @click="turnOffTOTP"><Trash2 :size="16" />{{ t('account.disableTOTP') }}</button></div>
+							<div class="disable-totp"><div class="field"><label for="account-disable-totp-code">{{ t('account.verificationCode') }}</label><input id="account-disable-totp-code" v-model="disableCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" /></div><button class="button danger" type="button" :disabled="totpSaving || !disableCode.trim()" @click="turnOffTOTP"><Trash2 :size="16" />{{ t('account.disableTOTP') }}</button></div>
 					</div>
 
 					<div v-if="recoveryCodes.length" class="recovery-panel"><div><h3>{{ t('account.recoveryCodes') }}</h3><p>{{ t('account.recoveryCodesHelp') }}</p></div><div class="recovery-grid"><code v-for="code in recoveryCodes" :key="code">{{ code }}</code></div><button class="button secondary" type="button" @click="copyRecoveryCodes"><Check v-if="copied" :size="16" /><Copy v-else :size="16" />{{ copied ? t('account.copied') : t('account.copyCodes') }}</button></div>

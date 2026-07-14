@@ -2876,7 +2876,7 @@ button.pill:hover {
 
 .setup-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -2884,7 +2884,7 @@ button.pill:hover {
   display: grid;
   align-content: start;
   gap: 0;
-  min-height: 168px;
+  min-height: 204px;
   padding: 20px;
   color: var(--text-secondary);
   cursor: pointer;
@@ -2935,6 +2935,13 @@ button.pill:hover {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.profile-owner {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .profile-route {
@@ -3041,6 +3048,34 @@ button.pill:hover {
 .setup-review-grid span:not(.pill) {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.setup-review-boundaries {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  padding-top: 4px;
+}
+
+.setup-review-boundaries section {
+  min-width: 0;
+}
+
+.setup-review-boundaries h3 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.setup-review-boundaries ul {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .setup-notice {
@@ -3257,7 +3292,8 @@ button.pill:hover {
   }
 
   .grid,
-  .setup-grid {
+  .setup-grid,
+  .setup-review-boundaries {
     grid-template-columns: 1fr;
   }
 

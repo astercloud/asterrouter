@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 func (r *MemoryRepository) GetCustomerWallet(_ context.Context, userID string) (CustomerWallet, error) {
@@ -191,6 +193,23 @@ ON CONFLICT(id) DO UPDATE SET code_hash=EXCLUDED.code_hash,title=EXCLUDED.title,
 }
 
 func (r *PostgresRepository) RedeemCustomerCode(ctx context.Context, request CustomerCodeRedemption) (CustomerBillingEntry, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		entry, err := r.redeemCustomerCodeOnce(ctx, request)
+		if !isRetryableCustomerRedemptionError(err) {
+			return entry, err
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return CustomerBillingEntry{}, ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 5 * time.Millisecond):
+		}
+	}
+	return CustomerBillingEntry{}, lastErr
+}
+
+func (r *PostgresRepository) redeemCustomerCodeOnce(ctx context.Context, request CustomerCodeRedemption) (CustomerBillingEntry, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return CustomerBillingEntry{}, err
@@ -252,4 +271,9 @@ FROM customer_redemption_codes WHERE code_hash=$1 FOR UPDATE`, request.CodeHash)
 		return CustomerBillingEntry{}, err
 	}
 	return entry, nil
+}
+
+func isRetryableCustomerRedemptionError(err error) bool {
+	var postgresErr *pq.Error
+	return errors.As(err, &postgresErr) && (postgresErr.Code == "40001" || postgresErr.Code == "40P01")
 }

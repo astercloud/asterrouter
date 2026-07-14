@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 	"github.com/astercloud/asterrouter/backend/internal/testutil"
 )
 
@@ -69,16 +70,25 @@ func TestGatewayNormalAndStreamingSoak(t *testing.T) {
 		time.Sleep(interval)
 	}
 
-	usage, err := control.UsageReport(context.Background(), requests+1)
+	const evidenceWindow = 500
+	usage, err := control.UsageReport(context.Background(), evidenceWindow)
 	if err != nil {
 		t.Fatalf("UsageReport(): %v", err)
 	}
-	traces, err := control.ListGatewayTraces(context.Background(), requests+1)
+	traceSummary, err := control.GatewayTraceSummaryQuery(context.Background(), controlplane.GatewayTraceQuery{})
+	if err != nil {
+		t.Fatalf("GatewayTraceSummaryQuery(): %v", err)
+	}
+	traces, err := control.ListGatewayTraces(context.Background(), evidenceWindow)
 	if err != nil {
 		t.Fatalf("ListGatewayTraces(): %v", err)
 	}
-	if len(usage.Recent) != requests || len(traces) != requests {
-		t.Fatalf("evidence count requests=%d usage=%d traces=%d", requests, len(usage.Recent), len(traces))
+	wantRecent := requests
+	if wantRecent > evidenceWindow {
+		wantRecent = evidenceWindow
+	}
+	if usage.TotalRequests != requests || traceSummary.Total != requests || len(usage.Recent) != wantRecent || len(traces) != wantRecent {
+		t.Fatalf("evidence requests=%d usage_total=%d trace_total=%d usage_recent=%d traces_recent=%d want_recent=%d", requests, usage.TotalRequests, traceSummary.Total, len(usage.Recent), len(traces), wantRecent)
 	}
 
 	runtime.GC()

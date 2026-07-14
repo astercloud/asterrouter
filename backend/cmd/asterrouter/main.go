@@ -67,6 +67,9 @@ func main() {
 		StorageMode:     storageMode,
 		DemoMode:        cfg.DemoMode,
 	})
+	if err := settingsService.BootstrapProfile(context.Background()); err != nil {
+		log.Fatalf("bootstrap profile: %v", err)
+	}
 	adminSettings, err := settingsService.Admin(context.Background())
 	if err != nil {
 		log.Fatalf("load settings: %v", err)
@@ -118,6 +121,11 @@ func main() {
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatalf("seed control plane repository: %v", err)
 	}
+	if adminSettings.DefaultProfile == controlplane.ProfileScopePlatform {
+		if err := controlService.EnsurePlatformBootstrap(context.Background()); err != nil {
+			log.Fatalf("initialize platform domain: %v", err)
+		}
+	}
 	authService := auth.NewService(auth.Config{
 		Username:         cfg.AdminUsername,
 		Password:         cfg.AdminPassword,
@@ -161,6 +169,9 @@ func main() {
 	})
 	go controlService.RunCustomerNotificationScheduler(monitorCtx, func(err error) {
 		log.Printf("customer notification scheduler: %v", err)
+	})
+	go controlService.RunPlatformUsageDeliveryScheduler(monitorCtx, func(err error) {
+		log.Printf("platform usage delivery scheduler: %v", err)
 	})
 	pluginService := plugins.NewServiceWithOptions(pluginRepo, plugins.ServiceOptions{
 		SecretKey: cfg.SecretKey,

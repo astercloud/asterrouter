@@ -4,8 +4,10 @@ import * as auth from './auth'
 import * as customer from './customer'
 import * as operator from './operator'
 import * as plugins from './plugins'
+import * as platform from './platform'
 import * as settings from './settings'
 import * as system from './system'
+import type { APIKeyCreateRequest, APIKeyUpdateRequest, PlatformUsageSinkRequest } from '@/types'
 
 const client = vi.hoisted(() => ({
   get: vi.fn(),
@@ -76,12 +78,56 @@ describe('API module contracts', () => {
     expect(client.post).toHaveBeenLastCalledWith('/admin/settings/email-templates/test', {
       recipient: 'recipient@example.com', subject: 'Subject', html: '<p>Body</p>'
     })
-    await settings.applySetupProfiles(['personal', 'enterprise'], 'personal')
+    await settings.applySetupProfile('platform')
     expect(client.post).toHaveBeenLastCalledWith('/setup/profiles', {
-      profiles: ['personal', 'enterprise'], default_profile: 'personal'
+      profile: 'platform'
     })
     await settings.getLocales()
     expect(client.get).toHaveBeenLastCalledWith('/i18n/locales')
+  })
+
+  it('uses the platform control-plane dashboard endpoint', async () => {
+    await platform.getPlatformDashboard()
+    expect(client.get).toHaveBeenLastCalledWith('/platform/dashboard')
+
+    await platform.getPlatformAPIKeys()
+    expect(client.get).toHaveBeenLastCalledWith('/platform/api-keys')
+    const createPayload: APIKeyCreateRequest = {
+      name: 'Service key',
+      key_type: 'service',
+      policy_id: '',
+      model_allowlist: ['model'],
+      qps_limit: 0,
+      monthly_token_limit: 0,
+      expires_at: ''
+    }
+    await platform.createPlatformAPIKey(createPayload)
+    expect(client.post).toHaveBeenLastCalledWith('/platform/api-keys', createPayload)
+    const updatePayload: APIKeyUpdateRequest = { ...createPayload, status: 'active' }
+    await platform.updatePlatformAPIKey('key / 1', updatePayload)
+    expect(client.put).toHaveBeenLastCalledWith('/platform/api-keys/key%20%2F%201', updatePayload)
+    await platform.rotatePlatformAPIKey('key / 1')
+    expect(client.post).toHaveBeenLastCalledWith('/platform/api-keys/key%20%2F%201/rotate')
+    await platform.disablePlatformAPIKey('key / 1')
+    expect(client.post).toHaveBeenLastCalledWith('/platform/api-keys/key%20%2F%201/disable')
+
+    const sinkPayload: PlatformUsageSinkRequest = {
+      tenant_id: 'tenant-1', external_auth_integration_id: 'integration-1', name: 'Billing', endpoint_url: 'https://billing.example/events', status: 'active', max_attempts: 5
+    }
+    await platform.getPlatformUsageSinks()
+    expect(client.get).toHaveBeenLastCalledWith('/platform/usage-sinks')
+    await platform.createPlatformUsageSink(sinkPayload)
+    expect(client.post).toHaveBeenLastCalledWith('/platform/usage-sinks', sinkPayload)
+    await platform.updatePlatformUsageSink('sink / 1', sinkPayload)
+    expect(client.put).toHaveBeenLastCalledWith('/platform/usage-sinks/sink%20%2F%201', sinkPayload)
+    await platform.rotatePlatformUsageSinkEndpoint('sink / 1', 'https://billing.example/rotated', 'secret')
+    expect(client.post).toHaveBeenLastCalledWith('/platform/usage-sinks/sink%20%2F%201/rotate-endpoint', {
+      endpoint_url: 'https://billing.example/rotated', signing_secret: 'secret'
+    })
+    await platform.getPlatformUsageDeliveries('sink / 1', 'dead_letter')
+    expect(client.get).toHaveBeenLastCalledWith('/platform/usage-sinks/sink%20%2F%201/deliveries', { params: { status: 'dead_letter' } })
+    await platform.requeuePlatformUsageDelivery('sink / 1', 'delivery / 1')
+    expect(client.post).toHaveBeenLastCalledWith('/platform/usage-sinks/sink%20%2F%201/deliveries/delivery%20%2F%201/requeue')
   })
 
   it('uses customer billing and notification endpoint contracts', async () => {

@@ -29,7 +29,7 @@ const editingUser = ref<WorkspaceUser | null>(null)
 
 const roleOptions = ['super_admin', 'platform_admin', 'key_manager', 'read_only_auditor', 'developer']
 const resourceScopeOptions = ['dashboard', 'routing', 'providers', 'api_keys', 'usage', 'traces', 'alerts', 'identity', 'policies', 'audit', 'exports', 'plugins', 'settings', 'system']
-const surfaceScopeOptions = ['personal', 'relay_operator', 'enterprise', 'portal']
+const surfaceScopeOptions = ['personal', 'relay_operator', 'enterprise', 'platform', 'portal']
 
 const userForm = reactive<WorkspaceUserRequest>({
   email: '',

@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
@@ -536,6 +539,200 @@ func TestGatewayChatCompletionFallsBackToNextAccountAfterUpstreamFailure(t *test
 	}
 	if !strings.Contains(traces[0].RouteAttempts, `"outcome":"failed"`) || !strings.Contains(traces[0].RouteAttempts, `"outcome":"selected"`) {
 		t.Fatalf("expected route attempts to record both failure and selection: %s", traces[0].RouteAttempts)
+	}
+}
+
+func TestGatewayChatCompletionFallsBackAfterRateLimitAndServerError(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{name: "rate_limited", statusCode: http.StatusTooManyRequests, body: `{"error":{"type":"rate_limit_error","message":"retry later"}}`},
+		{name: "server_error", statusCode: http.StatusInternalServerError, body: `{"error":{"type":"upstream_error","message":"unavailable"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.statusCode)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer failing.Close()
+			var fallbackAuthorization string
+			fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fallbackAuthorization = r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"fallback","choices":[{"message":{"content":"fallback-ok"}}],"usage":{"prompt_tokens":7,"completion_tokens":11}}`))
+			}))
+			defer fallback.Close()
+
+			handler, control := newTestRuntime(t, config.Config{})
+			primaryProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Failing provider", Type: "openai_compatible", BaseURL: failing.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "primary-provider-secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fallbackProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Fallback provider", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "fallback-provider-secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			primaryAccount := createGatewayTestAccount(t, control, primaryProvider, "model", "primary-account-secret", 10, 1)
+			fallbackAccount := createGatewayTestAccount(t, control, fallbackProvider, "model", "fallback-account-secret", 20, 1)
+			createGatewayTestModelAndRoutes(t, control, "failure-status-public", "default", []gatewayTestRoute{
+				{account: primaryAccount, upstreamModel: "model", priority: 10},
+				{account: fallbackAccount, upstreamModel: "model", priority: 20},
+			})
+			key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{Name: "Failure status key", ModelAllowlist: []string{"failure-status-public"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"failure-status-public","messages":[{"role":"user","content":"synthetic"}]}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+key.Key)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "fallback-ok") {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if fallbackAuthorization != "Bearer fallback-account-secret" {
+				t.Fatalf("fallback authorization=%q", fallbackAuthorization)
+			}
+			traces, err := control.ListGatewayTraces(context.Background(), 10)
+			if err != nil || len(traces) != 1 {
+				t.Fatalf("traces=%+v err=%v", traces, err)
+			}
+			if !strings.Contains(traces[0].RouteAttempts, `"account_id":"`+primaryAccount.ID+`"`) ||
+				!strings.Contains(traces[0].RouteAttempts, `"outcome":"failed"`) ||
+				!strings.Contains(traces[0].RouteAttempts, `"account_id":"`+fallbackAccount.ID+`"`) ||
+				!strings.Contains(traces[0].RouteAttempts, `"outcome":"selected"`) {
+				t.Fatalf("route attempts=%s", traces[0].RouteAttempts)
+			}
+		})
+	}
+}
+
+func TestGatewayChatCompletionFallsBackAfterPrimaryTimeoutAndReleasesCapacity(t *testing.T) {
+	originalClient := gatewayHTTPClient
+	gatewayHTTPClient = func(stream bool) *http.Client {
+		if stream {
+			return originalClient(true)
+		}
+		return &http.Client{Timeout: 50 * time.Millisecond}
+	}
+	t.Cleanup(func() { gatewayHTTPClient = originalClient })
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"too-late"}`))
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"timeout-fallback","choices":[{"message":{"content":"fallback-ok"}}],"usage":{"prompt_tokens":7,"completion_tokens":11}}`))
+	}))
+	defer fallback.Close()
+
+	handler, control := newTestRuntime(t, config.Config{})
+	primaryProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Timeout primary", Type: "openai_compatible", BaseURL: primary.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "primary-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallbackProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Timeout fallback", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "fallback-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryAccount := createGatewayTestAccount(t, control, primaryProvider, "model", "primary-secret", 10, 1)
+	fallbackAccount := createGatewayTestAccount(t, control, fallbackProvider, "model", "fallback-secret", 20, 1)
+	createGatewayTestModelAndRoutes(t, control, "timeout-public", "default", []gatewayTestRoute{
+		{account: primaryAccount, upstreamModel: "model", priority: 10},
+		{account: fallbackAccount, upstreamModel: "model", priority: 20},
+	})
+	key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{Name: "Timeout key", ModelAllowlist: []string{"timeout-public"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"timeout-public","messages":[{"role":"user","content":"timeout"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "timeout-fallback") {
+		t.Fatalf("timeout fallback status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	traces, err := control.ListGatewayTraces(context.Background(), 10)
+	if err != nil || len(traces) != 1 {
+		t.Fatalf("traces=%+v err=%v", traces, err)
+	}
+	if !strings.Contains(traces[0].RouteAttempts, `"account_id":"`+primaryAccount.ID+`"`) ||
+		!strings.Contains(traces[0].RouteAttempts, `"outcome":"failed"`) ||
+		!strings.Contains(traces[0].RouteAttempts, `Client.Timeout`) ||
+		!strings.Contains(traces[0].RouteAttempts, `"account_id":"`+fallbackAccount.ID+`"`) {
+		t.Fatalf("timeout attempts=%s", traces[0].RouteAttempts)
+	}
+	release, ok := control.TryAcquireProviderAccountSlot(primaryAccount.ID, primaryAccount.Concurrency)
+	if !ok {
+		t.Fatal("primary concurrency capacity was not released after timeout")
+	}
+	release()
+}
+
+func TestGatewayStreamingInterruptionRecordsErrorWithoutUnsafeFailover(t *testing.T) {
+	var fallbackCalls atomic.Int32
+	interrupted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("upstream response writer does not support hijacking")
+		}
+		conn, buffer, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := "data: {\"id\":\"partial-stream\"}\n\n"
+		_, _ = fmt.Fprintf(buffer, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n%s\r\n", len(payload), payload)
+		_ = buffer.Flush()
+		_ = conn.Close()
+	}))
+	defer interrupted.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer fallback.Close()
+
+	handler, control := newTestRuntime(t, config.Config{})
+	primaryProvider, _ := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Interrupted stream", Type: "openai_compatible", BaseURL: interrupted.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "primary-secret"})
+	fallbackProvider, _ := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Stream fallback", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "fallback-secret"})
+	primaryAccount := createGatewayTestAccount(t, control, primaryProvider, "model", "primary-secret", 10, 1)
+	fallbackAccount := createGatewayTestAccount(t, control, fallbackProvider, "model", "fallback-secret", 20, 1)
+	createGatewayTestModelAndRoutes(t, control, "stream-interruption", "default", []gatewayTestRoute{
+		{account: primaryAccount, upstreamModel: "model", priority: 10},
+		{account: fallbackAccount, upstreamModel: "model", priority: 20},
+	})
+	key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{Name: "Stream interruption key", ModelAllowlist: []string{"stream-interruption"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"stream-interruption","stream":true,"messages":[{"role":"user","content":"stream"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "partial-stream") {
+		t.Fatalf("interrupted stream status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if fallbackCalls.Load() != 0 {
+		t.Fatalf("stream failover duplicated an already-started response: fallback calls=%d", fallbackCalls.Load())
+	}
+	traces, err := control.ListGatewayTraces(context.Background(), 10)
+	if err != nil || len(traces) != 1 || traces[0].Status != "upstream_error" || traces[0].ErrorType != "stream_error" {
+		t.Fatalf("interrupted stream traces=%+v err=%v", traces, err)
+	}
+	usage, err := control.UsageReport(context.Background(), 10)
+	if err != nil || len(usage.Recent) != 1 || usage.Recent[0].Status != "upstream_error" || usage.Recent[0].ErrorType != "stream_error" {
+		t.Fatalf("interrupted stream usage=%+v err=%v", usage.Recent, err)
 	}
 }
 

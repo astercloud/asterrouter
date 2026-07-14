@@ -48,6 +48,33 @@ func requireRBAC(control *controlplane.Service) gin.HandlerFunc {
 	}
 }
 
+func requireSurfaceRBAC(control *controlplane.Service, surface string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if control == nil {
+			c.Next()
+			return
+		}
+		permission := permissionForRequest(c)
+		if permission == "" {
+			c.Next()
+			return
+		}
+		allowed, access, err := control.ActorCanSurfaceResource(c.Request.Context(), actor(c), surface, permission, resourceForRequest(c))
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1450, err.Error())
+			c.Abort()
+			return
+		}
+		if !allowed {
+			httpx.Error(c, http.StatusForbidden, 1451, "permission denied")
+			c.Abort()
+			return
+		}
+		c.Set("principal_access", access)
+		c.Next()
+	}
+}
+
 func requireUserInAccess(ctx context.Context, control *controlplane.Service, userID string, access controlplane.PrincipalAccess) error {
 	if access.Global || len(access.DepartmentIDs) == 0 {
 		return nil
@@ -62,6 +89,25 @@ func requireUserInAccess(ctx context.Context, control *controlplane.Service, use
 		}
 	}
 	return errors.New("resource is outside the authorized department scope")
+}
+
+func requireDepartmentAssignmentInAccess(departmentID *string, access controlplane.PrincipalAccess, allowOmitted bool) error {
+	if access.Global || len(access.DepartmentIDs) == 0 {
+		return nil
+	}
+	if departmentID == nil {
+		if allowOmitted {
+			return nil
+		}
+		return errors.New("department-scoped administrators must assign a user to an authorized department")
+	}
+	requested := strings.TrimSpace(*departmentID)
+	for _, allowed := range access.DepartmentIDs {
+		if requested == allowed {
+			return nil
+		}
+	}
+	return errors.New("department assignment is outside the authorized department scope")
 }
 
 func requireAPIKeyInAccess(ctx context.Context, control *controlplane.Service, keyID string, access controlplane.PrincipalAccess) error {
@@ -165,10 +211,7 @@ func containsString(values []string, target string) bool {
 }
 
 func resourceForRequest(c *gin.Context) string {
-	path := strings.TrimPrefix(c.FullPath(), "/api/v1/admin")
-	if path == "" {
-		path = strings.TrimPrefix(c.Request.URL.Path, "/api/v1/admin")
-	}
+	path := controlPath(c)
 	switch {
 	case path == "/dashboard":
 		return controlplane.RBACResourceDashboard
@@ -186,6 +229,8 @@ func resourceForRequest(c *gin.Context) string {
 		return controlplane.RBACResourceAlerts
 	case strings.HasPrefix(path, "/users"), strings.HasPrefix(path, "/role-bindings"), strings.HasPrefix(path, "/departments"), strings.HasPrefix(path, "/organization-groups"):
 		return controlplane.RBACResourceIdentity
+	case strings.HasPrefix(path, "/tenants"), strings.HasPrefix(path, "/gateway-principals"):
+		return controlplane.RBACResourcePlatformTenants
 	case strings.HasPrefix(path, "/policies"):
 		return controlplane.RBACResourcePolicies
 	case strings.HasPrefix(path, "/audit-logs"):
@@ -204,10 +249,7 @@ func resourceForRequest(c *gin.Context) string {
 }
 
 func permissionForRequest(c *gin.Context) string {
-	path := strings.TrimPrefix(c.FullPath(), "/api/v1/admin")
-	if path == "" {
-		path = strings.TrimPrefix(c.Request.URL.Path, "/api/v1/admin")
-	}
+	path := controlPath(c)
 	method := c.Request.Method
 	if strings.HasPrefix(path, "/plugins") {
 		if method == http.MethodGet {
@@ -240,6 +282,17 @@ func permissionForRequest(c *gin.Context) string {
 		return controlplane.PermissionAdminRead
 	}
 	return controlplane.PermissionAdminWrite
+}
+
+func controlPath(c *gin.Context) string {
+	for _, value := range []string{c.FullPath(), c.Request.URL.Path} {
+		for _, prefix := range []string{"/api/v1/admin", "/api/v1/platform"} {
+			if strings.HasPrefix(value, prefix) {
+				return strings.TrimPrefix(value, prefix)
+			}
+		}
+	}
+	return ""
 }
 
 func principalAccess(c *gin.Context) controlplane.PrincipalAccess {

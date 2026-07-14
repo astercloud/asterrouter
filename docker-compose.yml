@@ -5,7 +5,9 @@ services:
       ASTER_ADDR: ":8080"
       ASTER_ADMIN_USERNAME: "admin"
       ASTER_ADMIN_PASSWORD: "change-me"
-      ASTER_PROFILE: "enterprise"
+      # Leave the deployment role unset for interactive first-run selection at /setup.
+      # For unattended installation, set ASTER_DEPLOYMENT_ROLE to personal,
+      # relay_operator, enterprise, or platform. The role is immutable after first boot.
       ASTER_SECRET_KEY: "replace-with-a-stable-random-secret"
       DATABASE_URL: "postgres://asterrouter:asterrouter@postgres:5432/asterrouter?sslmode=disable"
     ports:

@@ -22,6 +22,10 @@ func TestTOTPEnrollmentAndDisable(t *testing.T) {
 	if err := svc.ConfirmTOTP(context.Background(), user.ID, code); err != nil {
 		t.Fatal(err)
 	}
+	stored, _ := svc.workspaceUserByID(context.Background(), user.ID)
+	if stored.SessionVersion != 1 {
+		t.Fatalf("session version after TOTP enable = %d, want 1", stored.SessionVersion)
+	}
 	recovery, err := svc.GenerateTOTPRecoveryCodes(context.Background(), user.ID)
 	if err != nil || len(recovery) != 10 {
 		t.Fatalf("recovery=%v err=%v", recovery, err)
@@ -32,9 +36,12 @@ func TestTOTPEnrollmentAndDisable(t *testing.T) {
 	if _, err := svc.VerifyUserTOTP(context.Background(), user.ID, recovery[0]); err == nil {
 		t.Fatal("recovery code must be single use")
 	}
-	stored, _ := svc.workspaceUserByID(context.Background(), user.ID)
+	stored, _ = svc.workspaceUserByID(context.Background(), user.ID)
 	if !stored.TOTPEnabled || stored.TOTPSecretCiphertext == "" {
 		t.Fatalf("stored = %+v", stored)
+	}
+	if stored.SessionVersion != 2 {
+		t.Fatalf("session version after recovery code regeneration = %d, want 2", stored.SessionVersion)
 	}
 	if err := svc.DisableTOTP(context.Background(), user.ID, code); err != nil {
 		t.Fatal(err)
@@ -42,5 +49,8 @@ func TestTOTPEnrollmentAndDisable(t *testing.T) {
 	stored, _ = svc.workspaceUserByID(context.Background(), user.ID)
 	if stored.TOTPEnabled || stored.TOTPSecretCiphertext != "" {
 		t.Fatalf("stored after disable = %+v", stored)
+	}
+	if stored.SessionVersion != 3 {
+		t.Fatalf("session version after TOTP disable = %d, want 3", stored.SessionVersion)
 	}
 }

@@ -146,14 +146,28 @@ func New(opts Options) http.Handler {
 	})
 	api.POST("/setup/profiles", func(c *gin.Context) {
 		var req struct {
-			Profiles       []string `json:"profiles"`
-			DefaultProfile string   `json:"default_profile"`
+			Profile string `json:"profile"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
-		data, err := opts.SettingsService.ApplyProfiles(c.Request.Context(), req.Profiles, req.DefaultProfile)
+		current, err := opts.SettingsService.Admin(c.Request.Context())
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1401, err.Error())
+			return
+		}
+		if current.SetupCompleted || len(current.EnabledProfiles) > 0 || current.DefaultProfile != "" {
+			httpx.Error(c, http.StatusBadRequest, 1401, "setup is already completed; create a separate instance for a different business model")
+			return
+		}
+		if req.Profile == controlplane.ProfileScopePlatform && opts.ControlService != nil {
+			if err := opts.ControlService.EnsurePlatformBootstrap(c.Request.Context()); err != nil {
+				httpx.Error(c, http.StatusInternalServerError, 1402, err.Error())
+				return
+			}
+		}
+		data, err := opts.SettingsService.ApplyInitialProfile(c.Request.Context(), req.Profile)
 		if err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1401, err.Error())
 			return
@@ -232,7 +246,7 @@ func New(opts Options) http.Handler {
 			return
 		}
 		authLimiter.Reset(c.ClientIP())
-		httpx.OK(c, result)
+		httpx.OK(c, enrichLoginResult(c.Request.Context(), opts.ControlService, result))
 	})
 	api.POST("/auth/register", func(c *gin.Context) {
 		policy, err := opts.SettingsService.RegistrationPolicy(c.Request.Context())
@@ -663,7 +677,7 @@ func New(opts Options) http.Handler {
 		}
 		c.SetSameSite(http.SameSiteLaxMode)
 		c.SetCookie("asterrouter_session", result.AccessToken, int(time.Until(result.ExpiresAt).Seconds()), "/", "", true, true)
-		httpx.OK(c, result)
+		httpx.OK(c, enrichLoginResult(c.Request.Context(), opts.ControlService, result))
 	})
 
 	r.GET("/api/iam/get-captcha-code", func(c *gin.Context) {
@@ -723,6 +737,34 @@ func New(opts Options) http.Handler {
 	})
 	registerPluginOpenRoutes(api.Group("/open/plugins"), opts.PluginService, opts.ControlService)
 	registerPluginHostRoutes(api.Group("/plugin-host"), opts.PluginService, opts.ControlService)
+	systemAPI := api.Group("/system")
+	systemAPI.Use(requireAdminAuth(opts.Config.AdminToken, opts.AuthService))
+	systemAPI.Use(requireSystemAdministrator(opts.ControlService))
+	systemAPI.GET("/profiles", func(c *gin.Context) {
+		current, err := opts.SettingsService.Admin(c.Request.Context())
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1004, err.Error())
+			return
+		}
+		httpx.OK(c, profileBundleResponse(current))
+	})
+	systemAPI.PUT("/profiles", func(c *gin.Context) {
+		if opts.Config.DemoMode {
+			var req profileBundleRequest
+			if err := c.ShouldBindJSON(&req); err != nil {
+				httpx.Error(c, http.StatusBadRequest, 1402, "invalid profile bundle payload")
+				return
+			}
+			current, err := opts.SettingsService.ApplyProfiles(c.Request.Context(), req.EnabledProfiles, req.DefaultProfile)
+			if err != nil {
+				httpx.Error(c, http.StatusBadRequest, 1403, err.Error())
+				return
+			}
+			httpx.OK(c, profileBundleResponse(current))
+			return
+		}
+		httpx.Error(c, http.StatusConflict, 1403, "deployment profile is fixed after installation; create a separate instance for a different business model")
+	})
 
 	admin := api.Group("/admin")
 	admin.Use(requireAdminAuth(opts.Config.AdminToken, opts.AuthService))
@@ -749,6 +791,9 @@ func New(opts Options) http.Handler {
 		previous, err := opts.SettingsService.Admin(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1004, err.Error())
+			return
+		}
+		if !requireProfileBundleChange(c, opts.ControlService, previous, req) {
 			return
 		}
 		data, err := opts.SettingsService.Update(c.Request.Context(), req)
@@ -866,7 +911,7 @@ func New(opts Options) http.Handler {
 	operatorAPI.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceRelayOperator))
 	registerOperatorRoutes(operatorAPI, opts.OperatorService)
 	registerSharedCoreRoutes(operatorAPI, opts.ControlService, false)
-	registerSurfaceSettings(operatorAPI, opts.SettingsService)
+	registerSurfaceSettings(operatorAPI, opts.SettingsService, opts.ControlService)
 	registerSystemRoutes(operatorAPI.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
 	registerPluginRoutes(operatorAPI.Group("/plugins"), opts.PluginService, opts.ControlService, "relay_operator")
 
@@ -879,14 +924,37 @@ func New(opts Options) http.Handler {
 		data, err := opts.ControlService.Dashboard(c.Request.Context())
 		sharedCoreResponse(c, data, err)
 	})
-	registerSurfaceSettings(consoleAPI, opts.SettingsService)
+	registerSurfaceSettings(consoleAPI, opts.SettingsService, opts.ControlService)
 	registerSystemRoutes(consoleAPI.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
 	registerPluginRoutes(consoleAPI.Group("/plugins"), opts.PluginService, opts.ControlService, "personal")
 
+	platformAPI := api.Group("/platform")
+	platformAPI.Use(requireAdminAuth(opts.Config.AdminToken, opts.AuthService))
+	platformAPI.Use(requireProfile(opts.SettingsService, "platform"))
+	platformAPI.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfacePlatform))
+	platformAPI.Use(requireSurfaceRBAC(opts.ControlService, controlplane.SurfacePlatform))
+	registerPlatformRoutes(platformAPI, opts.ControlService, opts.PluginService)
 	registerGatewayRoutes(r, opts.ControlService)
 
 	serveSPA(r, opts.Config.FrontendDir)
 	return r
+}
+
+func enrichLoginResult(ctx context.Context, control *controlplane.Service, result auth.LoginResult) auth.LoginResult {
+	result.User.AllowedSurfaces = allowedSurfacesForActor(ctx, control, result.User.Username)
+	return result
+}
+
+type profileBundleRequest struct {
+	EnabledProfiles []string `json:"enabled_profiles"`
+	DefaultProfile  string   `json:"default_profile"`
+}
+
+func profileBundleResponse(current settings.AdminSettings) profileBundleRequest {
+	return profileBundleRequest{
+		EnabledProfiles: current.EnabledProfiles,
+		DefaultProfile:  current.DefaultProfile,
+	}
 }
 
 func agreementAccepted(ctx context.Context, service *settings.Service, accepted bool) bool {

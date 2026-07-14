@@ -1,67 +1,33 @@
-import { expect, test, type APIResponse, type Page } from '@playwright/test'
-import { loginDemo } from './fixtures'
+import { expect, test, type Page } from '@playwright/test'
+import { adminPost, createGatewayFixture, envelope, loginDemo } from './fixtures'
 
-type Envelope<T> = { code: number; message: string; data: T }
-
-async function envelope<T>(response: APIResponse): Promise<T> {
-  const body = await response.json() as Envelope<T>
-  expect(response.status(), JSON.stringify(body)).toBe(200)
-  expect(body.code, JSON.stringify(body)).toBe(0)
-  return body.data
+type PolicyAlert = {
+  id: string
+  type: string
+  severity: string
+  status: string
+  resource_id: string
+  metadata: Record<string, string>
 }
 
-async function adminPost<T>(page: Page, token: string, path: string, data: unknown): Promise<T> {
-  return envelope<T>(await page.request.post(`/api/v1/admin${path}`, {
-    data,
-    headers: { Authorization: `Bearer ${token}` }
+async function invokeWithSyntheticUsage(page: Page, key: string, model: string, tokens: number) {
+  return page.request.post('/v1/chat/completions', {
+    data: {
+      model,
+      messages: [{ role: 'user', content: `synthetic ${tokens}-token policy request` }],
+      synthetic_usage: { prompt_tokens: tokens, completion_tokens: 0 }
+    },
+    headers: { Authorization: `Bearer ${key}` }
+  })
+}
+
+async function policyAlert(page: Page, adminToken: string, keyID: string, type: string): Promise<PolicyAlert> {
+  const alerts = await envelope<PolicyAlert[]>(await page.request.get(`/api/v1/admin/alerts?type=${type}&resource_type=api_key&limit=100`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
   }))
-}
-
-async function createGatewayFixture(page: Page, token: string, runID: string, publicModel: string) {
-  const upstreamPort = process.env.ASTER_E2E_UPSTREAM_PORT || '19000'
-  const provider = await adminPost<{ id: string }>(page, token, '/providers', {
-    name: `E2E Provider ${runID}`,
-    type: 'openai_compatible',
-    base_url: `http://127.0.0.1:${upstreamPort}/v1`,
-    status: 'active',
-    models: ['upstream-model'],
-    priority: 10,
-    api_key: 'synthetic-provider-secret'
-  })
-  const account = await adminPost<{ id: string; secret_configured: boolean }>(page, token, '/provider-accounts', {
-    provider_id: provider.id,
-    name: `E2E Account ${runID}`,
-    platform: 'openai_compatible',
-    auth_type: 'api_key',
-    status: 'active',
-    schedulable: true,
-    priority: 10,
-    concurrency: 2,
-    rate_multiplier: 1,
-    models: ['upstream-model'],
-    group_ids: [],
-    secret: 'synthetic-account-secret'
-  })
-  expect(account.secret_configured).toBe(true)
-
-  const model = await adminPost<{ id: string }>(page, token, '/gateway-models', {
-    model_id: publicModel,
-    name: `E2E Model ${runID}`,
-    description: 'Synthetic Playwright gateway contract',
-    modality: 'chat',
-    default_route_group: 'default',
-    status: 'active'
-  })
-  await adminPost(page, token, '/model-routes', {
-    gateway_model_id: model.id,
-    route_group: 'default',
-    provider_account_id: account.id,
-    upstream_model: 'upstream-model',
-    priority: 10,
-    weight: 100,
-    status: 'active'
-  })
-  return account
+  const alert = alerts.find((item) => item.resource_id === keyID)
+  expect(alert, `missing ${type} alert for ${keyID}`).toBeTruthy()
+  return alert!
 }
 
 test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }, testInfo) => {
@@ -140,7 +106,7 @@ test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }
   expect(audit).toContainEqual(expect.objectContaining({ action: 'invoke', resource_type: 'gateway_call' }))
 })
 
-test('@smoke @j05 token quota rejects a gateway request and records evidence', async ({ page }, testInfo) => {
+test('@smoke @j05 quota and budget warn, deduplicate, escalate, and reject with evidence', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
@@ -148,50 +114,94 @@ test('@smoke @j05 token quota rejects a gateway request and records evidence', a
   expect(token).not.toBe('')
 
   const runID = `${testInfo.project.name}-${Date.now()}`
-  const publicModel = `e2e-quota-${runID}`
-  await createGatewayFixture(page, token, runID, publicModel)
-  const workspaceKey = await adminPost<{ key: string; record: { id: string } }>(page, token, '/api-keys', {
+  const quotaModel = `e2e-quota-${runID}`
+  await createGatewayFixture(page, token, `${runID}-quota`, quotaModel)
+  const quotaKey = await adminPost<{ key: string; record: { id: string } }>(page, token, '/api-keys', {
     name: `E2E Quota Key ${runID}`,
-    model_allowlist: [publicModel],
+    model_allowlist: [quotaModel],
     qps_limit: 10,
-    monthly_token_limit: 1
+    monthly_token_limit: 100
   })
 
-  const accepted = await page.request.post('/v1/chat/completions', {
-    data: { model: publicModel, messages: [{ role: 'user', content: 'synthetic request before quota rejection' }] },
-    headers: { Authorization: `Bearer ${workspaceKey.key}` }
-  })
-  expect(accepted.status()).toBe(200)
+  expect((await invokeWithSyntheticUsage(page, quotaKey.key, quotaModel, 40)).status()).toBe(200)
+  expect((await invokeWithSyntheticUsage(page, quotaKey.key, quotaModel, 40)).status()).toBe(200)
+  const quotaWarning = await policyAlert(page, token, quotaKey.record.id, 'api_key_quota')
+  expect(quotaWarning).toMatchObject({ severity: 'warning', status: 'active' })
+  expect(quotaWarning.metadata).toMatchObject({ current_month_tokens: '80', quota_used_percent: '80' })
 
-  const rejected = await page.request.post('/v1/chat/completions', {
-    data: { model: publicModel, messages: [{ role: 'user', content: 'synthetic quota rejection request' }] },
-    headers: { Authorization: `Bearer ${workspaceKey.key}` }
+  expect((await invokeWithSyntheticUsage(page, quotaKey.key, quotaModel, 20)).status()).toBe(200)
+  const quotaCritical = await policyAlert(page, token, quotaKey.record.id, 'api_key_quota')
+  expect(quotaCritical).toMatchObject({ id: quotaWarning.id, severity: 'critical', status: 'active' })
+  expect(quotaCritical.metadata).toMatchObject({ current_month_tokens: '100', quota_used_percent: '100' })
+
+  const quotaRejected = await invokeWithSyntheticUsage(page, quotaKey.key, quotaModel, 1)
+  expect(quotaRejected.status()).toBe(429)
+  await expect(quotaRejected.json()).resolves.toMatchObject({ error: { type: 'insufficient_quota' } })
+
+  const budgetModel = `e2e-budget-${runID}`
+  await createGatewayFixture(page, token, `${runID}-budget`, budgetModel)
+  await adminPost(page, token, '/model-pricings', {
+    model: budgetModel,
+    currency: 'USD',
+    input_price_cents_per_1m_tokens: 1000000,
+    output_price_cents_per_1m_tokens: 1000000,
+    status: 'active'
   })
-  expect(rejected.status()).toBe(429)
-  await expect(rejected.json()).resolves.toMatchObject({
-    error: { type: 'insufficient_quota' }
+  const budgetKey = await adminPost<{ key: string; record: { id: string } }>(page, token, '/api-keys', {
+    name: `E2E Budget Key ${runID}`,
+    model_allowlist: [budgetModel],
+    qps_limit: 10,
+    monthly_token_limit: 0
+  })
+  await adminPost(page, token, '/policies', {
+    name: `E2E Budget Policy ${runID}`,
+    scope_type: 'api_key',
+    scope_id: budgetKey.record.id,
+    model_allowlist: [],
+    model_denylist: [],
+    qps_limit: 0,
+    monthly_token_limit: 0,
+    monthly_budget_cents: 100,
+    overage_action: 'block',
+    prompt_logging_mode: 'metadata_only',
+    retention_days: 30,
+    status: 'active'
+  })
+
+  expect((await invokeWithSyntheticUsage(page, budgetKey.key, budgetModel, 40)).status()).toBe(200)
+  expect((await invokeWithSyntheticUsage(page, budgetKey.key, budgetModel, 40)).status()).toBe(200)
+  const budgetWarning = await policyAlert(page, token, budgetKey.record.id, 'api_key_budget')
+  expect(budgetWarning).toMatchObject({ severity: 'warning', status: 'active' })
+  expect(budgetWarning.metadata).toMatchObject({ current_month_cost_cents: '80', budget_used_percent: '80' })
+
+  expect((await invokeWithSyntheticUsage(page, budgetKey.key, budgetModel, 20)).status()).toBe(200)
+  const budgetCritical = await policyAlert(page, token, budgetKey.record.id, 'api_key_budget')
+  expect(budgetCritical).toMatchObject({ id: budgetWarning.id, severity: 'critical', status: 'active' })
+  expect(budgetCritical.metadata).toMatchObject({ current_month_cost_cents: '100', budget_used_percent: '100' })
+
+  const budgetRejected = await invokeWithSyntheticUsage(page, budgetKey.key, budgetModel, 1)
+  expect(budgetRejected.status()).toBe(429)
+  await expect(budgetRejected.json()).resolves.toMatchObject({
+    error: { type: 'insufficient_quota', message: 'workspace key monthly budget exceeded' }
   })
 
   const usage = await envelope<{ recent: Array<Record<string, unknown>> }>(await page.request.get('/api/v1/admin/usage?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
-  expect(usage.recent).toContainEqual(expect.objectContaining({
-    api_key_id: workspaceKey.record.id,
-    model: publicModel,
-    status: 'error',
-    error_type: 'quota_exceeded'
-  }))
+  expect(usage.recent).toContainEqual(expect.objectContaining({ api_key_id: quotaKey.record.id, model: quotaModel, status: 'error', error_type: 'quota_exceeded' }))
+  expect(usage.recent).toContainEqual(expect.objectContaining({ api_key_id: budgetKey.record.id, model: budgetModel, status: 'error', error_type: 'budget_exceeded' }))
+  expect(usage.recent.filter((item) => item.api_key_id === budgetKey.record.id).reduce((sum, item) => sum + Number(item.cost_cents || 0), 0)).toBe(100)
 
   const traces = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/admin/gateway-traces?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
-  expect(traces).toContainEqual(expect.objectContaining({
-    api_key_id: workspaceKey.record.id,
-    model: publicModel,
-    status: 'error',
-    http_status: 429,
-    error_type: 'quota_exceeded'
+  expect(traces).toContainEqual(expect.objectContaining({ api_key_id: quotaKey.record.id, model: quotaModel, status: 'error', http_status: 429, error_type: 'quota_exceeded' }))
+  expect(traces).toContainEqual(expect.objectContaining({ api_key_id: budgetKey.record.id, model: budgetModel, status: 'error', http_status: 429, error_type: 'budget_exceeded' }))
+
+  const audit = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/admin/audit-logs?limit=100', {
+    headers: { Authorization: `Bearer ${token}` }
   }))
+  expect(audit).toContainEqual(expect.objectContaining({ action: 'invoke', resource_type: 'gateway_call', summary: expect.stringContaining('status=policy_rejected') }))
 })
 
 test('@smoke @j04 failed primary route falls back and records attempts', async ({ page }, testInfo) => {

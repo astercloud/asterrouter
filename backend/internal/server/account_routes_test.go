@@ -143,6 +143,55 @@ func TestPasswordChangeRevokesExistingBearerToken(t *testing.T) {
 	}
 }
 
+func TestPasswordResetImmediatelyRevokesExistingBearerToken(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	user, _, err := control.RegisterWorkspaceUser(t.Context(), "reset-session@example.test", "current-password", "Reset Session User", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := func(password string) (string, int) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"reset-session@example.test","password":"`+password+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		var response struct {
+			Data auth.LoginResult `json:"data"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &response)
+		return response.Data.AccessToken, rec.Code
+	}
+
+	oldToken, status := login("current-password")
+	if status != http.StatusOK || oldToken == "" {
+		t.Fatalf("initial login status=%d", status)
+	}
+	_, resetToken, err := control.BeginPasswordReset(t.Context(), user.Email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/reset-password", bytes.NewBufferString(`{"token":"`+resetToken+`","password":"updated-password"}`))
+	resetReq.Header.Set("Content-Type", "application/json")
+	resetRec := httptest.NewRecorder()
+	handler.ServeHTTP(resetRec, resetReq)
+	if resetRec.Code != http.StatusOK {
+		t.Fatalf("reset status=%d body=%s", resetRec.Code, resetRec.Body.String())
+	}
+	profileReq := httptest.NewRequest(http.MethodGet, "/api/v1/account/profile", nil)
+	profileReq.Header.Set("Authorization", "Bearer "+oldToken)
+	profileRec := httptest.NewRecorder()
+	handler.ServeHTTP(profileRec, profileReq)
+	if profileRec.Code != http.StatusUnauthorized {
+		t.Fatalf("old token status=%d body=%s", profileRec.Code, profileRec.Body.String())
+	}
+	if _, status := login("current-password"); status != http.StatusUnauthorized {
+		t.Fatalf("old password login status=%d", status)
+	}
+	if newToken, status := login("updated-password"); status != http.StatusOK || newToken == "" {
+		t.Fatalf("new password login status=%d", status)
+	}
+}
+
 func TestLocalAdministratorLoginRequiresTOTP(t *testing.T) {
 	handler, control := newAuthTestRuntime(t)
 	setup, err := control.BeginTOTPSetup(t.Context(), "admin")
@@ -180,6 +229,100 @@ func TestLocalAdministratorLoginRequiresTOTP(t *testing.T) {
 	handler.ServeHTTP(mfaRec, mfaReq)
 	if mfaRec.Code != http.StatusOK {
 		t.Fatalf("MFA login status=%d body=%s", mfaRec.Code, mfaRec.Body.String())
+	}
+}
+
+func TestTOTPChangesImmediatelyRevokeExistingBearerTokens(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	_, _, err := control.RegisterWorkspaceUser(t.Context(), "totp-session@example.test", "current-password", "TOTP Session User", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	login := func(code string) string {
+		t.Helper()
+		loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"totp-session@example.test","password":"current-password"}`))
+		loginReq.Header.Set("Content-Type", "application/json")
+		loginRec := httptest.NewRecorder()
+		handler.ServeHTTP(loginRec, loginReq)
+		var loginResponse struct {
+			Data struct {
+				AccessToken string `json:"access_token"`
+				MFARequired bool   `json:"mfa_required"`
+				Challenge   string `json:"challenge"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(loginRec.Body.Bytes(), &loginResponse); err != nil || loginRec.Code != http.StatusOK {
+			t.Fatalf("login status=%d body=%s err=%v", loginRec.Code, loginRec.Body.String(), err)
+		}
+		if !loginResponse.Data.MFARequired {
+			if loginResponse.Data.AccessToken == "" {
+				t.Fatalf("login token missing: %s", loginRec.Body.String())
+			}
+			return loginResponse.Data.AccessToken
+		}
+		mfaReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/login", bytes.NewBufferString(`{"challenge":"`+loginResponse.Data.Challenge+`","code":"`+code+`"}`))
+		mfaReq.Header.Set("Content-Type", "application/json")
+		mfaRec := httptest.NewRecorder()
+		handler.ServeHTTP(mfaRec, mfaReq)
+		var mfaResponse struct {
+			Data auth.LoginResult `json:"data"`
+		}
+		if err := json.Unmarshal(mfaRec.Body.Bytes(), &mfaResponse); err != nil || mfaRec.Code != http.StatusOK || mfaResponse.Data.AccessToken == "" {
+			t.Fatalf("MFA login status=%d body=%s err=%v", mfaRec.Code, mfaRec.Body.String(), err)
+		}
+		return mfaResponse.Data.AccessToken
+	}
+	assertRevoked := func(token string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/account/profile", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("old token status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	postWithToken := func(path, body, token string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	token := login("")
+	setupRec := postWithToken("/api/v1/auth/totp/setup", `{}`, token)
+	var setupResponse struct {
+		Data controlplane.TOTPSetup `json:"data"`
+	}
+	if err := json.Unmarshal(setupRec.Body.Bytes(), &setupResponse); err != nil || setupRec.Code != http.StatusOK || setupResponse.Data.Secret == "" {
+		t.Fatalf("setup status=%d body=%s err=%v", setupRec.Code, setupRec.Body.String(), err)
+	}
+	code := auth.GenerateTOTPCode(setupResponse.Data.Secret, time.Now().UTC())
+	confirmRec := postWithToken("/api/v1/auth/totp/confirm", `{"code":"`+code+`"}`, token)
+	if confirmRec.Code != http.StatusOK {
+		t.Fatalf("confirm status=%d body=%s", confirmRec.Code, confirmRec.Body.String())
+	}
+	assertRevoked(token)
+
+	token = login(code)
+	recoveryRec := postWithToken("/api/v1/auth/totp/recovery-codes", `{}`, token)
+	if recoveryRec.Code != http.StatusOK {
+		t.Fatalf("recovery status=%d body=%s", recoveryRec.Code, recoveryRec.Body.String())
+	}
+	assertRevoked(token)
+
+	token = login(code)
+	disableRec := postWithToken("/api/v1/auth/totp/disable", `{"code":"`+code+`"}`, token)
+	if disableRec.Code != http.StatusOK {
+		t.Fatalf("disable status=%d body=%s", disableRec.Code, disableRec.Body.String())
+	}
+	assertRevoked(token)
+	if finalToken := login(""); finalToken == "" {
+		t.Fatal("password login did not recover after TOTP disable")
 	}
 }
 

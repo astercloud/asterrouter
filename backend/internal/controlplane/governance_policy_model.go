@@ -17,9 +17,10 @@ const (
 	GovernancePolicyPromptLoggingMetadataOnly = "metadata_only"
 	GovernancePolicyPromptLoggingRedacted     = "redacted"
 
-	GatewayPolicySourceAPIKeyExplicit = "api_key_explicit"
-	GatewayPolicySourceAPIKeyScope    = "api_key_scope"
-	GatewayPolicySourceGlobalScope    = "global_scope"
+	GatewayPolicySourceAPIKeyExplicit          = "api_key_explicit"
+	GatewayPolicySourceAPIKeyScope             = "api_key_scope"
+	GatewayPolicySourceGlobalScope             = "global_scope"
+	GatewayPolicySourceExternalAuthIntegration = "external_auth_integration"
 )
 
 type GovernancePolicy struct {

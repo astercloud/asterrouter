@@ -8,6 +8,16 @@ function json(response, status, body) {
   response.end(JSON.stringify(body))
 }
 
+function syntheticUsage(value) {
+  if (!value || typeof value !== 'object') return { prompt_tokens: 7, completion_tokens: 11 }
+  const promptTokens = Number(value.prompt_tokens)
+  const completionTokens = Number(value.completion_tokens)
+  if (!Number.isSafeInteger(promptTokens) || promptTokens < 0 || !Number.isSafeInteger(completionTokens) || completionTokens < 0) {
+    return { prompt_tokens: 7, completion_tokens: 11 }
+  }
+  return { prompt_tokens: promptTokens, completion_tokens: completionTokens }
+}
+
 async function readJSON(request) {
   const chunks = []
   for await (const chunk of request) chunks.push(chunk)
@@ -54,7 +64,7 @@ const server = createServer(async (request, response) => {
         id: 'e2e-completion',
         object: 'chat.completion',
         choices: [{ index: 0, message: { role: 'assistant', content: 'e2e-ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 7, completion_tokens: 11 }
+        usage: syntheticUsage(payload.synthetic_usage)
       })
       return
     }

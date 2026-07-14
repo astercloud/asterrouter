@@ -1,0 +1,4 @@
+interface:
+  display_name: "AsterRouter UI Tests"
+  short_description: "验证 Vue 界面关键流程、响应式布局与浏览器状态"
+  default_prompt: "Use $test-ui to exercise and verify this AsterRouter user flow in a browser."

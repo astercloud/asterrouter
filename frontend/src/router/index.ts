@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getPublicSettings } from '@/api/settings'
 import type { PublicSettings } from '@/types'
+import { defaultSurfaceRoute, surfaceForPath, canAccessSurface } from './surfaces'
 
 const EntryRedirectView = () => import('@/views/EntryRedirectView.vue')
 const LoginView = () => import('@/views/LoginView.vue')
@@ -50,6 +51,12 @@ const PortalHomeView = () => import('@/views/portal/PortalHomeView.vue')
 const PortalIntegrationView = () => import('@/views/portal/PortalIntegrationView.vue')
 const PortalKeysView = () => import('@/views/portal/PortalKeysView.vue')
 const PortalShell = () => import('@/views/portal/PortalShell.vue')
+const PlatformShell = () => import('@/views/platform/PlatformShell.vue')
+const PlatformHomeView = () => import('@/views/platform/PlatformHomeView.vue')
+const PlatformKeysView = () => import('@/views/platform/PlatformKeysView.vue')
+const PlatformTenantsView = () => import('@/views/platform/PlatformTenantsView.vue')
+const PlatformIntegrationsView = () => import('@/views/platform/PlatformIntegrationsView.vue')
+const PlatformUsageSinksView = () => import('@/views/platform/PlatformUsageSinksView.vue')
 
 let publicSettingsCache: PublicSettings | null = null
 
@@ -72,30 +79,17 @@ async function loadPublicSettings(): Promise<PublicSettings | null> {
   }
 }
 
-function profileRoute(profile: string, role = storedRole()): string {
-  if (profile === 'personal') return '/console/overview'
-  if (profile === 'relay_operator') return canOperateRelay(role) ? '/operator/overview' : '/customer/overview'
-  return '/admin/dashboard'
-}
-
-function storedRole(): string {
+function storedUser() {
   try {
-    return JSON.parse(localStorage.getItem('asterrouter_admin_user') || '{}').role || ''
+    return JSON.parse(localStorage.getItem('asterrouter_admin_user') || 'null')
   } catch {
-    return ''
+    return null
   }
-}
-
-function canOperateRelay(role: string): boolean {
-  return ['super_admin', 'platform_admin', 'demo_admin'].includes(role)
 }
 
 function defaultEntry(settings: PublicSettings | null): string {
   if (!settings?.setup_completed) return '/setup'
-  if (settings.default_profile && settings.enabled_profiles.includes(settings.default_profile)) {
-    return profileRoute(settings.default_profile)
-  }
-  return profileRoute(settings.enabled_profiles[0] || 'enterprise')
+  return defaultSurfaceRoute(settings.enabled_profiles, settings.default_profile, storedUser())
 }
 
 function surfaceAllowed(path: string, settings: PublicSettings | null): boolean {
@@ -105,6 +99,7 @@ function surfaceAllowed(path: string, settings: PublicSettings | null): boolean 
   if (path.startsWith('/customer')) return settings.enabled_profiles.includes('relay_operator')
   if (path.startsWith('/portal')) return settings.enabled_profiles.includes('enterprise')
   if (path.startsWith('/admin')) return settings.enabled_profiles.includes('enterprise')
+  if (path.startsWith('/platform')) return settings.enabled_profiles.includes('platform')
   return true
 }
 
@@ -221,6 +216,32 @@ const router = createRouter({
         { path: ':pathMatch(.*)*', redirect: '/portal/overview' }
       ]
     },
+    {
+      path: '/platform',
+      component: PlatformShell,
+      children: [
+        { path: '', redirect: '/platform/overview' },
+        { path: 'overview', component: PlatformHomeView, meta: { titleKey: 'platform.overview', descriptionKey: 'platform.subtitle' } },
+        { path: 'tenants', component: PlatformTenantsView, meta: { titleKey: 'platform.tenants', descriptionKey: 'platform.tenantsSubtitle' } },
+        { path: 'integrations', component: PlatformIntegrationsView, meta: { titleKey: 'platform.integrations', descriptionKey: 'platform.integrationsSubtitle' } },
+        { path: 'usage-sinks', component: PlatformUsageSinksView, meta: { titleKey: 'platform.usageSinks', descriptionKey: 'platform.usageSinksSubtitle' } },
+        { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
+        { path: 'gateway-models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
+        { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
+        { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
+        { path: 'provider-accounts', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
+        { path: 'model-pricings', component: AdminModelPricingsView, meta: { titleKey: 'admin.modelPricings', descriptionKey: 'modelPricings.subtitle' } },
+        { path: 'policies', component: AdminPoliciesView, meta: { titleKey: 'admin.policies', descriptionKey: 'policies.subtitle' } },
+        { path: 'api-keys', component: PlatformKeysView, meta: { titleKey: 'admin.apiKeys', descriptionKey: 'platform.keySubtitle' } },
+        { path: 'usage', component: AdminUsageView, meta: { titleKey: 'admin.usage', descriptionKey: 'usage.subtitle' } },
+        { path: 'traces', component: AdminGatewayTracesView, meta: { titleKey: 'admin.traces', descriptionKey: 'traces.subtitle' } },
+        { path: 'alerts', component: AdminAlertsView, meta: { titleKey: 'admin.alerts', descriptionKey: 'alerts.subtitle' } },
+        { path: 'audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },
+        { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
+        { path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
+        { path: ':pathMatch(.*)*', redirect: '/platform/overview' }
+      ]
+    },
     { path: '/legal/:slug', component: LegalDocumentView },
     { path: '/:pathMatch(.*)*', redirect: '/' }
   ]
@@ -252,9 +273,12 @@ router.beforeEach(async (to) => {
   if (!surfaceAllowed(to.path, settings)) {
     return entry
   }
-  if ((to.path.startsWith('/admin') || to.path.startsWith('/portal') || to.path.startsWith('/console') || to.path.startsWith('/operator') || to.path.startsWith('/customer')) && !token) {
+  if ((to.path.startsWith('/admin') || to.path.startsWith('/portal') || to.path.startsWith('/console') || to.path.startsWith('/operator') || to.path.startsWith('/customer') || to.path.startsWith('/platform')) && !token) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
+	const user = storedUser()
+	const targetSurface = surfaceForPath(to.path)
+	if (user && targetSurface && !canAccessSurface(user, targetSurface)) return entry
   return true
 })
 

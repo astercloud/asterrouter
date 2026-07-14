@@ -79,10 +79,45 @@ jobs:
           ASTER_RELEASE_TEST_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_release_test?sslmode=disable
         run: bash scripts/test-release-runtime.sh "${{ steps.meta.outputs.version }}"
 
+      - name: Install Chromium for candidate browser journeys
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Create isolated candidate-browser databases
+        env:
+          PGPASSWORD: asterrouter
+        run: |
+          set -euo pipefail
+          for database in platform_setup enterprise relay_operator personal platform; do
+            psql --host=127.0.0.1 --username=asterrouter --dbname=postgres \
+              --command="CREATE DATABASE asterrouter_release_test_journey_${database}"
+          done
+
+      - name: Validate candidate browser journeys
+        env:
+          ASTER_RELEASE_JOURNEY_DIR: ${{ runner.temp }}/asterrouter-release-journeys
+          ASTER_RELEASE_TEST_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_release_test_journey?sslmode=disable
+        run: bash scripts/test-release-browser-journeys.sh "${{ steps.meta.outputs.version }}"
+
       - name: Validate Linux install, upgrade, and rollback
         env:
           ASTER_INSTALLER_TEST_DIR: ${{ runner.temp }}/asterrouter-installer-test
         run: sudo --preserve-env=ASTER_INSTALLER_TEST_DIR bash scripts/test-installer.sh
+
+      - name: Upload release browser journey evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: asterrouter-release-browser-journeys
+          path: |
+            ${{ runner.temp }}/asterrouter-release-journeys/report.txt
+            ${{ runner.temp }}/asterrouter-release-journeys/runtime.log
+            ${{ runner.temp }}/asterrouter-release-journeys/fake-upstream.log
+            ${{ runner.temp }}/asterrouter-release-journeys/setup/report.txt
+            ${{ runner.temp }}/asterrouter-release-journeys/setup/runtime.log
+            ${{ runner.temp }}/asterrouter-release-journeys/setup/playwright
+            ${{ runner.temp }}/asterrouter-release-journeys/profiles
+          if-no-files-found: ignore
 
       - name: Write release notes
         run: |

@@ -18,6 +18,7 @@ import { useI18n } from 'vue-i18n'
 import TopBar from '@/components/TopBar.vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import { canAccessSurface } from '@/router/surfaces'
 
 interface SurfaceNavItem {
   to: string
@@ -35,7 +36,7 @@ const props = withDefaults(
     homeTo: string
     navLabel: string
     navGroups: SurfaceNavGroup[]
-    surface: 'personal' | 'relay_operator' | 'enterprise' | 'portal' | 'customer'
+    surface: 'personal' | 'relay_operator' | 'enterprise' | 'platform' | 'portal' | 'customer'
     brandMark?: string
     storageKey?: string
   }>(),
@@ -55,25 +56,27 @@ const darkMode = ref(document.documentElement.dataset.theme === 'dark')
 
 const version = computed(() => app.publicSettings?.version || 'Dev')
 const enabledProfiles = computed(() => app.publicSettings?.enabled_profiles || [])
-const canOperateRelay = computed(() => ['super_admin', 'platform_admin', 'demo_admin'].includes(auth.user?.role || ''))
 const surfaceLinks = computed(() => {
   const links: SurfaceNavItem[] = []
-  if (props.surface !== 'personal' && enabledProfiles.value.includes('personal')) {
+	if (props.surface !== 'personal' && enabledProfiles.value.includes('personal') && canAccessSurface(auth.user, 'personal')) {
     links.push({ to: '/console/overview', label: 'nav.console', icon: Laptop })
   }
-  if (props.surface !== 'relay_operator' && enabledProfiles.value.includes('relay_operator') && canOperateRelay.value) {
+	if (props.surface !== 'relay_operator' && enabledProfiles.value.includes('relay_operator') && canAccessSurface(auth.user, 'relay_operator')) {
     links.push({ to: '/operator/overview', label: 'nav.operator', icon: RadioTower })
   }
-  if (props.surface !== 'customer' && enabledProfiles.value.includes('relay_operator')) {
+	if (props.surface !== 'customer' && enabledProfiles.value.includes('relay_operator') && canAccessSurface(auth.user, 'customer')) {
     links.push({ to: '/customer/overview', label: 'nav.customer', icon: UserRound })
   }
-  if (enabledProfiles.value.includes('enterprise')) {
-    if (props.surface !== 'enterprise') {
+	if (enabledProfiles.value.includes('enterprise')) {
+		if (props.surface !== 'enterprise' && canAccessSurface(auth.user, 'enterprise')) {
       links.push({ to: '/admin/dashboard', label: 'nav.admin', icon: PanelsTopLeft })
     }
-    if (props.surface !== 'portal') {
+		if (props.surface !== 'portal' && canAccessSurface(auth.user, 'portal')) {
       links.push({ to: '/portal/overview', label: 'nav.portal', icon: KeyRound })
     }
+  }
+	if (props.surface !== 'platform' && enabledProfiles.value.includes('platform') && canAccessSurface(auth.user, 'platform')) {
+    links.push({ to: '/platform/overview', label: 'nav.platformConsole', icon: PanelsTopLeft })
   }
   return links
 })

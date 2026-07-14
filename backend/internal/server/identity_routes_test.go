@@ -15,8 +15,12 @@ import (
 
 func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
+	department, err := control.CreateDepartment(t.Context(), "tester", controlplane.DepartmentRequest{Name: "Engineering", Code: "eng", Status: controlplane.DepartmentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	createBody := bytes.NewBufferString(`{"email":"dev@example.com","display_name":"Dev User","status":"active","role":"developer"}`)
+	createBody := bytes.NewBufferString(`{"email":"dev@example.com","display_name":"Dev User","status":"active","role":"developer","department_id":"` + department.ID + `"}`)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", createBody)
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
@@ -30,7 +34,7 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 	if err := json.Unmarshal(createRec.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("decode create user: %v", err)
 	}
-	if createResp.Data.ID == "" || createResp.Data.Email != "dev@example.com" || createResp.Data.Role != controlplane.RoleDeveloper {
+	if createResp.Data.ID == "" || createResp.Data.Email != "dev@example.com" || createResp.Data.Role != controlplane.RoleDeveloper || createResp.Data.DepartmentID != department.ID {
 		t.Fatalf("create user mismatch: %+v", createResp.Data)
 	}
 
@@ -120,6 +124,114 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 	handler.ServeHTTP(duplicateRec, duplicateReq)
 	if duplicateRec.Code != http.StatusBadRequest || !strings.Contains(duplicateRec.Body.String(), "already exists") {
 		t.Fatalf("duplicate user should be rejected status=%d body=%s", duplicateRec.Code, duplicateRec.Body.String())
+	}
+}
+
+func TestAdminUserDepartmentAssignmentValidationAndSessionRevocation(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{})
+	engineering, err := control.CreateDepartment(t.Context(), "tester", controlplane.DepartmentRequest{Name: "Engineering", Code: "eng", Status: controlplane.DepartmentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finance, err := control.CreateDepartment(t.Context(), "tester", controlplane.DepartmentRequest{Name: "Finance", Code: "fin", Status: controlplane.DepartmentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived, err := control.CreateDepartment(t.Context(), "tester", controlplane.DepartmentRequest{Name: "Archived", Code: "old", Status: controlplane.DepartmentStatusArchived})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	create := func(email, departmentID string) *httptest.ResponseRecorder {
+		body := bytes.NewBufferString(`{"email":"` + email + `","status":"active","role":"developer","department_id":"` + departmentID + `"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", body)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for name, departmentID := range map[string]string{"missing": "dept_missing", "archived": archived.ID} {
+		rec := create(name+"@example.test", departmentID)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "active department not found") {
+			t.Fatalf("%s department status=%d body=%s", name, rec.Code, rec.Body.String())
+		}
+	}
+
+	createRec := create("assigned@example.test", engineering.ID)
+	var createResponse struct {
+		Data controlplane.WorkspaceUser `json:"data"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createResponse); err != nil || createRec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s err=%v", createRec.Code, createRec.Body.String(), err)
+	}
+	if createResponse.Data.DepartmentID != engineering.ID {
+		t.Fatalf("created department=%q want=%q", createResponse.Data.DepartmentID, engineering.ID)
+	}
+
+	updateBody := bytes.NewBufferString(`{"email":"assigned@example.test","status":"active","role":"developer","department_id":"` + finance.ID + `"}`)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/users/"+createResponse.Data.ID, updateBody)
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	handler.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	users, err := control.ListWorkspaceUsers(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range users {
+		if user.ID == createResponse.Data.ID {
+			if user.DepartmentID != finance.ID || user.SessionVersion != 1 {
+				t.Fatalf("updated user=%+v", user)
+			}
+			return
+		}
+	}
+	t.Fatal("updated user not found")
+}
+
+func TestDepartmentAdministratorCanOnlyAssignAuthorizedDepartment(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{AdminToken: "secret"})
+	engineering, err := control.CreateDepartment(t.Context(), "tester", controlplane.DepartmentRequest{Name: "Engineering", Code: "eng", Status: controlplane.DepartmentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finance, err := control.CreateDepartment(t.Context(), "tester", controlplane.DepartmentRequest{Name: "Finance", Code: "fin", Status: controlplane.DepartmentStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := control.CreateWorkspaceUser(t.Context(), "tester", controlplane.WorkspaceUserRequest{Email: "department-manager@example.test", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleDeveloper})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.CreateRoleBinding(t.Context(), "tester", controlplane.RoleBindingRequest{UserID: manager.ID, Role: controlplane.RolePlatformAdmin, ScopeType: controlplane.RoleScopeDepartment, ScopeID: engineering.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", bytes.NewBufferString(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("X-Actor", manager.Email)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	allowed := request(`{"email":"engineer@example.test","status":"active","role":"developer","department_id":"` + engineering.ID + `"}`)
+	if allowed.Code != http.StatusOK || !strings.Contains(allowed.Body.String(), engineering.ID) {
+		t.Fatalf("authorized department status=%d body=%s", allowed.Code, allowed.Body.String())
+	}
+	for name, body := range map[string]string{
+		"unassigned": `{"email":"unassigned@example.test","status":"active","role":"developer"}`,
+		"foreign":    `{"email":"finance@example.test","status":"active","role":"developer","department_id":"` + finance.ID + `"}`,
+	} {
+		rec := request(body)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s assignment status=%d body=%s", name, rec.Code, rec.Body.String())
+		}
 	}
 }
 

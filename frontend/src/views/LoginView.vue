@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
 import { availableLocales, getLocale, setLocale, type LocaleCode } from '@/i18n'
 import { forgotPassword, register, resetPassword, verifyEmail } from '@/api/auth'
+import { defaultSurfaceRoute } from '@/router/surfaces'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -73,10 +74,7 @@ async function submitAccountAction() {
 
 function defaultEntry(): string {
   const settings = app.publicSettings
-  const profile = settings?.enabled_profiles.includes(settings.default_profile) ? settings.default_profile : settings?.enabled_profiles[0]
-  if (profile === 'personal') return '/console/overview'
-  if (profile === 'relay_operator') return ['super_admin', 'platform_admin', 'demo_admin'].includes(auth.user?.role || '') ? '/operator/overview' : '/customer/overview'
-  return '/admin/dashboard'
+  return defaultSurfaceRoute(settings?.enabled_profiles || [], settings?.default_profile || '', auth.user)
 }
 
 function changeLocale(event: Event) {

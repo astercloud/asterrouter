@@ -1,0 +1,4 @@
+interface:
+  display_name: "AsterRouter Environment Tests"
+  short_description: "验证 PostgreSQL、容器、Linux 发布包与远程部署"
+  default_prompt: "Use $remote-tests to verify AsterRouter in its PostgreSQL and deployment environments."

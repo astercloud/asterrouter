@@ -55,6 +55,7 @@ export interface PublicSettings {
 export interface AuthUser {
   username: string
   role: string
+	allowed_surfaces?: Array<'personal' | 'relay_operator' | 'enterprise' | 'platform' | 'portal' | 'customer'>
 	display_name?: string
 	email?: string
 	avatar_data_url?: string
@@ -607,6 +608,9 @@ export interface APIKeyRecord {
   key_type: string
   customer_id: string
   owner_user_id: string
+  profile_scope: string
+  platform_tenant_id: string
+  gateway_principal_id: string
   policy_id: string
   model_allowlist: string[]
   qps_limit: number
@@ -627,6 +631,8 @@ export interface APIKeyCreateRequest {
   key_type?: string
   customer_id?: string
   owner_user_id?: string
+  platform_tenant_id?: string
+  gateway_principal_id?: string
 }
 
 export interface APIKeyUpdateRequest {
@@ -640,6 +646,143 @@ export interface APIKeyUpdateRequest {
   key_type?: string
   customer_id?: string
   owner_user_id?: string
+  platform_tenant_id?: string
+  gateway_principal_id?: string
+}
+
+export interface PlatformTenant {
+  id: string
+  name: string
+  slug: string
+  entitlement_reference: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PlatformTenantRequest {
+  name: string
+  slug: string
+  entitlement_reference: string
+  status: string
+}
+
+export interface GatewayPrincipal {
+  id: string
+  tenant_id: string
+  name: string
+  principal_type: 'service' | 'developer' | 'integration'
+  external_subject_reference: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GatewayPrincipalRequest {
+  tenant_id: string
+  name: string
+  principal_type: 'service' | 'developer' | 'integration'
+  external_subject_reference: string
+  status: string
+}
+
+export interface ExternalAuthIntegration {
+  id: string
+  tenant_id: string
+  gateway_principal_id: string
+  name: string
+  protocol: 'hmac_signed_context' | 'jwt_jwks'
+  key_id: string
+  secret_configured: boolean
+  secret_hint: string
+  issuer: string
+  jwks_url: string
+  subject_claim: string
+  models_claim: string
+  qps_limit_claim: string
+  monthly_token_limit_claim: string
+  audience: string
+  policy_id: string
+  model_allowlist: string[]
+  qps_limit: number
+  monthly_token_limit: number
+  max_ttl_seconds: number
+  status: 'active' | 'disabled'
+  created_at: string
+  updated_at: string
+}
+
+export interface ExternalAuthIntegrationRequest {
+  tenant_id: string
+  gateway_principal_id: string
+  name: string
+  protocol?: 'hmac_signed_context' | 'jwt_jwks'
+  key_id: string
+  secret?: string
+  issuer?: string
+  jwks_url?: string
+  subject_claim?: string
+  models_claim?: string
+  qps_limit_claim?: string
+  monthly_token_limit_claim?: string
+  audience: string
+  policy_id: string
+  model_allowlist: string[]
+  qps_limit: number
+  monthly_token_limit: number
+  max_ttl_seconds: number
+  status: 'active' | 'disabled'
+}
+
+export interface ExternalAuthIntegrationCreateResponse {
+  record: ExternalAuthIntegration
+  secret: string
+}
+
+export interface PlatformUsageSink {
+  id: string
+  tenant_id: string
+  external_auth_integration_id: string
+  name: string
+  endpoint_url_hint: string
+  signing_secret_hint: string
+  status: 'active' | 'disabled'
+  max_attempts: number
+  created_at: string
+  updated_at: string
+}
+
+export interface PlatformUsageSinkRequest {
+  tenant_id: string
+  external_auth_integration_id: string
+  name: string
+  endpoint_url: string
+  signing_secret?: string
+  status: 'active' | 'disabled'
+  max_attempts: number
+}
+
+export interface PlatformUsageSinkCreateResponse {
+  record: PlatformUsageSink
+  signing_secret: string
+}
+
+export interface PlatformUsageDeliveryEvent {
+  id: string
+  sink_id: string
+  usage_record_id: string
+  event_id: string
+  status: 'pending' | 'delivering' | 'delivered' | 'dead_letter'
+  attempt_count: number
+  max_attempts: number
+  next_attempt_at: string
+  lease_until?: string
+  delivered_at?: string
+  last_http_status: number
+  last_error?: string
+  target_hint: string
+  created_at: string
+  updated_at: string
 }
 
 export interface APIKeyCreateResponse {
@@ -654,6 +797,11 @@ export interface AuditLog {
   resource_type: string
   resource_id: string
   summary: string
+  profile_scope: string
+  platform_tenant_id: string
+  platform_tenant_name: string
+  gateway_principal_id: string
+  gateway_principal_name: string
   created_at: string
 }
 
@@ -1038,6 +1186,11 @@ export interface UsageRecord {
   id: string
   api_key_id: string
   customer_id: string
+  profile_scope: string
+  platform_tenant_id: string
+  platform_tenant_name: string
+  gateway_principal_id: string
+  gateway_principal_name: string
   api_fingerprint: string
   model: string
   upstream_model: string
@@ -1141,6 +1294,11 @@ export interface GatewayTrace {
   id: string
   api_key_id: string
   api_fingerprint: string
+  profile_scope: string
+  platform_tenant_id: string
+  platform_tenant_name: string
+  gateway_principal_id: string
+  gateway_principal_name: string
   model: string
   stream: boolean
   message_count: number

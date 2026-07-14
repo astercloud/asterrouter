@@ -1,0 +1,314 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/astercloud/asterrouter/backend/internal/config"
+	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/settings"
+	"github.com/astercloud/asterrouter/backend/internal/system"
+)
+
+func TestPlatformAPIRequiresEnabledProfileAndExplicitSurfaceBinding(t *testing.T) {
+	t.Run("disabled profile is not exposed", func(t *testing.T) {
+		handler := newTestHandler(t, config.Config{AdminToken: "secret"})
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/platform/dashboard", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("disabled platform status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{
+		Version: "test", StorageMode: "memory", EnabledProfiles: []string{"platform"}, DefaultProfile: "platform",
+	})
+	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	if err := control.EnsureSeedData(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	user, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{
+		Email: "platform-operator@example.test", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleDeveloper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(Options{
+		Config:          config.Config{AdminToken: "secret"},
+		SettingsService: settingsService,
+		ControlService:  control,
+		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
+	})
+	request := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/platform/dashboard", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-Actor", user.Email)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := request("secret"); rec.Code != http.StatusForbidden {
+		t.Fatalf("unbound platform operator status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
+		UserID: user.ID, Role: controlplane.RolePlatformAdmin, ScopeType: controlplane.RoleScopeSurface, ScopeID: controlplane.SurfacePlatform,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := request("secret"); rec.Code != http.StatusOK {
+		t.Fatalf("bound platform operator status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{Name: "gateway-only", ModelAllowlist: []string{"model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := request(key.Key); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("gateway key reached platform API status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	adminReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/dashboard", nil)
+	adminReq.Header.Set("Authorization", "Bearer secret")
+	adminRec := httptest.NewRecorder()
+	handler.ServeHTTP(adminRec, adminReq)
+	if adminRec.Code != http.StatusNotFound {
+		t.Fatalf("enterprise API was exposed from a platform instance status=%d body=%s", adminRec.Code, adminRec.Body.String())
+	}
+}
+
+func TestSystemProfileChangesCannotMutateAnInstalledDeployment(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{
+		Version: "test", StorageMode: "memory", EnabledProfiles: []string{"enterprise"}, DefaultProfile: "enterprise",
+	})
+	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	user, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{
+		Email: "platform-admin@example.test", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RolePlatformAdmin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(Options{
+		Config:          config.Config{AdminToken: "secret"},
+		SettingsService: settingsService,
+		ControlService:  control,
+		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
+	})
+
+	denied := httptest.NewRequest(http.MethodPut, "/api/v1/system/profiles", bytes.NewBufferString(`{"enabled_profiles":["enterprise","platform"],"default_profile":"enterprise"}`))
+	denied.Header.Set("Authorization", "Bearer secret")
+	denied.Header.Set("X-Actor", user.Email)
+	denied.Header.Set("Content-Type", "application/json")
+	deniedRec := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRec, denied)
+	if deniedRec.Code != http.StatusForbidden {
+		t.Fatalf("non-system administrator status=%d body=%s", deniedRec.Code, deniedRec.Body.String())
+	}
+
+	allowed := httptest.NewRequest(http.MethodPut, "/api/v1/system/profiles", bytes.NewBufferString(`{"enabled_profiles":["platform"],"default_profile":"platform"}`))
+	allowed.Header.Set("Authorization", "Bearer secret")
+	allowed.Header.Set("Content-Type", "application/json")
+	allowedRec := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRec, allowed)
+	if allowedRec.Code != http.StatusConflict {
+		t.Fatalf("system administrator mutation status=%d body=%s", allowedRec.Code, allowedRec.Body.String())
+	}
+	current, err := settingsService.Admin(context.Background())
+	if err != nil || current.DefaultProfile != "enterprise" || len(current.EnabledProfiles) != 1 || current.EnabledProfiles[0] != "enterprise" {
+		t.Fatalf("installed profile mutated=%+v err=%v", current.PublicSettings, err)
+	}
+}
+
+func TestProfileBundleChangesAreDeniedAcrossSurfaceSettings(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{
+		Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}, DefaultProfile: "enterprise",
+	})
+	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	user, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{
+		Email: "surface-settings@example.test", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RolePlatformAdmin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, surface := range []string{controlplane.SurfacePersonal, controlplane.SurfaceRelayOperator} {
+		if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
+			UserID: user.ID, Role: controlplane.RolePlatformAdmin, ScopeType: controlplane.RoleScopeSurface, ScopeID: surface,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := New(Options{
+		Config:          config.Config{AdminToken: "secret"},
+		SettingsService: settingsService,
+		ControlService:  control,
+		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
+	})
+	current, err := settingsService.Admin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.EnabledProfiles = []string{"personal", "relay_operator", "enterprise", "platform"}
+	body, err := json.Marshal(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/api/v1/admin/settings", "/api/v1/console/settings", "/api/v1/operator/settings"} {
+		req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("X-Actor", user.Email)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+	updated, err := settingsService.Admin(context.Background())
+	if err != nil || len(updated.EnabledProfiles) != 3 {
+		t.Fatalf("profile bundle mutated after denied writes: %+v err=%v", updated.PublicSettings, err)
+	}
+}
+
+func TestPlatformAPIKeysAllowOnlyWorkspaceOrServiceOwnership(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{
+		Version: "test", StorageMode: "memory", EnabledProfiles: []string{"platform"}, DefaultProfile: "platform",
+	})
+	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	handler := New(Options{
+		Config:          config.Config{AdminToken: "secret"},
+		SettingsService: settingsService,
+		ControlService:  control,
+		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
+	})
+	request := func(payload string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/platform/api-keys", bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := request(`{"name":"unbound","key_type":"service","model_allowlist":["model"],"qps_limit":1,"monthly_token_limit":1}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unbound platform key status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	valid := request(`{"name":"platform-service","key_type":"service","platform_tenant_id":"ptn_default","gateway_principal_id":"gpr_default_service","model_allowlist":["model"],"qps_limit":1,"monthly_token_limit":1}`)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("platform service key status=%d body=%s", valid.Code, valid.Body.String())
+	}
+	for _, payload := range []string{
+		`{"name":"customer","key_type":"customer","customer_id":"customer-1","model_allowlist":["model"],"qps_limit":1,"monthly_token_limit":1}`,
+		`{"name":"user","key_type":"user","owner_user_id":"user-1","model_allowlist":["model"],"qps_limit":1,"monthly_token_limit":1}`,
+	} {
+		if rec := request(payload); rec.Code != http.StatusBadRequest {
+			t.Fatalf("non-platform key status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	keys, err := control.ListAPIKeys(context.Background())
+	if err != nil || len(keys) != 1 || keys[0].KeyType != controlplane.APIKeyTypeService || keys[0].ProfileScope != controlplane.ProfileScopePlatform || keys[0].PlatformTenantID != "ptn_default" || keys[0].GatewayPrincipalID != "gpr_default_service" {
+		t.Fatalf("stored platform keys=%+v err=%v", keys, err)
+	}
+}
+
+func TestPlatformControlPlaneScopesPlatformDomainAndObservability(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{
+		Version: "test", StorageMode: "memory", EnabledProfiles: []string{"platform"}, DefaultProfile: "platform",
+	})
+	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	handler := New(Options{
+		Config:          config.Config{AdminToken: "secret"},
+		SettingsService: settingsService,
+		ControlService:  control,
+		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
+	})
+	request := func(method, path, payload string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	tenantsRec := request(http.MethodGet, "/api/v1/platform/tenants", "")
+	if tenantsRec.Code != http.StatusOK {
+		t.Fatalf("list default platform tenants status=%d body=%s", tenantsRec.Code, tenantsRec.Body.String())
+	}
+	var tenantsResponse struct {
+		Data []controlplane.PlatformTenant `json:"data"`
+	}
+	if err := json.Unmarshal(tenantsRec.Body.Bytes(), &tenantsResponse); err != nil || len(tenantsResponse.Data) != 1 || tenantsResponse.Data[0].ID != "ptn_default" {
+		t.Fatalf("default tenants=%+v err=%v", tenantsResponse.Data, err)
+	}
+	tenantRec := request(http.MethodPost, "/api/v1/platform/tenants", `{"name":"Partner API","slug":"partner-api","entitlement_reference":"partner-42"}`)
+	if tenantRec.Code != http.StatusOK {
+		t.Fatalf("create tenant status=%d body=%s", tenantRec.Code, tenantRec.Body.String())
+	}
+	var tenantResponse struct {
+		Data controlplane.PlatformTenant `json:"data"`
+	}
+	if err := json.Unmarshal(tenantRec.Body.Bytes(), &tenantResponse); err != nil {
+		t.Fatal(err)
+	}
+	principalRec := request(http.MethodPost, "/api/v1/platform/gateway-principals", `{"tenant_id":"`+tenantResponse.Data.ID+`","name":"Partner backend","principal_type":"integration","external_subject_reference":"partner-service"}`)
+	if principalRec.Code != http.StatusOK {
+		t.Fatalf("create principal status=%d body=%s", principalRec.Code, principalRec.Body.String())
+	}
+	var principalResponse struct {
+		Data controlplane.GatewayPrincipal `json:"data"`
+	}
+	if err := json.Unmarshal(principalRec.Body.Bytes(), &principalResponse); err != nil {
+		t.Fatal(err)
+	}
+	keyRec := request(http.MethodPost, "/api/v1/platform/api-keys", `{"name":"partner-key","key_type":"service","platform_tenant_id":"`+tenantResponse.Data.ID+`","gateway_principal_id":"`+principalResponse.Data.ID+`","model_allowlist":["model"],"qps_limit":1,"monthly_token_limit":1}`)
+	if keyRec.Code != http.StatusOK {
+		t.Fatalf("create scoped platform key status=%d body=%s", keyRec.Code, keyRec.Body.String())
+	}
+	var keyResponse struct {
+		Data controlplane.APIKeyCreateResponse `json:"data"`
+	}
+	if err := json.Unmarshal(keyRec.Body.Bytes(), &keyResponse); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := control.AuthorizeGatewayModel(context.Background(), keyResponse.Data.Key, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.RecordGatewayUsage(context.Background(), auth, controlplane.GatewayUsageInput{Model: "model", Status: "forwarded", InputTokens: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.RecordGatewayTrace(context.Background(), auth, controlplane.GatewayTraceInput{Model: "model", Status: "forwarded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.RecordGatewayCall(context.Background(), auth, "model", "forwarded", "platform call"); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.RecordGatewayUsage(context.Background(), controlplane.GatewayAuthContext{APIKey: controlplane.APIKeyRecord{ID: "legacy", Fingerprint: "legacy"}}, controlplane.GatewayUsageInput{Model: "legacy", Status: "forwarded"}); err != nil {
+		t.Fatal(err)
+	}
+
+	usageRec := request(http.MethodGet, "/api/v1/platform/usage", "")
+	if usageRec.Code != http.StatusOK || !strings.Contains(usageRec.Body.String(), tenantResponse.Data.ID) || strings.Contains(usageRec.Body.String(), "legacy") {
+		t.Fatalf("platform usage scope status=%d body=%s", usageRec.Code, usageRec.Body.String())
+	}
+	traceRec := request(http.MethodGet, "/api/v1/platform/gateway-traces", "")
+	if traceRec.Code != http.StatusOK || !strings.Contains(traceRec.Body.String(), tenantResponse.Data.ID) {
+		t.Fatalf("platform trace scope status=%d body=%s", traceRec.Code, traceRec.Body.String())
+	}
+	auditRec := request(http.MethodGet, "/api/v1/platform/audit-logs", "")
+	if auditRec.Code != http.StatusOK || !strings.Contains(auditRec.Body.String(), tenantResponse.Data.ID) {
+		t.Fatalf("platform audit scope status=%d body=%s", auditRec.Code, auditRec.Body.String())
+	}
+	if err := control.RecordRiskRuleAlert(context.Background(), "legacy", "legacy-rule", "Legacy rule", "legacy alert", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	alertsRec := request(http.MethodGet, "/api/v1/platform/alerts", "")
+	if alertsRec.Code != http.StatusOK || !strings.Contains(alertsRec.Body.String(), tenantResponse.Data.ID) || strings.Contains(alertsRec.Body.String(), "legacy alert") {
+		t.Fatalf("platform alert scope status=%d body=%s", alertsRec.Code, alertsRec.Body.String())
+	}
+}

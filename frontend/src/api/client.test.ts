@@ -41,10 +41,13 @@ describe('api client', () => {
   })
 
   it.each([
-    ['/console/overview', '/console/providers'],
-    ['/operator/overview', '/operator/providers'],
-    ['/admin/dashboard', '/admin/providers']
-  ])('maps shared admin endpoints for the active surface %s', async (browserPath, expectedURL) => {
+    ['/console/overview', '/admin/providers', '/console/providers'],
+    ['/operator/overview', '/admin/providers', '/operator/providers'],
+    ['/admin/dashboard', '/admin/providers', '/admin/providers'],
+    ['/platform/overview', '/admin/providers', '/platform/providers'],
+    ['/platform/overview', '/admin/policies', '/platform/policies'],
+    ['/platform/overview', '/admin/audit-logs', '/platform/audit-logs']
+  ])('maps shared admin endpoint %s for the active surface %s', async (browserPath, requestURL, expectedURL) => {
     window.history.replaceState({}, '', browserPath)
     let capturedURL = ''
     apiClient.defaults.adapter = async (config) => {
@@ -52,7 +55,7 @@ describe('api client', () => {
       return response(config, { code: 0, message: 'ok', data: [] })
     }
 
-    await apiClient.get('/admin/providers')
+    await apiClient.get(requestURL)
 
     expect(capturedURL).toBe(expectedURL)
   })

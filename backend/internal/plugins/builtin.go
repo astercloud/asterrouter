@@ -7,7 +7,7 @@ import (
 
 func builtinPlugins(now time.Time) []Plugin {
 	return []Plugin{
-		builtin("com.asterrouter.core.gateway", "Gateway Core", "OpenAI-compatible gateway, API key validation, provider forwarding, and audit hooks.", "core", "backend", TierCore, StatusEnabled, EntitlementIncluded, []string{"personal", "relay_operator", "enterprise"}, "", false, now),
+		builtin("com.asterrouter.core.gateway", "Gateway Core", "OpenAI-compatible gateway, API key validation, provider forwarding, and audit hooks.", "core", "backend", TierCore, StatusEnabled, EntitlementIncluded, []string{"personal", "relay_operator", "enterprise", "platform"}, "", false, now),
 		builtin("com.asterrouter.core.plugin-host", "Plugin Host", "Built-in plugin registry, contribution metadata, entitlement gates, and plugin audit events.", "core", "backend", TierCore, StatusEnabled, EntitlementIncluded, []string{"personal", "relay_operator", "enterprise"}, "/plugins", false, now),
 		builtin("com.asterrouter.core.update-manager", "System Update Manager", "Version check, release manifest matching, checksum validation, rollback, and restart orchestration.", "operations", "backend", TierCore, StatusEnabled, EntitlementIncluded, []string{"personal", "relay_operator", "enterprise"}, "/settings", true, now),
 		builtin("com.asterrouter.provider.openai-compatible", "OpenAI-compatible Provider", "Register compatible provider connections and forward chat completion traffic.", "provider", "backend", TierFreeCore, StatusEnabled, EntitlementFree, []string{"personal", "relay_operator", "enterprise"}, "/providers", true, now),

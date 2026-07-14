@@ -7,6 +7,7 @@ import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { availableLocales, getLocale, setLocale, type LocaleCode } from '@/i18n'
 import CustomerNotificationBell from '@/components/CustomerNotificationBell.vue'
+import { canAccessSurface } from '@/router/surfaces'
 
 withDefaults(defineProps<{ showMenu?: boolean }>(), {
   showMenu: false
@@ -39,7 +40,7 @@ const isOperatorSurface = computed(() => route.path.startsWith('/operator'))
 const isCustomerSurface = computed(() => route.path.startsWith('/customer'))
 const isAdminSurface = computed(() => route.path.startsWith('/admin'))
 const isPortalSurface = computed(() => route.path.startsWith('/portal'))
-const canOperateRelay = computed(() => ['super_admin', 'platform_admin', 'demo_admin'].includes(auth.user?.role || ''))
+const isPlatformSurface = computed(() => route.path.startsWith('/platform'))
 
 function changeLocale(event: Event) {
   setLocale((event.target as HTMLSelectElement).value as LocaleCode)
@@ -53,7 +54,7 @@ async function openSurface(path: string) {
 async function openAccount() {
 	const surface = route.path.split('/')[1]
 	accountOpen.value = false
-	await router.push(`/${['console', 'operator', 'admin', 'portal', 'customer'].includes(surface) ? surface : 'admin'}/account`)
+	await router.push(`/${['console', 'operator', 'admin', 'portal', 'customer', 'platform'].includes(surface) ? surface : 'admin'}/account`)
 }
 
 async function logout() {
@@ -139,25 +140,29 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
 			<UserCog :size="16" />
 			{{ t('account.title') }}
 		  </button>
-          <button v-if="enabledProfiles.includes('personal') && !isConsoleSurface" type="button" @click="openSurface('/console/overview')">
+          <button v-if="enabledProfiles.includes('personal') && canAccessSurface(auth.user, 'personal') && !isConsoleSurface" type="button" @click="openSurface('/console/overview')">
             <Laptop :size="16" />
             {{ t('nav.console') }}
           </button>
-          <button v-if="enabledProfiles.includes('relay_operator') && canOperateRelay && !isOperatorSurface" type="button" @click="openSurface('/operator/overview')">
+          <button v-if="enabledProfiles.includes('relay_operator') && canAccessSurface(auth.user, 'relay_operator') && !isOperatorSurface" type="button" @click="openSurface('/operator/overview')">
             <RadioTower :size="16" />
             {{ t('nav.operator') }}
           </button>
-          <button v-if="enabledProfiles.includes('relay_operator') && !isCustomerSurface" type="button" @click="openSurface('/customer/overview')">
+          <button v-if="enabledProfiles.includes('relay_operator') && canAccessSurface(auth.user, 'customer') && !isCustomerSurface" type="button" @click="openSurface('/customer/overview')">
             <UserRound :size="16" />
             {{ t('nav.customer') }}
           </button>
-          <button v-if="enabledProfiles.includes('enterprise') && !isAdminSurface" type="button" @click="openSurface('/admin/dashboard')">
+          <button v-if="enabledProfiles.includes('enterprise') && canAccessSurface(auth.user, 'enterprise') && !isAdminSurface" type="button" @click="openSurface('/admin/dashboard')">
             <PanelsTopLeft :size="16" />
             {{ t('nav.admin') }}
           </button>
-          <button v-if="enabledProfiles.includes('enterprise') && !isPortalSurface" type="button" @click="openSurface('/portal/overview')">
+          <button v-if="enabledProfiles.includes('enterprise') && canAccessSurface(auth.user, 'portal') && !isPortalSurface" type="button" @click="openSurface('/portal/overview')">
             <KeyRound :size="16" />
             {{ t('nav.portal') }}
+          </button>
+          <button v-if="enabledProfiles.includes('platform') && canAccessSurface(auth.user, 'platform') && !isPlatformSurface" type="button" @click="openSurface('/platform/overview')">
+            <PanelsTopLeft :size="16" />
+            {{ t('nav.platformConsole') }}
           </button>
           <button class="danger-item" type="button" @click="logout">
             <LogOut :size="16" />

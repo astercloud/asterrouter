@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+var ErrPortalAPIKeyNotFound = errors.New("portal api key not found")
+
 type portalScope struct {
 	Actor          string
 	UserID         string
@@ -116,7 +118,7 @@ func (s *Service) portalAPIKeyAccess(ctx context.Context, actor string, id strin
 		return portalScope{}, APIKeyRecord{}, err
 	}
 	if !scope.CanViewAllKeys && (key.KeyType != APIKeyTypeUser || key.OwnerUserID != scope.UserID) {
-		return portalScope{}, APIKeyRecord{}, errors.New("portal api key not found")
+		return portalScope{}, APIKeyRecord{}, ErrPortalAPIKeyNotFound
 	}
 	return scope, key, nil
 }

@@ -15,6 +15,31 @@ const (
 	APIKeyTypeCustomer  = "customer"
 	APIKeyTypeService   = "service"
 
+	ProfileScopePlatform = "platform"
+
+	PlatformTenantStatusActive   = "active"
+	PlatformTenantStatusDisabled = "disabled"
+
+	GatewayPrincipalStatusActive   = "active"
+	GatewayPrincipalStatusDisabled = "disabled"
+
+	GatewayPrincipalTypeService     = "service"
+	GatewayPrincipalTypeDeveloper   = "developer"
+	GatewayPrincipalTypeIntegration = "integration"
+
+	ExternalAuthIntegrationStatusActive   = "active"
+	ExternalAuthIntegrationStatusDisabled = "disabled"
+	ExternalAuthIntegrationProtocolHMAC   = "hmac_signed_context"
+	ExternalAuthIntegrationProtocolJWT    = "jwt_jwks"
+
+	PlatformUsageSinkStatusActive   = "active"
+	PlatformUsageSinkStatusDisabled = "disabled"
+
+	PlatformUsageDeliveryStatusPending    = "pending"
+	PlatformUsageDeliveryStatusDelivering = "delivering"
+	PlatformUsageDeliveryStatusDelivered  = "delivered"
+	PlatformUsageDeliveryStatusDeadLetter = "dead_letter"
+
 	AccountStatusActive   = "active"
 	AccountStatusError    = "error"
 	AccountStatusDisabled = "disabled"
@@ -253,48 +278,222 @@ type ModelPricingRequest struct {
 }
 
 type APIKeyRecord struct {
-	ID                string     `json:"id"`
-	Name              string     `json:"name"`
-	KeyHash           string     `json:"-"`
-	Fingerprint       string     `json:"fingerprint"`
-	Prefix            string     `json:"prefix"`
-	Status            string     `json:"status"`
-	KeyType           string     `json:"key_type"`
-	CustomerID        string     `json:"customer_id"`
-	OwnerUserID       string     `json:"owner_user_id"`
-	PolicyID          string     `json:"policy_id"`
-	ModelAllowlist    []string   `json:"model_allowlist"`
-	QPSLimit          int        `json:"qps_limit"`
-	MonthlyTokenLimit int        `json:"monthly_token_limit"`
-	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt        *time.Time `json:"last_used_at,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID                 string     `json:"id"`
+	Name               string     `json:"name"`
+	KeyHash            string     `json:"-"`
+	Fingerprint        string     `json:"fingerprint"`
+	Prefix             string     `json:"prefix"`
+	Status             string     `json:"status"`
+	KeyType            string     `json:"key_type"`
+	CustomerID         string     `json:"customer_id"`
+	OwnerUserID        string     `json:"owner_user_id"`
+	ProfileScope       string     `json:"profile_scope"`
+	PlatformTenantID   string     `json:"platform_tenant_id"`
+	GatewayPrincipalID string     `json:"gateway_principal_id"`
+	PolicyID           string     `json:"policy_id"`
+	ModelAllowlist     []string   `json:"model_allowlist"`
+	QPSLimit           int        `json:"qps_limit"`
+	MonthlyTokenLimit  int        `json:"monthly_token_limit"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type APIKeyCreateRequest struct {
-	Name              string   `json:"name"`
-	PolicyID          string   `json:"policy_id"`
-	ModelAllowlist    []string `json:"model_allowlist"`
-	QPSLimit          int      `json:"qps_limit"`
-	MonthlyTokenLimit int      `json:"monthly_token_limit"`
-	ExpiresAt         string   `json:"expires_at"`
-	KeyType           string   `json:"key_type"`
-	CustomerID        string   `json:"customer_id"`
-	OwnerUserID       string   `json:"owner_user_id"`
+	Name               string   `json:"name"`
+	PolicyID           string   `json:"policy_id"`
+	ModelAllowlist     []string `json:"model_allowlist"`
+	QPSLimit           int      `json:"qps_limit"`
+	MonthlyTokenLimit  int      `json:"monthly_token_limit"`
+	ExpiresAt          string   `json:"expires_at"`
+	KeyType            string   `json:"key_type"`
+	CustomerID         string   `json:"customer_id"`
+	OwnerUserID        string   `json:"owner_user_id"`
+	PlatformTenantID   string   `json:"platform_tenant_id"`
+	GatewayPrincipalID string   `json:"gateway_principal_id"`
 }
 
 type APIKeyUpdateRequest struct {
-	Name              string   `json:"name"`
-	PolicyID          string   `json:"policy_id"`
-	ModelAllowlist    []string `json:"model_allowlist"`
-	QPSLimit          int      `json:"qps_limit"`
-	MonthlyTokenLimit int      `json:"monthly_token_limit"`
-	ExpiresAt         string   `json:"expires_at"`
-	Status            string   `json:"status"`
-	KeyType           string   `json:"key_type"`
-	CustomerID        string   `json:"customer_id"`
-	OwnerUserID       string   `json:"owner_user_id"`
+	Name               string   `json:"name"`
+	PolicyID           string   `json:"policy_id"`
+	ModelAllowlist     []string `json:"model_allowlist"`
+	QPSLimit           int      `json:"qps_limit"`
+	MonthlyTokenLimit  int      `json:"monthly_token_limit"`
+	ExpiresAt          string   `json:"expires_at"`
+	Status             string   `json:"status"`
+	KeyType            string   `json:"key_type"`
+	CustomerID         string   `json:"customer_id"`
+	OwnerUserID        string   `json:"owner_user_id"`
+	PlatformTenantID   string   `json:"platform_tenant_id"`
+	GatewayPrincipalID string   `json:"gateway_principal_id"`
+}
+
+// PlatformTenant owns the gateway relationship with a product, partner, or
+// API customer. It intentionally stores only an opaque entitlement reference;
+// the connected product remains the source of truth for users and orders.
+type PlatformTenant struct {
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Slug                 string    `json:"slug"`
+	EntitlementReference string    `json:"entitlement_reference"`
+	Status               string    `json:"status"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type PlatformTenantRequest struct {
+	Name                 string `json:"name"`
+	Slug                 string `json:"slug"`
+	EntitlementReference string `json:"entitlement_reference"`
+	Status               string `json:"status"`
+}
+
+// GatewayPrincipal is a non-human caller identity inside a Platform Tenant.
+// It is not an AsterRouter workspace user and never creates an external login
+// account, session, subscription, or balance.
+type GatewayPrincipal struct {
+	ID                       string    `json:"id"`
+	TenantID                 string    `json:"tenant_id"`
+	Name                     string    `json:"name"`
+	PrincipalType            string    `json:"principal_type"`
+	ExternalSubjectReference string    `json:"external_subject_reference"`
+	Status                   string    `json:"status"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
+}
+
+type GatewayPrincipalRequest struct {
+	TenantID                 string `json:"tenant_id"`
+	Name                     string `json:"name"`
+	PrincipalType            string `json:"principal_type"`
+	ExternalSubjectReference string `json:"external_subject_reference"`
+	Status                   string `json:"status"`
+}
+
+// ExternalAuthIntegration defines how a connected product delegates a
+// bounded AI-access decision to AsterRouter. It contains no external user
+// session, refresh token, subscription, or customer profile.
+type ExternalAuthIntegration struct {
+	ID                 string    `json:"id"`
+	TenantID           string    `json:"tenant_id"`
+	GatewayPrincipalID string    `json:"gateway_principal_id"`
+	Name               string    `json:"name"`
+	Protocol           string    `json:"protocol"`
+	KeyID              string    `json:"key_id"`
+	SecretConfigured   bool      `json:"secret_configured"`
+	SecretHint         string    `json:"secret_hint"`
+	SecretCiphertext   string    `json:"-"`
+	Issuer             string    `json:"issuer"`
+	JWKSURL            string    `json:"jwks_url"`
+	SubjectClaim       string    `json:"subject_claim"`
+	ModelsClaim        string    `json:"models_claim"`
+	QPSLimitClaim      string    `json:"qps_limit_claim"`
+	MonthlyTokenClaim  string    `json:"monthly_token_limit_claim"`
+	Audience           string    `json:"audience"`
+	PolicyID           string    `json:"policy_id"`
+	ModelAllowlist     []string  `json:"model_allowlist"`
+	QPSLimit           int       `json:"qps_limit"`
+	MonthlyTokenLimit  int       `json:"monthly_token_limit"`
+	MaxTTLSeconds      int       `json:"max_ttl_seconds"`
+	Status             string    `json:"status"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+type ExternalAuthIntegrationRequest struct {
+	TenantID           string   `json:"tenant_id"`
+	GatewayPrincipalID string   `json:"gateway_principal_id"`
+	Name               string   `json:"name"`
+	Protocol           string   `json:"protocol"`
+	KeyID              string   `json:"key_id"`
+	Secret             string   `json:"secret"`
+	Issuer             string   `json:"issuer"`
+	JWKSURL            string   `json:"jwks_url"`
+	SubjectClaim       string   `json:"subject_claim"`
+	ModelsClaim        string   `json:"models_claim"`
+	QPSLimitClaim      string   `json:"qps_limit_claim"`
+	MonthlyTokenClaim  string   `json:"monthly_token_limit_claim"`
+	Audience           string   `json:"audience"`
+	PolicyID           string   `json:"policy_id"`
+	ModelAllowlist     []string `json:"model_allowlist"`
+	QPSLimit           int      `json:"qps_limit"`
+	MonthlyTokenLimit  int      `json:"monthly_token_limit"`
+	MaxTTLSeconds      int      `json:"max_ttl_seconds"`
+	Status             string   `json:"status"`
+}
+
+// ExternalAuthIntegrationCreateResponse returns a shared HMAC secret only at
+// creation or rotation. JWT/JWKS integrations never receive a secret. The
+// record never serializes its ciphertext.
+type ExternalAuthIntegrationCreateResponse struct {
+	Record ExternalAuthIntegration `json:"record"`
+	Secret string                  `json:"secret"`
+}
+
+// PlatformUsageSink is a Platform-controlled destination for signed,
+// metering-only usage events. It is bound to one External Auth Integration;
+// it does not carry a product user, login token, subscription, or balance.
+type PlatformUsageSink struct {
+	ID                        string    `json:"id"`
+	TenantID                  string    `json:"tenant_id"`
+	ExternalAuthIntegrationID string    `json:"external_auth_integration_id"`
+	Name                      string    `json:"name"`
+	EndpointURLCiphertext     string    `json:"-"`
+	EndpointURLHint           string    `json:"endpoint_url_hint"`
+	SigningSecretCiphertext   string    `json:"-"`
+	SigningSecretHint         string    `json:"signing_secret_hint"`
+	Status                    string    `json:"status"`
+	MaxAttempts               int       `json:"max_attempts"`
+	CreatedAt                 time.Time `json:"created_at"`
+	UpdatedAt                 time.Time `json:"updated_at"`
+}
+
+type PlatformUsageSinkRequest struct {
+	TenantID                  string `json:"tenant_id"`
+	ExternalAuthIntegrationID string `json:"external_auth_integration_id"`
+	Name                      string `json:"name"`
+	EndpointURL               string `json:"endpoint_url"`
+	SigningSecret             string `json:"signing_secret"`
+	Status                    string `json:"status"`
+	MaxAttempts               int    `json:"max_attempts"`
+}
+
+type PlatformUsageSinkCreateResponse struct {
+	Record        PlatformUsageSink `json:"record"`
+	SigningSecret string            `json:"signing_secret"`
+}
+
+// PlatformUsageDeliveryEvent is a durable, immutable usage snapshot. Payload
+// stays internal so delivery history cannot be used to read metering details
+// outside the authorized Platform observability surface.
+type PlatformUsageDeliveryEvent struct {
+	ID             string     `json:"id"`
+	SinkID         string     `json:"sink_id"`
+	UsageRecordID  string     `json:"usage_record_id"`
+	EventID        string     `json:"event_id"`
+	Status         string     `json:"status"`
+	AttemptCount   int        `json:"attempt_count"`
+	MaxAttempts    int        `json:"max_attempts"`
+	NextAttemptAt  time.Time  `json:"next_attempt_at"`
+	LeaseUntil     *time.Time `json:"lease_until,omitempty"`
+	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	LastHTTPStatus int        `json:"last_http_status"`
+	LastError      string     `json:"last_error,omitempty"`
+	TargetHint     string     `json:"target_hint"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+
+	PayloadJSON string `json:"-"`
+	LeaseToken  string `json:"-"`
+}
+
+type PlatformUsageDeliveryQuery struct {
+	SinkID     string
+	DeliveryID string
+	Status     string
+	Limit      int
+	Offset     int
 }
 
 type APIKeyCreateResponse struct {
@@ -303,13 +502,20 @@ type APIKeyCreateResponse struct {
 }
 
 type AuditLog struct {
-	ID           string    `json:"id"`
-	Actor        string    `json:"actor"`
-	Action       string    `json:"action"`
-	ResourceType string    `json:"resource_type"`
-	ResourceID   string    `json:"resource_id"`
-	Summary      string    `json:"summary"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID                        string    `json:"id"`
+	Actor                     string    `json:"actor"`
+	Action                    string    `json:"action"`
+	ResourceType              string    `json:"resource_type"`
+	ResourceID                string    `json:"resource_id"`
+	Summary                   string    `json:"summary"`
+	ProfileScope              string    `json:"profile_scope"`
+	PlatformTenantID          string    `json:"platform_tenant_id"`
+	PlatformTenantName        string    `json:"platform_tenant_name"`
+	GatewayPrincipalID        string    `json:"gateway_principal_id"`
+	GatewayPrincipalName      string    `json:"gateway_principal_name"`
+	ExternalAuthIntegrationID string    `json:"external_auth_integration_id"`
+	ExternalSubjectReference  string    `json:"external_subject_reference"`
+	CreatedAt                 time.Time `json:"created_at"`
 }
 
 type Dashboard struct {
@@ -322,21 +528,28 @@ type Dashboard struct {
 }
 
 type UsageRecord struct {
-	ID                string    `json:"id"`
-	APIKeyID          string    `json:"api_key_id"`
-	CustomerID        string    `json:"customer_id"`
-	APIFingerprint    string    `json:"api_fingerprint"`
-	Model             string    `json:"model"`
-	UpstreamModel     string    `json:"upstream_model"`
-	ProviderID        string    `json:"provider_id"`
-	ProviderAccountID string    `json:"provider_account_id"`
-	Status            string    `json:"status"`
-	ErrorType         string    `json:"error_type"`
-	LatencyMS         int64     `json:"latency_ms"`
-	InputTokens       int       `json:"input_tokens"`
-	OutputTokens      int       `json:"output_tokens"`
-	CostCents         int       `json:"cost_cents"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                        string    `json:"id"`
+	APIKeyID                  string    `json:"api_key_id"`
+	CustomerID                string    `json:"customer_id"`
+	ProfileScope              string    `json:"profile_scope"`
+	PlatformTenantID          string    `json:"platform_tenant_id"`
+	PlatformTenantName        string    `json:"platform_tenant_name"`
+	GatewayPrincipalID        string    `json:"gateway_principal_id"`
+	GatewayPrincipalName      string    `json:"gateway_principal_name"`
+	ExternalAuthIntegrationID string    `json:"external_auth_integration_id"`
+	ExternalSubjectReference  string    `json:"external_subject_reference"`
+	APIFingerprint            string    `json:"api_fingerprint"`
+	Model                     string    `json:"model"`
+	UpstreamModel             string    `json:"upstream_model"`
+	ProviderID                string    `json:"provider_id"`
+	ProviderAccountID         string    `json:"provider_account_id"`
+	Status                    string    `json:"status"`
+	ErrorType                 string    `json:"error_type"`
+	LatencyMS                 int64     `json:"latency_ms"`
+	InputTokens               int       `json:"input_tokens"`
+	OutputTokens              int       `json:"output_tokens"`
+	CostCents                 int       `json:"cost_cents"`
+	CreatedAt                 time.Time `json:"created_at"`
 }
 
 type UsageModelSummary struct {
@@ -409,62 +622,77 @@ type CostAllocationReport struct {
 }
 
 type UsageQuery struct {
-	Limit       int
-	Offset      int
-	Search      string
-	APIKeyID    string
-	APIKeyIDs   []string
-	CustomerID  string
-	Model       string
-	ProviderID  string
-	AccountID   string
-	Status      string
-	CreatedFrom time.Time
-	CreatedTo   time.Time
+	Limit                     int
+	Offset                    int
+	Search                    string
+	APIKeyID                  string
+	APIKeyIDs                 []string
+	CustomerID                string
+	ProfileScope              string
+	PlatformTenantID          string
+	GatewayPrincipalID        string
+	ExternalAuthIntegrationID string
+	Model                     string
+	ProviderID                string
+	AccountID                 string
+	Status                    string
+	CreatedFrom               time.Time
+	CreatedTo                 time.Time
 }
 
 type GatewayTrace struct {
-	ID                string    `json:"id"`
-	APIKeyID          string    `json:"api_key_id"`
-	APIFingerprint    string    `json:"api_fingerprint"`
-	Model             string    `json:"model"`
-	Stream            bool      `json:"stream"`
-	MessageCount      int       `json:"message_count"`
-	ProviderID        string    `json:"provider_id"`
-	ProviderAccountID string    `json:"provider_account_id"`
-	GatewayModelID    string    `json:"gateway_model_id"`
-	RouteID           string    `json:"route_id"`
-	RouteGroup        string    `json:"route_group"`
-	UpstreamModel     string    `json:"upstream_model"`
-	RouteSource       string    `json:"route_source"`
-	RouteReason       string    `json:"route_reason"`
-	PolicyID          string    `json:"policy_id"`
-	PolicyName        string    `json:"policy_name"`
-	PolicySource      string    `json:"policy_source"`
-	PolicyVersion     int       `json:"policy_version"`
-	PolicySnapshot    string    `json:"policy_snapshot"`
-	Status            string    `json:"status"`
-	HTTPStatus        int       `json:"http_status"`
-	ErrorType         string    `json:"error_type"`
-	LatencyMS         int64     `json:"latency_ms"`
-	InputTokens       int       `json:"input_tokens"`
-	OutputTokens      int       `json:"output_tokens"`
-	RequestSummary    string    `json:"request_summary"`
-	ResponseSummary   string    `json:"response_summary"`
-	RouteAttempts     string    `json:"route_attempts"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                        string    `json:"id"`
+	APIKeyID                  string    `json:"api_key_id"`
+	APIFingerprint            string    `json:"api_fingerprint"`
+	ProfileScope              string    `json:"profile_scope"`
+	PlatformTenantID          string    `json:"platform_tenant_id"`
+	PlatformTenantName        string    `json:"platform_tenant_name"`
+	GatewayPrincipalID        string    `json:"gateway_principal_id"`
+	GatewayPrincipalName      string    `json:"gateway_principal_name"`
+	ExternalAuthIntegrationID string    `json:"external_auth_integration_id"`
+	ExternalSubjectReference  string    `json:"external_subject_reference"`
+	Model                     string    `json:"model"`
+	Stream                    bool      `json:"stream"`
+	MessageCount              int       `json:"message_count"`
+	ProviderID                string    `json:"provider_id"`
+	ProviderAccountID         string    `json:"provider_account_id"`
+	GatewayModelID            string    `json:"gateway_model_id"`
+	RouteID                   string    `json:"route_id"`
+	RouteGroup                string    `json:"route_group"`
+	UpstreamModel             string    `json:"upstream_model"`
+	RouteSource               string    `json:"route_source"`
+	RouteReason               string    `json:"route_reason"`
+	PolicyID                  string    `json:"policy_id"`
+	PolicyName                string    `json:"policy_name"`
+	PolicySource              string    `json:"policy_source"`
+	PolicyVersion             int       `json:"policy_version"`
+	PolicySnapshot            string    `json:"policy_snapshot"`
+	Status                    string    `json:"status"`
+	HTTPStatus                int       `json:"http_status"`
+	ErrorType                 string    `json:"error_type"`
+	LatencyMS                 int64     `json:"latency_ms"`
+	InputTokens               int       `json:"input_tokens"`
+	OutputTokens              int       `json:"output_tokens"`
+	RequestSummary            string    `json:"request_summary"`
+	ResponseSummary           string    `json:"response_summary"`
+	RouteAttempts             string    `json:"route_attempts"`
+	CreatedAt                 time.Time `json:"created_at"`
 }
 
 type GatewayTraceQuery struct {
-	Limit       int
-	Offset      int
-	Search      string
-	APIKeyID    string
-	APIKeyIDs   []string
-	Model       string
-	Status      string
-	CreatedFrom time.Time
-	CreatedTo   time.Time
+	Limit                     int
+	Offset                    int
+	Search                    string
+	APIKeyID                  string
+	APIKeyIDs                 []string
+	ProfileScope              string
+	PlatformTenantID          string
+	GatewayPrincipalID        string
+	ExternalAuthIntegrationID string
+	Model                     string
+	Status                    string
+	CreatedFrom               time.Time
+	CreatedTo                 time.Time
 }
 
 type GatewayTraceSummary struct {
@@ -476,13 +704,17 @@ type GatewayTraceSummary struct {
 }
 
 type AuditLogQuery struct {
-	Limit        int
-	Offset       int
-	Search       string
-	Action       string
-	ResourceType string
-	CreatedFrom  time.Time
-	CreatedTo    time.Time
+	Limit                     int
+	Offset                    int
+	Search                    string
+	Action                    string
+	ResourceType              string
+	ProfileScope              string
+	PlatformTenantID          string
+	GatewayPrincipalID        string
+	ExternalAuthIntegrationID string
+	CreatedFrom               time.Time
+	CreatedTo                 time.Time
 }
 
 type AuditLogSummary struct {
@@ -504,9 +736,13 @@ type PortalWorkspace struct {
 }
 
 type GatewayAuthContext struct {
-	APIKey       APIKeyRecord      `json:"api_key"`
-	Policy       *GovernancePolicy `json:"policy,omitempty"`
-	PolicySource string            `json:"policy_source,omitempty"`
+	APIKey                   APIKeyRecord             `json:"api_key"`
+	Policy                   *GovernancePolicy        `json:"policy,omitempty"`
+	PolicySource             string                   `json:"policy_source,omitempty"`
+	PlatformTenant           *PlatformTenant          `json:"platform_tenant,omitempty"`
+	GatewayPrincipal         *GatewayPrincipal        `json:"gateway_principal,omitempty"`
+	ExternalAuthIntegration  *ExternalAuthIntegration `json:"external_auth_integration,omitempty"`
+	ExternalSubjectReference string                   `json:"external_subject_reference,omitempty"`
 }
 
 type GatewayProvider struct {

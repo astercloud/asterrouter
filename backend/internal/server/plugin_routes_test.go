@@ -102,7 +102,7 @@ func TestPluginHostFeedEndpointRejectsExternalAndUnknownRuntime(t *testing.T) {
 }
 
 func TestPluginOpenCatalogUsesScopedAPIToken(t *testing.T) {
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewService(plugins.NewMemoryRepository())
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
@@ -179,7 +179,7 @@ func TestAdminPluginsCatalogSyncEndpoint(t *testing.T) {
 	}))
 	defer catalogServer.Close()
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		OfficialCatalog: plugins.OfficialCatalogConfig{
@@ -318,7 +318,7 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 	defer catalogServer.Close()
 	catalogServerURL = catalogServer.URL
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		OfficialCatalog: plugins.OfficialCatalogConfig{
@@ -592,7 +592,7 @@ func TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus(t *testing.T) {
 		"expires_at": expiresAt.Format(time.RFC3339),
 	}, now)
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		SecretKey: "test-secret",

@@ -37,7 +37,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			openAIError(c, http.StatusServiceUnavailable, "service_unavailable", "gateway control service is not available")
 			return
 		}
-		models, err := control.GatewayModelsForKey(c.Request.Context(), bearerToken(c))
+		models, err := control.GatewayModelsForCredential(c.Request.Context(), bearerToken(c), signedContextToken(c))
 		if err != nil {
 			writeGatewayError(c, err)
 			return
@@ -67,7 +67,7 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
 			openAIError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 			return
 		}
-		auth, err := control.AuthorizeGatewayModel(c.Request.Context(), bearerToken(c), req.Model)
+		auth, err := control.AuthorizeGatewayCredential(c.Request.Context(), bearerToken(c), signedContextToken(c), req.Model)
 		if err != nil {
 			writeGatewayError(c, err)
 			return
@@ -486,7 +486,7 @@ func upstreamResponseSummary(statusCode int, body []byte) string {
 	return strings.Join(parts, " ")
 }
 
-func gatewayHTTPClient(stream bool) *http.Client {
+var gatewayHTTPClient = func(stream bool) *http.Client {
 	if stream {
 		return &http.Client{}
 	}

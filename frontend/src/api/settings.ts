@@ -43,10 +43,9 @@ export async function testEmailTemplate(recipient: string, subject: string, html
   await apiClient.post('/admin/settings/email-templates/test', { recipient, subject, html })
 }
 
-export async function applySetupProfiles(profiles: string[], defaultProfile: string): Promise<AdminSettings> {
+export async function applySetupProfile(profile: string): Promise<AdminSettings> {
   const response = await apiClient.post<AdminSettings>('/setup/profiles', {
-    profiles,
-    default_profile: defaultProfile
+    profile
   })
   return response.data
 }

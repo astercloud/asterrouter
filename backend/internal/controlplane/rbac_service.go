@@ -87,10 +87,57 @@ func (s *Service) ActorCan(ctx context.Context, actor string, permission string)
 	return s.ActorCanResource(ctx, actor, permission, "")
 }
 
+// ActorIsSystemAdministrator identifies the narrow authority allowed to change
+// installation-level Profile Bundles. A platform administrator is not a
+// system administrator merely because it can operate a Platform Surface.
+func (s *Service) ActorIsSystemAdministrator(ctx context.Context, actor string) (bool, error) {
+	access, err := s.PrincipalAccess(ctx, actor)
+	if err != nil {
+		return false, err
+	}
+	return access.Global && access.Role == RoleSuperAdmin, nil
+}
+
 func (s *Service) ActorCanResource(ctx context.Context, actor string, permission string, resource string) (bool, PrincipalAccess, error) {
 	access, err := s.principalAccessForResource(ctx, actor, resource)
 	if err != nil {
 		return false, PrincipalAccess{}, err
+	}
+	return contains(access.Permissions, permission), access, nil
+}
+
+// ActorCanSurfaceResource resolves permissions for a dedicated control-plane
+// surface. Surface bindings are intentionally not global grants: they add
+// permissions only while the matching surface is handling the request.
+func (s *Service) ActorCanSurfaceResource(ctx context.Context, actor, surface, permission, resource string) (bool, PrincipalAccess, error) {
+	access, err := s.principalAccessForResource(ctx, actor, resource)
+	if err != nil || access.Global {
+		return err == nil && contains(access.Permissions, permission), access, err
+	}
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "local-admin"
+	}
+	users, err := s.repo.ListWorkspaceUsers(ctx)
+	if err != nil {
+		return false, PrincipalAccess{}, err
+	}
+	user, ok := workspaceUserByActor(users, actor)
+	if !ok || user.Status != WorkspaceUserStatusActive {
+		return false, access, nil
+	}
+	bindings, err := s.repo.ListRoleBindings(ctx)
+	if err != nil {
+		return false, PrincipalAccess{}, err
+	}
+	for _, binding := range bindings {
+		if binding.UserID != user.ID || binding.ScopeType != RoleScopeSurface || binding.ScopeID != surface {
+			continue
+		}
+		access.Permissions = mergePermissions(access.Permissions, permissionsForRole(binding.Role, resource))
+		if roleRank(binding.Role) > roleRank(access.Role) {
+			access.Role = binding.Role
+		}
 	}
 	return contains(access.Permissions, permission), access, nil
 }

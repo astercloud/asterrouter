@@ -58,12 +58,14 @@ apiClient.interceptors.request.use((config) => {
     '/model-routes',
     '/gateway-simulator',
     '/api-keys',
+    '/policies',
     '/model-pricings',
     '/usage',
     '/gateway-traces',
+    '/alerts',
+    '/audit-logs',
     '/plugins',
-    '/system',
-    '/settings'
+    '/cost-allocation'
   ]
   if (
     path.startsWith('/admin/') &&
@@ -71,6 +73,7 @@ apiClient.interceptors.request.use((config) => {
   ) {
     if (window.location.pathname.startsWith('/console')) config.url = path.replace(/^\/admin/, '/console')
     else if (window.location.pathname.startsWith('/operator')) config.url = path.replace(/^\/admin/, '/operator')
+		else if (window.location.pathname.startsWith('/platform')) config.url = path.replace(/^\/admin/, '/platform')
   }
   config.headers['Accept-Language'] = getLocale()
   const token = localStorage.getItem('asterrouter_admin_token')

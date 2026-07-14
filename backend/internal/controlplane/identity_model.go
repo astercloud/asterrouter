@@ -17,24 +17,26 @@ const (
 	RoleScopeSurface    = "surface"
 	RoleScopeDepartment = "department"
 
-	RBACResourceDashboard = "dashboard"
-	RBACResourceRouting   = "routing"
-	RBACResourceProviders = "providers"
-	RBACResourceAPIKeys   = "api_keys"
-	RBACResourceUsage     = "usage"
-	RBACResourceTraces    = "traces"
-	RBACResourceAlerts    = "alerts"
-	RBACResourceIdentity  = "identity"
-	RBACResourcePolicies  = "policies"
-	RBACResourceAudit     = "audit"
-	RBACResourceExports   = "exports"
-	RBACResourcePlugins   = "plugins"
-	RBACResourceSettings  = "settings"
-	RBACResourceSystem    = "system"
+	RBACResourceDashboard       = "dashboard"
+	RBACResourceRouting         = "routing"
+	RBACResourceProviders       = "providers"
+	RBACResourceAPIKeys         = "api_keys"
+	RBACResourceUsage           = "usage"
+	RBACResourceTraces          = "traces"
+	RBACResourceAlerts          = "alerts"
+	RBACResourceIdentity        = "identity"
+	RBACResourcePlatformTenants = "platform_tenants"
+	RBACResourcePolicies        = "policies"
+	RBACResourceAudit           = "audit"
+	RBACResourceExports         = "exports"
+	RBACResourcePlugins         = "plugins"
+	RBACResourceSettings        = "settings"
+	RBACResourceSystem          = "system"
 
 	SurfacePersonal      = "personal"
 	SurfaceRelayOperator = "relay_operator"
 	SurfaceEnterprise    = "enterprise"
+	SurfacePlatform      = "platform"
 	SurfacePortal        = "portal"
 	SurfaceCustomer      = "customer"
 )
@@ -113,10 +115,11 @@ type WorkspaceUserDefaults struct {
 }
 
 type WorkspaceUserRequest struct {
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	Status      string `json:"status"`
-	Role        string `json:"role"`
+	Email        string  `json:"email"`
+	DisplayName  string  `json:"display_name"`
+	Status       string  `json:"status"`
+	Role         string  `json:"role"`
+	DepartmentID *string `json:"department_id"`
 }
 
 type RoleBinding struct {

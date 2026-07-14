@@ -422,6 +422,7 @@ func (s *Service) ConfirmTOTP(ctx context.Context, actor, code string) error {
 		return errors.New("invalid TOTP code")
 	}
 	user.TOTPEnabled = true
+	user.SessionVersion++
 	user.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return err
@@ -445,6 +446,7 @@ func (s *Service) DisableTOTP(ctx context.Context, actor, code string) error {
 	user.TOTPEnabled = false
 	user.TOTPSecretCiphertext = ""
 	user.TOTPRecoveryHashes = nil
+	user.SessionVersion++
 	user.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return err
@@ -501,6 +503,7 @@ func (s *Service) GenerateTOTPRecoveryCodes(ctx context.Context, actor string) (
 		codes[i], hashes[i] = token, recoveryCodeHash(token)
 	}
 	user.TOTPRecoveryHashes = hashes
+	user.SessionVersion++
 	user.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return nil, err
@@ -723,6 +726,9 @@ func (s *Service) CreateWorkspaceUser(ctx context.Context, actor string, req Wor
 	if err != nil {
 		return WorkspaceUser{}, err
 	}
+	if err := s.validateWorkspaceUserDepartment(ctx, user.DepartmentID); err != nil {
+		return WorkspaceUser{}, err
+	}
 	if err := s.ensureUniqueUserEmail(ctx, "", user.Email); err != nil {
 		return WorkspaceUser{}, err
 	}
@@ -752,7 +758,12 @@ func (s *Service) UpdateWorkspaceUser(ctx context.Context, actor string, id stri
 	user.AvatarDataURL = existing.AvatarDataURL
 	user.ExternalIssuer = existing.ExternalIssuer
 	user.ExternalSubject = existing.ExternalSubject
-	user.DepartmentID = existing.DepartmentID
+	if req.DepartmentID == nil {
+		user.DepartmentID = existing.DepartmentID
+	}
+	if err := s.validateWorkspaceUserDepartment(ctx, user.DepartmentID); err != nil {
+		return WorkspaceUser{}, err
+	}
 	user.TOTPEnabled = existing.TOTPEnabled
 	user.TOTPSecretCiphertext = existing.TOTPSecretCiphertext
 	user.TOTPRecoveryHashes = existing.TOTPRecoveryHashes
@@ -763,7 +774,7 @@ func (s *Service) UpdateWorkspaceUser(ctx context.Context, actor string, id stri
 	user.PasswordResetHash = existing.PasswordResetHash
 	user.PasswordResetExpiresAt = existing.PasswordResetExpiresAt
 	user.SessionVersion = existing.SessionVersion
-	if user.Status != existing.Status || user.Role != existing.Role {
+	if user.Status != existing.Status || user.Role != existing.Role || user.DepartmentID != existing.DepartmentID {
 		user.SessionVersion++
 	}
 	user.CreatedAt = existing.CreatedAt
@@ -775,6 +786,23 @@ func (s *Service) UpdateWorkspaceUser(ctx context.Context, actor string, id stri
 		return WorkspaceUser{}, err
 	}
 	return user, nil
+}
+
+func (s *Service) validateWorkspaceUserDepartment(ctx context.Context, departmentID string) error {
+	departmentID = strings.TrimSpace(departmentID)
+	if departmentID == "" {
+		return nil
+	}
+	departments, err := s.repo.ListDepartments(ctx)
+	if err != nil {
+		return err
+	}
+	for _, department := range departments {
+		if department.ID == departmentID && department.Status == DepartmentStatusActive {
+			return nil
+		}
+	}
+	return errors.New("active department not found")
 }
 
 func (s *Service) ListRoleBindings(ctx context.Context) ([]RoleBinding, error) {
@@ -841,13 +869,18 @@ func workspaceUserFromRequest(req WorkspaceUserRequest, createdAt time.Time) (Wo
 	if createdAt.IsZero() {
 		createdAt = now
 	}
+	departmentID := ""
+	if req.DepartmentID != nil {
+		departmentID = strings.TrimSpace(*req.DepartmentID)
+	}
 	return WorkspaceUser{
-		Email:       email,
-		DisplayName: strings.TrimSpace(req.DisplayName),
-		Status:      status,
-		Role:        role,
-		CreatedAt:   createdAt,
-		UpdatedAt:   now,
+		Email:        email,
+		DisplayName:  strings.TrimSpace(req.DisplayName),
+		Status:       status,
+		Role:         role,
+		DepartmentID: departmentID,
+		CreatedAt:    createdAt,
+		UpdatedAt:    now,
 	}, nil
 }
 
@@ -908,7 +941,7 @@ func validRBACResource(resource string) bool {
 }
 
 func validSurface(surface string) bool {
-	return oneOf(surface, SurfacePersonal, SurfaceRelayOperator, SurfaceEnterprise, SurfacePortal, SurfaceCustomer)
+	return oneOf(surface, SurfacePersonal, SurfaceRelayOperator, SurfaceEnterprise, SurfacePlatform, SurfacePortal, SurfaceCustomer)
 }
 
 func validRole(role string) bool {

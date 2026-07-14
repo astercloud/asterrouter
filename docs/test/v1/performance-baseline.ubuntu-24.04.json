@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "status": "bootstrap_required",
+  "environment": {
+    "runner": "ubuntu-24.04",
+    "os": "linux",
+    "architecture": "amd64",
+    "go": "from backend/go.mod"
+  },
+  "source": "Populate from three successful nightly runs on the pinned runner, then change status to confirmed in a reviewed commit.",
+  "thresholds": {
+    "ns_per_op_ratio": 1.2,
+    "bytes_per_op_ratio": 1.1,
+    "allocs_per_op_ratio": 1.0
+  },
+  "benchmarks": {}
+}
