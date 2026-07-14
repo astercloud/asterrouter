@@ -14,7 +14,7 @@ async function invokeWithSyntheticUsage(page: Page, key: string, model: string, 
   return page.request.post('/v1/chat/completions', {
     data: {
       model,
-      max_cost_cents: tokens,
+      max_cost_cents: 1,
       messages: [{ role: 'user', content: `synthetic ${tokens}-token policy request` }],
       synthetic_usage: { prompt_tokens: tokens, completion_tokens: 0 }
     },
