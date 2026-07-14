@@ -36,6 +36,10 @@ type AIJobDeliveryEnvelope struct {
 	QueueLeaseToken string `json:"queue_lease_token"`
 }
 
+func (envelope AIJobDeliveryEnvelope) reference() AIJobReadyReference {
+	return AIJobReadyReference{JobID: envelope.JobID, StatusVersion: envelope.StatusVersion}
+}
+
 func NewAIJobDeliveryEnvelope(job AIJob) (AIJobDeliveryEnvelope, error) {
 	envelope := AIJobDeliveryEnvelope{
 		SchemaVersion:   aiJobDeliveryEnvelopeSchemaVersion,

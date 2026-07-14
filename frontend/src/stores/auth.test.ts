@@ -92,4 +92,14 @@ describe('auth store', () => {
     expect(store.user?.display_name).toBe('Updated User')
     expect(store.user?.email).toBe('updated@example.com')
   })
+
+  it('replaces the current session token after a sensitive account change', () => {
+    localStorage.setItem('asterrouter_admin_token', 'old-token')
+    const store = useAuthStore()
+
+    store.replaceSessionToken('new-token')
+
+    expect(store.token).toBe('new-token')
+    expect(localStorage.getItem('asterrouter_admin_token')).toBe('new-token')
+  })
 })

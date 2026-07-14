@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
@@ -29,6 +30,15 @@ func writeGatewayError(c *gin.Context, err error) {
 		openAIError(c, http.StatusConflict, "job_not_cancelable", "ai job is already in a non-cancelable terminal state")
 	case errors.Is(err, controlplane.ErrAIJobStateConflict):
 		openAIError(c, http.StatusConflict, "job_state_conflict", "ai job state changed concurrently")
+	case errors.Is(err, controlplane.ErrAIJobQueueCapacityExceeded):
+		c.Header("Retry-After", strconv.Itoa(controlplane.AIJobDefaultPollAfter))
+		openAIError(c, http.StatusTooManyRequests, "queue_capacity_exceeded", "durable ai job queue capacity exceeded")
+	case errors.Is(err, controlplane.ErrBillingHoldBudgetExceeded):
+		openAIError(c, http.StatusPaymentRequired, "budget_hold_failed", "request cost reservation exceeds the available monthly budget")
+	case errors.Is(err, controlplane.ErrBillingHoldEstimateUnavailable):
+		openAIError(c, http.StatusPaymentRequired, "budget_hold_failed", "request cost cannot be reserved without an applicable price")
+	case errors.Is(err, controlplane.ErrBillingHoldStateConflict):
+		openAIError(c, http.StatusConflict, "billing_hold_conflict", "request cost reservation state changed concurrently")
 	case errors.Is(err, gatewaycore.ErrInvalidCanonicalRequest):
 		openAIError(c, http.StatusBadRequest, "invalid_request_error", "invalid gateway request")
 	case errors.Is(err, controlplane.ErrGatewayRouteUnavailable):

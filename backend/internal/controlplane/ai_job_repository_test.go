@@ -268,7 +268,11 @@ func TestAIJobAdmissionRollsBackOnOutboxConflict(t *testing.T) {
 			t.Fatal(err)
 		}
 		outbox.ID = existingOutbox[0].ID
-		if _, created, err := repo.CreateDurableAIJob(ctx, operation, job, event, outbox); err == nil || created {
+		billing, err := svc.newBillingHoldAdmission(ctx, operation, auth, aiJobTestRequest(operation.IdempotencyKey, operation.RequestFingerprint))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, created, err := repo.CreateDurableAIJob(ctx, operation, job, event, outbox, AIJobAdmissionLimits{}, billing); err == nil || created {
 			t.Fatalf("conflicting admission created=%t err=%v", created, err)
 		}
 		if _, found, err := repo.FindAIJob(ctx, job.ID); err != nil || found {
@@ -276,6 +280,9 @@ func TestAIJobAdmissionRollsBackOnOutboxConflict(t *testing.T) {
 		}
 		if _, found, err := repo.FindAIOperation(ctx, operation.ID); err != nil || found {
 			t.Fatalf("rolled-back operation found=%t err=%v", found, err)
+		}
+		if _, found, err := repo.FindBillingHoldByOperationID(ctx, operation.ID); err != nil || found {
+			t.Fatalf("rolled-back billing hold found=%t err=%v", found, err)
 		}
 		events, err := repo.ListAIJobEvents(ctx, job.ID)
 		if err != nil || len(events) != 0 {

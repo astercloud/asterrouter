@@ -30,7 +30,7 @@ func TestRedisAIJobDeliveryQueueConfiguration(t *testing.T) {
 
 func TestRedisAIJobDeliveryQueueContract(t *testing.T) {
 	ctx := context.Background()
-	leaseDuration := 80 * time.Millisecond
+	leaseDuration := 500 * time.Millisecond
 	queue, client := newRedisAIJobDeliveryQueueTest(t, leaseDuration)
 	envelope := testAIJobDeliveryEnvelope("redis-contract", 2, 1, "redis-job-lease")
 	if err := queue.Publish(ctx, envelope, envelope.DedupeKey(), time.Now()); err != nil {
@@ -38,6 +38,9 @@ func TestRedisAIJobDeliveryQueueContract(t *testing.T) {
 	}
 	if err := queue.Publish(ctx, envelope, envelope.DedupeKey(), time.Now()); err != nil {
 		t.Fatalf("idempotent publish: %v", err)
+	}
+	if err := queue.Publish(ctx, envelope, "alternate-dedupe-key", time.Now()); err != nil {
+		t.Fatalf("canonical delivery id dedupe: %v", err)
 	}
 	conflict := testAIJobDeliveryEnvelope("redis-conflict", 2, 1, "redis-job-lease-conflict")
 	if err := queue.Publish(ctx, conflict, envelope.DedupeKey(), time.Now()); !errors.Is(err, ErrAIJobDeliveryDedupeConflict) {
@@ -47,14 +50,14 @@ func TestRedisAIJobDeliveryQueueContract(t *testing.T) {
 	if err != nil || len(deliveries) != 1 || deliveries[0].Attempt != 1 || deliveries[0].Envelope != envelope {
 		t.Fatalf("first receive=%+v err=%v", deliveries, err)
 	}
+	extendedUntil := time.Now().Add(1200 * time.Millisecond)
+	if err := queue.Extend(ctx, deliveries[0], extendedUntil); err != nil {
+		t.Fatalf("extend: %v", err)
+	}
 	wrong := deliveries[0]
 	wrong.LeaseToken = "wrong"
 	if err := queue.Ack(ctx, wrong); !errors.Is(err, ErrAIJobDeliveryLeaseConflict) {
 		t.Fatalf("wrong lease ack error=%v", err)
-	}
-	extendedUntil := time.Now().Add(250 * time.Millisecond)
-	if err := queue.Extend(ctx, deliveries[0], extendedUntil); err != nil {
-		t.Fatalf("extend: %v", err)
 	}
 	time.Sleep(leaseDuration + 30*time.Millisecond)
 	if early, err := queue.Receive(ctx, "worker-b", 1, 0); err != nil || len(early) != 0 {
@@ -161,6 +164,39 @@ func TestRedisAIJobDeliveryQueuePublishRollsBackDedupeOnStreamError(t *testing.T
 	}
 	if exists, err := client.Exists(ctx, queue.dedupeKey(envelope.DedupeKey())).Result(); err != nil || exists != 0 {
 		t.Fatalf("dedupe key survived failed publish: exists=%d err=%v", exists, err)
+	}
+}
+
+func TestRedisAIJobDeliveryQueueQuarantinesMalformedMessages(t *testing.T) {
+	ctx := context.Background()
+	queue, client := newRedisAIJobDeliveryQueueTest(t, time.Second)
+	if err := client.ZAdd(ctx, queue.delayedKey, redis.Z{Score: float64(time.Now().UnixMilli()), Member: "{broken"}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if deliveries, err := queue.Receive(ctx, "worker-a", 1, 0); err != nil || len(deliveries) != 0 {
+		t.Fatalf("malformed delayed receive=%+v err=%v", deliveries, err)
+	}
+	dead, err := client.XRange(ctx, queue.deadLetterKey, "-", "+").Result()
+	if err != nil || len(dead) != 1 || redisAIJobDeliveryString(dead[0].Values["reason"]) != "invalid_delayed_envelope" {
+		t.Fatalf("delayed dead letters=%+v err=%v", dead, err)
+	}
+	if err := queue.ensureConsumerGroup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.XAdd(ctx, &redis.XAddArgs{Stream: queue.streamKey, Values: map[string]any{
+		"envelope": strings.Repeat("x", queue.maxPayload+1), "attempt_base": 0,
+	}}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if deliveries, err := queue.Receive(ctx, "worker-a", 1, 0); err != nil || len(deliveries) != 0 {
+		t.Fatalf("oversized stream receive=%+v err=%v", deliveries, err)
+	}
+	dead, err = client.XRange(ctx, queue.deadLetterKey, "-", "+").Result()
+	if err != nil || len(dead) != 2 || redisAIJobDeliveryString(dead[1].Values["reason"]) != ErrAIJobDeliveryEnvelopeTooLarge.Error() {
+		t.Fatalf("stream dead letters=%+v err=%v", dead, err)
+	}
+	if payload := redisAIJobDeliveryString(dead[1].Values["envelope"]); len(payload) > queue.maxPayload {
+		t.Fatalf("dead-letter payload bytes=%d max=%d", len(payload), queue.maxPayload)
 	}
 }
 

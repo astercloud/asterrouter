@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/gin-gonic/gin"
 )
 
 func TestGatewayModelsRequiresAPIKey(t *testing.T) {
@@ -256,18 +258,23 @@ func TestGatewayChatCompletionRejectsDisallowedModel(t *testing.T) {
 func TestGatewayChatCompletionForwardsToConfiguredProvider(t *testing.T) {
 	var gotAuthorization string
 	var gotModel string
+	var gotSessionID string
+	var gotPromptCacheKey string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("upstream path = %s", r.URL.Path)
 		}
 		gotAuthorization = r.Header.Get("Authorization")
+		gotSessionID = r.Header.Get("X-Session-ID")
 		var payload struct {
-			Model string `json:"model"`
+			Model          string `json:"model"`
+			PromptCacheKey string `json:"prompt_cache_key"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode upstream payload: %v", err)
 		}
 		gotModel = payload.Model
+		gotPromptCacheKey = payload.PromptCacheKey
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"upstream-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"upstream-ok"},"finish_reason":"stop"}]}`))
 	}))
@@ -286,6 +293,13 @@ func TestGatewayChatCompletionForwardsToConfiguredProvider(t *testing.T) {
 		t.Fatalf("CreateProvider(): %v", err)
 	}
 	account := createGatewayTestAccount(t, control, provider, "upstream-gpt", "upstream-secret", 10, 3)
+	if _, err := control.UpsertProviderCacheCapability(context.Background(), "tester", controlplane.ProviderCacheCapabilityRequest{
+		ProviderAccountID: account.ID, UpstreamModel: "upstream-gpt", Protocol: "openai_chat_completions",
+		SupportStatus: controlplane.CacheSupportAccepted, AffinityTransport: controlplane.AffinityTransportHeader,
+		AffinityField: "X-Session-ID", CacheControlMode: controlplane.CacheControlModePromptCacheKey,
+	}); err != nil {
+		t.Fatalf("UpsertProviderCacheCapability(): %v", err)
+	}
 	createGatewayTestModelAndRoutes(t, control, "gpt-4o-mini", "default", []gatewayTestRoute{{account: account, upstreamModel: "upstream-gpt", priority: 10}})
 	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
 		Name:              "gateway",
@@ -301,6 +315,7 @@ func TestGatewayChatCompletionForwardsToConfiguredProvider(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+created.Key)
+	req.Header.Set("X-AsterRouter-Sticky-Key", "raw-customer-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -312,6 +327,9 @@ func TestGatewayChatCompletionForwardsToConfiguredProvider(t *testing.T) {
 	}
 	if gotModel != "upstream-gpt" {
 		t.Fatalf("upstream model = %q", gotModel)
+	}
+	if gotSessionID == "" || gotPromptCacheKey != gotSessionID || strings.Contains(gotSessionID, "raw-customer-session") {
+		t.Fatalf("upstream cache affinity session=%q prompt_cache_key=%q", gotSessionID, gotPromptCacheKey)
 	}
 	if !strings.Contains(rec.Body.String(), "upstream-ok") {
 		t.Fatalf("upstream response not returned: %s", rec.Body.String())
@@ -1005,6 +1023,100 @@ func TestGatewayChatCompletionRejectsStreamingWithoutProvider(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestForwardChatCompletionInjectsVerifiedUpstreamAffinity(t *testing.T) {
+	var receivedHeader string
+	var receivedBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedHeader = r.Header.Get("X-Session-ID")
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Errorf("decode upstream body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"response-a"}`))
+	}))
+	defer upstream.Close()
+
+	recorder := httptest.NewRecorder()
+	requestContext, _ := gin.CreateTestContext(recorder)
+	requestContext.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	provider := controlplane.GatewayProvider{BaseURL: upstream.URL, APIKey: "upstream-secret", UpstreamModel: "upstream-model"}
+	affinity := controlplane.GatewayUpstreamAffinity{
+		HeaderName: "X-Session-ID", BodyField: "session_id", Value: "ar_opaque_session", PromptCacheKey: true,
+	}
+	response, err := forwardChatCompletion(requestContext, provider, []byte(`{"model":"public-model","messages":[],"client_field":"preserved"}`), false, affinity)
+	if err != nil {
+		t.Fatalf("forwardChatCompletion(): %v", err)
+	}
+	defer response.Body.Close()
+	if receivedHeader != affinity.Value || receivedBody["session_id"] != affinity.Value || receivedBody["prompt_cache_key"] != affinity.Value {
+		t.Fatalf("upstream affinity header=%q body=%+v", receivedHeader, receivedBody)
+	}
+	if receivedBody["model"] != "upstream-model" || receivedBody["client_field"] != "preserved" {
+		t.Fatalf("upstream request rewrite lost fields: %+v", receivedBody)
+	}
+}
+
+type cacheCapabilityUnavailableRepository struct {
+	controlplane.Repository
+}
+
+func (cacheCapabilityUnavailableRepository) FindProviderCacheCapability(context.Context, string, string, string) (controlplane.ProviderCacheCapability, bool, error) {
+	return controlplane.ProviderCacheCapability{}, false, errors.New("cache capability store unavailable")
+}
+
+func TestAttemptGatewayCandidatesTracesUnavailableUpstreamAffinity(t *testing.T) {
+	var receivedBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Errorf("decode upstream body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"response-a"}`))
+	}))
+	defer upstream.Close()
+
+	ctx := context.Background()
+	repository := cacheCapabilityUnavailableRepository{Repository: controlplane.NewMemoryRepository()}
+	control := controlplane.NewService(repository, "/v1", "affinity-error-test-secret")
+	if _, _, err := repository.CreateAIOperation(ctx, controlplane.AIOperation{
+		ID: "operation-affinity-unavailable", Status: controlplane.AIOperationStatusRunning,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("CreateAIOperation(): %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	requestContext, _ := gin.CreateTestContext(recorder)
+	requestContext.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	candidate := controlplane.GatewayProvider{
+		ID: "provider-a", AccountID: "account-a", RouteID: "route-a", BaseURL: upstream.URL,
+		APIKey: "upstream-secret", UpstreamModel: "upstream-model", SelectionReason: "priority route",
+	}
+	response, selected, release, attempts, err := attemptGatewayCandidates(
+		requestContext,
+		control,
+		"operation-affinity-unavailable",
+		controlplane.GatewayAffinityInput{Protocol: "openai_chat_completions", StickyKey: "stable-session"},
+		[]controlplane.GatewayProvider{candidate},
+		[]byte(`{"model":"public-model","messages":[]}`),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("attemptGatewayCandidates(): %v", err)
+	}
+	defer response.Body.Close()
+	defer release()
+	if selected.SelectionReason != "priority route; upstream cache affinity unavailable" {
+		t.Fatalf("selection reason = %q", selected.SelectionReason)
+	}
+	if len(attempts) != 1 || attempts[0].Outcome != "selected" {
+		t.Fatalf("attempts = %+v", attempts)
+	}
+	if _, exists := receivedBody["prompt_cache_key"]; exists {
+		t.Fatalf("unverified affinity was injected: %+v", receivedBody)
 	}
 }
 

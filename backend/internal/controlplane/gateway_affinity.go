@@ -26,6 +26,60 @@ type GatewayAffinityInput struct {
 	PolicyVersion int
 }
 
+type GatewayUpstreamAffinity struct {
+	HeaderName     string
+	BodyField      string
+	Value          string
+	PromptCacheKey bool
+}
+
+func (s *Service) ResolveGatewayUpstreamAffinity(ctx context.Context, input GatewayAffinityInput, provider GatewayProvider) (GatewayUpstreamAffinity, bool, error) {
+	if s == nil || s.repo == nil || strings.TrimSpace(input.StickyKey) == "" || strings.TrimSpace(provider.AccountID) == "" || strings.TrimSpace(provider.UpstreamModel) == "" {
+		return GatewayUpstreamAffinity{}, false, nil
+	}
+	capability, found, err := s.repo.FindProviderCacheCapability(ctx, provider.AccountID, provider.UpstreamModel, input.Protocol)
+	if err != nil || !found {
+		return GatewayUpstreamAffinity{}, false, err
+	}
+	if !oneOf(capability.SupportStatus, CacheSupportAccepted, CacheSupportObserved, CacheSupportBilledVerified) {
+		return GatewayUpstreamAffinity{}, false, nil
+	}
+	if capability.AffinityTransport != AffinityTransportNone && !validCacheAffinityField(capability.AffinityField, capability.AffinityTransport) {
+		return GatewayUpstreamAffinity{}, false, nil
+	}
+	if !oneOf(capability.CacheControlMode, "", CacheControlModePassthrough, CacheControlModePromptCacheKey) {
+		return GatewayUpstreamAffinity{}, false, nil
+	}
+	instruction := GatewayUpstreamAffinity{
+		Value:          s.gatewayUpstreamAffinityValue(input, provider),
+		PromptCacheKey: capability.CacheControlMode == CacheControlModePromptCacheKey,
+	}
+	switch capability.AffinityTransport {
+	case AffinityTransportHeader:
+		instruction.HeaderName = capability.AffinityField
+	case AffinityTransportBody:
+		instruction.BodyField = capability.AffinityField
+	}
+	if instruction.HeaderName == "" && instruction.BodyField == "" && !instruction.PromptCacheKey {
+		return GatewayUpstreamAffinity{}, false, nil
+	}
+	return instruction, true, nil
+}
+
+func (s *Service) gatewayUpstreamAffinityValue(input GatewayAffinityInput, provider GatewayProvider) string {
+	principalID := strings.TrimSpace(input.PrincipalID)
+	if principalID == "" {
+		principalID = strings.TrimSpace(input.CredentialID)
+	}
+	identity := strings.Join([]string{
+		"upstream_cache", input.TenantID, principalID, input.CredentialID, input.Model, input.Protocol,
+		input.RouteGroup, input.StickyKey, strconv.Itoa(input.PolicyVersion), provider.ID, provider.AccountID, provider.UpstreamModel,
+	}, "\x00")
+	mac := hmac.New(sha256.New, []byte(s.secretKey))
+	_, _ = mac.Write([]byte(identity))
+	return "ar_" + hex.EncodeToString(mac.Sum(nil)[:24])
+}
+
 func (s *Service) PreferGatewayCandidatesWithAffinity(ctx context.Context, input GatewayAffinityInput, candidates []GatewayProvider) []GatewayProvider {
 	if s == nil || s.repo == nil || len(candidates) < 2 {
 		return candidates

@@ -120,7 +120,7 @@ release = {
     "version": version,
     "channel": "stable",
     "name": f"AsterRouter {version}",
-    "notes": "Adds effective pricing administration and usage normalization, provider dispatch decisions, AI job delivery workers, gateway affinity and accounting updates, plus expanded first-install and settings validation.",
+    "notes": "Adds durable AI job admission and ready queues, provider capacity and billing hold controls, effective pricing decision safeguards, and expanded admin usability for users, usage, plugins, and account profile workflows.",
     "published_at": build_date,
     "html_url": html_url,
     "assets": assets,

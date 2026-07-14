@@ -39,7 +39,11 @@ func (s *Service) BeginCanonicalOperation(ctx context.Context, auth gatewaycore.
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	createdOperation, created, err := s.repo.CreateAIOperation(ctx, operation)
+	billing, err := s.newBillingHoldAdmission(ctx, operation, auth, request)
+	if err != nil {
+		return AIOperation{}, false, err
+	}
+	createdOperation, created, err := s.repo.CreateAIOperationWithBillingHold(ctx, operation, billing)
 	if err != nil {
 		return AIOperation{}, false, err
 	}

@@ -55,6 +55,7 @@ func TestDurableAIJobWorkerAndReconcilerContract(t *testing.T) {
 				t.Fatalf("accepted worker report=%+v err=%v", report, err)
 			}
 			assertAIJobStatus(t, svc, acceptedJob.ID, AIJobStatusRunning)
+			assertBillingHoldStatus(t, svc, acceptedJob.OperationID, BillingHoldStatusCommitted)
 
 			fallbackJob := beginDurableWorkerJob(t, svc, "worker-fallback")
 			report, err = svc.RunDurableAIJobWorkerOnce(ctx, "worker-b", time.Minute, 1, adapter)
@@ -62,6 +63,7 @@ func TestDurableAIJobWorkerAndReconcilerContract(t *testing.T) {
 				t.Fatalf("fallback worker report=%+v calls=%d err=%v", report, adapter.DispatchCalls(), err)
 			}
 			assertAIJobStatus(t, svc, fallbackJob.ID, AIJobStatusRunning)
+			assertBillingHoldStatus(t, svc, fallbackJob.OperationID, BillingHoldStatusCommitted)
 			attempts := adapter.Attempts()
 			if attempts[1].Status != AIAttemptStatusRunning || attempts[2].Status != AIAttemptStatusRunning {
 				t.Fatalf("adapter attempts before reload=%+v", attempts)
@@ -77,6 +79,7 @@ func TestDurableAIJobWorkerAndReconcilerContract(t *testing.T) {
 				t.Fatalf("unknown worker report=%+v err=%v", report, err)
 			}
 			assertAIJobStatus(t, svc, unknownJob.ID, AIJobStatusUnknown)
+			assertBillingHoldStatus(t, svc, unknownJob.OperationID, BillingHoldStatusDisputed)
 			if adapter.DispatchCalls() != 4 {
 				t.Fatalf("dispatch calls=%d, want 4", adapter.DispatchCalls())
 			}
@@ -90,6 +93,7 @@ func TestDurableAIJobWorkerAndReconcilerContract(t *testing.T) {
 			if err != nil || !found || exhausted.Status != AIJobStatusQueued || !exhausted.NextEligibleAt.After(base) {
 				t.Fatalf("exhausted job=%+v found=%t err=%v", exhausted, found, err)
 			}
+			assertBillingHoldStatus(t, svc, exhaustedJob.OperationID, BillingHoldStatusReserved)
 			svc.now = func() time.Time { return base.Add(time.Second) }
 			if claimed, err := svc.ClaimReadyAIJobs(ctx, "early-retry", time.Minute, 1); err != nil || len(claimed) != 0 {
 				t.Fatalf("early retry claimed=%+v err=%v", claimed, err)
@@ -101,6 +105,7 @@ func TestDurableAIJobWorkerAndReconcilerContract(t *testing.T) {
 				t.Fatalf("reconcile report=%+v calls=%d err=%v", reconcileReport, adapter.ReconcileCalls(), err)
 			}
 			assertAIJobStatus(t, svc, unknownJob.ID, AIJobStatusSucceeded)
+			assertBillingHoldStatus(t, svc, unknownJob.OperationID, BillingHoldStatusDisputed)
 			unknownAttempt := adapter.Attempts()[3]
 			completedAttempt, found, err := svc.AIAttempt(ctx, unknownAttempt.ID)
 			if err != nil || !found || completedAttempt.Status != AIAttemptStatusSucceeded || completedAttempt.ProviderTaskID != "task-recovered" {
@@ -137,7 +142,7 @@ func setupDurableWorkerRoutes(t *testing.T, svc *Service) {
 	for index, upstream := range []string{"worker-upstream-a", "worker-upstream-b"} {
 		account, createErr := svc.CreateProviderAccount(ctx, "test", ProviderAccountRequest{
 			ProviderID: provider.ID, Name: "Durable account " + upstream, Platform: "openai_compatible", AuthType: "api_key",
-			Status: AccountStatusActive, Models: []string{upstream}, Secret: "account-secret-" + upstream, Concurrency: 2, Priority: 100 - index,
+			Status: AccountStatusActive, Models: []string{upstream}, Secret: "account-secret-" + upstream, Concurrency: 10, Priority: 100 - index,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -182,6 +187,14 @@ func assertAIJobStatus(t *testing.T, svc *Service, jobID, status string) {
 	job, found, err := svc.repo.FindAIJob(context.Background(), jobID)
 	if err != nil || !found || job.Status != status {
 		t.Fatalf("job=%+v found=%t err=%v, want status %s", job, found, err, status)
+	}
+}
+
+func assertBillingHoldStatus(t *testing.T, svc *Service, operationID, status string) {
+	t.Helper()
+	hold, found, err := svc.BillingHoldForOperation(context.Background(), operationID)
+	if err != nil || !found || hold.Status != status {
+		t.Fatalf("billing hold=%+v found=%t err=%v, want status %s", hold, found, err, status)
 	}
 }
 

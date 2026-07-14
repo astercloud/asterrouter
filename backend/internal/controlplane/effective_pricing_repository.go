@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"sort"
 	"time"
 )
@@ -77,6 +78,17 @@ func (r *MemoryRepository) ListProviderCacheCapabilities(context.Context) ([]Pro
 		return out[i].ProviderAccountID < out[j].ProviderAccountID
 	})
 	return out, nil
+}
+
+func (r *MemoryRepository) FindProviderCacheCapability(_ context.Context, providerAccountID, upstreamModel, protocol string) (ProviderCacheCapability, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, capability := range r.providerCacheCapabilities {
+		if capability.ProviderAccountID == providerAccountID && capability.UpstreamModel == upstreamModel && capability.Protocol == protocol {
+			return capability, true, nil
+		}
+	}
+	return ProviderCacheCapability{}, false, nil
 }
 
 func (r *MemoryRepository) SaveProviderCacheCapability(_ context.Context, capability ProviderCacheCapability) error {
@@ -231,6 +243,7 @@ func (r *MemoryRepository) SummarizeEffectivePricingUsage(_ context.Context, fro
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	byKey := map[string]*EffectivePricingUsageAggregate{}
+	latenciesByKey := map[string][]int64{}
 	for _, record := range r.usageRecords {
 		if (!from.IsZero() && record.CreatedAt.Before(from)) || (!to.IsZero() && record.CreatedAt.After(to)) || record.ProviderAccountID == "" {
 			continue
@@ -248,6 +261,9 @@ func (r *MemoryRepository) SummarizeEffectivePricingUsage(_ context.Context, fro
 			aggregate.ErrorCount++
 		} else {
 			aggregate.SuccessfulRequestCount++
+			if record.LatencyMS > 0 {
+				latenciesByKey[key] = append(latenciesByKey[key], record.LatencyMS)
+			}
 		}
 		if !failed && record.CacheFieldsPresent {
 			aggregate.CacheMetricsRequestCount++
@@ -272,7 +288,8 @@ func (r *MemoryRepository) SummarizeEffectivePricingUsage(_ context.Context, fro
 		}
 	}
 	out := make([]EffectivePricingUsageAggregate, 0, len(byKey))
-	for _, aggregate := range byKey {
+	for key, aggregate := range byKey {
+		aggregate.P95LatencyMS = nearestRankPercentile(latenciesByKey[key], 0.95)
 		out = append(out, *aggregate)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -282,6 +299,19 @@ func (r *MemoryRepository) SummarizeEffectivePricingUsage(_ context.Context, fro
 		return out[i].ProviderAccountID < out[j].ProviderAccountID
 	})
 	return out, nil
+}
+
+func nearestRankPercentile(values []int64, percentile float64) int64 {
+	if len(values) == 0 || percentile <= 0 || percentile > 1 {
+		return 0
+	}
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	index := int(math.Ceil(percentile*float64(len(sorted)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	return sorted[index]
 }
 
 func (r *PostgresRepository) ListProcurementPrices(ctx context.Context) ([]ProcurementPrice, error) {
@@ -452,19 +482,48 @@ FROM provider_cache_capabilities ORDER BY provider_account_id, upstream_model`)
 	defer rows.Close()
 	out := []ProviderCacheCapability{}
 	for rows.Next() {
-		var capability ProviderCacheCapability
-		if err := rows.Scan(&capability.ID, &capability.ProviderAccountID, &capability.UpstreamModel, &capability.Protocol,
-			&capability.SupportStatus, &capability.PoolAffinityGrade, &capability.AffinityTransport, &capability.AffinityField,
-			&capability.CacheControlMode, &capability.UsageSchema, &capability.MetricsCoverage, &capability.EligibleRequestHitRate,
-			&capability.CacheTokenHitRate, &capability.CacheWriteReadRatio, &capability.AffinityConsistencyRate,
-			&capability.BillingConsistencyRate, &capability.ProductionSampleCount, &capability.ProbeSampleCount,
-			&capability.DegradedReason, &capability.LastObservedAt, &capability.LastVerifiedAt,
-			&capability.CreatedAt, &capability.UpdatedAt); err != nil {
+		capability, err := scanProviderCacheCapability(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, capability)
 	}
 	return out, rows.Err()
+}
+
+func (r *PostgresRepository) FindProviderCacheCapability(ctx context.Context, providerAccountID, upstreamModel, protocol string) (ProviderCacheCapability, bool, error) {
+	capability, err := scanProviderCacheCapability(r.db.QueryRowContext(ctx, `
+SELECT id, provider_account_id, upstream_model, protocol, support_status,
+       pool_affinity_grade, affinity_transport, affinity_field, cache_control_mode,
+       usage_schema, metrics_coverage, eligible_request_hit_rate, cache_token_hit_rate,
+       cache_write_read_ratio, affinity_consistency_rate, billing_consistency_rate,
+       production_sample_count, probe_sample_count, degraded_reason,
+       last_observed_at, last_verified_at, created_at, updated_at
+FROM provider_cache_capabilities
+WHERE provider_account_id=$1 AND upstream_model=$2 AND protocol=$3`, providerAccountID, upstreamModel, protocol))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ProviderCacheCapability{}, false, nil
+		}
+		return ProviderCacheCapability{}, false, err
+	}
+	return capability, true, nil
+}
+
+type providerCacheCapabilityScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanProviderCacheCapability(scanner providerCacheCapabilityScanner) (ProviderCacheCapability, error) {
+	var capability ProviderCacheCapability
+	err := scanner.Scan(&capability.ID, &capability.ProviderAccountID, &capability.UpstreamModel, &capability.Protocol,
+		&capability.SupportStatus, &capability.PoolAffinityGrade, &capability.AffinityTransport, &capability.AffinityField,
+		&capability.CacheControlMode, &capability.UsageSchema, &capability.MetricsCoverage, &capability.EligibleRequestHitRate,
+		&capability.CacheTokenHitRate, &capability.CacheWriteReadRatio, &capability.AffinityConsistencyRate,
+		&capability.BillingConsistencyRate, &capability.ProductionSampleCount, &capability.ProbeSampleCount,
+		&capability.DegradedReason, &capability.LastObservedAt, &capability.LastVerifiedAt,
+		&capability.CreatedAt, &capability.UpdatedAt)
+	return capability, err
 }
 
 func (r *PostgresRepository) SaveProviderCacheCapability(ctx context.Context, capability ProviderCacheCapability) error {
@@ -913,8 +972,10 @@ func (r *PostgresRepository) SummarizeEffectivePricingUsage(ctx context.Context,
        COALESCE(SUM(COALESCE(cache_write_1h_tokens,0)),0),
        COALESCE(SUM(output_tokens),0),
        COALESCE(SUM(COALESCE(procurement_cost_micros,0)),0),
-       COALESCE(SUM(CASE WHEN procurement_cost_micros IS NOT NULL THEN 1 ELSE 0 END),0),
+	       COALESCE(SUM(CASE WHEN procurement_cost_micros IS NOT NULL THEN 1 ELSE 0 END),0),
 	       COALESCE(SUM(latency_ms),0),
+	       COALESCE(PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY latency_ms)
+	         FILTER (WHERE status NOT IN ('error','upstream_error') AND error_type='' AND latency_ms>0),0),
 	       MAX(CASE WHEN status NOT IN ('error','upstream_error') AND error_type='' AND cache_fields_present THEN created_at END)
 FROM usage_records
 WHERE provider_account_id<>'' AND created_at >= $1 AND created_at <= $2
@@ -933,7 +994,8 @@ ORDER BY provider_account_id, upstream_model, protocol`, from, to)
 			&aggregate.UncachedInputTokens, &aggregate.CacheReadTokens,
 			&aggregate.CacheWrite5mTokens, &aggregate.CacheWrite1hTokens,
 			&aggregate.OutputTokens, &aggregate.ProcurementCostMicros,
-			&aggregate.ProcurementCostRecordCount, &aggregate.LatencyTotalMS, &aggregate.LastCacheObservedAt); err != nil {
+			&aggregate.ProcurementCostRecordCount, &aggregate.LatencyTotalMS, &aggregate.P95LatencyMS,
+			&aggregate.LastCacheObservedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, aggregate)

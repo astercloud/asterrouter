@@ -410,28 +410,46 @@ func (s *Service) BeginTOTPSetup(ctx context.Context, actor string) (TOTPSetup, 
 }
 
 func (s *Service) ConfirmTOTP(ctx context.Context, actor, code string) error {
+	_, err := s.confirmTOTP(ctx, actor, code, false)
+	return err
+}
+
+func (s *Service) ConfirmTOTPWithRecoveryCodes(ctx context.Context, actor, code string) ([]string, error) {
+	return s.confirmTOTP(ctx, actor, code, true)
+}
+
+func (s *Service) confirmTOTP(ctx context.Context, actor, code string, includeRecoveryCodes bool) ([]string, error) {
 	user, err := s.workspaceUserByID(ctx, actor)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	secret, err := decryptSecret(s.secretKey, user.TOTPSecretCiphertext)
 	if err != nil {
-		return errors.New("TOTP enrollment has not been started")
+		return nil, errors.New("TOTP enrollment has not been started")
 	}
 	if !auth.ValidateTOTP(secret, code, time.Now().UTC()) {
-		return errors.New("invalid TOTP code")
+		return nil, errors.New("invalid TOTP code")
+	}
+	var codes []string
+	if includeRecoveryCodes {
+		var hashes []string
+		codes, hashes, err = newTOTPRecoveryCodes()
+		if err != nil {
+			return nil, err
+		}
+		user.TOTPRecoveryHashes = hashes
 	}
 	user.TOTPEnabled = true
 	user.SessionVersion++
 	user.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.audit(ctx, actor, "totp_enabled", "workspace_user", user.ID, "Enabled TOTP authentication"); err != nil {
-		return err
+		return nil, err
 	}
 	_ = s.publishAccountSecurityNotification(ctx, user, "两步验证已启用", "您的账户已启用 TOTP 两步验证。", "totp_enabled")
-	return nil
+	return codes, nil
 }
 
 func (s *Service) DisableTOTP(ctx context.Context, actor, code string) error {
@@ -493,14 +511,9 @@ func (s *Service) GenerateTOTPRecoveryCodes(ctx context.Context, actor string) (
 	if !user.TOTPEnabled {
 		return nil, errors.New("TOTP is not enabled")
 	}
-	codes := make([]string, 10)
-	hashes := make([]string, 10)
-	for i := range codes {
-		token, err := auth.GenerateRecoveryCode()
-		if err != nil {
-			return nil, err
-		}
-		codes[i], hashes[i] = token, recoveryCodeHash(token)
+	codes, hashes, err := newTOTPRecoveryCodes()
+	if err != nil {
+		return nil, err
 	}
 	user.TOTPRecoveryHashes = hashes
 	user.SessionVersion++
@@ -512,6 +525,19 @@ func (s *Service) GenerateTOTPRecoveryCodes(ctx context.Context, actor string) (
 		return nil, err
 	}
 	return codes, nil
+}
+
+func newTOTPRecoveryCodes() ([]string, []string, error) {
+	codes := make([]string, 10)
+	hashes := make([]string, 10)
+	for i := range codes {
+		token, err := auth.GenerateRecoveryCode()
+		if err != nil {
+			return nil, nil, err
+		}
+		codes[i], hashes[i] = token, recoveryCodeHash(token)
+	}
+	return codes, hashes, nil
 }
 
 func recoveryCodeHash(code string) string {

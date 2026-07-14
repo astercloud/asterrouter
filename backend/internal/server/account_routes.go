@@ -28,6 +28,14 @@ type accountProfileResponse struct {
 	TOTPAvailable bool                 `json:"totp_available"`
 }
 
+type accountSecurityResponse struct {
+	AccessToken string    `json:"access_token,omitempty"`
+	ExpiresAt   time.Time `json:"expires_at,omitempty"`
+	Changed     bool      `json:"changed,omitempty"`
+	Enabled     *bool     `json:"enabled,omitempty"`
+	Codes       []string  `json:"codes,omitempty"`
+}
+
 func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 	account := api.Group("/account")
 	account.Use(requireAdminAuth(opts.Config.AdminToken, opts.AuthService))
@@ -75,7 +83,13 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 			}
 			opts.AuthService.SetPasswordHash(passwordHash)
 		}
-		httpx.OK(c, gin.H{"changed": true})
+		response, err := replacementAccountSession(c, opts)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			return
+		}
+		response.Changed = true
+		httpx.OK(c, response)
 	})
 	account.DELETE("/identities/:provider", func(c *gin.Context) {
 		if err := opts.ControlService.UnbindCurrentAuthIdentity(c.Request.Context(), actor(c), c.Param("provider")); err != nil {
@@ -90,6 +104,13 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 		httpx.OK(c, data)
 	})
 	account.POST("/identities/:provider/bind", func(c *gin.Context) {
+		var req struct {
+			ReturnPath string `json:"return_path"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
+			return
+		}
 		provider := strings.ToLower(strings.TrimSpace(c.Param("provider")))
 		now := time.Now().UTC()
 		var state auth.OIDCState
@@ -143,7 +164,7 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 			httpx.Error(c, http.StatusBadRequest, 1336, err.Error())
 			return
 		}
-		if err := opts.authBindingStore.Save(state.Value, actor(c), provider, now); err != nil {
+		if err := opts.authBindingStore.Save(state.Value, actor(c), provider, req.ReturnPath, now); err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1337, err.Error())
 			return
 		}
@@ -174,11 +195,20 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
-		if err := opts.ControlService.ConfirmTOTP(c.Request.Context(), actor(c), req.Code); err != nil {
+		codes, err := opts.ControlService.ConfirmTOTPWithRecoveryCodes(c.Request.Context(), actor(c), req.Code)
+		if err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1313, err.Error())
 			return
 		}
-		httpx.OK(c, gin.H{"enabled": true})
+		response, err := replacementAccountSession(c, opts)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			return
+		}
+		enabled := true
+		response.Enabled = &enabled
+		response.Codes = codes
+		httpx.OK(c, response)
 	})
 	account.POST("/totp/recovery-codes", func(c *gin.Context) {
 		codes, err := opts.ControlService.GenerateTOTPRecoveryCodes(c.Request.Context(), actor(c))
@@ -186,7 +216,13 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 			httpx.Error(c, http.StatusBadRequest, 1318, err.Error())
 			return
 		}
-		httpx.OK(c, gin.H{"codes": codes})
+		response, err := replacementAccountSession(c, opts)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			return
+		}
+		response.Codes = codes
+		httpx.OK(c, response)
 	})
 	account.DELETE("/totp", func(c *gin.Context) {
 		var req struct {
@@ -200,8 +236,39 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 			httpx.Error(c, http.StatusBadRequest, 1314, err.Error())
 			return
 		}
-		httpx.OK(c, gin.H{"enabled": false})
+		response, err := replacementAccountSession(c, opts)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			return
+		}
+		enabled := false
+		response.Enabled = &enabled
+		httpx.OK(c, response)
 	})
+	account.POST("/sessions/revoke-others", func(c *gin.Context) {
+		if err := opts.ControlService.RevokeAccountSessions(c.Request.Context(), actor(c)); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1338, err.Error())
+			return
+		}
+		response, err := replacementAccountSession(c, opts)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			return
+		}
+		response.Changed = true
+		httpx.OK(c, response)
+	})
+}
+
+func replacementAccountSession(c *gin.Context, opts Options) (accountSecurityResponse, error) {
+	if opts.AuthService == nil {
+		return accountSecurityResponse{}, nil
+	}
+	result, err := opts.AuthService.LoginOIDC(actor(c), role(c))
+	if err != nil {
+		return accountSecurityResponse{}, err
+	}
+	return accountSecurityResponse{AccessToken: result.AccessToken, ExpiresAt: result.ExpiresAt}, nil
 }
 
 func currentAccountProfile(c *gin.Context, opts Options) (accountProfileResponse, error) {

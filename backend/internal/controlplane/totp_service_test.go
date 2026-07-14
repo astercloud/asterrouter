@@ -54,3 +54,26 @@ func TestTOTPEnrollmentAndDisable(t *testing.T) {
 		t.Fatalf("session version after TOTP disable = %d, want 3", stored.SessionVersion)
 	}
 }
+
+func TestConfirmTOTPWithRecoveryCodesPersistsEnrollmentAtomically(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "secret")
+	user, err := svc.CreateWorkspaceUser(t.Context(), "admin", WorkspaceUserRequest{Email: "atomic@example.test", Role: RoleDeveloper, Status: WorkspaceUserStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup, err := svc.BeginTOTPSetup(t.Context(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes, err := svc.ConfirmTOTPWithRecoveryCodes(t.Context(), user.ID, auth.GenerateTOTPCode(setup.Secret, time.Now().UTC()))
+	if err != nil || len(codes) != 10 {
+		t.Fatalf("codes=%v err=%v", codes, err)
+	}
+	stored, err := svc.workspaceUserByID(t.Context(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.TOTPEnabled || len(stored.TOTPRecoveryHashes) != 10 || stored.SessionVersion != 1 {
+		t.Fatalf("stored enrollment = %+v", stored)
+	}
+}

@@ -282,6 +282,9 @@ func (r *MemoryRepository) ApplyUsageLedger(_ context.Context, record UsageRecor
 			}
 		}
 	}
+	if err := settleMemoryBillingHoldForUsage(r, record, billing); err != nil {
+		return false, err
+	}
 	r.usageRecords[record.ID] = record
 	r.billingLedgerEntries[billing.ID] = billing
 	r.transactionalOutboxEvents[outbox.ID] = outbox
@@ -663,6 +666,9 @@ ON CONFLICT(operation_id, attempt_id, usage_version) DO NOTHING
 			return false, ErrUsageLedgerConflict
 		}
 		return false, nil
+	}
+	if err := settlePostgresBillingHoldForUsage(ctx, tx, record, billing); err != nil {
+		return false, err
 	}
 	if err := saveUsageRecord(ctx, tx, record); err != nil {
 		return false, err

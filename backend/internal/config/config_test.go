@@ -184,3 +184,25 @@ func TestLoadDeploymentRoleBootstrapsCompatibleProfiles(t *testing.T) {
 		t.Fatalf("ValidateRuntime() loaded deployment role: %v", err)
 	}
 }
+
+func TestLoadDurableAIJobQueueLimits(t *testing.T) {
+	t.Setenv("ASTER_AI_JOB_QUEUE_PROFILE_LIMIT", "1000")
+	t.Setenv("ASTER_AI_JOB_QUEUE_TENANT_LIMIT", "100")
+	t.Setenv("ASTER_AI_JOB_QUEUE_PRINCIPAL_LIMIT", "10")
+
+	cfg := Load()
+	if cfg.AIJobQueueProfileLimit != 1000 || cfg.AIJobQueueTenantLimit != 100 || cfg.AIJobQueuePrincipalLimit != 10 {
+		t.Fatalf("Load() durable job limits = %+v", cfg)
+	}
+}
+
+func TestValidateRuntimeRejectsInvalidDurableAIJobQueueLimit(t *testing.T) {
+	t.Setenv("ASTER_AI_JOB_QUEUE_PRINCIPAL_LIMIT", "invalid")
+	cfg := Load()
+	if cfg.AIJobQueuePrincipalLimit != -1 {
+		t.Fatalf("invalid limit=%d", cfg.AIJobQueuePrincipalLimit)
+	}
+	if err := ValidateRuntime(cfg); err == nil {
+		t.Fatal("ValidateRuntime() accepted an invalid durable job queue limit")
+	}
+}

@@ -22,8 +22,14 @@ type aiJobExecutor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func (r *MemoryRepository) CreateDurableAIJob(_ context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent) (AIJob, bool, error) {
+func (r *MemoryRepository) CreateDurableAIJob(_ context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent, limits AIJobAdmissionLimits, billing BillingHoldAdmission) (AIJob, bool, error) {
 	if err := validateDurableAIJobAdmission(operation, job, event, outbox); err != nil {
+		return AIJob{}, false, err
+	}
+	if err := validateBillingHoldAdmission(operation, billing); err != nil {
+		return AIJob{}, false, err
+	}
+	if err := limits.validate(); err != nil {
 		return AIJob{}, false, err
 	}
 	r.mu.Lock()
@@ -32,6 +38,9 @@ func (r *MemoryRepository) CreateDurableAIJob(_ context.Context, operation AIOpe
 		if sameAIJobIdempotencyScope(current, job) {
 			return current, false, nil
 		}
+	}
+	if err := enforceAIJobAdmissionLimits(limits, aiJobAdmissionCountsForJobs(r.aiJobs, job)); err != nil {
+		return AIJob{}, false, err
 	}
 	if _, exists := r.aiOperations[operation.ID]; exists {
 		return AIJob{}, false, fmt.Errorf("ai operation %q already exists", operation.ID)
@@ -45,10 +54,20 @@ func (r *MemoryRepository) CreateDurableAIJob(_ context.Context, operation AIOpe
 	if err := validateMemoryOutboxInsert(r.transactionalOutboxEvents, outbox); err != nil {
 		return AIJob{}, false, err
 	}
+	if _, exists := r.billingHolds[billing.Hold.ID]; exists {
+		return AIJob{}, false, fmt.Errorf("billing hold %q already exists", billing.Hold.ID)
+	}
+	if _, found := memoryBillingHoldForOperation(r.billingHolds, operation.ID); found {
+		return AIJob{}, false, fmt.Errorf("billing hold for operation %q already exists", operation.ID)
+	}
+	if err := enforceMemoryBillingHoldBudget(r, billing); err != nil {
+		return AIJob{}, false, err
+	}
 	r.aiOperations[operation.ID] = operation
 	r.aiJobs[job.ID] = job
 	r.aiJobEvents[event.ID] = event
 	r.transactionalOutboxEvents[outbox.ID] = outbox
+	r.billingHolds[billing.Hold.ID] = billing.Hold
 	return job, true, nil
 }
 
@@ -114,6 +133,11 @@ func (r *MemoryRepository) RequestAIJobCancellation(_ context.Context, id string
 	if !ok {
 		return AIJob{}, false, true, fmt.Errorf("ai operation %q not found", job.OperationID)
 	}
+	if toStatus == AIJobStatusCanceled {
+		if err := releaseMemoryBillingHoldForOperation(r, job.OperationID, "job_canceled_before_dispatch", requestedAt); err != nil {
+			return AIJob{}, false, true, err
+		}
+	}
 	applyMemoryOperationJobStatus(&operation, updated.Status, updated.ErrorType, requestedAt)
 	r.aiOperations[operation.ID] = operation
 	r.aiJobs[id] = updated
@@ -146,8 +170,48 @@ func (r *MemoryRepository) ClaimQueuedAIJobs(_ context.Context, now, leaseUntil 
 		}
 	}
 	candidates = rankAIJobFairCandidates(candidates, jobs, activities, now, limit)
+	return r.claimAIJobCandidatesLocked(candidates, now, leaseUntil, workerID, leaseToken, limit)
+}
+
+func (r *MemoryRepository) ClaimAIJobsByReadyReferences(_ context.Context, references []AIJobReadyReference, now, leaseUntil time.Time, workerID, leaseToken string, limit int) ([]AIJob, error) {
+	if limit <= 0 || len(references) == 0 || strings.TrimSpace(workerID) == "" || strings.TrimSpace(leaseToken) == "" || !leaseUntil.After(now) {
+		return []AIJob{}, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	wanted := make(map[string]int, len(references))
+	for _, reference := range references {
+		if strings.TrimSpace(reference.JobID) != "" && reference.StatusVersion > 0 {
+			wanted[reference.JobID] = reference.StatusVersion
+		}
+	}
+	candidates := make([]AIJob, 0, len(wanted))
+	jobs := make([]AIJob, 0, len(r.aiJobs))
+	for _, job := range r.aiJobs {
+		jobs = append(jobs, job)
+		if wanted[job.ID] == job.StatusVersion && aiJobReadyForClaim(job, now) {
+			candidates = append(candidates, job)
+		}
+	}
+	activities := make([]aiJobDispatchActivity, 0)
+	for _, event := range r.aiJobEvents {
+		if event.EventType != AIJobEventScheduled {
+			continue
+		}
+		if job, found := r.aiJobs[event.JobID]; found {
+			activities = append(activities, aiJobDispatchActivity{Job: job, DispatchedAt: event.CreatedAt})
+		}
+	}
+	candidates = rankAIJobFairCandidates(candidates, jobs, activities, now, limit)
+	return r.claimAIJobCandidatesLocked(candidates, now, leaseUntil, workerID, leaseToken, limit)
+}
+
+func (r *MemoryRepository) claimAIJobCandidatesLocked(candidates []AIJob, now, leaseUntil time.Time, workerID, leaseToken string, limit int) ([]AIJob, error) {
 	claimed := make([]AIJob, 0, len(candidates))
 	for _, candidate := range candidates {
+		if len(claimed) >= limit {
+			break
+		}
 		updated, event, outbox, err := prepareAIJobClaim(candidate, now)
 		if err != nil {
 			return nil, err
@@ -171,6 +235,31 @@ func (r *MemoryRepository) ClaimQueuedAIJobs(_ context.Context, now, leaseUntil 
 		claimed = append(claimed, updated)
 	}
 	return claimed, nil
+}
+
+func (r *MemoryRepository) ListAIJobsForReadyIndex(_ context.Context, limit int) ([]AIJob, error) {
+	if limit <= 0 {
+		return []AIJob{}, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	jobs := make([]AIJob, 0)
+	for _, job := range r.aiJobs {
+		if job.Status == AIJobStatusQueued || (job.Status == AIJobStatusDispatching && job.QueueLeaseUntil != nil) {
+			jobs = append(jobs, job)
+		}
+	}
+	sort.Slice(jobs, func(i, j int) bool {
+		left, right := aiJobReadyAt(jobs[i]), aiJobReadyAt(jobs[j])
+		if !left.Equal(right) {
+			return left.Before(right)
+		}
+		return jobs[i].ID < jobs[j].ID
+	})
+	if len(jobs) > limit {
+		jobs = jobs[:limit]
+	}
+	return jobs, nil
 }
 
 func (r *MemoryRepository) ListAIJobsForDeliveryRebuild(_ context.Context, now time.Time, limit int) ([]AIJob, error) {
@@ -300,8 +389,14 @@ func (r *MemoryRepository) ListAIJobEvents(_ context.Context, jobID string) ([]A
 	return out, nil
 }
 
-func (r *PostgresRepository) CreateDurableAIJob(ctx context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent) (AIJob, bool, error) {
+func (r *PostgresRepository) CreateDurableAIJob(ctx context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent, limits AIJobAdmissionLimits, billing BillingHoldAdmission) (AIJob, bool, error) {
 	if err := validateDurableAIJobAdmission(operation, job, event, outbox); err != nil {
+		return AIJob{}, false, err
+	}
+	if err := validateBillingHoldAdmission(operation, billing); err != nil {
+		return AIJob{}, false, err
+	}
+	if err := limits.validate(); err != nil {
 		return AIJob{}, false, err
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -309,6 +404,11 @@ func (r *PostgresRepository) CreateDurableAIJob(ctx context.Context, operation A
 		return AIJob{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if limits.enabled() {
+		if err := lockPostgresAIJobAdmissionScopes(ctx, tx, job, limits); err != nil {
+			return AIJob{}, false, err
+		}
+	}
 	result, err := insertAIOperation(ctx, tx, operation)
 	if err != nil {
 		return AIJob{}, false, err
@@ -329,6 +429,21 @@ func (r *PostgresRepository) CreateDurableAIJob(ctx context.Context, operation A
 			return AIJob{}, false, err
 		}
 		return existing, false, nil
+	}
+	if limits.enabled() {
+		counts, countErr := countPostgresAIJobAdmissionScopes(ctx, tx, job)
+		if countErr != nil {
+			return AIJob{}, false, countErr
+		}
+		if limitErr := enforceAIJobAdmissionLimits(limits, counts); limitErr != nil {
+			return AIJob{}, false, limitErr
+		}
+	}
+	if err := enforcePostgresBillingHoldBudget(ctx, tx, billing); err != nil {
+		return AIJob{}, false, err
+	}
+	if err := insertBillingHold(ctx, tx, billing.Hold); err != nil {
+		return AIJob{}, false, err
 	}
 	if err := insertAIJob(ctx, tx, job); err != nil {
 		return AIJob{}, false, err
@@ -409,6 +524,11 @@ WHERE id=$1 AND profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND prin
 	if err := persistAIJobTransition(ctx, tx, job, updated, event, outbox); err != nil {
 		return AIJob{}, false, true, err
 	}
+	if toStatus == AIJobStatusCanceled {
+		if err := releasePostgresBillingHoldForOperation(ctx, tx, job.OperationID, "job_canceled_before_dispatch", requestedAt); err != nil {
+			return AIJob{}, false, true, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return AIJob{}, false, true, err
 	}
@@ -437,12 +557,59 @@ func (r *PostgresRepository) ClaimQueuedAIJobs(ctx context.Context, now, leaseUn
 		return nil, err
 	}
 	candidates = rankAIJobFairCandidates(candidates, inFlight, activities, now, len(candidates))
-	claimed := make([]AIJob, 0, len(candidates))
+	claimed, err := claimPostgresAIJobCandidates(ctx, tx, candidates, nil, now, leaseUntil, workerID, leaseToken, limit)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+func (r *PostgresRepository) ClaimAIJobsByReadyReferences(ctx context.Context, references []AIJobReadyReference, now, leaseUntil time.Time, workerID, leaseToken string, limit int) ([]AIJob, error) {
+	if limit <= 0 || len(references) == 0 || strings.TrimSpace(workerID) == "" || strings.TrimSpace(leaseToken) == "" || !leaseUntil.After(now) {
+		return []AIJob{}, nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	candidates, expected, err := listPostgresAIJobFairCandidatesByReferences(ctx, tx, references, now)
+	if err != nil {
+		return nil, err
+	}
+	inFlight, err := listPostgresAIJobInFlight(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	activities, err := listPostgresAIJobDispatchActivity(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	candidates = rankAIJobFairCandidates(candidates, inFlight, activities, now, len(candidates))
+	claimed, err := claimPostgresAIJobCandidates(ctx, tx, candidates, expected, now, leaseUntil, workerID, leaseToken, limit)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+func claimPostgresAIJobCandidates(ctx context.Context, tx *sql.Tx, candidates []AIJob, expected map[string]int, now, leaseUntil time.Time, workerID, leaseToken string, limit int) ([]AIJob, error) {
+	claimed := make([]AIJob, 0, min(limit, len(candidates)))
 	for _, candidate := range candidates {
 		if len(claimed) >= limit {
 			break
 		}
-		current, found, lockErr := lockPostgresAIJobForClaim(ctx, tx, candidate.ID, now)
+		expectedVersion := 0
+		if expected != nil {
+			expectedVersion = expected[candidate.ID]
+		}
+		current, found, lockErr := lockPostgresAIJobForClaim(ctx, tx, candidate.ID, expectedVersion, now)
 		if lockErr != nil {
 			return nil, lockErr
 		}
@@ -462,10 +629,30 @@ func (r *PostgresRepository) ClaimQueuedAIJobs(ctx context.Context, now, leaseUn
 		}
 		claimed = append(claimed, updated)
 	}
-	if err := tx.Commit(); err != nil {
+	return claimed, nil
+}
+
+func (r *PostgresRepository) ListAIJobsForReadyIndex(ctx context.Context, limit int) ([]AIJob, error) {
+	if limit <= 0 {
+		return []AIJob{}, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs
+WHERE status=$1 OR (status=$2 AND queue_lease_until IS NOT NULL)
+ORDER BY CASE WHEN status=$2 THEN queue_lease_until ELSE next_eligible_at END, id
+LIMIT $3`, AIJobStatusQueued, AIJobStatusDispatching, limit)
+	if err != nil {
 		return nil, err
 	}
-	return claimed, nil
+	defer rows.Close()
+	jobs := make([]AIJob, 0)
+	for rows.Next() {
+		job, scanErr := scanAIJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
 }
 
 func (r *PostgresRepository) ListAIJobsForDeliveryRebuild(ctx context.Context, now time.Time, limit int) ([]AIJob, error) {

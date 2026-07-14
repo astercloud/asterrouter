@@ -147,6 +147,57 @@ func TestGatewayCandidateAffinityReusesAccountThenSupplierWithinScope(t *testing
 	}
 }
 
+func TestResolveGatewayUpstreamAffinityUsesVerifiedCapabilityAndOpaqueValue(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1", "upstream-affinity-test-secret")
+	capability := ProviderCacheCapability{
+		ID: "capability-a", ProviderAccountID: "account-a", UpstreamModel: "upstream-model", Protocol: "openai_chat_completions",
+		SupportStatus: CacheSupportObserved, AffinityTransport: AffinityTransportHeader, AffinityField: "X-Session-ID",
+		CacheControlMode: CacheControlModePromptCacheKey,
+	}
+	if err := repo.SaveProviderCacheCapability(ctx, capability); err != nil {
+		t.Fatal(err)
+	}
+	input := GatewayAffinityInput{
+		TenantID: "tenant-a", PrincipalID: "customer-a", CredentialID: "key-a", Model: "public-model",
+		Protocol: "openai_chat_completions", RouteGroup: "default", StickyKey: "raw-session-secret", PolicyVersion: 3,
+	}
+	provider := GatewayProvider{ID: "provider-a", AccountID: "account-a", UpstreamModel: "upstream-model"}
+	first, found, err := svc.ResolveGatewayUpstreamAffinity(ctx, input, provider)
+	if err != nil || !found {
+		t.Fatalf("ResolveGatewayUpstreamAffinity() found=%t err=%v", found, err)
+	}
+	second, found, err := svc.ResolveGatewayUpstreamAffinity(ctx, input, provider)
+	if err != nil || !found || first != second {
+		t.Fatalf("stable affinity first=%+v second=%+v found=%t err=%v", first, second, found, err)
+	}
+	if first.HeaderName != "X-Session-ID" || !first.PromptCacheKey || first.Value == "" || strings.Contains(first.Value, input.StickyKey) || strings.Contains(first.Value, input.PrincipalID) {
+		t.Fatalf("unsafe or incomplete upstream affinity: %+v", first)
+	}
+	otherTenant := input
+	otherTenant.TenantID = "tenant-b"
+	other, found, err := svc.ResolveGatewayUpstreamAffinity(ctx, otherTenant, provider)
+	if err != nil || !found || other.Value == first.Value {
+		t.Fatalf("upstream affinity leaked across tenants: first=%+v other=%+v found=%t err=%v", first, other, found, err)
+	}
+	capability.SupportStatus = CacheSupportDegraded
+	if err := repo.SaveProviderCacheCapability(ctx, capability); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := svc.ResolveGatewayUpstreamAffinity(ctx, input, provider); err != nil || found {
+		t.Fatalf("degraded capability was injected found=%t err=%v", found, err)
+	}
+	capability.SupportStatus = CacheSupportAccepted
+	capability.AffinityField = "Authorization"
+	if err := repo.SaveProviderCacheCapability(ctx, capability); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := svc.ResolveGatewayUpstreamAffinity(ctx, input, provider); err != nil || found {
+		t.Fatalf("reserved persisted header was injected found=%t err=%v", found, err)
+	}
+}
+
 func TestGatewaySimulationDoesNotConsumeRateCapacity(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret")

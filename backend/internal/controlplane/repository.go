@@ -42,15 +42,18 @@ type Repository interface {
 	ReschedulePlatformUsageDeliveryEvent(ctx context.Context, id, leaseToken string, nextAttemptAt time.Time, httpStatus int, lastError string, deadLetter bool, updatedAt time.Time) error
 	RequeuePlatformUsageDeliveryEvent(ctx context.Context, id string, nextAttemptAt time.Time) error
 	CreateAIOperation(ctx context.Context, operation AIOperation) (AIOperation, bool, error)
+	CreateAIOperationWithBillingHold(ctx context.Context, operation AIOperation, admission BillingHoldAdmission) (AIOperation, bool, error)
 	FindAIOperation(ctx context.Context, id string) (AIOperation, bool, error)
 	MarkAIOperationRunning(ctx context.Context, id string, updatedAt time.Time) (bool, error)
 	CompleteAIOperation(ctx context.Context, id, status, errorType string, completedAt time.Time) (bool, error)
-	CreateDurableAIJob(ctx context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent) (AIJob, bool, error)
+	CreateDurableAIJob(ctx context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent, limits AIJobAdmissionLimits, billing BillingHoldAdmission) (AIJob, bool, error)
 	FindAIJob(ctx context.Context, id string) (AIJob, bool, error)
 	FindAIJobByOperationID(ctx context.Context, operationID string) (AIJob, bool, error)
 	FindOwnedAIJob(ctx context.Context, id string, owner AIJobOwner) (AIJob, bool, error)
 	RequestAIJobCancellation(ctx context.Context, id string, owner AIJobOwner, requestedAt time.Time) (AIJob, bool, bool, error)
 	ClaimQueuedAIJobs(ctx context.Context, now, leaseUntil time.Time, workerID, leaseToken string, limit int) ([]AIJob, error)
+	ClaimAIJobsByReadyReferences(ctx context.Context, references []AIJobReadyReference, now, leaseUntil time.Time, workerID, leaseToken string, limit int) ([]AIJob, error)
+	ListAIJobsForReadyIndex(ctx context.Context, limit int) ([]AIJob, error)
 	ListAIJobsForDeliveryRebuild(ctx context.Context, now time.Time, limit int) ([]AIJob, error)
 	ExtendAIJobQueueLease(ctx context.Context, id string, expectedVersion int, fenceToken int64, leaseToken string, leaseUntil, extendedAt time.Time) (AIJob, bool, error)
 	TransitionAIJob(ctx context.Context, id string, expectedVersion int, fenceToken int64, toStatus, reason string, transitionedAt time.Time) (AIJob, bool, error)
@@ -62,6 +65,9 @@ type Repository interface {
 	UpdateAIAttemptDispatch(ctx context.Context, attempt AIAttempt, expectedVersion int) (AIAttempt, bool, error)
 	ListAIAttemptsForReconciliation(ctx context.Context, now time.Time, limit int) ([]AIAttempt, error)
 	CompleteAIAttempt(ctx context.Context, id, status, errorType string, completedAt time.Time) (bool, error)
+	FindBillingHoldByOperationID(ctx context.Context, operationID string) (BillingHold, bool, error)
+	TransitionBillingHold(ctx context.Context, operationID string, expectedVersion int, toStatus string, settledAmount int, reason string, transitionedAt time.Time) (BillingHold, bool, error)
+	ListBillingHolds(ctx context.Context) ([]BillingHold, error)
 	ApplyUsageLedger(ctx context.Context, record UsageRecord, billing BillingLedgerEntry, outbox TransactionalOutboxEvent, events []PlatformUsageDeliveryEvent) (bool, error)
 	ListBillingLedgerEntries(ctx context.Context, operationID string) ([]BillingLedgerEntry, error)
 	ListTransactionalOutboxEvents(ctx context.Context, aggregateID string) ([]TransactionalOutboxEvent, error)
@@ -108,6 +114,7 @@ type Repository interface {
 	SaveProviderBillingLine(ctx context.Context, line ProviderBillingLine) error
 	SaveProviderBillingLineAndReconcileUsage(ctx context.Context, line ProviderBillingLine, record UsageRecord) error
 	ListProviderCacheCapabilities(ctx context.Context) ([]ProviderCacheCapability, error)
+	FindProviderCacheCapability(ctx context.Context, providerAccountID, upstreamModel, protocol string) (ProviderCacheCapability, bool, error)
 	SaveProviderCacheCapability(ctx context.Context, capability ProviderCacheCapability) error
 	UpsertProviderCacheProductionMetrics(ctx context.Context, metrics ProviderCacheProductionMetrics) error
 	ListProviderCacheProbeRuns(ctx context.Context, limit int) ([]ProviderCacheProbeRun, error)
@@ -211,6 +218,7 @@ type MemoryRepository struct {
 	aiJobs                          map[string]AIJob
 	aiJobEvents                     map[string]AIJobEvent
 	aiAttempts                      map[string]AIAttempt
+	billingHolds                    map[string]BillingHold
 	billingLedgerEntries            map[string]BillingLedgerEntry
 	transactionalOutboxEvents       map[string]TransactionalOutboxEvent
 	credentialRateSamples           map[string][]credentialRateSample
@@ -264,6 +272,7 @@ func NewMemoryRepository() *MemoryRepository {
 		aiJobs:                          map[string]AIJob{},
 		aiJobEvents:                     map[string]AIJobEvent{},
 		aiAttempts:                      map[string]AIAttempt{},
+		billingHolds:                    map[string]BillingHold{},
 		billingLedgerEntries:            map[string]BillingLedgerEntry{},
 		transactionalOutboxEvents:       map[string]TransactionalOutboxEvent{},
 		credentialRateSamples:           map[string][]credentialRateSample{},
@@ -1670,6 +1679,45 @@ DROP INDEX IF EXISTS ai_operations_idempotency_idx;
 
 CREATE INDEX IF NOT EXISTS ai_operations_tenant_created_idx
   ON ai_operations(profile_scope, tenant_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS billing_holds (
+  id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL UNIQUE REFERENCES ai_operations(id) ON DELETE RESTRICT,
+  profile_scope TEXT NOT NULL DEFAULT '',
+  tenant_id TEXT NOT NULL DEFAULT '',
+  credential_id TEXT NOT NULL,
+  credential_source TEXT NOT NULL,
+  integration_id TEXT NOT NULL DEFAULT '',
+  principal_type TEXT NOT NULL DEFAULT '',
+  principal_id TEXT NOT NULL DEFAULT '',
+  external_subject_reference TEXT NOT NULL DEFAULT '',
+  request_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  reserved_amount_cents INTEGER NOT NULL DEFAULT 0,
+  settled_amount_cents INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  price_snapshot_id TEXT NOT NULL DEFAULT '',
+  estimate_source TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  budget_period_start TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  settled_at TIMESTAMPTZ,
+  released_at TIMESTAMPTZ,
+  CHECK (status IN ('reserved', 'committed', 'settled', 'released', 'disputed')),
+  CHECK (version > 0),
+  CHECK (reserved_amount_cents >= 0),
+  CHECK (settled_amount_cents >= 0),
+  CHECK (char_length(currency) = 3)
+);
+
+CREATE INDEX IF NOT EXISTS billing_holds_budget_idx
+  ON billing_holds(profile_scope, tenant_id, credential_id, budget_period_start, status);
+
+CREATE INDEX IF NOT EXISTS billing_holds_expiry_idx
+  ON billing_holds(status, expires_at);
 
 CREATE TABLE IF NOT EXISTS ai_jobs (
   id TEXT PRIMARY KEY,

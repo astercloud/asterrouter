@@ -26,8 +26,8 @@ func TestEffectivePricingReportRanksRealCostInsteadOfQuotedMultiplier(t *testing
 	uncachedA, totalA := 100, 100
 	uncachedB, cachedB, totalB := 10, 90, 100
 	inputs := []GatewayUsageInput{
-		{Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions", ProviderID: "provider-a", ProviderAccountID: "account-a", Status: "forwarded", InputTokens: 100, TotalInputTokens: &totalA, UncachedInputTokens: &uncachedA, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai"},
-		{Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions", ProviderID: "provider-b", ProviderAccountID: "account-b", Status: "forwarded", InputTokens: 100, TotalInputTokens: &totalB, UncachedInputTokens: &uncachedB, CacheReadTokens: &cachedB, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai"},
+		{Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions", ProviderID: "provider-a", ProviderAccountID: "account-a", Status: "forwarded", LatencyMS: 150, InputTokens: 100, TotalInputTokens: &totalA, UncachedInputTokens: &uncachedA, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai"},
+		{Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions", ProviderID: "provider-b", ProviderAccountID: "account-b", Status: "forwarded", LatencyMS: 450, InputTokens: 100, TotalInputTokens: &totalB, UncachedInputTokens: &uncachedB, CacheReadTokens: &cachedB, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai"},
 	}
 	for index, input := range inputs {
 		if err := svc.RecordGatewayUsage(ctx, GatewayAuthContext{APIKey: APIKeyRecord{ID: "key-" + string(rune('a'+index))}}, input); err != nil {
@@ -43,6 +43,9 @@ func TestEffectivePricingReportRanksRealCostInsteadOfQuotedMultiplier(t *testing
 	}
 	if report.Rows[0].ProviderAccountID != "account-b" || report.Rows[0].QuotedMultiplier <= report.Rows[1].QuotedMultiplier || report.Rows[0].EffectiveCostMicrosPer1M >= report.Rows[1].EffectiveCostMicrosPer1M {
 		t.Fatalf("report did not rank real cost over quoted multiplier: %+v", report.Rows)
+	}
+	if report.Rows[0].P95LatencyMS != 450 || report.Rows[1].P95LatencyMS != 150 {
+		t.Fatalf("report p95 latency = %+v", report.Rows)
 	}
 }
 
@@ -114,7 +117,18 @@ func TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt(t *test
 	}
 }
 
-func TestEffectivePricingDecisionUsesCacheQualityAsTiebreaker(t *testing.T) {
+func TestEvaluateEffectivePricingDecisionRequiresUpstreamModel(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	_, err := svc.EvaluateEffectivePricingDecision(context.Background(), "tester", EffectivePricingDecisionEvaluationRequest{
+		Model: "public-model", Protocol: "openai_chat_completions",
+		CurrentProviderAccountID: "account-a", CandidateProviderAccountID: "account-b",
+	})
+	if err == nil || !strings.Contains(err.Error(), "upstream_model") {
+		t.Fatalf("missing upstream_model err=%v", err)
+	}
+}
+
+func TestEffectivePricingDecisionKeepsGatewayAndUpstreamModelEvidenceSeparate(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 	repo := NewMemoryRepository()
@@ -122,57 +136,211 @@ func TestEffectivePricingDecisionUsesCacheQualityAsTiebreaker(t *testing.T) {
 	svc.now = func() time.Time { return now }
 	seedEffectivePricingProvider(t, repo, now, "provider-a", "account-a", "Channel A")
 	seedEffectivePricingProvider(t, repo, now, "provider-b", "account-b", "Channel B")
-	for _, accountID := range []string{"account-a", "account-b"} {
+
+	for _, model := range []string{"upstream-a", "upstream-b"} {
+		for _, account := range []struct {
+			providerID string
+			accountID  string
+		}{
+			{providerID: "provider-a", accountID: "account-a"},
+			{providerID: "provider-b", accountID: "account-b"},
+		} {
+			if err := repo.SaveProcurementPrice(ctx, ProcurementPrice{
+				ID: "price-" + model + "-" + account.accountID, ProviderID: account.providerID,
+				ProviderAccountID: account.accountID, UpstreamModel: model, Protocol: "openai_chat_completions",
+				Currency: "USD", Confidence: ProcurementCostConfidenceExact, Status: ProcurementPriceStatusActive,
+				EffectiveFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	totalTokens := 100
+	costs := map[string]int64{
+		"upstream-a:account-a": 10,
+		"upstream-a:account-b": 9,
+		"upstream-b:account-a": 100,
+		"upstream-b:account-b": 50,
+	}
+	for key, cost := range costs {
+		parts := strings.Split(key, ":")
 		providerID := "provider-a"
-		if accountID == "account-b" {
+		if parts[1] == "account-b" {
 			providerID = "provider-b"
 		}
-		if err := repo.SaveProcurementPrice(ctx, ProcurementPrice{
-			ID: "price-" + accountID, ProviderID: providerID, ProviderAccountID: accountID,
-			UpstreamModel: "model", Protocol: "openai_chat_completions", Currency: "USD",
-			UncachedInputMicrosPer1MTokens: 1_000_000, CacheReadMicrosPer1MTokens: 100_000,
-			ReferenceInputMicrosPer1MTokens: 1_000_000, Confidence: ProcurementCostConfidenceExact,
-			Status: ProcurementPriceStatusActive, EffectiveFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+		cost := cost
+		if err := svc.RecordGatewayUsage(ctx, GatewayAuthContext{APIKey: APIKeyRecord{ID: "key-" + key}}, GatewayUsageInput{
+			Model: "gateway-public", UpstreamModel: parts[0], Protocol: "openai_chat_completions",
+			ProviderID: providerID, ProviderAccountID: parts[1], Status: "forwarded", LatencyMS: 100,
+			InputTokens: totalTokens, TotalInputTokens: &totalTokens, ProcurementCostMicros: &cost,
+			ProcurementCostConfidence: ProcurementCostConfidenceExact,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	currentTotal, currentUncached, currentCached := 100, 90, 10
-	candidateTotal, candidateUncached, candidateCached := 100, 20, 80
-	currentCost, candidateCost := int64(50), int64(50)
-	for _, input := range []GatewayUsageInput{
-		{Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions", ProviderID: "provider-a", ProviderAccountID: "account-a", Status: "forwarded", InputTokens: 100, TotalInputTokens: &currentTotal, UncachedInputTokens: &currentUncached, CacheReadTokens: &currentCached, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai", ProcurementCostMicros: &currentCost, ProcurementCostConfidence: ProcurementCostConfidenceExact},
-		{Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions", ProviderID: "provider-b", ProviderAccountID: "account-b", Status: "forwarded", InputTokens: 100, TotalInputTokens: &candidateTotal, UncachedInputTokens: &candidateUncached, CacheReadTokens: &candidateCached, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai", ProcurementCostMicros: &candidateCost, ProcurementCostConfidence: ProcurementCostConfidenceExact},
-	} {
-		if err := svc.RecordGatewayUsage(ctx, GatewayAuthContext{APIKey: APIKeyRecord{ID: "cache-tiebreak-key"}}, input); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, capability := range []ProviderCacheCapability{
-		{ID: "cachecap-a", ProviderAccountID: "account-a", UpstreamModel: "model", Protocol: "openai_chat_completions", SupportStatus: CacheSupportObserved, PoolAffinityGrade: PoolAffinityProbable, BillingConsistencyRate: 1, CreatedAt: now, UpdatedAt: now},
-		{ID: "cachecap-b", ProviderAccountID: "account-b", UpstreamModel: "model", Protocol: "openai_chat_completions", SupportStatus: CacheSupportObserved, PoolAffinityGrade: PoolAffinityProbable, BillingConsistencyRate: 1, CreatedAt: now, UpdatedAt: now},
-	} {
-		if err := repo.SaveProviderCacheCapability(ctx, capability); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := svc.UpdateEffectivePricingPolicy(ctx, "tester", EffectivePricingPolicyRequest{
-		Mode: EffectivePricingModeRecommend, WindowHours: 24, MinSampleCount: 1, MinMetricsCoverage: 0.8,
-		MinBillingConsistency: 0.95, MinCostImprovement: 0.08, MaxErrorRateRegression: 0.01,
-		MaxP95LatencyRegression: 0.2, CanaryPercent: 5, SupplierAffinityTTLSeconds: 3600,
-		AccountAffinityTTLSeconds: 1800, ProbeDailyTokenBudget: 1000, ProbeDailyCostBudgetMicros: 1000,
-	}); err != nil {
-		t.Fatal(err)
-	}
+
 	decision, err := svc.EvaluateEffectivePricingDecision(ctx, "tester", EffectivePricingDecisionEvaluationRequest{
-		Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions",
+		Model: "gateway-public", UpstreamModel: "upstream-b", Protocol: "openai_chat_completions",
 		CurrentProviderAccountID: "account-a", CandidateProviderAccountID: "account-b",
 	})
 	if err != nil {
 		t.Fatalf("EvaluateEffectivePricingDecision(): %v", err)
 	}
-	if decision.Status != EffectivePricingDecisionRecommended || !contains(decision.ReasonCodes, "cache_quality_tiebreaker") || decision.CostImprovement != 0 {
-		t.Fatalf("cache tiebreak decision = %+v", decision)
+	if decision.Model != "gateway-public" || decision.UpstreamModel != "upstream-b" || decision.CurrentCostMicrosPer1M != 1_000_000 || decision.CandidateCostMicrosPer1M != 500_000 {
+		t.Fatalf("decision used evidence from the wrong model: %+v", decision)
+	}
+
+	listed, err := svc.ListEffectivePricingDecisions(ctx)
+	if err != nil || len(listed) != 1 || listed[0].UpstreamModel != "upstream-b" {
+		t.Fatalf("listed decisions=%+v err=%v", listed, err)
+	}
+	report, err := svc.EffectivePricingReport(ctx, EffectivePricingReportQuery{Model: "upstream-b", Protocol: "openai_chat_completions"})
+	if err != nil || len(report.Decisions) != 1 || report.Decisions[0].UpstreamModel != "upstream-b" {
+		t.Fatalf("upstream-b report decisions=%+v err=%v", report.Decisions, err)
+	}
+	otherReport, err := svc.EffectivePricingReport(ctx, EffectivePricingReportQuery{Model: "upstream-a", Protocol: "openai_chat_completions"})
+	if err != nil || len(otherReport.Decisions) != 0 {
+		t.Fatalf("upstream-a report leaked decisions=%+v err=%v", otherReport.Decisions, err)
+	}
+}
+
+func TestEffectivePricingDecisionCacheQualityTiebreaker(t *testing.T) {
+	tests := []struct {
+		name                    string
+		candidateCostMicros     int64
+		candidateLatencyMS      int64
+		wantStatus              string
+		wantCacheTiebreaker     bool
+		wantCostThresholdReason bool
+		wantP95RegressionReason bool
+	}{
+		{
+			name:                "recommends candidate when effective cost does not regress",
+			candidateCostMicros: 50,
+			candidateLatencyMS:  100,
+			wantStatus:          EffectivePricingDecisionRecommended,
+			wantCacheTiebreaker: true,
+		},
+		{
+			name:                    "holds candidate when effective cost regression exceeds policy",
+			candidateCostMicros:     52,
+			candidateLatencyMS:      100,
+			wantStatus:              EffectivePricingDecisionHold,
+			wantCostThresholdReason: true,
+		},
+		{
+			name:                    "holds candidate when p95 latency regression exceeds policy",
+			candidateCostMicros:     50,
+			candidateLatencyMS:      130,
+			wantStatus:              EffectivePricingDecisionHold,
+			wantP95RegressionReason: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+			repo := NewMemoryRepository()
+			svc := NewService(repo, "/v1")
+			svc.now = func() time.Time { return now }
+			seedEffectivePricingProvider(t, repo, now, "provider-a", "account-a", "Channel A")
+			seedEffectivePricingProvider(t, repo, now, "provider-b", "account-b", "Channel B")
+			for _, accountID := range []string{"account-a", "account-b"} {
+				providerID := "provider-a"
+				if accountID == "account-b" {
+					providerID = "provider-b"
+				}
+				if err := repo.SaveProcurementPrice(ctx, ProcurementPrice{
+					ID: "price-" + accountID, ProviderID: providerID, ProviderAccountID: accountID,
+					UpstreamModel: "model", Protocol: "openai_chat_completions", Currency: "USD",
+					UncachedInputMicrosPer1MTokens: 1_000_000, CacheReadMicrosPer1MTokens: 100_000,
+					ReferenceInputMicrosPer1MTokens: 1_000_000, Confidence: ProcurementCostConfidenceExact,
+					Status: ProcurementPriceStatusActive, EffectiveFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			currentTotal, currentUncached, currentCached := 100, 90, 10
+			candidateTotal, candidateUncached, candidateCached := 100, 20, 80
+			currentCost := int64(50)
+			for _, input := range []GatewayUsageInput{
+				{Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions", ProviderID: "provider-a", ProviderAccountID: "account-a", Status: "forwarded", LatencyMS: 100, InputTokens: 100, TotalInputTokens: &currentTotal, UncachedInputTokens: &currentUncached, CacheReadTokens: &currentCached, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai", ProcurementCostMicros: &currentCost, ProcurementCostConfidence: ProcurementCostConfidenceExact},
+				{Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions", ProviderID: "provider-b", ProviderAccountID: "account-b", Status: "forwarded", LatencyMS: tt.candidateLatencyMS, InputTokens: 100, TotalInputTokens: &candidateTotal, UncachedInputTokens: &candidateUncached, CacheReadTokens: &candidateCached, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai", ProcurementCostMicros: &tt.candidateCostMicros, ProcurementCostConfidence: ProcurementCostConfidenceExact},
+			} {
+				if err := svc.RecordGatewayUsage(ctx, GatewayAuthContext{APIKey: APIKeyRecord{ID: "cache-tiebreak-key"}}, input); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, capability := range []ProviderCacheCapability{
+				{ID: "cachecap-a", ProviderAccountID: "account-a", UpstreamModel: "model", Protocol: "openai_chat_completions", SupportStatus: CacheSupportObserved, PoolAffinityGrade: PoolAffinityProbable, BillingConsistencyRate: 1, CreatedAt: now, UpdatedAt: now},
+				{ID: "cachecap-b", ProviderAccountID: "account-b", UpstreamModel: "model", Protocol: "openai_chat_completions", SupportStatus: CacheSupportObserved, PoolAffinityGrade: PoolAffinityProbable, BillingConsistencyRate: 1, CreatedAt: now, UpdatedAt: now},
+			} {
+				if err := repo.SaveProviderCacheCapability(ctx, capability); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := svc.UpdateEffectivePricingPolicy(ctx, "tester", EffectivePricingPolicyRequest{
+				Mode: EffectivePricingModeRecommend, WindowHours: 24, MinSampleCount: 1, MinMetricsCoverage: 0.8,
+				MinBillingConsistency: 0.95, MinCostImprovement: 0.08, MinCacheHitRateImprovement: 0.10,
+				MinAffinityImprovement: 0.10, MaxCacheTiebreakCostRegression: 0.02, MaxErrorRateRegression: 0.01,
+				MaxP95LatencyRegression: 0.2, CanaryPercent: 5, SupplierAffinityTTLSeconds: 3600,
+				AccountAffinityTTLSeconds: 1800, ProbeDailyTokenBudget: 1000, ProbeDailyCostBudgetMicros: 1000,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			decision, err := svc.EvaluateEffectivePricingDecision(ctx, "tester", EffectivePricingDecisionEvaluationRequest{
+				Model: "public", UpstreamModel: "model", Protocol: "openai_chat_completions",
+				CurrentProviderAccountID: "account-a", CandidateProviderAccountID: "account-b",
+			})
+			if err != nil {
+				t.Fatalf("EvaluateEffectivePricingDecision(): %v", err)
+			}
+			if decision.Status != tt.wantStatus || contains(decision.ReasonCodes, "cache_quality_tiebreaker") != tt.wantCacheTiebreaker || contains(decision.ReasonCodes, "cost_improvement_below_threshold") != tt.wantCostThresholdReason || contains(decision.ReasonCodes, "p95_latency_regression_exceeded") != tt.wantP95RegressionReason {
+				t.Fatalf("cache tiebreak decision = %+v", decision)
+			}
+		})
+	}
+}
+
+func TestEffectivePricingQualityRegressionReasons(t *testing.T) {
+	basePolicy := EffectivePricingPolicy{Mode: EffectivePricingModeRecommend, MaxErrorRateRegression: 0.005, MaxP95LatencyRegression: 0.20}
+	current := EffectivePricingReportRow{ErrorRate: 0.01, P95LatencyMS: 100}
+	tests := []struct {
+		name      string
+		candidate EffectivePricingReportRow
+		policy    EffectivePricingPolicy
+		want      []string
+	}{
+		{name: "within quality limits", candidate: EffectivePricingReportRow{ErrorRate: 0.015, P95LatencyMS: 120}, policy: basePolicy},
+		{name: "error rate regression", candidate: EffectivePricingReportRow{ErrorRate: 0.016, P95LatencyMS: 100}, policy: basePolicy, want: []string{"error_rate_regression_exceeded"}},
+		{name: "p95 latency regression", candidate: EffectivePricingReportRow{ErrorRate: 0.01, P95LatencyMS: 121}, policy: basePolicy, want: []string{"p95_latency_regression_exceeded"}},
+		{name: "missing p95 evidence", candidate: EffectivePricingReportRow{ErrorRate: 0.01}, policy: basePolicy, want: []string{"p95_latency_evidence_missing"}},
+		{name: "cost first permits missing p95", candidate: EffectivePricingReportRow{ErrorRate: 0.01}, policy: EffectivePricingPolicy{Mode: EffectivePricingModeCostFirst, MaxErrorRateRegression: 0.005, MaxP95LatencyRegression: 0.20}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := effectivePricingQualityRegressionReasons(current, tt.candidate, tt.policy)
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("reasons=%v want=%v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpsertProviderCacheCapabilityRejectsReservedAffinityField(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	seedEffectivePricingProvider(t, repo, now, "provider-a", "account-a", "Channel A")
+	_, err := svc.UpsertProviderCacheCapability(ctx, "tester", ProviderCacheCapabilityRequest{
+		ProviderAccountID: "account-a", UpstreamModel: "model", Protocol: "openai_chat_completions",
+		SupportStatus: CacheSupportAccepted, AffinityTransport: AffinityTransportBody, AffinityField: "model",
+	})
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("reserved affinity field err=%v", err)
 	}
 }
 

@@ -134,12 +134,62 @@ func TestPasswordChangeRevokesExistingBearerToken(t *testing.T) {
 	if passwordRec.Code != http.StatusOK {
 		t.Fatalf("password status=%d body=%s", passwordRec.Code, passwordRec.Body.String())
 	}
+	var passwordResponse struct {
+		Data accountSecurityResponse `json:"data"`
+	}
+	if err := json.Unmarshal(passwordRec.Body.Bytes(), &passwordResponse); err != nil || passwordResponse.Data.AccessToken == "" {
+		t.Fatalf("replacement session response=%s err=%v", passwordRec.Body.String(), err)
+	}
 	profileReq := httptest.NewRequest(http.MethodGet, "/api/v1/account/profile", nil)
 	profileReq.Header.Set("Authorization", "Bearer "+token)
 	profileRec := httptest.NewRecorder()
 	handler.ServeHTTP(profileRec, profileReq)
 	if profileRec.Code != http.StatusUnauthorized {
 		t.Fatalf("old token status=%d body=%s", profileRec.Code, profileRec.Body.String())
+	}
+	replacementReq := httptest.NewRequest(http.MethodGet, "/api/v1/account/profile", nil)
+	replacementReq.Header.Set("Authorization", "Bearer "+passwordResponse.Data.AccessToken)
+	replacementRec := httptest.NewRecorder()
+	handler.ServeHTTP(replacementRec, replacementReq)
+	if replacementRec.Code != http.StatusOK {
+		t.Fatalf("replacement token status=%d body=%s", replacementRec.Code, replacementRec.Body.String())
+	}
+}
+
+func TestRevokeOtherSessionsReturnsReplacementBearerToken(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	_, _, err := control.RegisterWorkspaceUser(t.Context(), "sessions@example.test", "current-password", "Session User", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"sessions@example.test","password":"current-password"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	var loginResponse struct {
+		Data auth.LoginResult `json:"data"`
+	}
+	_ = json.Unmarshal(loginRec.Body.Bytes(), &loginResponse)
+
+	revokeReq := httptest.NewRequest(http.MethodPost, "/api/v1/account/sessions/revoke-others", nil)
+	revokeReq.Header.Set("Authorization", "Bearer "+loginResponse.Data.AccessToken)
+	revokeRec := httptest.NewRecorder()
+	handler.ServeHTTP(revokeRec, revokeReq)
+	var revokeResponse struct {
+		Data accountSecurityResponse `json:"data"`
+	}
+	if err := json.Unmarshal(revokeRec.Body.Bytes(), &revokeResponse); err != nil || revokeRec.Code != http.StatusOK || revokeResponse.Data.AccessToken == "" {
+		t.Fatalf("revoke status=%d body=%s err=%v", revokeRec.Code, revokeRec.Body.String(), err)
+	}
+
+	for token, wantStatus := range map[string]int{loginResponse.Data.AccessToken: http.StatusUnauthorized, revokeResponse.Data.AccessToken: http.StatusOK} {
+		profileReq := httptest.NewRequest(http.MethodGet, "/api/v1/account/profile", nil)
+		profileReq.Header.Set("Authorization", "Bearer "+token)
+		profileRec := httptest.NewRecorder()
+		handler.ServeHTTP(profileRec, profileReq)
+		if profileRec.Code != wantStatus {
+			t.Fatalf("profile status=%d want=%d body=%s", profileRec.Code, wantStatus, profileRec.Body.String())
+		}
 	}
 }
 

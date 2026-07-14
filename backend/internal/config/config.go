@@ -14,41 +14,44 @@ import (
 const localDevelopmentSecret = "asterrouter-local-development-secret"
 
 type Config struct {
-	Addr                string
-	AdminToken          string
-	AdminUsername       string
-	AdminPassword       string
-	DatabaseURL         string
-	DeploymentRole      string
-	FrontendDir         string
-	DefaultProfile      string
-	Profiles            []string
-	PublicBase          string
-	SecretKey           string
-	Version             string
-	BuildType           string
-	UpdateManifestURL   string
-	CatalogMode         string
-	CatalogBootstrapURL string
-	CatalogURL          string
-	OfficialServicesURL string
-	CatalogKeyID        string
-	CatalogPublicKey    string
-	LicenseURL          string
-	RedeemURL           string
-	LicenseKeyID        string
-	LicensePublicKey    string
-	InstanceID          string
-	InstanceFingerprint string
-	InstanceDisplayName string
-	PluginCacheDir      string
-	PluginActiveDir     string
-	PluginHostURL       string
-	BackupDir           string
-	DiagnosticDir       string
-	MaxArchiveBytes     int64
-	AllowRestart        bool
-	DemoMode            bool
+	Addr                     string
+	AdminToken               string
+	AdminUsername            string
+	AdminPassword            string
+	DatabaseURL              string
+	DeploymentRole           string
+	FrontendDir              string
+	DefaultProfile           string
+	Profiles                 []string
+	PublicBase               string
+	SecretKey                string
+	Version                  string
+	BuildType                string
+	UpdateManifestURL        string
+	CatalogMode              string
+	CatalogBootstrapURL      string
+	CatalogURL               string
+	OfficialServicesURL      string
+	CatalogKeyID             string
+	CatalogPublicKey         string
+	LicenseURL               string
+	RedeemURL                string
+	LicenseKeyID             string
+	LicensePublicKey         string
+	InstanceID               string
+	InstanceFingerprint      string
+	InstanceDisplayName      string
+	PluginCacheDir           string
+	PluginActiveDir          string
+	PluginHostURL            string
+	BackupDir                string
+	DiagnosticDir            string
+	MaxArchiveBytes          int64
+	AIJobQueueProfileLimit   int
+	AIJobQueueTenantLimit    int
+	AIJobQueuePrincipalLimit int
+	AllowRestart             bool
+	DemoMode                 bool
 }
 
 func Load() Config {
@@ -68,41 +71,44 @@ func Load() Config {
 	pluginCacheDir := getEnv("ASTER_PLUGIN_CACHE_DIR", "data/plugin-cache")
 	pluginActiveDir := getEnv("ASTER_PLUGIN_ACTIVE_DIR", filepath.Join(filepath.Dir(pluginCacheDir), "plugin-active"))
 	return Config{
-		Addr:                addr,
-		AdminToken:          strings.TrimSpace(os.Getenv("ASTER_ADMIN_TOKEN")),
-		AdminUsername:       getEnv("ASTER_ADMIN_USERNAME", "admin"),
-		AdminPassword:       strings.TrimSpace(os.Getenv("ASTER_ADMIN_PASSWORD")),
-		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		DeploymentRole:      deploymentRole,
-		FrontendDir:         getEnv("ASTER_FRONTEND_DIR", "../frontend/dist"),
-		DefaultProfile:      defaultProfile,
-		Profiles:            profiles,
-		PublicBase:          strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")),
-		SecretKey:           getEnv("ASTER_SECRET_KEY", localDevelopmentSecret),
-		Version:             getEnv("ASTER_VERSION", buildinfo.Version),
-		BuildType:           getEnv("ASTER_BUILD_TYPE", buildinfo.BuildType),
-		UpdateManifestURL:   strings.TrimSpace(os.Getenv("ASTER_UPDATE_MANIFEST_URL")),
-		CatalogMode:         getEnv("ASTER_CATALOG_MODE", "disabled"),
-		CatalogBootstrapURL: strings.TrimSpace(os.Getenv("ASTER_CATALOG_BOOTSTRAP_URL")),
-		CatalogURL:          strings.TrimSpace(os.Getenv("ASTER_CATALOG_URL")),
-		OfficialServicesURL: strings.TrimSpace(os.Getenv("ASTER_OFFICIAL_SERVICES_URL")),
-		CatalogKeyID:        strings.TrimSpace(os.Getenv("ASTER_CATALOG_KEY_ID")),
-		CatalogPublicKey:    strings.TrimSpace(os.Getenv("ASTER_CATALOG_PUBLIC_KEY")),
-		LicenseURL:          strings.TrimSpace(os.Getenv("ASTER_LICENSE_URL")),
-		RedeemURL:           strings.TrimSpace(os.Getenv("ASTER_REDEEM_URL")),
-		LicenseKeyID:        strings.TrimSpace(os.Getenv("ASTER_LICENSE_KEY_ID")),
-		LicensePublicKey:    strings.TrimSpace(os.Getenv("ASTER_LICENSE_PUBLIC_KEY")),
-		InstanceID:          strings.TrimSpace(os.Getenv("ASTER_INSTANCE_ID")),
-		InstanceFingerprint: strings.TrimSpace(os.Getenv("ASTER_INSTANCE_FINGERPRINT")),
-		InstanceDisplayName: strings.TrimSpace(os.Getenv("ASTER_INSTANCE_DISPLAY_NAME")),
-		PluginCacheDir:      pluginCacheDir,
-		PluginActiveDir:     pluginActiveDir,
-		PluginHostURL:       defaultString(strings.TrimSpace(os.Getenv("ASTER_PLUGIN_HOST_URL")), defaultPluginHostURL(addr)),
-		BackupDir:           getEnv("ASTER_BACKUP_DIR", "data/backups"),
-		DiagnosticDir:       getEnv("ASTER_DIAGNOSTIC_DIR", "data/diagnostics"),
-		MaxArchiveBytes:     getInt64Env("ASTER_MAX_ARCHIVE_BYTES", 2<<30),
-		AllowRestart:        getBoolEnv("ASTER_ALLOW_RESTART"),
-		DemoMode:            getBoolEnv("ASTER_DEMO_MODE"),
+		Addr:                     addr,
+		AdminToken:               strings.TrimSpace(os.Getenv("ASTER_ADMIN_TOKEN")),
+		AdminUsername:            getEnv("ASTER_ADMIN_USERNAME", "admin"),
+		AdminPassword:            strings.TrimSpace(os.Getenv("ASTER_ADMIN_PASSWORD")),
+		DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		DeploymentRole:           deploymentRole,
+		FrontendDir:              getEnv("ASTER_FRONTEND_DIR", "../frontend/dist"),
+		DefaultProfile:           defaultProfile,
+		Profiles:                 profiles,
+		PublicBase:               strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")),
+		SecretKey:                getEnv("ASTER_SECRET_KEY", localDevelopmentSecret),
+		Version:                  getEnv("ASTER_VERSION", buildinfo.Version),
+		BuildType:                getEnv("ASTER_BUILD_TYPE", buildinfo.BuildType),
+		UpdateManifestURL:        strings.TrimSpace(os.Getenv("ASTER_UPDATE_MANIFEST_URL")),
+		CatalogMode:              getEnv("ASTER_CATALOG_MODE", "disabled"),
+		CatalogBootstrapURL:      strings.TrimSpace(os.Getenv("ASTER_CATALOG_BOOTSTRAP_URL")),
+		CatalogURL:               strings.TrimSpace(os.Getenv("ASTER_CATALOG_URL")),
+		OfficialServicesURL:      strings.TrimSpace(os.Getenv("ASTER_OFFICIAL_SERVICES_URL")),
+		CatalogKeyID:             strings.TrimSpace(os.Getenv("ASTER_CATALOG_KEY_ID")),
+		CatalogPublicKey:         strings.TrimSpace(os.Getenv("ASTER_CATALOG_PUBLIC_KEY")),
+		LicenseURL:               strings.TrimSpace(os.Getenv("ASTER_LICENSE_URL")),
+		RedeemURL:                strings.TrimSpace(os.Getenv("ASTER_REDEEM_URL")),
+		LicenseKeyID:             strings.TrimSpace(os.Getenv("ASTER_LICENSE_KEY_ID")),
+		LicensePublicKey:         strings.TrimSpace(os.Getenv("ASTER_LICENSE_PUBLIC_KEY")),
+		InstanceID:               strings.TrimSpace(os.Getenv("ASTER_INSTANCE_ID")),
+		InstanceFingerprint:      strings.TrimSpace(os.Getenv("ASTER_INSTANCE_FINGERPRINT")),
+		InstanceDisplayName:      strings.TrimSpace(os.Getenv("ASTER_INSTANCE_DISPLAY_NAME")),
+		PluginCacheDir:           pluginCacheDir,
+		PluginActiveDir:          pluginActiveDir,
+		PluginHostURL:            defaultString(strings.TrimSpace(os.Getenv("ASTER_PLUGIN_HOST_URL")), defaultPluginHostURL(addr)),
+		BackupDir:                getEnv("ASTER_BACKUP_DIR", "data/backups"),
+		DiagnosticDir:            getEnv("ASTER_DIAGNOSTIC_DIR", "data/diagnostics"),
+		MaxArchiveBytes:          getInt64Env("ASTER_MAX_ARCHIVE_BYTES", 2<<30),
+		AIJobQueueProfileLimit:   getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_PROFILE_LIMIT"),
+		AIJobQueueTenantLimit:    getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_TENANT_LIMIT"),
+		AIJobQueuePrincipalLimit: getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_PRINCIPAL_LIMIT"),
+		AllowRestart:             getBoolEnv("ASTER_ALLOW_RESTART"),
+		DemoMode:                 getBoolEnv("ASTER_DEMO_MODE"),
 	}
 }
 
@@ -137,6 +143,9 @@ func defaultString(value string, fallback string) string {
 }
 
 func ValidateRuntime(cfg Config) error {
+	if cfg.AIJobQueueProfileLimit < 0 || cfg.AIJobQueueTenantLimit < 0 || cfg.AIJobQueuePrincipalLimit < 0 {
+		return errors.New("ASTER_AI_JOB_QUEUE_PROFILE_LIMIT, ASTER_AI_JOB_QUEUE_TENANT_LIMIT, and ASTER_AI_JOB_QUEUE_PRINCIPAL_LIMIT must be non-negative integers")
+	}
 	if strings.TrimSpace(cfg.DeploymentRole) != "" {
 		deploymentRole := normalizeProfile(cfg.DeploymentRole)
 		if !isDeploymentProfile(deploymentRole) {
@@ -248,6 +257,18 @@ func getInt64Env(key string, fallback int64) int64 {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed <= 0 {
 		return fallback
+	}
+	return parsed
+}
+
+func getNonNegativeIntEnv(key string) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return -1
 	}
 	return parsed
 }

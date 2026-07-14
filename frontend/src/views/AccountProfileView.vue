@@ -11,6 +11,7 @@ import {
 	Link,
 	LockKeyhole,
 	Mail,
+	MonitorSmartphone,
 	RefreshCw,
 	Save,
 	ShieldCheck,
@@ -29,6 +30,7 @@ import {
 	disableTOTP,
 	generateTOTPRecoveryCodes,
 	getAccountProfile,
+	revokeOtherAccountSessions,
 	unbindAccountIdentity,
 	updateAccountProfile
 } from '@/api/account'
@@ -60,10 +62,14 @@ const recoveryCodes = ref<string[]>([])
 const copied = ref(false)
 const unbindingProvider = ref('')
 const bindingProvider = ref('')
+const sessionSaving = ref(false)
+const activeTab = ref<'profile' | 'login' | 'security'>('profile')
 
 const initials = computed(() => (displayName.value || profile.value?.email || profile.value?.id || 'AR').slice(0, 2).toUpperCase())
 const passwordValid = computed(() => newPassword.value.length >= 10 && newPassword.value === confirmPassword.value)
 const avatarDirty = computed(() => avatarDataURL.value !== savedAvatarDataURL.value)
+const primaryLoginMethods = computed(() => profile.value?.login_methods.filter((method) => method.id === 'email' || method.id === 'local') || [])
+const externalLoginMethods = computed(() => profile.value?.login_methods.filter((method) => !['email', 'local'].includes(method.id) && (method.available || method.bound)) || [])
 
 function clearFeedback() {
 	notice.value = ''
@@ -129,7 +135,7 @@ async function bindIdentity(method: AccountLoginMethod) {
 	bindingProvider.value = method.id
 	clearFeedback()
 	try {
-		const authorizationURL = await beginAccountIdentityBinding(method.id)
+		const authorizationURL = await beginAccountIdentityBinding(method.id, window.location.pathname)
 		window.location.assign(authorizationURL)
 	} catch (err) {
 		error.value = readableError(err)
@@ -241,7 +247,8 @@ async function savePassword() {
 	passwordSaving.value = true
 	clearFeedback()
 	try {
-		await changeAccountPassword(currentPassword.value, newPassword.value)
+		const result = await changeAccountPassword(currentPassword.value, newPassword.value)
+		auth.replaceSessionToken(result.access_token)
 		currentPassword.value = ''
 		newPassword.value = ''
 		confirmPassword.value = ''
@@ -273,8 +280,9 @@ async function enableTOTP() {
 	totpSaving.value = true
 	clearFeedback()
 	try {
-		await confirmTOTP(totpCode.value)
-		recoveryCodes.value = await generateTOTPRecoveryCodes()
+		const result = await confirmTOTP(totpCode.value)
+		auth.replaceSessionToken(result.access_token)
+		recoveryCodes.value = result.codes || []
 		totpSetup.value = null
 		totpQRCode.value = ''
 		totpCode.value = ''
@@ -291,7 +299,9 @@ async function refreshRecoveryCodes() {
 	totpSaving.value = true
 	clearFeedback()
 	try {
-		recoveryCodes.value = await generateTOTPRecoveryCodes()
+		const result = await generateTOTPRecoveryCodes()
+		auth.replaceSessionToken(result.access_token)
+		recoveryCodes.value = result.codes || []
 	} catch (err) {
 		error.value = readableError(err)
 	} finally {
@@ -304,7 +314,8 @@ async function turnOffTOTP() {
 	totpSaving.value = true
 	clearFeedback()
 	try {
-		await disableTOTP(disableCode.value)
+		const result = await disableTOTP(disableCode.value)
+		auth.replaceSessionToken(result.access_token)
 		disableCode.value = ''
 		recoveryCodes.value = []
 		if (profile.value) profile.value.totp_enabled = false
@@ -313,6 +324,21 @@ async function turnOffTOTP() {
 		error.value = readableError(err)
 	} finally {
 		totpSaving.value = false
+	}
+}
+
+async function revokeOtherSessions() {
+	if (!profile.value || profile.value.managed_by_config || !window.confirm(t('account.revokeSessionsConfirm'))) return
+	sessionSaving.value = true
+	clearFeedback()
+	try {
+		const result = await revokeOtherAccountSessions()
+		auth.replaceSessionToken(result.access_token)
+		notice.value = t('account.sessionsRevoked')
+	} catch (err) {
+		error.value = readableError(err)
+	} finally {
+		sessionSaving.value = false
 	}
 }
 
@@ -345,8 +371,10 @@ onMounted(async () => {
 	const params = new URLSearchParams(window.location.search)
 	if (params.get('binding') === 'success') {
 		notice.value = t('account.bindingSucceeded')
+		activeTab.value = 'login'
 	} else if (params.get('binding') === 'error') {
 		error.value = params.get('message') || t('account.bindingFailed')
+		activeTab.value = 'login'
 	}
 	if (params.has('binding')) {
 		window.history.replaceState({}, '', window.location.pathname)
@@ -381,7 +409,13 @@ onMounted(async () => {
 
 			<div v-if="profile.managed_by_config" class="notice info">{{ t('account.managedByConfig') }}</div>
 
-			<section class="panel account-section">
+			<nav class="account-tabs" :aria-label="t('account.tabsLabel')">
+				<button type="button" data-tab="profile" :class="{ active: activeTab === 'profile' }" :aria-selected="activeTab === 'profile'" @click="activeTab = 'profile'"><UserRound :size="17" />{{ t('account.profileTab') }}</button>
+				<button type="button" data-tab="login" :class="{ active: activeTab === 'login' }" :aria-selected="activeTab === 'login'" @click="activeTab = 'login'"><KeyRound :size="17" />{{ t('account.loginTab') }}</button>
+				<button type="button" data-tab="security" :class="{ active: activeTab === 'security' }" :aria-selected="activeTab === 'security'" @click="activeTab = 'security'"><ShieldCheck :size="17" />{{ t('account.securityTab') }}</button>
+			</nav>
+
+			<section v-if="activeTab === 'profile'" class="panel account-section" data-section="account-profile">
 				<div class="panel-header"><div><h2>{{ t('account.profileAndAvatar') }}</h2><p>{{ t('account.profileHelp') }}</p></div></div>
 				<div class="panel-body profile-editor-grid">
 					<div class="avatar-editor">
@@ -396,20 +430,40 @@ onMounted(async () => {
 				</div>
 			</section>
 
-			<section class="panel account-section">
+			<section v-else-if="activeTab === 'login'" class="panel account-section" data-section="account-login-methods">
 				<div class="panel-header"><div><h2>{{ t('account.loginMethods') }}</h2><p>{{ t('account.loginMethodsHelp') }}</p></div></div>
-				<div class="login-method-list">
-					<div v-for="method in profile.login_methods" :key="method.id" class="login-method-row">
+				<div class="login-method-group">
+					<div class="method-group-heading"><strong>{{ t('account.primaryCredential') }}</strong><span>{{ t('account.primaryCredentialHelp') }}</span></div>
+					<div v-for="method in primaryLoginMethods" :key="method.id" class="login-method-row">
 						<span class="method-icon"><component :is="methodIcon(method)" :size="19" /></span>
 						<div><strong>{{ method.label }}</strong><span v-if="method.detail">{{ method.detail }}</span></div>
-						<div class="method-actions"><span class="pill" :class="method.bound ? 'status-success' : method.available ? 'status-warning' : ''">{{ method.bound ? t('account.bound') : method.available ? t('account.available') : t('account.unavailable') }}</span><button v-if="method.bound && method.id !== 'local'" class="button secondary" type="button" :disabled="profile.managed_by_config || unbindingProvider === method.id" @click="unbindIdentity(method)"><Unlink :size="15" />{{ t('account.unbind') }}</button><button v-else-if="method.id !== 'local' && method.available" class="button secondary" type="button" :disabled="profile.managed_by_config || bindingProvider === method.id" @click="bindIdentity(method)"><Link :size="15" />{{ t('account.bind') }}</button></div>
+						<div class="method-actions"><span class="pill" :class="method.bound ? 'status-success' : 'status-warning'">{{ method.bound ? t('account.bound') : t('account.notSet') }}</span><button v-if="method.id === 'email' && !method.bound" class="button secondary" type="button" @click="activeTab = 'security'"><KeyRound :size="15" />{{ t('account.setPassword') }}</button></div>
+					</div>
+				</div>
+				<div class="login-method-group external-methods">
+					<div class="method-group-heading"><strong>{{ t('account.externalCredential') }}</strong><span>{{ t('account.externalCredentialHelp') }}</span></div>
+					<div v-if="!externalLoginMethods.length" class="account-empty-state"><Building2 :size="22" /><div><strong>{{ t('account.noExternalMethods') }}</strong><p>{{ t('account.noExternalMethodsHelp') }}</p></div></div>
+					<div v-for="method in externalLoginMethods" v-else :key="method.id" class="login-method-row">
+						<span class="method-icon"><component :is="methodIcon(method)" :size="19" /></span>
+						<div><strong>{{ method.label }}</strong><span v-if="method.detail">{{ method.detail }}</span></div>
+						<div class="method-actions"><span class="pill" :class="method.bound ? 'status-success' : 'status-warning'">{{ method.bound ? t('account.bound') : t('account.available') }}</span><button v-if="method.bound" class="button secondary" type="button" :disabled="profile.managed_by_config || unbindingProvider === method.id" @click="unbindIdentity(method)"><Unlink :size="15" />{{ t('account.unbind') }}</button><button v-else class="button secondary" type="button" :disabled="profile.managed_by_config || bindingProvider === method.id" @click="bindIdentity(method)"><Link :size="15" />{{ t('account.bind') }}</button></div>
 					</div>
 				</div>
 			</section>
 
+			<template v-else>
+			<section class="panel account-section security-overview" data-section="account-security">
+				<div class="panel-header"><div><h2>{{ t('account.securityOverview') }}</h2><p>{{ t('account.securityOverviewHelp') }}</p></div></div>
+				<div class="security-overview-list">
+					<div><span class="method-icon"><LockKeyhole :size="19" /></span><div><strong>{{ t('account.passwordSignIn') }}</strong><p>{{ profile.password_enabled ? t('account.passwordConfigured') : t('account.passwordNotConfigured') }}</p></div><span class="pill" :class="profile.password_enabled ? 'status-success' : 'status-warning'">{{ profile.password_enabled ? t('account.configured') : t('account.notSet') }}</span></div>
+					<div><span class="method-icon"><ShieldCheck :size="19" /></span><div><strong>{{ t('account.twoFactor') }}</strong><p>{{ profile.totp_enabled ? t('account.totpStatusHelp') : profile.totp_available ? t('account.totpReadyHelp') : t('account.totpUnavailableHelp') }}</p></div><span class="pill" :class="profile.totp_enabled ? 'status-success' : 'status-warning'">{{ profile.totp_enabled ? t('account.enabled') : t('account.disabled') }}</span></div>
+					<div><span class="method-icon"><MonitorSmartphone :size="19" /></span><div><strong>{{ t('account.activeSessions') }}</strong><p>{{ t('account.activeSessionsHelp') }}</p></div><span class="pill status-success">{{ t('account.currentSession') }}</span></div>
+				</div>
+			</section>
+
 			<section class="panel account-section">
-				<div class="panel-header"><div><h2>{{ t('account.changePassword') }}</h2><p>{{ t('account.passwordHelp') }}</p></div><LockKeyhole :size="20" /></div>
-				<form class="panel-body password-form" @submit.prevent="savePassword">
+				<div class="panel-header"><div><h2>{{ profile.password_enabled ? t('account.changePassword') : t('account.setPassword') }}</h2><p>{{ t('account.passwordHelp') }}</p></div><LockKeyhole :size="20" /></div>
+				<form class="panel-body password-form" data-form="account-password" @submit.prevent="savePassword">
 					<div v-if="profile.password_enabled" class="field"><label for="account-current-password">{{ t('account.currentPassword') }}</label><input id="account-current-password" v-model="currentPassword" type="password" autocomplete="current-password" :disabled="profile.managed_by_config" required /></div>
 					<div class="field"><label for="account-new-password">{{ t('account.newPassword') }}</label><input id="account-new-password" v-model="newPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /><small>{{ t('account.passwordRule') }}</small></div>
 					<div class="field"><label for="account-confirm-password">{{ t('account.confirmPassword') }}</label><input id="account-confirm-password" v-model="confirmPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /></div>
@@ -435,12 +489,18 @@ onMounted(async () => {
 					<div v-if="recoveryCodes.length" class="recovery-panel"><div><h3>{{ t('account.recoveryCodes') }}</h3><p>{{ t('account.recoveryCodesHelp') }}</p></div><div class="recovery-grid"><code v-for="code in recoveryCodes" :key="code">{{ code }}</code></div><button class="button secondary" type="button" @click="copyRecoveryCodes"><Check v-if="copied" :size="16" /><Copy v-else :size="16" />{{ copied ? t('account.copied') : t('account.copyCodes') }}</button></div>
 				</div>
 			</section>
+
+			<section class="panel account-section session-section">
+				<div class="panel-header"><div><h2>{{ t('account.sessionManagement') }}</h2><p>{{ t('account.sessionManagementHelp') }}</p></div><MonitorSmartphone :size="20" /></div>
+				<div class="panel-body session-action"><div><strong>{{ t('account.revokeOtherSessions') }}</strong><p>{{ t('account.revokeOtherSessionsHelp') }}</p></div><button class="button secondary" type="button" :disabled="profile.managed_by_config || sessionSaving" @click="revokeOtherSessions"><RefreshCw :size="16" />{{ sessionSaving ? t('common.saving') : t('account.revokeOtherSessions') }}</button></div>
+			</section>
+			</template>
 		</template>
 	</main>
 </template>
 
 <style scoped>
-.account-page { width: min(950px, 100%); margin-inline: auto; }
+.account-page { width: min(1040px, 100%); margin-inline: auto; }
 .account-page-header { margin-bottom: 18px; }
 .account-loading { min-height: 280px; display: grid; place-items: center; color: var(--text-muted); }
 .account-summary { display: grid; gap: 20px; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-sm); }
@@ -455,7 +515,11 @@ onMounted(async () => {
 .account-metrics > div { min-width: 0; min-height: 68px; padding: 12px 14px; border-radius: 8px; background: var(--surface-subtle); }
 .account-metrics span { display: block; margin-bottom: 5px; color: var(--text-muted); font-size: 12px; }
 .account-metrics strong { display: block; font-size: 16px; overflow-wrap: anywhere; }
-.account-section { margin-top: 18px; border-radius: 8px; }
+.account-tabs { display: flex; gap: 4px; margin-top: 18px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); }
+.account-tabs button { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.account-tabs button:hover { background: var(--surface-hover); color: var(--text); }
+.account-tabs button.active { background: var(--surface); color: var(--primary-700); box-shadow: var(--shadow-sm); }
+.account-section { margin-top: 12px; border-radius: 8px; }
 .account-section > .panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .panel-header p { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; }
 .profile-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
@@ -466,19 +530,29 @@ onMounted(async () => {
 .account-actions { display: flex; align-items: center; gap: 8px; }
 .profile-fields { display: grid; align-content: start; gap: 14px; padding-left: 24px; border-left: 1px solid var(--border); }
 .profile-save { justify-self: end; }
-.login-method-list { padding: 0 20px 8px; }
+.login-method-group { padding: 4px 20px 12px; }
+.login-method-group + .login-method-group { border-top: 1px solid var(--border); }
+.method-group-heading { display: grid; gap: 3px; padding: 14px 0 8px; }
+.method-group-heading strong { font-size: 13px; }
+.method-group-heading span { color: var(--text-muted); font-size: 12px; }
 .login-method-row { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 68px; border-top: 1px solid var(--border); }
-.login-method-row:first-child { border-top: 0; }
 .login-method-row > div { display: grid; gap: 3px; }
 .login-method-row > div span { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .method-actions { display: flex !important; grid-auto-flow: column; align-items: center; gap: 8px !important; }
 .method-icon { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 8px; background: var(--primary-50); color: var(--primary-700); }
+.account-empty-state { display: flex; align-items: flex-start; gap: 12px; margin: 8px 0 4px; padding: 18px 0; border-top: 1px solid var(--border); color: var(--text-muted); }
+.account-empty-state strong { display: block; color: var(--text); font-size: 13px; }
+.account-empty-state p { margin: 4px 0 0; font-size: 12px; }
 .password-form { display: grid; gap: 16px; }
 .field small { display: block; margin-top: 5px; color: var(--text-muted); }
 .form-actions { display: flex; justify-content: flex-end; padding-top: 4px; }
 .totp-body { display: grid; gap: 20px; }
 .security-status { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .security-status p { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; }
+.security-overview-list { padding: 0 20px 8px; }
+.security-overview-list > div { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 70px; border-top: 1px solid var(--border); }
+.security-overview-list > div:first-child { border-top: 0; }
+.security-overview-list p, .session-action p { margin: 4px 0 0; color: var(--text-muted); font-size: 13px; }
 .totp-setup { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
 .totp-setup > img { width: 220px; height: 220px; border: 1px solid var(--border); border-radius: 8px; background: white; }
 .totp-setup-copy { display: grid; align-content: start; gap: 12px; }
@@ -493,6 +567,7 @@ onMounted(async () => {
 .recovery-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .recovery-grid code { padding: 7px 9px; border-radius: 6px; background: var(--surface); }
 .recovery-panel .button { justify-self: start; }
+.session-action { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .notice.info { border-color: var(--info); background: var(--info-bg); color: var(--text); }
 .button.danger { background: var(--danger); color: white; }
@@ -510,14 +585,20 @@ onMounted(async () => {
 	.account-actions { flex-wrap: wrap; }
 	.profile-save { justify-self: start; }
 	.form-actions { justify-content: flex-start; }
-	.login-method-list { padding-inline: 16px; }
+	.account-tabs { overflow-x: auto; }
+	.account-tabs button { flex: 1 0 auto; min-height: 44px; }
+	.login-method-group { padding-inline: 16px; }
 	.login-method-row { grid-template-columns: 38px minmax(0, 1fr); padding-block: 10px; }
 	.method-actions { grid-column: 2; grid-auto-flow: row; justify-items: start; }
+	.security-overview-list { padding-inline: 16px; }
+	.security-overview-list > div { grid-template-columns: 38px minmax(0, 1fr); padding-block: 10px; }
+	.security-overview-list > div > .pill { grid-column: 2; justify-self: start; }
 	.security-status { grid-template-columns: 38px minmax(0, 1fr); }
 	.security-status > .button { grid-column: 1 / -1; justify-self: start; }
 	.totp-setup { grid-template-columns: 1fr; }
 	.totp-setup > img { width: min(220px, 100%); height: auto; }
 	.totp-enabled-actions, .disable-totp { align-items: stretch; flex-direction: column; }
 	.recovery-grid { grid-template-columns: 1fr; }
+	.session-action { align-items: stretch; flex-direction: column; }
 }
 </style>

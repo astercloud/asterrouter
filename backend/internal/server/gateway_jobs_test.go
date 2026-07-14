@@ -79,6 +79,33 @@ func TestGatewayDurableJobLifecycleAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestGatewayDurableJobQueueBackpressure(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{})
+	if _, err := control.CreateGatewayModel(context.Background(), "test", controlplane.GatewayModelRequest{
+		ModelID: "limited-image-job", Name: "Limited image job", Modality: "image", Status: controlplane.GatewayModelStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.SetAIJobAdmissionLimits(controlplane.AIJobAdmissionLimits{Principal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	request := durableJobAPIKeyRequest("limited job owner")
+	request.ModelAllowlist = []string{"limited-image-job"}
+	owner, err := control.CreateAPIKey(context.Background(), "test", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"limited-image-job","operation":"image_generation","modality":"image","input":{"prompt":"synthetic"}}`
+	first := performGatewayJobRequest(handler, http.MethodPost, "/v1/jobs", owner.Key, "limited-job-first", body)
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	second := performGatewayJobRequest(handler, http.MethodPost, "/v1/jobs", owner.Key, "limited-job-second", body)
+	if second.Code != http.StatusTooManyRequests || second.Header().Get("Retry-After") == "" || !strings.Contains(second.Body.String(), "queue_capacity_exceeded") {
+		t.Fatalf("second status=%d headers=%v body=%s", second.Code, second.Header(), second.Body.String())
+	}
+}
+
 func TestGatewayDurableJobAuthorizationAndNonDisclosure(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	if _, err := control.CreateGatewayModel(context.Background(), "test", controlplane.GatewayModelRequest{

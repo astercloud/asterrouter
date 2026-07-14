@@ -25,16 +25,18 @@ const (
 	redisAIJobDeliveryDefaultDedupeTTL      = 7 * 24 * time.Hour
 	redisAIJobDeliveryDefaultMaxPayload     = 16 * 1024
 	redisAIJobDeliveryDefaultPromotionBatch = int64(100)
+	redisAIJobDeliveryDefaultDeadLetterMax  = int64(10_000)
 	redisAIJobDeliveryMaxReasonBytes        = 2048
 )
 
 type RedisAIJobDeliveryQueueConfig struct {
-	Namespace       string
-	ConsumerGroup   string
-	DeliveryLease   time.Duration
-	DedupeTTL       time.Duration
-	MaxPayloadBytes int
-	PromotionBatch  int64
+	Namespace        string
+	ConsumerGroup    string
+	DeliveryLease    time.Duration
+	DedupeTTL        time.Duration
+	MaxPayloadBytes  int
+	PromotionBatch   int64
+	DeadLetterMaxLen int64
 }
 
 type RedisAIJobDeliveryQueue struct {
@@ -44,6 +46,7 @@ type RedisAIJobDeliveryQueue struct {
 	dedupeTTL      time.Duration
 	maxPayload     int
 	promotionBatch int64
+	deadLetterMax  int64
 	streamKey      string
 	delayedKey     string
 	leaseTokenKey  string
@@ -52,6 +55,8 @@ type RedisAIJobDeliveryQueue struct {
 	deadLetterKey  string
 	dedupePrefix   string
 }
+
+var _ AIJobDeliveryQueue = (*RedisAIJobDeliveryQueue)(nil)
 
 func NewRedisAIJobDeliveryQueue(client redis.UniversalClient, config RedisAIJobDeliveryQueueConfig) (*RedisAIJobDeliveryQueue, error) {
 	if client == nil {
@@ -87,13 +92,17 @@ func NewRedisAIJobDeliveryQueue(client redis.UniversalClient, config RedisAIJobD
 	if promotionBatch == 0 {
 		promotionBatch = redisAIJobDeliveryDefaultPromotionBatch
 	}
-	if deliveryLease <= 0 || dedupeTTL <= 0 || maxPayload <= 0 || promotionBatch <= 0 {
+	deadLetterMax := config.DeadLetterMaxLen
+	if deadLetterMax == 0 {
+		deadLetterMax = redisAIJobDeliveryDefaultDeadLetterMax
+	}
+	if deliveryLease < time.Millisecond || dedupeTTL < time.Millisecond || maxPayload <= 0 || promotionBatch <= 0 || deadLetterMax <= 0 {
 		return nil, ErrRedisAIJobDeliveryConfig
 	}
 	prefix := "asterrouter:{" + namespace + ":ai_job_delivery}"
 	return &RedisAIJobDeliveryQueue{
 		client: client, consumerGroup: consumerGroup, deliveryLease: deliveryLease, dedupeTTL: dedupeTTL,
-		maxPayload: maxPayload, promotionBatch: promotionBatch,
+		maxPayload: maxPayload, promotionBatch: promotionBatch, deadLetterMax: deadLetterMax,
 		streamKey: prefix + ":stream", delayedKey: prefix + ":delayed",
 		leaseTokenKey: prefix + ":lease_tokens", leaseUntilKey: prefix + ":lease_until",
 		attemptKey: prefix + ":attempts", deadLetterKey: prefix + ":dead_letters", dedupePrefix: prefix + ":dedupe:",
@@ -116,13 +125,17 @@ func (q *RedisAIJobDeliveryQueue) Publish(ctx context.Context, envelope AIJobDel
 	if availableAt.IsZero() {
 		availableAt = now
 	}
+	delay := availableAt.Sub(now)
+	if delay < 0 {
+		delay = 0
+	}
 	delayed, err := json.Marshal(redisDelayedAIJobDelivery{Envelope: string(payload)})
 	if err != nil {
 		return err
 	}
 	result, err := redisAIJobDeliveryPublishScript.Run(ctx, q.client,
-		[]string{q.streamKey, q.delayedKey, q.dedupeKey(dedupeKey)},
-		string(payload), q.dedupeTTL.Milliseconds(), availableAt.UnixMilli(), now.UnixMilli(), string(delayed),
+		[]string{q.streamKey, q.delayedKey, q.dedupeKey(dedupeKey), q.dedupeKey(envelope.DedupeKey())},
+		string(payload), q.dedupeTTL.Milliseconds(), delay.Milliseconds(), string(delayed),
 	).Int64()
 	if err != nil {
 		return err
@@ -153,7 +166,7 @@ func (q *RedisAIJobDeliveryQueue) Receive(ctx context.Context, consumer string, 
 		deadline = time.Now().Add(wait)
 	}
 	for {
-		if err := q.promoteDue(ctx, time.Now().UTC()); err != nil {
+		if err := q.promoteDue(ctx); err != nil {
 			return nil, err
 		}
 		reclaimed, err := q.reclaimExpired(ctx, consumer, maxItems)
@@ -205,13 +218,13 @@ func (q *RedisAIJobDeliveryQueue) Receive(ctx context.Context, consumer string, 
 }
 
 func (q *RedisAIJobDeliveryQueue) Extend(ctx context.Context, delivery AIJobDelivery, leaseUntil time.Time) error {
-	now := time.Now().UTC()
-	if !leaseUntil.After(now) {
+	leaseDuration := time.Until(leaseUntil)
+	if leaseDuration <= 0 {
 		return ErrAIJobDeliveryLeaseExpired
 	}
 	result, err := redisAIJobDeliveryExtendScript.Run(ctx, q.client,
 		[]string{q.streamKey, q.leaseTokenKey, q.leaseUntilKey},
-		q.consumerGroup, delivery.Consumer, delivery.ID, delivery.LeaseToken, now.UnixMilli(), leaseUntil.UnixMilli(),
+		q.consumerGroup, delivery.Consumer, delivery.ID, delivery.LeaseToken, max(leaseDuration.Milliseconds(), int64(1)),
 	).Int64()
 	return redisAIJobDeliveryLeaseResult(result, err)
 }
@@ -219,7 +232,7 @@ func (q *RedisAIJobDeliveryQueue) Extend(ctx context.Context, delivery AIJobDeli
 func (q *RedisAIJobDeliveryQueue) Ack(ctx context.Context, delivery AIJobDelivery) error {
 	result, err := redisAIJobDeliveryAckScript.Run(ctx, q.client,
 		[]string{q.streamKey, q.leaseTokenKey, q.leaseUntilKey, q.attemptKey},
-		q.consumerGroup, delivery.ID, delivery.LeaseToken, time.Now().UTC().UnixMilli(),
+		q.consumerGroup, delivery.ID, delivery.LeaseToken,
 	).Int64()
 	return redisAIJobDeliveryLeaseResult(result, err)
 }
@@ -233,6 +246,7 @@ func (q *RedisAIJobDeliveryQueue) Nack(ctx context.Context, delivery AIJobDelive
 	if retryAt.IsZero() || retryAt.Before(now) {
 		retryAt = now
 	}
+	retryDelay := retryAt.Sub(now)
 	reason = trimRedisAIJobDeliveryReason(reason)
 	delayed, err := json.Marshal(redisDelayedAIJobDelivery{Envelope: string(payload), AttemptBase: delivery.Attempt, LastError: reason})
 	if err != nil {
@@ -240,7 +254,7 @@ func (q *RedisAIJobDeliveryQueue) Nack(ctx context.Context, delivery AIJobDelive
 	}
 	result, err := redisAIJobDeliveryNackScript.Run(ctx, q.client,
 		[]string{q.streamKey, q.delayedKey, q.leaseTokenKey, q.leaseUntilKey, q.attemptKey},
-		q.consumerGroup, delivery.ID, delivery.LeaseToken, now.UnixMilli(), retryAt.UnixMilli(),
+		q.consumerGroup, delivery.ID, delivery.LeaseToken, retryDelay.Milliseconds(),
 		string(payload), delivery.Attempt, reason, string(delayed),
 	).Int64()
 	return redisAIJobDeliveryLeaseResult(result, err)
@@ -253,8 +267,7 @@ func (q *RedisAIJobDeliveryQueue) DeadLetter(ctx context.Context, delivery AIJob
 	}
 	result, err := redisAIJobDeliveryDeadLetterScript.Run(ctx, q.client,
 		[]string{q.streamKey, q.deadLetterKey, q.leaseTokenKey, q.leaseUntilKey, q.attemptKey},
-		q.consumerGroup, delivery.ID, delivery.LeaseToken, time.Now().UTC().UnixMilli(),
-		string(payload), delivery.Attempt, trimRedisAIJobDeliveryReason(reason),
+		q.consumerGroup, delivery.ID, delivery.LeaseToken, string(payload), delivery.Attempt, trimRedisAIJobDeliveryReason(reason), q.deadLetterMax,
 	).Int64()
 	return redisAIJobDeliveryLeaseResult(result, err)
 }
@@ -267,35 +280,33 @@ func (q *RedisAIJobDeliveryQueue) ensureConsumerGroup(ctx context.Context) error
 	return err
 }
 
-func (q *RedisAIJobDeliveryQueue) promoteDue(ctx context.Context, now time.Time) error {
+func (q *RedisAIJobDeliveryQueue) promoteDue(ctx context.Context) error {
 	_, err := redisAIJobDeliveryPromoteScript.Run(ctx, q.client,
-		[]string{q.streamKey, q.delayedKey}, now.UnixMilli(), q.promotionBatch,
+		[]string{q.streamKey, q.delayedKey, q.deadLetterKey}, q.promotionBatch, q.deadLetterMax,
 	).Result()
 	return err
 }
 
 func (q *RedisAIJobDeliveryQueue) reclaimExpired(ctx context.Context, consumer string, maxItems int) ([]AIJobDelivery, error) {
-	now := time.Now().UTC()
-	leaseUntil := now.Add(q.deliveryLease)
 	scanCount := maxItems * 10
 	if scanCount < 100 {
 		scanCount = 100
 	}
 	values, err := redisAIJobDeliveryReclaimScript.Run(ctx, q.client,
 		[]string{q.streamKey, q.leaseTokenKey, q.leaseUntilKey, q.attemptKey},
-		q.consumerGroup, consumer, now.UnixMilli(), maxItems, leaseUntil.UnixMilli(), "delivery_lease_"+randomID(16),
+		q.consumerGroup, consumer, maxItems, q.deliveryLease.Milliseconds(), "delivery_lease_"+randomID(16),
 		(q.deliveryLease * 2).Milliseconds(), scanCount,
 	).StringSlice()
 	if err != nil {
 		return nil, err
 	}
-	return q.decodeClaimedDeliveries(ctx, consumer, leaseUntil, values)
+	return q.decodeClaimedDeliveries(ctx, consumer, values)
 }
 
 func (q *RedisAIJobDeliveryQueue) establishNewLeases(ctx context.Context, consumer string, messages []redis.XMessage) ([]AIJobDelivery, error) {
-	leaseUntil := time.Now().UTC().Add(q.deliveryLease)
+	localLeaseUntil := time.Now().UTC().Add(q.deliveryLease)
 	args := make([]any, 0, 4+2*len(messages))
-	args = append(args, q.consumerGroup, consumer, leaseUntil.UnixMilli(), "delivery_lease_"+randomID(16))
+	args = append(args, q.consumerGroup, consumer, q.deliveryLease.Milliseconds(), "delivery_lease_"+randomID(16))
 	byID := make(map[string]redis.XMessage, len(messages))
 	for _, message := range messages {
 		byID[message.ID] = message
@@ -317,7 +328,7 @@ func (q *RedisAIJobDeliveryQueue) establishNewLeases(ctx context.Context, consum
 		if !found {
 			return nil, ErrAIJobDeliveryInfrastructureState
 		}
-		delivery, err := q.deliveryFromValues(lease.ID, consumer, lease.Token, lease.Attempt, leaseUntil, message.Values)
+		delivery, err := q.deliveryFromValues(lease.ID, consumer, lease.Token, lease.Attempt, localLeaseUntil, message.Values)
 		if err != nil {
 			if rejectErr := q.deadLetterMalformed(ctx, lease.ID, lease.Token, lease.Attempt, redisAIJobDeliveryString(message.Values["envelope"]), err); rejectErr != nil {
 				return nil, errors.Join(err, rejectErr)
@@ -329,7 +340,8 @@ func (q *RedisAIJobDeliveryQueue) establishNewLeases(ctx context.Context, consum
 	return deliveries, nil
 }
 
-func (q *RedisAIJobDeliveryQueue) decodeClaimedDeliveries(ctx context.Context, consumer string, leaseUntil time.Time, values []string) ([]AIJobDelivery, error) {
+func (q *RedisAIJobDeliveryQueue) decodeClaimedDeliveries(ctx context.Context, consumer string, values []string) ([]AIJobDelivery, error) {
+	localLeaseUntil := time.Now().UTC().Add(q.deliveryLease)
 	deliveries := make([]AIJobDelivery, 0, len(values))
 	for _, raw := range values {
 		var claimed redisAIJobDeliveryClaimedValue
@@ -340,7 +352,7 @@ func (q *RedisAIJobDeliveryQueue) decodeClaimedDeliveries(ctx context.Context, c
 		for key, value := range claimed.Fields {
 			values[key] = value
 		}
-		delivery, err := q.deliveryFromValues(claimed.ID, consumer, claimed.Token, claimed.Attempt, leaseUntil, values)
+		delivery, err := q.deliveryFromValues(claimed.ID, consumer, claimed.Token, claimed.Attempt, localLeaseUntil, values)
 		if err != nil {
 			if rejectErr := q.deadLetterMalformed(ctx, claimed.ID, claimed.Token, claimed.Attempt, claimed.Fields["envelope"], err); rejectErr != nil {
 				return nil, errors.Join(err, rejectErr)
@@ -353,8 +365,12 @@ func (q *RedisAIJobDeliveryQueue) decodeClaimedDeliveries(ctx context.Context, c
 }
 
 func (q *RedisAIJobDeliveryQueue) deliveryFromValues(id, consumer, leaseToken string, attempt int, leaseUntil time.Time, values map[string]any) (AIJobDelivery, error) {
+	rawEnvelope := redisAIJobDeliveryString(values["envelope"])
+	if len(rawEnvelope) > q.maxPayload {
+		return AIJobDelivery{}, ErrAIJobDeliveryEnvelopeTooLarge
+	}
 	var envelope AIJobDeliveryEnvelope
-	if err := json.Unmarshal([]byte(redisAIJobDeliveryString(values["envelope"])), &envelope); err != nil {
+	if err := json.Unmarshal([]byte(rawEnvelope), &envelope); err != nil {
 		return AIJobDelivery{}, err
 	}
 	if err := validateAIJobDeliveryEnvelope(envelope); err != nil {
@@ -364,9 +380,12 @@ func (q *RedisAIJobDeliveryQueue) deliveryFromValues(id, consumer, leaseToken st
 }
 
 func (q *RedisAIJobDeliveryQueue) deadLetterMalformed(ctx context.Context, id, leaseToken string, attempt int, payload string, cause error) error {
+	if len(payload) > q.maxPayload {
+		payload = payload[:q.maxPayload]
+	}
 	result, err := redisAIJobDeliveryDeadLetterScript.Run(ctx, q.client,
 		[]string{q.streamKey, q.deadLetterKey, q.leaseTokenKey, q.leaseUntilKey, q.attemptKey},
-		q.consumerGroup, id, leaseToken, time.Now().UTC().UnixMilli(), payload, attempt, trimRedisAIJobDeliveryReason(cause.Error()),
+		q.consumerGroup, id, leaseToken, payload, attempt, trimRedisAIJobDeliveryReason(cause.Error()), q.deadLetterMax,
 	).Int64()
 	return redisAIJobDeliveryLeaseResult(result, err)
 }
@@ -508,43 +527,60 @@ type redisDelayedAIJobDelivery struct {
 }
 
 type redisAIJobDeliveryLeaseResultValue struct {
-	ID      string `json:"id"`
-	Token   string `json:"token"`
-	Attempt int    `json:"attempt"`
+	ID         string `json:"id"`
+	Token      string `json:"token"`
+	Attempt    int    `json:"attempt"`
+	LeaseUntil int64  `json:"lease_until"`
 }
 
 type redisAIJobDeliveryClaimedValue struct {
-	ID      string            `json:"id"`
-	Token   string            `json:"token"`
-	Attempt int               `json:"attempt"`
-	Fields  map[string]string `json:"fields"`
+	ID         string            `json:"id"`
+	Token      string            `json:"token"`
+	Attempt    int               `json:"attempt"`
+	LeaseUntil int64             `json:"lease_until"`
+	Fields     map[string]string `json:"fields"`
 }
 
 var redisAIJobDeliveryPublishScript = redis.NewScript(`
-local existing = redis.call('GET', KEYS[3])
-if existing then
-  if existing == ARGV[1] then return 0 end
-  return -1
+local callerExisting = redis.call('GET', KEYS[3])
+local canonicalExisting = redis.call('GET', KEYS[4])
+if callerExisting and callerExisting ~= ARGV[1] then return -1 end
+if canonicalExisting and canonicalExisting ~= ARGV[1] then return -1 end
+if callerExisting or canonicalExisting then
+  if not callerExisting then redis.call('SET', KEYS[3], ARGV[1], 'PX', ARGV[2]) end
+  if not canonicalExisting then redis.call('SET', KEYS[4], ARGV[1], 'PX', ARGV[2]) end
+  return 0
 end
 redis.call('SET', KEYS[3], ARGV[1], 'PX', ARGV[2])
+if KEYS[4] ~= KEYS[3] then redis.call('SET', KEYS[4], ARGV[1], 'PX', ARGV[2]) end
 local published
-if tonumber(ARGV[3]) <= tonumber(ARGV[4]) then
+local serverTime = redis.call('TIME')
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+local availableAt = now + tonumber(ARGV[3])
+if tonumber(ARGV[3]) <= 0 then
   published = redis.pcall('XADD', KEYS[1], '*', 'envelope', ARGV[1], 'attempt_base', '0')
 else
-  published = redis.pcall('ZADD', KEYS[2], ARGV[3], ARGV[5])
+  published = redis.pcall('ZADD', KEYS[2], availableAt, ARGV[4])
 end
 if type(published) == 'table' and published.err then
   redis.call('DEL', KEYS[3])
+  if KEYS[4] ~= KEYS[3] then redis.call('DEL', KEYS[4]) end
   return published
 end
 return 1
 `)
 
 var redisAIJobDeliveryPromoteScript = redis.NewScript(`
-local members = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
+local serverTime = redis.call('TIME')
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+local members = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now, 'LIMIT', 0, ARGV[1])
 for _, member in ipairs(members) do
-  local data = cjson.decode(member)
-  redis.call('XADD', KEYS[1], '*', 'envelope', data.envelope, 'attempt_base', tostring(data.attempt_base or 0), 'last_error', data.last_error or '')
+  local decoded, data = pcall(cjson.decode, member)
+  if decoded and type(data) == 'table' and type(data.envelope) == 'string' then
+    redis.call('XADD', KEYS[1], '*', 'envelope', data.envelope, 'attempt_base', tostring(data.attempt_base or 0), 'last_error', data.last_error or '')
+  else
+    redis.call('XADD', KEYS[3], 'MAXLEN', '~', ARGV[2], '*', 'envelope', member, 'attempt', '0', 'reason', 'invalid_delayed_envelope', 'failed_at', now)
+  end
   redis.call('ZREM', KEYS[2], member)
 end
 return #members
@@ -553,6 +589,9 @@ return #members
 var redisAIJobDeliveryReclaimScript = redis.NewScript(`
 local output = {}
 local claimedCount = 0
+local serverTime = redis.call('TIME')
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+local leaseUntil = now + tonumber(ARGV[4])
 local function cleanup(id)
   redis.call('HDEL', KEYS[2], id)
   redis.call('ZREM', KEYS[3], id)
@@ -573,26 +612,26 @@ local function claim(id, priorDeliveries)
     fields[key] = value
     if key == 'attempt_base' then attemptBase = tonumber(value) or 0 end
   end
-  local token = ARGV[6] .. ':' .. id
+  local token = ARGV[5] .. ':' .. id
   redis.call('HSET', KEYS[2], id, token)
-  redis.call('ZADD', KEYS[3], ARGV[5], id)
+  redis.call('ZADD', KEYS[3], leaseUntil, id)
   if priorDeliveries and not redis.call('HGET', KEYS[4], id) then
     redis.call('HSET', KEYS[4], id, priorDeliveries)
   else
     redis.call('HSETNX', KEYS[4], id, attemptBase)
   end
   local attempt = redis.call('HINCRBY', KEYS[4], id, 1)
-  table.insert(output, cjson.encode({id=id, token=token, attempt=attempt, fields=fields}))
+  table.insert(output, cjson.encode({id=id, token=token, attempt=attempt, lease_until=leaseUntil, fields=fields}))
   claimedCount = claimedCount + 1
 end
-local due = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', ARGV[3], 'LIMIT', 0, ARGV[4])
+local due = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now, 'LIMIT', 0, ARGV[3])
 for _, id in ipairs(due) do
   claim(id, nil)
 end
-if claimedCount < tonumber(ARGV[4]) then
-  local pending = redis.call('XPENDING', KEYS[1], ARGV[1], 'IDLE', ARGV[7], '-', '+', ARGV[8])
+if claimedCount < tonumber(ARGV[3]) then
+  local pending = redis.call('XPENDING', KEYS[1], ARGV[1], 'IDLE', ARGV[6], '-', '+', ARGV[7])
   for _, entry in ipairs(pending) do
-    if claimedCount >= tonumber(ARGV[4]) then break end
+    if claimedCount >= tonumber(ARGV[3]) then break end
     local id = entry[1]
     if not redis.call('ZSCORE', KEYS[3], id) then claim(id, tonumber(entry[4]) or 1) end
   end
@@ -602,43 +641,51 @@ return output
 
 var redisAIJobDeliveryEstablishScript = redis.NewScript(`
 local output = {}
+local serverTime = redis.call('TIME')
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+local leaseUntil = now + tonumber(ARGV[3])
 for index = 5, #ARGV, 2 do
   local id = ARGV[index]
   local claimed = redis.call('XCLAIM', KEYS[1], ARGV[1], ARGV[2], 0, id, 'IDLE', 0, 'JUSTID')
   if #claimed > 0 then
     local token = ARGV[4] .. ':' .. id
     redis.call('HSET', KEYS[2], id, token)
-    redis.call('ZADD', KEYS[3], ARGV[3], id)
+    redis.call('ZADD', KEYS[3], leaseUntil, id)
     redis.call('HSETNX', KEYS[4], id, tonumber(ARGV[index + 1]) or 0)
     local attempt = redis.call('HINCRBY', KEYS[4], id, 1)
-    table.insert(output, cjson.encode({id=id, token=token, attempt=attempt}))
+    table.insert(output, cjson.encode({id=id, token=token, attempt=attempt, lease_until=leaseUntil}))
   end
 end
 return output
 `)
 
 var redisAIJobDeliveryExtendScript = redis.NewScript(`
+local serverTime = redis.call('TIME')
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
 local token = redis.call('HGET', KEYS[2], ARGV[3])
 if not token then return -2 end
 if token ~= ARGV[4] then return 0 end
 local leaseUntil = tonumber(redis.call('ZSCORE', KEYS[3], ARGV[3]) or '0')
-if leaseUntil <= tonumber(ARGV[5]) then return -1 end
+if leaseUntil <= now then return -1 end
 local claimed = redis.call('XCLAIM', KEYS[1], ARGV[1], ARGV[2], 0, ARGV[3], 'IDLE', 0, 'JUSTID')
 if #claimed == 0 then
   redis.call('HDEL', KEYS[2], ARGV[3])
   redis.call('ZREM', KEYS[3], ARGV[3])
   return -2
 end
-redis.call('ZADD', KEYS[3], ARGV[6], ARGV[3])
+local requestedUntil = now + tonumber(ARGV[5])
+if requestedUntil > leaseUntil then redis.call('ZADD', KEYS[3], requestedUntil, ARGV[3]) end
 return 1
 `)
 
 var redisAIJobDeliveryAckScript = redis.NewScript(`
+local serverTime = redis.call('TIME')
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
 local token = redis.call('HGET', KEYS[2], ARGV[2])
 if not token then return -2 end
 if token ~= ARGV[3] then return 0 end
 local leaseUntil = tonumber(redis.call('ZSCORE', KEYS[3], ARGV[2]) or '0')
-if leaseUntil <= tonumber(ARGV[4]) then return -1 end
+if leaseUntil <= now then return -1 end
 local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
 redis.call('HDEL', KEYS[2], ARGV[2])
 redis.call('ZREM', KEYS[3], ARGV[2])
@@ -649,37 +696,42 @@ return 1
 `)
 
 var redisAIJobDeliveryNackScript = redis.NewScript(`
+local serverTime = redis.call('TIME')
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+local retryAt = now + tonumber(ARGV[4])
 local token = redis.call('HGET', KEYS[3], ARGV[2])
 if not token then return -2 end
 if token ~= ARGV[3] then return 0 end
 local leaseUntil = tonumber(redis.call('ZSCORE', KEYS[4], ARGV[2]) or '0')
-if leaseUntil <= tonumber(ARGV[4]) then return -1 end
+if leaseUntil <= now then return -1 end
 local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
 if acknowledged == 0 then return -2 end
 redis.call('XDEL', KEYS[1], ARGV[2])
 redis.call('HDEL', KEYS[3], ARGV[2])
 redis.call('ZREM', KEYS[4], ARGV[2])
 redis.call('HDEL', KEYS[5], ARGV[2])
-if tonumber(ARGV[5]) <= tonumber(ARGV[4]) then
-  redis.call('XADD', KEYS[1], '*', 'envelope', ARGV[6], 'attempt_base', ARGV[7], 'last_error', ARGV[8])
+if tonumber(ARGV[4]) <= 0 then
+  redis.call('XADD', KEYS[1], '*', 'envelope', ARGV[5], 'attempt_base', ARGV[6], 'last_error', ARGV[7])
 else
-  redis.call('ZADD', KEYS[2], ARGV[5], ARGV[9])
+  redis.call('ZADD', KEYS[2], retryAt, ARGV[8])
 end
 return 1
 `)
 
 var redisAIJobDeliveryDeadLetterScript = redis.NewScript(`
+local serverTime = redis.call('TIME')
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
 local token = redis.call('HGET', KEYS[3], ARGV[2])
 if not token then return -2 end
 if token ~= ARGV[3] then return 0 end
 local leaseUntil = tonumber(redis.call('ZSCORE', KEYS[4], ARGV[2]) or '0')
-if leaseUntil <= tonumber(ARGV[4]) then return -1 end
+if leaseUntil <= now then return -1 end
 local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
 if acknowledged == 0 then return -2 end
 redis.call('XDEL', KEYS[1], ARGV[2])
 redis.call('HDEL', KEYS[3], ARGV[2])
 redis.call('ZREM', KEYS[4], ARGV[2])
 redis.call('HDEL', KEYS[5], ARGV[2])
-redis.call('XADD', KEYS[2], '*', 'envelope', ARGV[5], 'attempt', ARGV[6], 'reason', ARGV[7], 'failed_at', ARGV[4])
+redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[7], '*', 'envelope', ARGV[4], 'attempt', ARGV[5], 'reason', ARGV[6], 'failed_at', now)
 return 1
 `)

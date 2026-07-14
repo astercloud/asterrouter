@@ -463,10 +463,10 @@ func New(opts Options) http.Handler {
 		}
 		if transaction, binding := opts.authBindingStore.Consume(c.Query("state"), "oidc", time.Now().UTC()); binding {
 			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, opts.OIDCService.IssuerURL(), profile.Subject, profile.Email); err != nil {
-				c.Redirect(http.StatusFound, "/account?binding=error&message="+url.QueryEscape(err.Error()))
+				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", err.Error()))
 				return
 			}
-			c.Redirect(http.StatusFound, "/account?binding=success&provider=oidc")
+			c.Redirect(http.StatusFound, authBindingRedirect(transaction, "success", "oidc", ""))
 			return
 		}
 		adminSettings, settingsErr := opts.SettingsService.Admin(c.Request.Context())
@@ -515,10 +515,10 @@ func New(opts Options) http.Handler {
 		}
 		if transaction, binding := opts.authBindingStore.Consume(c.Query("state"), "feishu", time.Now().UTC()); binding {
 			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, "feishu:"+opts.FeishuService.Region(), profile.Subject, profile.Email); err != nil {
-				c.Redirect(http.StatusFound, "/account?binding=error&message="+url.QueryEscape(err.Error()))
+				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", err.Error()))
 				return
 			}
-			c.Redirect(http.StatusFound, "/account?binding=success&provider=feishu")
+			c.Redirect(http.StatusFound, authBindingRedirect(transaction, "success", "feishu", ""))
 			return
 		}
 		adminSettings, settingsErr := opts.SettingsService.Admin(c.Request.Context())
@@ -562,10 +562,10 @@ func New(opts Options) http.Handler {
 		}
 		if transaction, binding := opts.authBindingStore.Consume(c.Query("state"), "dingtalk", time.Now().UTC()); binding {
 			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, "dingtalk", profile.Subject, profile.Email); err != nil {
-				c.Redirect(http.StatusFound, "/account?binding=error&message="+url.QueryEscape(err.Error()))
+				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", err.Error()))
 				return
 			}
-			c.Redirect(http.StatusFound, "/account?binding=success&provider=dingtalk")
+			c.Redirect(http.StatusFound, authBindingRedirect(transaction, "success", "dingtalk", ""))
 			return
 		}
 		adminSettings, err := opts.SettingsService.Admin(c.Request.Context())
@@ -622,10 +622,10 @@ func New(opts Options) http.Handler {
 			}
 			if transaction, binding := opts.authBindingStore.Consume(c.Query("state"), provider, time.Now().UTC()); binding {
 				if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, provider, profile.Subject, profile.Email); err != nil {
-					c.Redirect(http.StatusFound, "/account?binding=error&message="+url.QueryEscape(err.Error()))
+					c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", err.Error()))
 					return
 				}
-				c.Redirect(http.StatusFound, "/account?binding=success&provider="+url.QueryEscape(provider))
+				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "success", provider, ""))
 				return
 			}
 			if err := authorizeSocialProvision(c.Request.Context(), opts.SettingsService, opts.ControlService, provider, profile.Subject, profile.Email); err != nil {
@@ -717,11 +717,20 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
-		if err := opts.ControlService.ConfirmTOTP(c.Request.Context(), actor(c), req.Code); err != nil {
+		codes, err := opts.ControlService.ConfirmTOTPWithRecoveryCodes(c.Request.Context(), actor(c), req.Code)
+		if err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1313, err.Error())
 			return
 		}
-		httpx.OK(c, gin.H{"enabled": true})
+		response, err := replacementAccountSession(c, opts)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			return
+		}
+		enabled := true
+		response.Enabled = &enabled
+		response.Codes = codes
+		httpx.OK(c, response)
 	})
 	api.POST("/auth/totp/disable", requireAdminAuth(opts.Config.AdminToken, opts.AuthService), func(c *gin.Context) {
 		var req struct {
@@ -735,7 +744,14 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusBadRequest, 1314, err.Error())
 			return
 		}
-		httpx.OK(c, gin.H{"enabled": false})
+		response, err := replacementAccountSession(c, opts)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			return
+		}
+		enabled := false
+		response.Enabled = &enabled
+		httpx.OK(c, response)
 	})
 	api.POST("/auth/totp/recovery-codes", requireAdminAuth(opts.Config.AdminToken, opts.AuthService), func(c *gin.Context) {
 		codes, err := opts.ControlService.GenerateTOTPRecoveryCodes(c.Request.Context(), actor(c))
@@ -743,7 +759,13 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusBadRequest, 1318, err.Error())
 			return
 		}
-		httpx.OK(c, gin.H{"codes": codes})
+		response, err := replacementAccountSession(c, opts)
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			return
+		}
+		response.Codes = codes
+		httpx.OK(c, response)
 	})
 	registerPluginOpenRoutes(api.Group("/open/plugins"), opts.PluginService, opts.ControlService)
 	registerPluginHostRoutes(api.Group("/plugin-host"), opts.PluginService, opts.ControlService)

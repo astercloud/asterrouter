@@ -2,15 +2,17 @@ package server
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
 
 type authBindingTransaction struct {
-	UserID    string
-	Provider  string
-	CreatedAt time.Time
+	UserID     string
+	Provider   string
+	ReturnPath string
+	CreatedAt  time.Time
 }
 
 type authBindingStore struct {
@@ -23,16 +25,36 @@ func newAuthBindingStore() *authBindingStore {
 	return &authBindingStore{transactions: map[string]authBindingTransaction{}, ttl: 10 * time.Minute}
 }
 
-func (s *authBindingStore) Save(state, userID, provider string, now time.Time) error {
+func (s *authBindingStore) Save(state, userID, provider, returnPath string, now time.Time) error {
 	state, userID, provider = strings.TrimSpace(state), strings.TrimSpace(userID), strings.TrimSpace(provider)
 	if state == "" || userID == "" || provider == "" {
 		return errors.New("invalid authentication binding transaction")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.transactions[state] = authBindingTransaction{UserID: userID, Provider: provider, CreatedAt: now.UTC()}
+	s.transactions[state] = authBindingTransaction{UserID: userID, Provider: provider, ReturnPath: safeAccountReturnPath(returnPath), CreatedAt: now.UTC()}
 	s.pruneLocked(now.UTC())
 	return nil
+}
+
+func safeAccountReturnPath(value string) string {
+	switch strings.TrimSpace(value) {
+	case "/admin/account", "/console/account", "/operator/account", "/platform/account", "/portal/account", "/customer/account":
+		return strings.TrimSpace(value)
+	default:
+		return "/admin/account"
+	}
+}
+
+func authBindingRedirect(transaction authBindingTransaction, status, provider, message string) string {
+	query := url.Values{"binding": []string{status}}
+	if provider != "" {
+		query.Set("provider", provider)
+	}
+	if message != "" {
+		query.Set("message", message)
+	}
+	return safeAccountReturnPath(transaction.ReturnPath) + "?" + query.Encode()
 }
 
 func (s *authBindingStore) Consume(state, provider string, now time.Time) (authBindingTransaction, bool) {

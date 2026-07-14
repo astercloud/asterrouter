@@ -32,6 +32,9 @@ const (
 	AffinityTransportHeader = "header"
 	AffinityTransportBody   = "body"
 
+	CacheControlModePassthrough    = "passthrough_if_present"
+	CacheControlModePromptCacheKey = "prompt_cache_key"
+
 	EffectivePricingModeObserveOnly = "observe_only"
 	EffectivePricingModeRecommend   = "recommend"
 	EffectivePricingModeCanary      = "canary"
@@ -330,6 +333,7 @@ type EffectivePriceSnapshot struct {
 type EffectivePricingDecision struct {
 	ID                         string    `json:"id"`
 	Model                      string    `json:"model"`
+	UpstreamModel              string    `json:"upstream_model"`
 	Protocol                   string    `json:"protocol"`
 	CurrentProviderAccountID   string    `json:"current_provider_account_id"`
 	CandidateProviderAccountID string    `json:"candidate_provider_account_id"`
@@ -394,6 +398,7 @@ type EffectivePricingUsageAggregate struct {
 	ProcurementCostMicros      int64
 	ProcurementCostRecordCount int64
 	LatencyTotalMS             int64
+	P95LatencyMS               int64
 	LastCacheObservedAt        *time.Time
 }
 
@@ -425,6 +430,7 @@ type EffectivePricingReportRow struct {
 	EffectiveCostMicrosPer1M int64    `json:"effective_cost_micros_per_1m"`
 	RequestCount             int64    `json:"request_count"`
 	ErrorRate                float64  `json:"error_rate"`
+	P95LatencyMS             int64    `json:"p95_latency_ms"`
 	MetricsCoverage          float64  `json:"metrics_coverage"`
 	EligibleRequestHitRate   float64  `json:"eligible_request_hit_rate"`
 	CacheTokenHitRate        float64  `json:"cache_token_hit_rate"`

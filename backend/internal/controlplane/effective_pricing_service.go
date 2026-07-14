@@ -302,12 +302,26 @@ func (s *Service) UpsertProviderCacheCapability(ctx context.Context, actor strin
 	if !oneOf(transport, AffinityTransportNone, AffinityTransportHeader, AffinityTransportBody) {
 		return ProviderCacheCapability{}, errors.New("invalid affinity transport")
 	}
+	affinityField := strings.TrimSpace(request.AffinityField)
+	if transport == AffinityTransportNone && affinityField != "" {
+		return ProviderCacheCapability{}, errors.New("affinity_field requires header or body transport")
+	}
+	if transport != AffinityTransportNone && !validCacheAffinityField(affinityField, transport) {
+		return ProviderCacheCapability{}, errors.New("invalid or reserved cache affinity field")
+	}
+	cacheControlMode := strings.TrimSpace(request.CacheControlMode)
+	if cacheControlMode == "" {
+		cacheControlMode = CacheControlModePassthrough
+	}
+	if !oneOf(cacheControlMode, CacheControlModePassthrough, CacheControlModePromptCacheKey) {
+		return ProviderCacheCapability{}, errors.New("invalid cache control mode")
+	}
 	now := s.nowUTC()
 	id := "cachecap_" + prefix(hashAPIKey(request.ProviderAccountID+"\x00"+request.UpstreamModel+"\x00"+request.Protocol), 24)
 	capability := ProviderCacheCapability{
 		ID: id, ProviderAccountID: request.ProviderAccountID, UpstreamModel: request.UpstreamModel, Protocol: request.Protocol,
 		SupportStatus: supportStatus, PoolAffinityGrade: poolAffinity, AffinityTransport: transport,
-		AffinityField: strings.TrimSpace(request.AffinityField), CacheControlMode: strings.TrimSpace(request.CacheControlMode),
+		AffinityField: affinityField, CacheControlMode: cacheControlMode,
 		UsageSchema: strings.TrimSpace(request.UsageSchema), CreatedAt: now, UpdatedAt: now,
 	}
 	existing, err := s.repo.ListProviderCacheCapabilities(ctx)
@@ -331,9 +345,6 @@ func (s *Service) UpsertProviderCacheCapability(ctx context.Context, actor strin
 			break
 		}
 	}
-	if capability.CacheControlMode == "" {
-		capability.CacheControlMode = "passthrough_if_present"
-	}
 	if capability.UsageSchema == "" {
 		capability.UsageSchema = "auto"
 	}
@@ -344,6 +355,23 @@ func (s *Service) UpsertProviderCacheCapability(ctx context.Context, actor strin
 		return ProviderCacheCapability{}, err
 	}
 	return capability, nil
+}
+
+func validCacheAffinityField(value, transport string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' {
+			continue
+		}
+		return false
+	}
+	normalized := strings.ToLower(value)
+	if transport == AffinityTransportHeader {
+		return !oneOf(normalized, "authorization", "content-type", "accept", "x-api-key", "x-goog-api-key")
+	}
+	return !oneOf(normalized, "model", "messages", "stream", "max_tokens", "max_completion_tokens", "tools", "tool_choice")
 }
 
 func (s *Service) ListProviderCacheProbeRuns(ctx context.Context, limit int) ([]ProviderCacheProbeRun, error) {
@@ -528,6 +556,7 @@ func (s *Service) EffectivePricingReport(ctx context.Context, query EffectivePri
 			QuotedMultiplier: price.QuotedMultiplier, BilledMultiplier: safeRatio(billingAmount, referenceCost),
 			EffectiveMultiplier: effectiveMultiplier, EffectiveCostMicrosPer1M: effectiveCostPer1M,
 			RequestCount: aggregate.RequestCount, ErrorRate: safeRatio(aggregate.ErrorCount, aggregate.RequestCount),
+			P95LatencyMS:    aggregate.P95LatencyMS,
 			MetricsCoverage: metricsCoverage, EligibleRequestHitRate: eligibleRequestHitRate,
 			CacheTokenHitRate: cacheHitRate, CacheWriteReadRatio: cacheWriteReadRatio,
 			BillingConsistencyRate: billingConsistency, AffinityConsistencyRate: capability.AffinityConsistencyRate,
@@ -565,13 +594,13 @@ func (s *Service) EffectivePricingReport(ctx context.Context, query EffectivePri
 			}
 		}
 	}
-	decisions, err := s.repo.ListEffectivePricingDecisions(ctx)
+	decisions, err := s.ListEffectivePricingDecisions(ctx)
 	if err != nil {
 		return EffectivePricingReport{}, err
 	}
 	filteredDecisions := decisions[:0]
 	for _, decision := range decisions {
-		if (query.Model == "" || decision.Model == query.Model) && (query.Protocol == "" || decision.Protocol == query.Protocol) {
+		if (query.Model == "" || decision.UpstreamModel == query.Model) && (query.Protocol == "" || decision.Protocol == query.Protocol) {
 			filteredDecisions = append(filteredDecisions, decision)
 		}
 	}

@@ -53,14 +53,47 @@ func (s *Service) BeginDurableAIJob(ctx context.Context, auth gatewaycore.Canoni
 	if err != nil {
 		return AIJob{}, false, err
 	}
-	createdJob, created, err := s.repo.CreateDurableAIJob(ctx, operation, job, event, outbox)
+	billing, err := s.newBillingHoldAdmission(ctx, operation, auth, request)
+	if err != nil {
+		return AIJob{}, false, err
+	}
+	createdJob, created, err := s.repo.CreateDurableAIJob(ctx, operation, job, event, outbox, s.currentAIJobAdmissionLimits(), billing)
 	if err != nil {
 		return AIJob{}, false, err
 	}
 	if !created && createdJob.RequestFingerprint != job.RequestFingerprint {
 		return AIJob{}, false, ErrGatewayIdempotencyConflict
 	}
+	s.registerAIJobReadyState(ctx, createdJob)
 	return createdJob, created, nil
+}
+
+func (s *Service) SetAIJobReadyIndex(index AIJobReadyIndex) {
+	s.aiJobRuntimeMu.Lock()
+	defer s.aiJobRuntimeMu.Unlock()
+	s.aiJobReadyIndex = index
+}
+
+func (s *Service) SetAIJobAdmissionLimits(limits AIJobAdmissionLimits) error {
+	if err := limits.validate(); err != nil {
+		return err
+	}
+	s.aiJobRuntimeMu.Lock()
+	defer s.aiJobRuntimeMu.Unlock()
+	s.aiJobAdmissionLimits = limits
+	return nil
+}
+
+func (s *Service) currentAIJobReadyIndex() AIJobReadyIndex {
+	s.aiJobRuntimeMu.RLock()
+	defer s.aiJobRuntimeMu.RUnlock()
+	return s.aiJobReadyIndex
+}
+
+func (s *Service) currentAIJobAdmissionLimits() AIJobAdmissionLimits {
+	s.aiJobRuntimeMu.RLock()
+	defer s.aiJobRuntimeMu.RUnlock()
+	return s.aiJobAdmissionLimits
 }
 
 func (s *Service) AuthorizeGatewayCredentialScope(ctx context.Context, credential gatewaycore.CredentialEnvelope, sourceIP, requiredScope string) (gatewaycore.CanonicalAuthContext, error) {
@@ -91,6 +124,10 @@ func (s *Service) AIJobForAuth(ctx context.Context, auth gatewaycore.CanonicalAu
 
 func (s *Service) CancelAIJobForAuth(ctx context.Context, auth gatewaycore.CanonicalAuthContext, id string) (AIJob, bool, error) {
 	job, _, found, err := s.repo.RequestAIJobCancellation(ctx, strings.TrimSpace(id), aiJobOwnerFromAuth(auth), s.nowUTC())
+	if err == nil && found && job.StatusVersion > 1 {
+		s.removeAIJobReadyReference(ctx, AIJobReadyReference{JobID: job.ID, StatusVersion: job.StatusVersion - 1})
+		s.registerAIJobReadyState(ctx, job)
+	}
 	return job, found, err
 }
 
@@ -106,10 +143,40 @@ func (s *Service) claimReadyAIJobs(ctx context.Context, workerID string, leaseDu
 	if leaseDuration <= 0 {
 		return nil, errors.New("positive ai job lease duration is required")
 	}
+	if limit <= 0 {
+		return []AIJob{}, nil
+	}
 	now := s.nowUTC()
-	jobs, err := s.repo.ClaimQueuedAIJobs(ctx, now, now.Add(leaseDuration), strings.TrimSpace(workerID), "job_lease_"+randomID(12), limit)
-	if err != nil {
-		return nil, err
+	leaseUntil := now.Add(leaseDuration)
+	workerID = strings.TrimSpace(workerID)
+	leaseToken := "job_lease_" + randomID(12)
+	jobs := make([]AIJob, 0, limit)
+	index := s.currentAIJobReadyIndex()
+	if index != nil {
+		candidateLimit := aiJobReadyCandidateLimit(limit)
+		indexed, candidateErr := index.Candidates(ctx, AIJobReadyQuery{ReadyAt: now, Limit: candidateLimit})
+		if candidateErr == nil && len(indexed) > 0 {
+			references := make([]AIJobReadyReference, 0, len(indexed))
+			for _, entry := range indexed {
+				references = append(references, entry.reference())
+			}
+			claimed, claimErr := s.repo.ClaimAIJobsByReadyReferences(ctx, references, now, leaseUntil, workerID, leaseToken, limit)
+			if claimErr != nil {
+				return nil, claimErr
+			}
+			jobs = append(jobs, claimed...)
+			s.reconcileAIJobReadyCandidates(ctx, indexed, claimed, now)
+		}
+	}
+	if len(jobs) < limit {
+		claimed, err := s.repo.ClaimQueuedAIJobs(ctx, now, leaseUntil, workerID, leaseToken, limit-len(jobs))
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, claimed...)
+	}
+	for _, job := range jobs {
+		s.registerAIJobReadyState(ctx, job)
 	}
 	if !includePayload {
 		return jobs, nil
@@ -123,6 +190,16 @@ func (s *Service) claimReadyAIJobs(ctx context.Context, workerID string, leaseDu
 		jobs[index].RequestPayloadCiphertext = ""
 	}
 	return jobs, nil
+}
+
+func aiJobReadyCandidateLimit(limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if limit > 64 {
+		return 1024
+	}
+	return limit * 16
 }
 
 func (s *Service) ExtendAIJobQueueLease(ctx context.Context, envelope AIJobDeliveryEnvelope, leaseDuration time.Duration) (AIJob, error) {
@@ -142,6 +219,8 @@ func (s *Service) ExtendAIJobQueueLease(ctx context.Context, envelope AIJobDeliv
 	if !extended {
 		return job, ErrAIJobStateConflict
 	}
+	s.removeAIJobReadyReference(ctx, envelope.reference())
+	s.registerAIJobReadyState(ctx, job)
 	return job, nil
 }
 
@@ -153,6 +232,8 @@ func (s *Service) TransitionAIJob(ctx context.Context, id string, expectedVersio
 	if !updated {
 		return job, ErrAIJobStateConflict
 	}
+	s.removeAIJobReadyReference(ctx, AIJobReadyReference{JobID: strings.TrimSpace(id), StatusVersion: expectedVersion})
+	s.registerAIJobReadyState(ctx, job)
 	return job, nil
 }
 
@@ -168,7 +249,52 @@ func (s *Service) RequeueAIJob(ctx context.Context, id string, expectedVersion i
 	if !updated {
 		return job, ErrAIJobStateConflict
 	}
+	s.removeAIJobReadyReference(ctx, AIJobReadyReference{JobID: strings.TrimSpace(id), StatusVersion: expectedVersion})
+	s.registerAIJobReadyState(ctx, job)
 	return job, nil
+}
+
+func (s *Service) registerAIJobReadyState(ctx context.Context, job AIJob) {
+	index := s.currentAIJobReadyIndex()
+	if index == nil || (job.Status != AIJobStatusQueued && job.Status != AIJobStatusDispatching) {
+		return
+	}
+	entry, err := newAIJobReadyEntry(job)
+	if err == nil {
+		_ = index.Register(ctx, entry)
+	}
+}
+
+func (s *Service) removeAIJobReadyReference(ctx context.Context, reference AIJobReadyReference) {
+	index := s.currentAIJobReadyIndex()
+	if index != nil && strings.TrimSpace(reference.JobID) != "" && reference.StatusVersion > 0 {
+		_ = index.Remove(ctx, reference)
+	}
+}
+
+func (s *Service) reconcileAIJobReadyCandidates(ctx context.Context, candidates []AIJobReadyEntry, claimed []AIJob, now time.Time) {
+	claimedIDs := make(map[string]bool, len(claimed))
+	for _, job := range claimed {
+		claimedIDs[job.ID] = true
+	}
+	for _, candidate := range candidates {
+		if claimedIDs[candidate.JobID] {
+			s.removeAIJobReadyReference(ctx, candidate.reference())
+			continue
+		}
+		job, found, err := s.repo.FindAIJob(ctx, candidate.JobID)
+		if err != nil || (!found && err == nil) {
+			if err == nil {
+				s.removeAIJobReadyReference(ctx, candidate.reference())
+			}
+			continue
+		}
+		if job.StatusVersion != candidate.StatusVersion || !oneOf(job.Status, AIJobStatusQueued, AIJobStatusDispatching) ||
+			!aiJobReadyForClaim(job, now) || !aiJobReadyAt(job).Equal(candidate.ReadyAt) {
+			s.removeAIJobReadyReference(ctx, candidate.reference())
+			s.registerAIJobReadyState(ctx, job)
+		}
+	}
 }
 
 func (s *Service) AIJobEvents(ctx context.Context, jobID string) ([]AIJobEvent, error) {

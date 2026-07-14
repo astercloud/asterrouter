@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { Boxes, CheckCircle2, Copy, Download, FileClock, LockKeyhole, Plus, Plug, RefreshCw, Search, Settings2, Trash2, Upload, X, XCircle } from '@lucide/vue'
+import { ArrowRight, CheckCircle2, CircleAlert, Copy, Download, FileClock, KeyRound, LockKeyhole, Plus, RefreshCw, Search, Settings2, ShieldCheck, Trash2, Upload, X, XCircle } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import {
   activateOfficialLicense,
@@ -111,6 +111,10 @@ const feedSyncing = ref(false)
 const feedSyncServiceKey = ref('')
 const feedSyncRuns = ref<OfficialFeedSyncRun[]>([])
 
+type PluginCenterTab = 'workbench' | 'registry' | 'distribution' | 'feeds' | 'api'
+
+const activeTab = ref<PluginCenterTab>('workbench')
+
 type SecretField = {
   key: string
   labelKey: string
@@ -150,11 +154,64 @@ const notificationConfigSchemas: Record<string, NotificationConfigSchema> = {
 }
 
 const metrics = computed(() => [
-  { label: t('plugins.total'), value: catalog.value.summary.total, sub: t('plugins.installed'), icon: Plug },
-  { label: t('plugins.enabled'), value: catalog.value.summary.enabled, sub: t('plugins.runtime'), icon: CheckCircle2 },
-  { label: t('plugins.free'), value: catalog.value.summary.free, sub: t('plugins.neverCharged'), icon: Boxes },
-  { label: t('plugins.paidLocked'), value: catalog.value.summary.paid_locked, sub: t('plugins.requiresLicense'), icon: LockKeyhole }
+  { label: t('plugins.total'), value: catalog.value.summary.total, sub: t('plugins.installed') },
+  { label: t('plugins.enabled'), value: catalog.value.summary.enabled, sub: t('plugins.runtime') },
+  { label: t('plugins.free'), value: catalog.value.summary.free, sub: t('plugins.neverCharged') },
+  { label: t('plugins.paidLocked'), value: catalog.value.summary.paid_locked, sub: t('plugins.requiresLicense') }
 ])
+
+const pluginTabs = computed<Array<{ value: PluginCenterTab; label: string }>>(() => [
+  { value: 'workbench', label: t('plugins.workbench') },
+  { value: 'registry', label: t('plugins.registry') },
+  { value: 'distribution', label: t('plugins.distribution') },
+  { value: 'feeds', label: t('plugins.dataServices') },
+  { value: 'api', label: t('plugins.openAPI') }
+])
+
+const workbenchItems = computed(() => {
+  const catalogReady = Boolean(officialCatalogStatus.value?.trust_configured && officialCatalogStatus.value?.status === 'succeeded')
+  const licenseRequired = catalog.value.summary.paid_locked > 0
+  const licenseReady = !licenseRequired || officialLicenseStatus.value?.status === 'active'
+  const registryReady = catalog.value.summary.total > 0
+  const runtimeReady = catalog.value.summary.enabled > 0
+
+  return [
+    {
+      id: 'catalog',
+      title: t('plugins.officialCatalog'),
+      detail: t(catalogReady ? 'plugins.catalogReadyDetail' : 'plugins.catalogAttentionDetail'),
+      ready: catalogReady,
+      target: 'distribution' as PluginCenterTab
+    },
+    {
+      id: 'license',
+      title: t('plugins.officialLicense'),
+      detail: t(licenseReady ? (licenseRequired ? 'plugins.licenseReadyDetail' : 'plugins.licenseNotRequiredDetail') : 'plugins.licenseAttentionDetail'),
+      ready: licenseReady,
+      target: 'distribution' as PluginCenterTab
+    },
+    {
+      id: 'registry',
+      title: t('plugins.registry'),
+      detail: t(registryReady ? 'plugins.registryReadyDetail' : 'plugins.registryAttentionDetail', { total: catalog.value.summary.total }),
+      ready: registryReady,
+      target: 'registry' as PluginCenterTab
+    },
+    {
+      id: 'runtime',
+      title: t('plugins.runtimeStatus'),
+      detail: t(runtimeReady ? 'plugins.runtimeReadyDetail' : 'plugins.runtimeAttentionDetail', {
+        enabled: catalog.value.summary.enabled,
+        total: catalog.value.summary.total
+      }),
+      ready: runtimeReady,
+      target: 'registry' as PluginCenterTab
+    }
+  ]
+})
+
+const readyItemCount = computed(() => workbenchItems.value.filter((item) => item.ready).length)
+const recentPlugins = computed(() => catalog.value.plugins.slice(0, 5))
 
 const filteredPlugins = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -205,6 +262,15 @@ const activePlugin = computed(() => {
   }
   return filteredPlugins.value[0] || null
 })
+
+function showTab(tab: PluginCenterTab) {
+  activeTab.value = tab
+}
+
+function openPlugin(plugin: Plugin) {
+  selectedPlugin.value = plugin
+  activeTab.value = 'registry'
+}
 
 async function load() {
   loading.value = true
@@ -781,33 +847,185 @@ onMounted(load)
 </script>
 
 <template>
-  <main class="content crud-page">
+  <main class="content crud-page plugin-center-page">
     <section class="page-header">
       <div>
         <h1>{{ t('admin.plugins') }}</h1>
         <p>{{ t('plugins.subtitle') }}</p>
       </div>
-      <button class="button secondary" :disabled="loading" @click="load">
-        <RefreshCw :size="17" />
-        {{ t('common.refresh') }}
-      </button>
+      <div class="plugin-page-actions">
+        <button class="button secondary" :disabled="loading" @click="load">
+          <RefreshCw :size="17" />
+          {{ t('common.refresh') }}
+        </button>
+        <button class="button" type="button" :disabled="catalogSyncing || catalogStatusLoading || !canSyncOfficialCatalog" @click="syncCatalog">
+          <Download :size="17" />
+          {{ catalogSyncing ? t('plugins.syncingCatalog') : t('plugins.syncCatalog') }}
+        </button>
+      </div>
     </section>
 
     <div v-if="message" class="notice success">{{ message }}</div>
     <div v-if="error" class="notice">{{ error }}</div>
 
-    <section class="metric-grid">
-      <article v-for="metric in metrics" :key="metric.label" class="metric-card">
-        <span class="metric-icon"><component :is="metric.icon" :size="20" /></span>
-        <div>
-          <span>{{ metric.label }}</span>
-          <strong>{{ metric.value }}</strong>
-          <small>{{ metric.sub }}</small>
+    <nav class="plugin-center-tabs" :aria-label="t('plugins.tabsLabel')">
+      <button
+        v-for="tab in pluginTabs"
+        :key="tab.value"
+        class="plugin-center-tab"
+        :class="{ active: activeTab === tab.value }"
+        type="button"
+        :data-tab="tab.value"
+        :aria-current="activeTab === tab.value ? 'page' : undefined"
+        @click="showTab(tab.value)"
+      >
+        {{ tab.label }}
+      </button>
+    </nav>
+
+    <section v-if="activeTab === 'workbench'" class="plugin-dashboard" data-section="workbench">
+      <section class="metric-grid plugin-metric-grid">
+        <article v-for="metric in metrics" :key="metric.label" class="metric-card">
+          <div>
+            <span>{{ metric.label }}</span>
+            <strong>{{ metric.value }}</strong>
+            <small>{{ metric.sub }}</small>
+          </div>
+        </article>
+      </section>
+
+      <div class="plugin-dashboard-grid">
+        <div class="plugin-dashboard-main">
+          <section class="panel workbench-panel">
+            <header class="panel-header split-header">
+              <div>
+                <h2>{{ t('plugins.priorityItems') }}</h2>
+                <p>{{ t('plugins.priorityItemsHelp') }}</p>
+              </div>
+              <span class="pill" :class="readyItemCount === workbenchItems.length ? 'status-success' : 'status-warning'">
+                {{ t('plugins.itemsReady', { ready: readyItemCount, total: workbenchItems.length }) }}
+              </span>
+            </header>
+            <div class="workbench-items">
+              <article v-for="item in workbenchItems" :key="item.id" class="workbench-item">
+                <CheckCircle2 v-if="item.ready" class="workbench-state-icon ready" :size="19" aria-hidden="true" />
+                <CircleAlert v-else class="workbench-state-icon attention" :size="19" aria-hidden="true" />
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <p>{{ item.detail }}</p>
+                </div>
+                <span class="pill" :class="item.ready ? 'status-success' : 'status-warning'">
+                  {{ t(item.ready ? 'plugins.ready' : 'plugins.attention') }}
+                </span>
+                <button class="icon-button" type="button" :aria-label="t('plugins.viewArea', { area: item.title })" @click="showTab(item.target)">
+                  <ArrowRight :size="17" />
+                </button>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel workbench-panel">
+            <header class="panel-header split-header">
+              <div>
+                <h2>{{ t('plugins.inventoryTitle') }}</h2>
+                <p>{{ t('plugins.inventoryHelp') }}</p>
+              </div>
+              <button class="button secondary tiny-button" type="button" @click="showTab('registry')">
+                {{ t('plugins.viewRegistry') }}
+                <ArrowRight :size="15" />
+              </button>
+            </header>
+            <div class="panel-body table-scroll plugin-inventory-table">
+              <table class="data-table crud-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('plugins.plugin') }}</th>
+                    <th>{{ t('plugins.category') }}</th>
+                    <th>{{ t('plugins.tier') }}</th>
+                    <th>{{ t('plugins.status') }}</th>
+                    <th>{{ t('common.actions') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="plugin in recentPlugins" :key="plugin.id">
+                    <td><strong>{{ plugin.name }}</strong><span>{{ plugin.plugin_id }}</span></td>
+                    <td>{{ plugin.category }}</td>
+                    <td><span class="pill">{{ plugin.tier }}</span></td>
+                    <td><span class="pill" :class="statusClass(plugin.status)">{{ plugin.status }}</span></td>
+                    <td>
+                      <button class="icon-button" type="button" :aria-label="t('plugins.openPlugin', { name: plugin.name })" @click="openPlugin(plugin)">
+                        <ArrowRight :size="17" />
+                      </button>
+                    </td>
+                  </tr>
+                  <tr v-if="!recentPlugins.length">
+                    <td colspan="5" class="empty-cell">{{ loading ? t('common.loading') : t('plugins.emptyInventory') }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
-      </article>
+
+        <aside class="plugin-dashboard-side">
+          <section class="panel workbench-panel">
+            <header class="panel-header">
+              <ShieldCheck :size="17" aria-hidden="true" />
+              <h2>{{ t('plugins.systemHealth') }}</h2>
+            </header>
+            <dl class="plugin-health-list">
+              <div>
+                <dt>{{ t('plugins.catalogStatus') }}</dt>
+                <dd><span class="pill" :class="catalogStatusClass(officialCatalogStatus?.status || '')">{{ officialCatalogStatus?.status || '-' }}</span></dd>
+              </div>
+              <div>
+                <dt>{{ t('plugins.catalogTrust') }}</dt>
+                <dd :class="officialCatalogStatus?.trust_configured ? 'health-good' : 'health-warning'">
+                  {{ officialCatalogStatus?.trust_configured ? t('plugins.trustConfigured') : t('plugins.trustMissing') }}
+                </dd>
+              </div>
+              <div>
+                <dt>{{ t('plugins.licenseStatus') }}</dt>
+                <dd><span class="pill" :class="licenseStatusClass(officialLicenseStatus?.status || '')">{{ officialLicenseStatus?.status || '-' }}</span></dd>
+              </div>
+              <div>
+                <dt>{{ t('plugins.enabled') }}</dt>
+                <dd>{{ catalog.summary.enabled }} / {{ catalog.summary.total }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('plugins.runtimeStatus') }}</dt>
+                <dd :class="runtimeStatus?.running ? 'health-good' : 'health-muted'">
+                  {{ runtimeStatus?.running ? t('plugins.running') : runtimeStatus?.supervisor_state || '-' }}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="panel workbench-panel">
+            <header class="panel-header">
+              <h2>{{ t('plugins.quickActions') }}</h2>
+            </header>
+            <div class="plugin-quick-actions">
+              <button class="button secondary" type="button" :disabled="catalogSyncing || catalogStatusLoading || !canSyncOfficialCatalog" @click="syncCatalog">
+                <RefreshCw :size="16" />
+                {{ t('plugins.syncCatalog') }}
+              </button>
+              <button class="button secondary" type="button" @click="showTab('distribution')">
+                <LockKeyhole :size="16" />
+                {{ t('plugins.manageLicense') }}
+              </button>
+              <button class="button secondary" type="button" @click="apiTokenSecret = ''; apiTokenModal = true">
+                <KeyRound :size="16" />
+                {{ t('plugins.createAPIToken') }}
+              </button>
+            </div>
+          </section>
+        </aside>
+      </div>
     </section>
 
-    <section class="panel section-gap">
+    <section v-if="activeTab === 'distribution'" class="plugin-distribution-grid" data-section="distribution">
+    <section class="panel">
       <header class="panel-header split-header">
         <div>
           <h2>{{ t('plugins.officialCatalog') }}</h2>
@@ -886,7 +1104,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section class="panel section-gap">
+    <section class="panel">
       <header class="panel-header split-header">
         <div>
           <h2>{{ t('plugins.officialLicense') }}</h2>
@@ -942,8 +1160,9 @@ onMounted(load)
         </div>
       </div>
     </section>
+    </section>
 
-    <section class="panel section-gap">
+    <section v-if="activeTab === 'feeds'" class="panel plugin-tab-content" data-section="feeds">
       <header class="panel-header split-header">
         <div>
           <h2>{{ t('plugins.officialFeeds') }}</h2>
@@ -1059,7 +1278,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section class="panel section-gap">
+    <section v-if="activeTab === 'api'" class="panel plugin-tab-content" data-section="api">
       <header class="panel-header split-header">
         <div>
           <h2>{{ t('plugins.openAPI') }}</h2>
@@ -1115,7 +1334,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section class="plugin-workbench section-gap">
+    <section v-if="activeTab === 'registry'" class="plugin-workbench plugin-tab-content" data-section="registry">
       <aside class="plugin-tree-panel">
         <div class="plugin-filter-bar">
           <label class="search-box compact-search">
@@ -1615,3 +1834,311 @@ onMounted(load)
     </div>
   </main>
 </template>
+
+<style scoped>
+.plugin-center-page {
+  padding-bottom: 48px;
+}
+
+.plugin-page-actions,
+.plugin-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plugin-center-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.plugin-center-tab {
+  min-width: max-content;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  transition:
+    border-color 150ms ease,
+    color 150ms ease,
+    background-color 150ms ease;
+}
+
+.plugin-center-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.plugin-center-tab.active {
+  border-bottom-color: var(--primary-600);
+  color: var(--primary-700);
+}
+
+.plugin-center-tab:focus-visible {
+  outline: 2px solid var(--primary-500);
+  outline-offset: -3px;
+}
+
+.plugin-dashboard,
+.plugin-tab-content,
+.plugin-distribution-grid {
+  margin-top: 16px;
+}
+
+.plugin-metric-grid .metric-card {
+  min-height: 96px;
+  padding: 16px;
+}
+
+.plugin-metric-grid .metric-card > div {
+  align-content: center;
+}
+
+.plugin-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.75fr);
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+}
+
+.plugin-dashboard-main,
+.plugin-dashboard-side {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
+.workbench-panel .panel-header {
+  min-height: 62px;
+  padding: 12px 18px;
+}
+
+.workbench-items {
+  display: grid;
+}
+
+.workbench-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto 36px;
+  gap: 12px;
+  align-items: center;
+  min-height: 76px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.workbench-item:first-child {
+  border-top: 0;
+}
+
+.workbench-item > div {
+  min-width: 0;
+}
+
+.workbench-item strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.workbench-item p {
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-state-icon.ready,
+.health-good {
+  color: var(--success);
+}
+
+.workbench-state-icon.attention,
+.health-warning {
+  color: var(--warning);
+}
+
+.health-muted {
+  color: var(--text-muted);
+}
+
+.plugin-inventory-table {
+  padding: 0;
+}
+
+.plugin-inventory-table .data-table {
+  min-width: 640px;
+}
+
+.plugin-health-list {
+  display: grid;
+  margin: 0;
+  padding: 6px 18px 14px;
+}
+
+.plugin-health-list > div {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.plugin-health-list > div:last-child {
+  border-bottom: 0;
+}
+
+.plugin-health-list dt {
+  color: var(--text-muted);
+}
+
+.plugin-health-list dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 700;
+  text-align: right;
+}
+
+.plugin-quick-actions {
+  display: grid;
+  padding: 14px 18px 18px;
+}
+
+.plugin-quick-actions .button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.plugin-distribution-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.plugin-distribution-grid > .panel {
+  margin: 0;
+}
+
+.plugin-distribution-grid .row-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 1180px) {
+  .plugin-dashboard-grid,
+  .plugin-distribution-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .plugin-page-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .plugin-page-actions .button {
+    width: 100%;
+  }
+
+  .plugin-center-tabs {
+    margin-right: -14px;
+    padding-right: 14px;
+  }
+
+  .plugin-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plugin-metric-grid .metric-card {
+    min-height: 88px;
+    padding: 14px;
+  }
+
+  .workbench-panel .panel-header,
+  .plugin-distribution-grid .panel-header {
+    display: grid;
+    align-items: start;
+    padding: 14px;
+  }
+
+  .workbench-panel .split-header .pill {
+    justify-self: start;
+  }
+
+  .workbench-item {
+    grid-template-columns: 20px minmax(0, 1fr) 36px;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .workbench-item > .pill {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .workbench-item > .icon-button {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+
+  .workbench-item p {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .plugin-health-list,
+  .plugin-quick-actions {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .plugin-inventory-table .data-table {
+    min-width: 0;
+    table-layout: fixed;
+  }
+
+  .plugin-inventory-table th:nth-child(2),
+  .plugin-inventory-table td:nth-child(2),
+  .plugin-inventory-table th:nth-child(3),
+  .plugin-inventory-table td:nth-child(3) {
+    display: none;
+  }
+
+  .plugin-inventory-table th:nth-child(4),
+  .plugin-inventory-table td:nth-child(4) {
+    width: 88px;
+  }
+
+  .plugin-inventory-table th:last-child,
+  .plugin-inventory-table td:last-child {
+    width: 48px;
+  }
+
+  .plugin-center-page .plugin-detail-meta,
+  .plugin-center-page .plugin-detail-meta.compact-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plugin-distribution-grid .row-actions,
+  .plugin-distribution-grid .button {
+    width: 100%;
+  }
+}
+</style>

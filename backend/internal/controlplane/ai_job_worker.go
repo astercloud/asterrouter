@@ -72,29 +72,46 @@ func (s *Service) dispatchClaimedAIJob(ctx context.Context, job AIJob, adapter D
 			return updated.Status, nil
 		}
 		provider := candidates[0]
+		permit, _, capacityAcquired, capacityErr := s.TryAcquireProviderAccountPermitContext(
+			ctx, provider, estimateDurableAIJobTokens(job), providerCapacityLeaseID(job.OperationID, attemptNumber),
+		)
+		if capacityErr != nil {
+			return job.Status, capacityErr
+		}
+		if !capacityAcquired {
+			excluded[durableProviderCandidateKey(provider)] = struct{}{}
+			continue
+		}
 		attempt, err := s.BeginAIAttempt(ctx, job.OperationID, attemptNumber, provider)
 		if err != nil {
+			permit.Release()
 			return job.Status, err
 		}
 		executor := durableAIJobDispatchExecutor{adapter: adapter, provider: provider, job: job, attempt: attempt}
 		updatedAttempt, _, dispatchErr := s.ExecuteAIAttemptDispatch(ctx, attempt.ID, []byte(job.RequestPayload), executor)
 		switch updatedAttempt.DispatchState {
 		case AIAttemptDispatchAccepted:
+			capacityErr = permit.Retain(ctx, providerCapacityRetentionDuration(s.nowUTC(), updatedAttempt.ReconcileAfter))
+			billingErr := s.CommitBillingHold(ctx, job.OperationID, "provider_task_accepted")
 			updatedJob, transitionErr := s.TransitionAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, AIJobStatusRunning, "")
 			if transitionErr != nil {
-				return job.Status, transitionErr
+				return job.Status, errors.Join(capacityErr, billingErr, transitionErr)
 			}
-			return updatedJob.Status, dispatchErrIfAccepted(dispatchErr)
+			return updatedJob.Status, errors.Join(dispatchErrIfAccepted(dispatchErr), capacityErr, billingErr)
 		case AIAttemptDispatchProvenNotCreated:
+			permit.Release()
 			excluded[durableProviderCandidateKey(provider)] = struct{}{}
 			continue
 		case AIAttemptDispatchUnknown, AIAttemptDispatchSubmitted:
+			capacityErr = permit.Retain(ctx, providerCapacityRetentionDuration(s.nowUTC(), updatedAttempt.ReconcileAfter))
+			billingErr := s.DisputeBillingHold(ctx, job.OperationID, "provider_status_unknown")
 			updatedJob, transitionErr := s.TransitionAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, AIJobStatusUnknown, "provider_status_unknown")
 			if transitionErr != nil {
-				return job.Status, errors.Join(dispatchErr, transitionErr)
+				return job.Status, errors.Join(dispatchErr, capacityErr, billingErr, transitionErr)
 			}
-			return updatedJob.Status, errors.Join(ErrAIAttemptRequiresReconciliation, dispatchErr)
+			return updatedJob.Status, errors.Join(ErrAIAttemptRequiresReconciliation, dispatchErr, capacityErr, billingErr)
 		default:
+			permit.Release()
 			return job.Status, errors.Join(dispatchErr, fmt.Errorf("unexpected durable attempt dispatch state %q", updatedAttempt.DispatchState))
 		}
 	}
@@ -166,13 +183,16 @@ func (s *Service) reconcileAIAttempt(ctx context.Context, attempt AIAttempt, ada
 	if err != nil {
 		return err
 	}
+	capacityErr := s.restoreProviderCapacityForAttempt(ctx, attempt)
 	executor := durableAIJobReconcileExecutor{adapter: adapter, provider: provider, job: job, attempt: attempt}
 	updatedAttempt, _, reconcileErr := s.ReconcileAIAttemptDispatch(ctx, attempt.ID, executor)
+	reconcileErr = errors.Join(reconcileErr, capacityErr, s.syncProviderCapacityForAttempt(ctx, updatedAttempt))
 	if reconcileErr != nil && updatedAttempt.DispatchState != AIAttemptDispatchAccepted && updatedAttempt.DispatchState != AIAttemptDispatchProvenNotCreated {
+		billingErr := s.DisputeBillingHold(ctx, operation.ID, "provider_status_unknown")
 		if job.Status != AIJobStatusUnknown && oneOf(job.Status, AIJobStatusDispatching, AIJobStatusRunning) {
 			_, _ = s.TransitionAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, AIJobStatusUnknown, "provider_status_unknown")
 		}
-		return reconcileErr
+		return errors.Join(reconcileErr, billingErr)
 	}
 	if updatedAttempt.DispatchState == AIAttemptDispatchProvenNotCreated {
 		if oneOf(job.Status, AIJobStatusUnknown, AIJobStatusDispatching) {
@@ -183,6 +203,9 @@ func (s *Service) reconcileAIAttempt(ctx context.Context, attempt AIAttempt, ada
 	}
 	if updatedAttempt.DispatchState != AIAttemptDispatchAccepted {
 		return reconcileErr
+	}
+	if billingErr := s.CommitBillingHold(ctx, operation.ID, "provider_task_accepted"); billingErr != nil {
+		return errors.Join(reconcileErr, billingErr)
 	}
 	if job.Status == AIJobStatusUnknown || job.Status == AIJobStatusDispatching {
 		updatedJob, transitionErr := s.TransitionAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, AIJobStatusRunning, "")
@@ -224,6 +247,36 @@ func (s *Service) reconcileAIAttempt(ctx context.Context, attempt AIAttempt, ada
 		}
 	}
 	return reconcileErr
+}
+
+func estimateDurableAIJobTokens(job AIJob) int {
+	payloadBytes := len(job.RequestPayload)
+	if payloadBytes == 0 {
+		payloadBytes = len(job.RequestPayloadCiphertext)
+	}
+	return max(1, payloadBytes/4)
+}
+
+func (s *Service) restoreProviderCapacityForAttempt(ctx context.Context, attempt AIAttempt) error {
+	store := s.currentProviderCapacityStore()
+	if store == nil || strings.TrimSpace(attempt.ProviderAccountID) == "" {
+		return nil
+	}
+	_, err := store.Restore(ctx, providerCapacityLeaseForAttempt(attempt), providerCapacityRetentionDuration(s.nowUTC(), attempt.ReconcileAfter))
+	return err
+}
+
+func (s *Service) syncProviderCapacityForAttempt(ctx context.Context, attempt AIAttempt) error {
+	store := s.currentProviderCapacityStore()
+	if store == nil || strings.TrimSpace(attempt.ProviderAccountID) == "" {
+		return nil
+	}
+	lease := providerCapacityLeaseForAttempt(attempt)
+	if attempt.DispatchState == AIAttemptDispatchProvenNotCreated || attempt.Status != AIAttemptStatusRunning || isDurableProviderTerminalStatus(strings.ToLower(strings.TrimSpace(attempt.ProviderTaskStatus))) {
+		return store.Release(ctx, lease)
+	}
+	_, err := store.Restore(ctx, lease, providerCapacityRetentionDuration(s.nowUTC(), attempt.ReconcileAfter))
+	return err
 }
 
 func isDurableProviderTerminalStatus(status string) bool {

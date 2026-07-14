@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"sync"
@@ -27,60 +28,14 @@ func newGatewayScheduler() *gatewayScheduler {
 	}
 }
 
-type ProviderAccountPermit struct {
-	release func()
-}
-
-func (p ProviderAccountPermit) Release() {
-	if p.release != nil {
-		p.release()
-	}
-}
-
-// TryAcquireProviderAccountPermit atomically reserves RPM/TPM capacity and a
-// half-open circuit probe. A successful reservation remains in the rolling
-// minute window because it represents admitted work; Release only frees the
-// half-open probe lock.
+// TryAcquireProviderAccountPermit preserves the synchronous caller API while
+// delegating authoritative concurrency and rate admission to CapacityStore.
 func (s *Service) TryAcquireProviderAccountPermit(provider GatewayProvider, estimatedTokens int) (ProviderAccountPermit, string, bool) {
-	if s.scheduler == nil || provider.AccountID == "" {
-		return ProviderAccountPermit{}, "", true
+	permit, reason, acquired, err := s.TryAcquireProviderAccountPermitContext(context.Background(), provider, estimatedTokens, "")
+	if err != nil {
+		return ProviderAccountPermit{}, "capacity_store_unavailable", false
 	}
-	now := time.Now().UTC()
-	estimatedTokens = nonNegative(estimatedTokens)
-	scheduler := s.scheduler
-	scheduler.mu.Lock()
-	defer scheduler.mu.Unlock()
-
-	if provider.CircuitState == CircuitStateOpen && !provider.CircuitProbe {
-		return ProviderAccountPermit{}, "circuit_open", false
-	}
-	if provider.CircuitProbe && scheduler.halfOpenProbes[provider.AccountID] {
-		return ProviderAccountPermit{}, "circuit_half_open_busy", false
-	}
-	samples := scheduler.pruneSamples(provider.AccountID, now)
-	requests, tokens := rateWindowUsage(samples)
-	if provider.RPMLimit > 0 && requests >= provider.RPMLimit {
-		return ProviderAccountPermit{}, "rpm_exhausted", false
-	}
-	if provider.TPMLimit > 0 && tokens+estimatedTokens > provider.TPMLimit {
-		return ProviderAccountPermit{}, "tpm_exhausted", false
-	}
-	scheduler.rateSamples[provider.AccountID] = append(samples, gatewayRateSample{at: now, tokens: estimatedTokens})
-	if provider.CircuitProbe {
-		scheduler.halfOpenProbes[provider.AccountID] = true
-	}
-	released := false
-	return ProviderAccountPermit{release: func() {
-		scheduler.mu.Lock()
-		defer scheduler.mu.Unlock()
-		if released {
-			return
-		}
-		released = true
-		if provider.CircuitProbe {
-			delete(scheduler.halfOpenProbes, provider.AccountID)
-		}
-	}}, "", true
+	return permit, reason, acquired
 }
 
 func (s *Service) providerAccountRateHeadroom(account ProviderAccount, now time.Time) float64 {

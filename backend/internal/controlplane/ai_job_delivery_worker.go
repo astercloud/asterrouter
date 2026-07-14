@@ -27,6 +27,7 @@ type DurableAIJobDeliveryWorkerReport struct {
 
 type DurableAIJobDeliveryRebuildReport struct {
 	Scanned     int
+	Reindexed   int
 	Republished int
 	Claimed     int
 	Published   int
@@ -83,6 +84,28 @@ func (s *Service) RebuildDurableAIJobDeliveriesOnce(ctx context.Context, workerI
 		}
 		report.Republished++
 		report.Published++
+	}
+	if index := s.currentAIJobReadyIndex(); index != nil {
+		readyJobs, readyErr := s.repo.ListAIJobsForReadyIndex(ctx, aiJobReadyCandidateLimit(limit))
+		if readyErr != nil {
+			report.Errors++
+			runErrs = append(runErrs, fmt.Errorf("list ai jobs for ready index rebuild: %w", readyErr))
+		} else {
+			for _, job := range readyJobs {
+				entry, entryErr := newAIJobReadyEntry(job)
+				if entryErr != nil {
+					report.Errors++
+					runErrs = append(runErrs, fmt.Errorf("build ai job %s ready entry: %w", job.ID, entryErr))
+					continue
+				}
+				if registerErr := index.Register(ctx, entry); registerErr != nil {
+					report.Errors++
+					runErrs = append(runErrs, fmt.Errorf("reindex ai job %s: %w", job.ID, registerErr))
+					continue
+				}
+				report.Reindexed++
+			}
+		}
 	}
 	remaining := limit - len(jobs)
 	if remaining <= 0 {

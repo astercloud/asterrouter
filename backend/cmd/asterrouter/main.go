@@ -118,6 +118,11 @@ func main() {
 		log.Fatalf("initialize DingTalk login: %v", err)
 	}
 	controlService := controlplane.NewService(controlRepo, "/v1", cfg.SecretKey)
+	if err := controlService.SetAIJobAdmissionLimits(controlplane.AIJobAdmissionLimits{
+		Profile: cfg.AIJobQueueProfileLimit, Tenant: cfg.AIJobQueueTenantLimit, Principal: cfg.AIJobQueuePrincipalLimit,
+	}); err != nil {
+		log.Fatalf("configure durable ai job admission: %v", err)
+	}
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatalf("seed control plane repository: %v", err)
 	}

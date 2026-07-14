@@ -96,6 +96,14 @@ export interface TOTPSetup {
 	provisioning_uri: string
 }
 
+export interface AccountSecurityUpdate {
+	access_token: string
+	expires_at: string
+	changed?: boolean
+	enabled?: boolean
+	codes?: string[]
+}
+
 export interface LoginResult {
   access_token: string
   token_type: string
@@ -765,6 +773,7 @@ export type EffectivePricingPolicyRequest = Omit<EffectivePricingPolicy, 'id' | 
 export interface EffectivePricingDecision {
   id: string
   model: string
+  upstream_model: string
   protocol: string
   current_provider_account_id: string
   candidate_provider_account_id: string
@@ -795,6 +804,7 @@ export interface EffectivePricingReportRow {
   effective_cost_micros_per_1m: number
   request_count: number
   error_rate: number
+  p95_latency_ms: number
   metrics_coverage: number
   eligible_request_hit_rate: number
   cache_token_hit_rate: number

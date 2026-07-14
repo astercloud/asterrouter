@@ -36,7 +36,7 @@ describe('AdminEffectivePricingView', () => {
         provider_id: 'provider-a', provider_name: 'Channel A', provider_account_id: 'account-a',
         provider_account_name: 'Procurement A', upstream_model: 'model-a', protocol: 'openai_chat_completions',
         currency: 'USD', quoted_multiplier: 0.2, billed_multiplier: 0.6, effective_multiplier: 0.5,
-        effective_cost_micros_per_1m: 500000, request_count: 1000, error_rate: 0.01,
+        effective_cost_micros_per_1m: 500000, request_count: 1000, error_rate: 0.01, p95_latency_ms: 420,
         metrics_coverage: 0.98, eligible_request_hit_rate: 0.7, cache_token_hit_rate: 0.65,
         cache_write_read_ratio: 0.2, billing_consistency_rate: 0.99, affinity_consistency_rate: 0.95,
         cache_support_status: 'billed_verified', pool_affinity_grade: 'verified', cost_confidence: 'exact',
@@ -59,6 +59,7 @@ describe('AdminEffectivePricingView', () => {
 
     expect(wrapper.text()).toContain('Channel A')
     expect(wrapper.text()).toContain('0.50x')
+    expect(wrapper.text()).toContain('420 ms')
     expect(wrapper.findAll('.ep-table tbody tr')).toHaveLength(1)
 
     await wrapper.find('.ep-table tbody button').trigger('click')
@@ -68,6 +69,11 @@ describe('AdminEffectivePricingView', () => {
     const tabs = wrapper.findAll('.effective-tabs button')
     await tabs[1].trigger('click')
     expect(wrapper.find('.cache-row').exists()).toBe(true)
+
+    await wrapper.get('.page-header .button').trigger('click')
+    expect(wrapper.get('.effective-dialog').text()).toContain('Maximum error-rate regression')
+    expect(wrapper.get('.effective-dialog').text()).toContain('Maximum P95 latency regression')
+    expect(wrapper.find('.effective-dialog option[value="fixed_route"]').exists()).toBe(true)
 
     wrapper.unmount()
   })
@@ -90,6 +96,61 @@ describe('AdminEffectivePricingView', () => {
     expect(control.runProviderCacheProbe).toHaveBeenCalledWith({
       provider_account_id: 'account-a', upstream_model: 'model-a', protocol: 'openai_chat_completions',
       prefix_tokens: 2048, max_cost_micros: 100000
+    })
+    wrapper.unmount()
+  })
+
+  it('keeps gateway and upstream models separate when evaluating and displaying a switch', async () => {
+    const initialReport = await control.getEffectivePricingReport({})
+    const baseRow = initialReport.rows[0]
+    vi.mocked(control.getEffectivePricingReport).mockResolvedValue({
+      ...initialReport,
+      rows: [
+        { ...baseRow, provider_account_id: 'account-a', provider_account_name: 'Procurement A', upstream_model: 'upstream-a', cache_token_hit_rate: 0.11, error_rate: 0.011, p95_latency_ms: 111 },
+        { ...baseRow, provider_account_id: 'account-a', provider_account_name: 'Procurement A', upstream_model: 'upstream-b', cache_token_hit_rate: 0.22, error_rate: 0.022, p95_latency_ms: 222 },
+        { ...baseRow, provider_id: 'provider-b', provider_name: 'Channel B', provider_account_id: 'account-b', provider_account_name: 'Procurement B', upstream_model: 'upstream-b', cache_token_hit_rate: 0.77, error_rate: 0.033, p95_latency_ms: 333 }
+      ]
+    })
+    vi.mocked(control.getEffectivePricingDecisions).mockResolvedValue([{
+      id: 'decision-b', model: 'gateway-public', upstream_model: 'upstream-b', protocol: 'openai_chat_completions',
+      current_provider_account_id: 'account-a', candidate_provider_account_id: 'account-b',
+      current_cost_micros_per_1m: 800000, candidate_cost_micros_per_1m: 500000, cost_improvement: 0.375,
+      status: 'recommended', reason_codes: [], canary_percent: 5, sample_count: 1000, confidence: 'exact',
+      created_by: 'tester', created_at: '2026-07-14T12:00:00Z', updated_at: '2026-07-14T12:00:00Z'
+    }])
+    vi.mocked(control.getProviderAccounts).mockResolvedValue([
+      { id: 'account-a', provider_id: 'provider-a', name: 'Procurement A', status: 'active', models: ['upstream-a', 'upstream-b'] },
+      { id: 'account-b', provider_id: 'provider-b', name: 'Procurement B', status: 'active', models: ['upstream-b'] }
+    ] as never)
+
+    const wrapper = mount(AdminEffectivePricingView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    await wrapper.findAll('.effective-tabs button')[2].trigger('click')
+    const cardText = wrapper.get('.decision-card').text()
+    expect(cardText).toContain('gateway-public')
+    expect(cardText).toContain('upstream-b')
+    expect(cardText).toContain('22%')
+    expect(cardText).toContain('77%')
+    expect(cardText).toContain('222 ms')
+    expect(cardText).toContain('333 ms')
+    expect(cardText).not.toContain('111 ms')
+
+    await wrapper.findAll('.effective-tabs button')[0].trigger('click')
+    const upstreamBRows = wrapper.findAll('.ep-table tbody tr')
+    await upstreamBRows[2].findAll('button')[1].trigger('click')
+    const dialog = wrapper.get('.effective-dialog')
+    expect(dialog.get('input').element.value).toBe('')
+    expect(dialog.findAll('select')[0].element.value).toBe('upstream-b')
+    expect(dialog.findAll('select')[2].element.value).toBe('account-a')
+    expect(dialog.findAll('select')[3].element.value).toBe('account-b')
+
+    await dialog.get('input').setValue('gateway-public')
+    await dialog.trigger('submit')
+    await flushPromises()
+    expect(control.evaluateEffectivePricingDecision).toHaveBeenCalledWith({
+      model: 'gateway-public', upstream_model: 'upstream-b', protocol: 'openai_chat_completions',
+      current_provider_account_id: 'account-a', candidate_provider_account_id: 'account-b'
     })
     wrapper.unmount()
   })

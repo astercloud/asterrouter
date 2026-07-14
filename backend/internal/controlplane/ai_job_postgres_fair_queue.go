@@ -4,11 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 const aiJobFairSelectColumns = `id, profile_scope, tenant_id, credential_source, integration_id,
 principal_type, principal_id, external_subject_reference, status, priority, next_eligible_at, queue_lease_until, created_at`
+
+const aiJobFairQualifiedSelectColumns = `job.id, job.profile_scope, job.tenant_id, job.credential_source, job.integration_id,
+job.principal_type, job.principal_id, job.external_subject_reference, job.status, job.priority,
+job.next_eligible_at, job.queue_lease_until, job.created_at`
 
 func listPostgresAIJobFairCandidates(ctx context.Context, tx *sql.Tx, now time.Time, perPrincipalLimit int) ([]AIJob, error) {
 	rows, err := tx.QueryContext(ctx, `
@@ -93,17 +100,94 @@ GROUP BY job.profile_scope, job.tenant_id, job.credential_source, job.integratio
 	return out, rows.Err()
 }
 
-func lockPostgresAIJobForClaim(ctx context.Context, tx *sql.Tx, id string, now time.Time) (AIJob, bool, error) {
-	job, err := scanAIJob(tx.QueryRowContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs
-WHERE id=$1 AND (
-  (status=$2 AND next_eligible_at <= $3 AND (queue_lease_until IS NULL OR queue_lease_until <= $3))
-  OR (status=$4 AND queue_lease_until IS NOT NULL AND queue_lease_until <= $3)
+func listPostgresAIJobFairCandidatesByReferences(ctx context.Context, tx *sql.Tx, references []AIJobReadyReference, now time.Time) ([]AIJob, map[string]int, error) {
+	ids := make([]string, 0, len(references))
+	versions := make([]int64, 0, len(references))
+	expected := make(map[string]int, len(references))
+	for _, reference := range references {
+		id := strings.TrimSpace(reference.JobID)
+		if id == "" || reference.StatusVersion <= 0 || expected[id] != 0 {
+			continue
+		}
+		expected[id] = reference.StatusVersion
+		ids = append(ids, id)
+		versions = append(versions, int64(reference.StatusVersion))
+	}
+	if len(ids) == 0 {
+		return []AIJob{}, expected, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+WITH ready_references AS (
+  SELECT * FROM UNNEST($1::text[], $2::bigint[]) AS reference(id, status_version)
 )
-FOR UPDATE SKIP LOCKED`, id, AIJobStatusQueued, now, AIJobStatusDispatching))
+SELECT `+aiJobFairQualifiedSelectColumns+`
+FROM ai_jobs job
+JOIN ready_references reference ON reference.id=job.id AND reference.status_version=job.status_version
+WHERE (job.status=$3 AND job.next_eligible_at <= $4 AND (job.queue_lease_until IS NULL OR job.queue_lease_until <= $4))
+   OR (job.status=$5 AND job.queue_lease_until IS NOT NULL AND job.queue_lease_until <= $4)`,
+		pq.Array(ids), pq.Array(versions), AIJobStatusQueued, now, AIJobStatusDispatching)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	candidates := make([]AIJob, 0, len(ids))
+	for rows.Next() {
+		job, scanErr := scanAIJobFairFields(rows)
+		if scanErr != nil {
+			return nil, nil, scanErr
+		}
+		candidates = append(candidates, job)
+	}
+	return candidates, expected, rows.Err()
+}
+
+func lockPostgresAIJobForClaim(ctx context.Context, tx *sql.Tx, id string, expectedVersion int, now time.Time) (AIJob, bool, error) {
+	job, err := scanAIJob(tx.QueryRowContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs
+WHERE id=$1 AND ($2=0 OR status_version=$2) AND (
+  (status=$3 AND next_eligible_at <= $4 AND (queue_lease_until IS NULL OR queue_lease_until <= $4))
+  OR (status=$5 AND queue_lease_until IS NOT NULL AND queue_lease_until <= $4)
+)
+FOR UPDATE SKIP LOCKED`, id, expectedVersion, AIJobStatusQueued, now, AIJobStatusDispatching))
 	if errors.Is(err, sql.ErrNoRows) {
 		return AIJob{}, false, nil
 	}
 	return job, err == nil, err
+}
+
+func lockPostgresAIJobAdmissionScopes(ctx context.Context, tx *sql.Tx, job AIJob, limits AIJobAdmissionLimits) error {
+	keys := make([]string, 0, 3)
+	if limits.Profile > 0 {
+		keys = append(keys, "ai-job-admission:profile:"+aiJobProfileFairKey(job))
+	}
+	if limits.Tenant > 0 {
+		keys = append(keys, "ai-job-admission:tenant:"+aiJobTenantFairKey(job))
+	}
+	if limits.Principal > 0 {
+		keys = append(keys, "ai-job-admission:principal:"+aiJobPrincipalFairKey(job))
+	}
+	for _, key := range keys {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func countPostgresAIJobAdmissionScopes(ctx context.Context, tx *sql.Tx, job AIJob) (aiJobAdmissionCounts, error) {
+	var counts aiJobAdmissionCounts
+	err := tx.QueryRowContext(ctx, `
+SELECT
+  COUNT(*) FILTER (WHERE profile_scope=$1),
+  COUNT(*) FILTER (WHERE profile_scope=$1 AND tenant_id=$2),
+  COUNT(*) FILTER (WHERE profile_scope=$1 AND tenant_id=$2 AND credential_source=$3 AND integration_id=$4
+    AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7)
+FROM ai_jobs
+WHERE status IN ($8,$9)`,
+		strings.TrimSpace(job.ProfileScope), strings.TrimSpace(job.TenantID), strings.TrimSpace(job.CredentialSource),
+		strings.TrimSpace(job.IntegrationID), strings.TrimSpace(job.PrincipalType), strings.TrimSpace(job.PrincipalID),
+		strings.TrimSpace(job.ExternalSubjectReference), AIJobStatusQueued, AIJobStatusDispatching,
+	).Scan(&counts.Profile, &counts.Tenant, &counts.Principal)
+	return counts, err
 }
 
 func scanAIJobFairFields(scanner apiKeyScanner) (AIJob, error) {

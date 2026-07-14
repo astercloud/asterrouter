@@ -3,9 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   BarChart3,
-  Clock3,
-  Coins,
   Download,
   KeyRound,
   PieChart,
@@ -22,6 +21,7 @@ import { datetimeLocalToISOString } from '@/utils/timeRange'
 type TimePreset = '24h' | '7d' | '30d' | 'custom'
 type DetailTab = 'usage' | 'errors' | 'models' | 'keys'
 type DistributionMetric = 'tokens' | 'actual_cost'
+type UsageView = 'workbench' | 'analysis' | 'records'
 
 interface DistributionRow {
   label: string
@@ -63,6 +63,7 @@ const pageReport = ref<UsageReport | null>(null)
 const analysisReport = ref<UsageReport | null>(null)
 const keyAllocation = ref<CostAllocationReport | null>(null)
 const activeTab = ref<DetailTab>('usage')
+const activeView = ref<UsageView>('workbench')
 const distributionMetric = ref<DistributionMetric>('tokens')
 
 const query = ref('')
@@ -112,27 +113,29 @@ const metrics = computed(() => [
   {
     label: t('usage.requests'),
     value: formatNumber(summaryReport.value.total_requests),
-    sub: `${formatNumber(summaryReport.value.error_requests)} ${t('usage.errors')} · ${formatPercent(errorRate.value)}`,
-    icon: Activity
+    sub: `${formatNumber(summaryReport.value.error_requests)} ${t('usage.errors')} · ${formatPercent(errorRate.value)}`
   },
   {
     label: t('usage.tokens'),
     value: compactNumber(summaryReport.value.total_tokens),
-    sub: t('usage.totalTokens'),
-    icon: Sigma
+    sub: t('usage.totalTokens')
   },
   {
     label: t('usage.cost'),
     value: formatCost(summaryReport.value.total_cost_cents),
-    sub: t('usage.estimatedCost'),
-    icon: Coins
+    sub: t('usage.estimatedCost')
   },
   {
     label: t('usage.latency'),
     value: `${formatNumber(summaryReport.value.avg_latency_ms)} ms`,
-    sub: t('usage.averageLatency'),
-    icon: Clock3
+    sub: t('usage.averageLatency')
   }
+])
+
+const usageViews = computed<Array<{ value: UsageView; label: string }>>(() => [
+  { value: 'workbench', label: t('usage.workbench') },
+  { value: 'analysis', label: t('usage.analysisView') },
+  { value: 'records', label: t('usage.recordsView') }
 ])
 
 const detailTabs = computed(() => [
@@ -165,6 +168,12 @@ const trendPoints = computed(() => buildTrendPoints(analysisRecords.value, granu
 const trendInputPath = computed(() => linePath(trendPoints.value, 'input_tokens'))
 const trendOutputPath = computed(() => linePath(trendPoints.value, 'output_tokens'))
 const trendAxisLabels = computed(() => trendAxis(trendPoints.value))
+const recentWorkbenchRecords = computed(() => [...analysisRecords.value].sort(sortRecordsDesc).slice(0, 6))
+const costPerRequest = computed(() => summaryReport.value.total_requests
+  ? summaryReport.value.total_cost_cents / summaryReport.value.total_requests
+  : 0)
+const topModel = computed(() => modelSeries.value[0]?.label || '-')
+const topKey = computed(() => keySeries.value[0]?.label || '-')
 
 function toDateTimeLocal(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, '0')
@@ -501,6 +510,10 @@ function metricLabel(): string {
   return distributionMetric.value === 'actual_cost' ? t('usage.cost') : t('usage.tokens')
 }
 
+function showView(view: UsageView) {
+  activeView.value = view
+}
+
 function selectTab(tab: DetailTab) {
   activeTab.value = tab
 }
@@ -515,12 +528,12 @@ onMounted(loadAll)
         <h1>{{ t('admin.usage') }}</h1>
         <p>{{ t('usage.subtitle') }}</p>
       </div>
-      <div class="row-actions">
+      <div class="row-actions usage-page-actions">
         <button class="button secondary" type="button" :disabled="!summaryReport.total_requests" @click="exportCSV">
           <Download :size="17" />
           {{ t('common.export') }}
         </button>
-        <button class="button secondary" type="button" :disabled="loading" @click="loadAll">
+        <button class="button" type="button" :disabled="loading" @click="loadAll">
           <RefreshCw :size="17" />
           {{ t('common.refresh') }}
         </button>
@@ -529,24 +542,161 @@ onMounted(loadAll)
 
     <div v-if="error" class="notice">{{ error }}</div>
 
-    <section class="metric-grid usage-metric-grid">
-      <article v-for="metric in metrics" :key="metric.label" class="metric-card">
-        <span class="metric-icon"><component :is="metric.icon" :size="20" /></span>
+    <nav class="usage-primary-tabs" :aria-label="t('usage.viewsLabel')">
+      <button
+        v-for="view in usageViews"
+        :key="view.value"
+        class="usage-primary-tab"
+        :class="{ active: activeView === view.value }"
+        type="button"
+        :data-view="view.value"
+        :aria-current="activeView === view.value ? 'page' : undefined"
+        @click="showView(view.value)"
+      >
+        {{ view.label }}
+      </button>
+    </nav>
+
+    <section v-if="activeView === 'workbench'" class="usage-workbench" data-section="usage-workbench">
+      <section class="metric-grid usage-metric-grid usage-workbench-metrics">
+        <article v-for="metric in metrics" :key="metric.label" class="metric-card">
+          <div>
+            <span>{{ metric.label }}</span>
+            <strong>{{ metric.value }}</strong>
+            <small>{{ metric.sub }}</small>
+          </div>
+        </article>
+      </section>
+
+      <div class="usage-workbench-context">
         <div>
-          <span>{{ metric.label }}</span>
-          <strong>{{ metric.value }}</strong>
-          <small>{{ metric.sub }}</small>
+          <strong>{{ t('usage.analysisWindow') }}</strong>
+          <span>{{ t('usage.analysisWindowHelp') }}</span>
         </div>
-      </article>
+        <label>
+          <span>{{ t('usage.timeRange') }}</span>
+          <select v-model="timePreset" @change="handlePresetChange">
+            <option value="24h">{{ t('usage.last24Hours') }}</option>
+            <option value="7d">{{ t('usage.last7Days') }}</option>
+            <option value="30d">{{ t('usage.last30Days') }}</option>
+            <option value="custom">{{ t('usage.customRange') }}</option>
+          </select>
+        </label>
+        <label>
+          <span>{{ t('usage.granularity') }}</span>
+          <select v-model="granularity">
+            <option value="hour">{{ t('usage.hour') }}</option>
+            <option value="day">{{ t('usage.day') }}</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="usage-workbench-grid">
+        <article class="panel usage-trend-panel usage-workbench-trend">
+          <header class="panel-header split-header">
+            <div>
+              <h2>{{ t('usage.tokenTrend') }}</h2>
+              <p>{{ t('usage.recentSample', { count: analysisRecords.length }) }}</p>
+            </div>
+            <BarChart3 :size="18" aria-hidden="true" />
+          </header>
+          <div class="usage-line-wrap">
+            <div v-if="!trendPoints.length" class="usage-chart-empty">
+              <Activity :size="22" aria-hidden="true" />
+              <strong>{{ t('usage.emptyWindow') }}</strong>
+              <p>{{ t('usage.emptyWindowHelp') }}</p>
+            </div>
+            <template v-else>
+              <svg viewBox="0 0 1000 220" class="usage-line-chart" role="img" :aria-label="t('usage.tokenTrend')">
+                <line x1="42" y1="174" x2="962" y2="174" class="usage-axis" />
+                <line x1="42" y1="104" x2="962" y2="104" class="usage-grid-line" />
+                <line x1="42" y1="34" x2="962" y2="34" class="usage-grid-line" />
+                <path v-if="trendInputPath" :d="trendInputPath" class="usage-line usage-line-input" />
+                <path v-if="trendOutputPath" :d="trendOutputPath" class="usage-line usage-line-output" />
+                <text v-for="item in trendAxisLabels" :key="`${item.x}-${item.label}`" :x="item.x" y="206" text-anchor="middle" class="usage-axis-label">
+                  {{ item.label }}
+                </text>
+              </svg>
+              <div class="usage-line-legend">
+                <span><i class="usage-line-dot input"></i>{{ t('usage.inputTokens') }}</span>
+                <span><i class="usage-line-dot output"></i>{{ t('usage.outputTokens') }}</span>
+              </div>
+            </template>
+          </div>
+        </article>
+
+        <aside class="usage-workbench-side">
+          <section class="panel usage-health-panel">
+            <header class="panel-header">
+              <Activity :size="17" aria-hidden="true" />
+              <h2>{{ t('usage.operationalHealth') }}</h2>
+            </header>
+            <dl class="usage-health-list">
+              <div><dt>{{ t('usage.errorRate') }}</dt><dd :class="errorRate > 5 ? 'health-danger' : 'health-good'">{{ formatPercent(errorRate) }}</dd></div>
+              <div><dt>{{ t('usage.latency') }}</dt><dd>{{ formatLatency(summaryReport.avg_latency_ms) }}</dd></div>
+              <div><dt>{{ t('usage.costPerRequest') }}</dt><dd>{{ formatCost(costPerRequest) }}</dd></div>
+              <div><dt>{{ t('usage.topModel') }}</dt><dd>{{ topModel }}</dd></div>
+              <div><dt>{{ t('usage.topKey') }}</dt><dd>{{ topKey }}</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel usage-health-panel">
+            <header class="panel-header"><h2>{{ t('usage.quickAnalysis') }}</h2></header>
+            <div class="usage-quick-actions">
+              <button class="button secondary" type="button" @click="showView('analysis')">
+                <BarChart3 :size="16" />
+                {{ t('usage.openAnalysis') }}
+              </button>
+              <button class="button secondary" type="button" @click="showView('records')">
+                <Activity :size="16" />
+                {{ t('usage.openRecords') }}
+              </button>
+              <button class="button secondary" type="button" :disabled="!summaryReport.total_requests" @click="exportCSV">
+                <Download :size="16" />
+                {{ t('common.export') }}
+              </button>
+            </div>
+          </section>
+        </aside>
+      </div>
+
+      <section class="panel usage-recent-panel">
+        <header class="panel-header split-header">
+          <div>
+            <h2>{{ t('usage.recentRequests') }}</h2>
+            <p>{{ t('usage.recentRequestsHelp') }}</p>
+          </div>
+          <button class="button secondary tiny-button" type="button" @click="showView('records')">
+            {{ t('usage.viewAllRecords') }}
+            <ArrowRight :size="15" />
+          </button>
+        </header>
+        <div class="panel-body table-scroll usage-workbench-table">
+          <table class="data-table crud-table">
+            <thead><tr><th>{{ t('audit.time') }}</th><th>{{ t('usage.model') }}</th><th>{{ t('providers.status') }}</th><th>{{ t('usage.tokens') }}</th><th>{{ t('usage.cost') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
+            <tbody>
+              <tr v-for="item in recentWorkbenchRecords" :key="item.id">
+                <td>{{ formatTime(item.created_at) }}</td>
+                <td><strong>{{ item.model || '-' }}</strong><span>{{ item.provider_id || '-' }}</span></td>
+                <td><span class="pill" :class="statusClass(item.status)">{{ item.status }}</span></td>
+                <td>{{ formatNumber(recordTokens(item)) }}</td>
+                <td>{{ formatCost(item.cost_cents) }}</td>
+                <td><button class="icon-button" type="button" :aria-label="t('usage.openRecords')" @click="showView('records')"><ArrowRight :size="17" /></button></td>
+              </tr>
+              <tr v-if="!recentWorkbenchRecords.length"><td colspan="6" class="empty-cell">{{ t('usage.emptyWindow') }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </section>
 
-    <section class="panel usage-filter-panel">
+    <section v-if="activeView !== 'workbench'" class="panel usage-filter-panel" data-section="usage-filters">
       <div class="usage-filter-header">
         <div>
           <h2>{{ t('usage.filters') }}</h2>
           <p>{{ t('usage.filteredWindow') }}</p>
         </div>
-        <div class="usage-segmented">
+        <div v-if="activeView === 'analysis'" class="usage-segmented">
           <button type="button" :class="{ active: distributionMetric === 'tokens' }" @click="distributionMetric = 'tokens'">
             {{ t('usage.tokens') }}
           </button>
@@ -629,7 +779,7 @@ onMounted(loadAll)
       </div>
     </section>
 
-    <section class="usage-chart-grid">
+    <section v-if="activeView === 'analysis'" class="usage-chart-grid" data-section="usage-analysis">
       <article class="panel usage-chart-panel">
         <header class="panel-header split-header">
           <div>
@@ -708,34 +858,9 @@ onMounted(loadAll)
         </div>
       </article>
 
-      <article class="panel usage-chart-panel usage-trend-panel">
-        <header class="panel-header split-header">
-          <div>
-            <h2>{{ t('usage.tokenTrend') }}</h2>
-            <p>{{ t('usage.recentSample', { count: analysisRecords.length }) }}</p>
-          </div>
-          <BarChart3 :size="18" />
-        </header>
-        <div class="usage-line-wrap">
-          <svg viewBox="0 0 1000 220" class="usage-line-chart" role="img" :aria-label="t('usage.tokenTrend')">
-            <line x1="42" y1="174" x2="962" y2="174" class="usage-axis" />
-            <line x1="42" y1="104" x2="962" y2="104" class="usage-grid-line" />
-            <line x1="42" y1="34" x2="962" y2="34" class="usage-grid-line" />
-            <path v-if="trendInputPath" :d="trendInputPath" class="usage-line usage-line-input" />
-            <path v-if="trendOutputPath" :d="trendOutputPath" class="usage-line usage-line-output" />
-            <text v-for="item in trendAxisLabels" :key="`${item.x}-${item.label}`" :x="item.x" y="206" text-anchor="middle" class="usage-axis-label">
-              {{ item.label }}
-            </text>
-          </svg>
-          <div class="usage-line-legend">
-            <span><i class="usage-line-dot input"></i>{{ t('usage.inputTokens') }}</span>
-            <span><i class="usage-line-dot output"></i>{{ t('usage.outputTokens') }}</span>
-          </div>
-        </div>
-      </article>
     </section>
 
-    <section class="panel usage-detail-panel">
+    <section v-if="activeView === 'records'" class="panel usage-detail-panel" data-section="usage-records">
       <div class="usage-tabs">
         <button
           v-for="tab in detailTabs"
@@ -891,7 +1016,7 @@ onMounted(loadAll)
       </div>
     </section>
 
-    <section v-if="activeTab === 'usage'" class="pagination-bar">
+    <section v-if="activeView === 'records' && activeTab === 'usage'" class="pagination-bar">
       <button class="button secondary" type="button" :disabled="!canPrevious || pageLoading" @click="previousPage">
         {{ t('common.previous') }}
       </button>
@@ -907,3 +1032,325 @@ onMounted(loadAll)
     </section>
   </main>
 </template>
+
+<style scoped>
+.usage-page-actions {
+  flex-wrap: wrap;
+}
+
+.usage-primary-tabs {
+  display: flex;
+  min-height: 42px;
+  gap: 22px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.usage-primary-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.usage-primary-tab {
+  position: relative;
+  min-height: 42px;
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.usage-primary-tab::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: transparent;
+  content: "";
+}
+
+.usage-primary-tab:hover,
+.usage-primary-tab.active {
+  color: var(--text);
+}
+
+.usage-primary-tab.active::after {
+  background: var(--primary-500);
+}
+
+.usage-primary-tab:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+
+.usage-workbench {
+  display: grid;
+  gap: 16px;
+}
+
+.usage-workbench-metrics .metric-card {
+  min-height: 106px;
+  border-radius: var(--radius-sm);
+}
+
+.usage-workbench-metrics .metric-card > div {
+  min-width: 0;
+}
+
+.usage-workbench-context {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(150px, 190px) minmax(150px, 190px);
+  gap: 16px;
+  align-items: end;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.usage-workbench-context > div,
+.usage-workbench-context label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.usage-workbench-context strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.usage-workbench-context span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.usage-workbench-context label > span {
+  color: var(--text-secondary);
+  font-weight: 650;
+}
+
+.usage-workbench-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 0.72fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.usage-workbench-grid .panel,
+.usage-recent-panel {
+  border-radius: var(--radius-sm);
+}
+
+.usage-workbench-trend {
+  min-height: 356px;
+  grid-column: auto;
+}
+
+.usage-workbench-side {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 16px;
+}
+
+.usage-health-panel {
+  min-height: 0;
+}
+
+.usage-health-panel .panel-header {
+  justify-content: flex-start;
+}
+
+.usage-health-list {
+  display: grid;
+  margin: 0;
+  padding: 4px 16px 12px;
+}
+
+.usage-health-list > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-health-list > div:last-child {
+  border-bottom: 0;
+}
+
+.usage-health-list dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.usage-health-list dd {
+  max-width: 58%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-health-list .health-good {
+  color: var(--success);
+}
+
+.usage-health-list .health-danger {
+  color: var(--danger);
+}
+
+.usage-quick-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 12px 16px 16px;
+}
+
+.usage-quick-actions .button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.usage-chart-empty {
+  display: grid;
+  min-height: 236px;
+  place-content: center;
+  justify-items: center;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.usage-chart-empty strong {
+  margin-top: 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.usage-chart-empty p {
+  max-width: 400px;
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.usage-recent-panel .panel-header {
+  align-items: center;
+}
+
+.usage-workbench-table td strong,
+.usage-workbench-table td span {
+  display: block;
+}
+
+.usage-workbench-table td span:not(.pill) {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.usage-workbench-table .icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+@media (max-width: 1100px) {
+  .usage-workbench-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 0.58fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .usage-workbench-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-workbench-side {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .usage-primary-tabs {
+    gap: 18px;
+  }
+
+  .usage-page-actions .button {
+    flex: 1;
+  }
+
+  .usage-workbench-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-workbench-metrics .metric-card {
+    min-height: 112px;
+    padding: 14px;
+  }
+
+  .usage-workbench-metrics .metric-card strong {
+    font-size: 22px;
+  }
+
+  .usage-workbench-context {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-workbench-context > div {
+    grid-column: 1 / -1;
+  }
+
+  .usage-workbench-side {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-workbench-trend {
+    min-height: 310px;
+  }
+
+  .usage-line-chart {
+    min-width: 600px;
+  }
+
+  .usage-workbench-trend .usage-line-wrap {
+    overflow-x: auto;
+  }
+
+  .usage-recent-panel .panel-header {
+    display: grid;
+  }
+
+  .usage-recent-panel .tiny-button {
+    width: 100%;
+  }
+
+  .usage-workbench-table table {
+    min-width: 0;
+  }
+
+  .usage-workbench-table th:nth-child(1),
+  .usage-workbench-table td:nth-child(1),
+  .usage-workbench-table th:nth-child(5),
+  .usage-workbench-table td:nth-child(5) {
+    display: none;
+  }
+
+  .usage-workbench-table th,
+  .usage-workbench-table td {
+    padding-right: 9px;
+    padding-left: 9px;
+  }
+}
+</style>

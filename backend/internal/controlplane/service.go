@@ -49,6 +49,11 @@ type Service struct {
 	customerNotificationDispatcher CustomerNotificationDispatcher
 	usageObserver                  UsageObserver
 	credentialCapacityStore        CredentialCapacityStore
+	providerCapacityMu             sync.RWMutex
+	providerCapacityStore          ProviderCapacityStore
+	aiJobRuntimeMu                 sync.RWMutex
+	aiJobReadyIndex                AIJobReadyIndex
+	aiJobAdmissionLimits           AIJobAdmissionLimits
 	outboxPublisherMu              sync.RWMutex
 	outboxPublisher                TransactionalOutboxPublisher
 	rateMu                         sync.Mutex
@@ -91,7 +96,7 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 		return errors.New("platform usage sink redirects are not allowed")
 	}}, providerCacheProbeHTTPClient: &http.Client{Timeout: providerProbeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider cache probe redirects are not allowed")
-	}}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler()}
+	}}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: NewMemoryProviderCapacityStore()}
 }
 
 func (s *Service) nowUTC() time.Time {
@@ -101,35 +106,20 @@ func (s *Service) nowUTC() time.Time {
 	return time.Now().UTC()
 }
 
-// TryAcquireProviderAccountSlot attempts to reserve one in-process concurrency
-// slot for accountID. limit<=0 means unlimited. The caller must invoke the
-// returned release function exactly once when the slot is no longer needed
-// (successful or failed forward, stream completion, or early abort), even on
-// error paths. This tracker is process-local by design: it mirrors the
-// existing single-instance in-memory QPS limiter and does not depend on
-// Redis-compatible cache, which has not yet entered the core path.
+// TryAcquireProviderAccountSlot is the compatibility API for callers that only
+// need a concurrency reservation. The configured ProviderCapacityStore remains
+// authoritative; accountSlots is only a local ranking shadow.
 func (s *Service) TryAcquireProviderAccountSlot(accountID string, limit int) (release func(), ok bool) {
 	if limit <= 0 {
 		return func() {}, true
 	}
-	s.slotMu.Lock()
-	defer s.slotMu.Unlock()
-	if s.accountSlots[accountID] >= limit {
+	permit, _, acquired, err := s.TryAcquireProviderAccountPermitContext(
+		context.Background(), GatewayProvider{AccountID: strings.TrimSpace(accountID), Concurrency: limit, CircuitState: CircuitStateClosed}, 0, "",
+	)
+	if err != nil || !acquired {
 		return func() {}, false
 	}
-	s.accountSlots[accountID]++
-	released := false
-	return func() {
-		s.slotMu.Lock()
-		defer s.slotMu.Unlock()
-		if released {
-			return
-		}
-		released = true
-		if s.accountSlots[accountID] > 0 {
-			s.accountSlots[accountID]--
-		}
-	}, true
+	return permit.Release, true
 }
 
 // providerAccountSlotUsage returns the current in-process concurrency usage
@@ -138,6 +128,26 @@ func (s *Service) providerAccountSlotUsage(accountID string) int {
 	s.slotMu.Lock()
 	defer s.slotMu.Unlock()
 	return s.accountSlots[accountID]
+}
+
+func (s *Service) trackProviderAccountSlot(accountID string) func() {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return func() {}
+	}
+	s.slotMu.Lock()
+	s.accountSlots[accountID]++
+	s.slotMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.slotMu.Lock()
+			defer s.slotMu.Unlock()
+			if s.accountSlots[accountID] > 0 {
+				s.accountSlots[accountID]--
+			}
+		})
+	}
 }
 
 func (s *Service) SetAlertDispatcher(dispatcher AlertDispatcher) {

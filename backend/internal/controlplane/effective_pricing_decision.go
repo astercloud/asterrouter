@@ -10,7 +10,24 @@ import (
 )
 
 func (s *Service) ListEffectivePricingDecisions(ctx context.Context) ([]EffectivePricingDecision, error) {
-	return s.repo.ListEffectivePricingDecisions(ctx)
+	decisions, err := s.repo.ListEffectivePricingDecisions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapshots, err := s.repo.ListEffectivePriceSnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapshotByID := make(map[string]EffectivePriceSnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		snapshotByID[snapshot.ID] = snapshot
+	}
+	for index := range decisions {
+		if snapshot, ok := snapshotByID[decisions[index].CandidateSnapshotID]; ok {
+			decisions[index].UpstreamModel = snapshot.UpstreamModel
+		}
+	}
+	return decisions, nil
 }
 
 func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor string, request EffectivePricingDecisionEvaluationRequest) (EffectivePricingDecision, error) {
@@ -19,15 +36,15 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 	request.Protocol = strings.TrimSpace(request.Protocol)
 	request.CurrentProviderAccountID = strings.TrimSpace(request.CurrentProviderAccountID)
 	request.CandidateProviderAccountID = strings.TrimSpace(request.CandidateProviderAccountID)
-	if request.Model == "" || request.Protocol == "" || request.CurrentProviderAccountID == "" || request.CandidateProviderAccountID == "" || request.CurrentProviderAccountID == request.CandidateProviderAccountID {
-		return EffectivePricingDecision{}, errors.New("model, protocol, and distinct current/candidate provider accounts are required")
+	if request.Model == "" || request.UpstreamModel == "" || request.Protocol == "" || request.CurrentProviderAccountID == "" || request.CandidateProviderAccountID == "" || request.CurrentProviderAccountID == request.CandidateProviderAccountID {
+		return EffectivePricingDecision{}, errors.New("model, upstream_model, protocol, and distinct current/candidate provider accounts are required")
 	}
 	report, err := s.EffectivePricingReport(ctx, EffectivePricingReportQuery{Model: request.UpstreamModel, Protocol: request.Protocol})
 	if err != nil {
 		return EffectivePricingDecision{}, err
 	}
-	current, currentFound := effectivePricingReportRowByAccount(report.Rows, request.CurrentProviderAccountID)
-	candidate, candidateFound := effectivePricingReportRowByAccount(report.Rows, request.CandidateProviderAccountID)
+	current, currentFound := effectivePricingReportRow(report.Rows, request.CurrentProviderAccountID, request.UpstreamModel, request.Protocol)
+	candidate, candidateFound := effectivePricingReportRow(report.Rows, request.CandidateProviderAccountID, request.UpstreamModel, request.Protocol)
 	if !currentFound || !candidateFound {
 		return EffectivePricingDecision{}, errors.New("current and candidate accounts must both have comparable usage")
 	}
@@ -36,6 +53,7 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 	}
 	improvement := float64(current.EffectiveCostMicrosPer1M-candidate.EffectiveCostMicrosPer1M) / float64(current.EffectiveCostMicrosPer1M)
 	blockingReasons := effectivePricingDecisionBlockingReasons(candidate.ReasonCodes)
+	blockingReasons = append(blockingReasons, effectivePricingQualityRegressionReasons(current, candidate, report.Policy)...)
 	decisionReasons := []string{}
 	status := EffectivePricingDecisionHold
 	costThresholdMet := improvement >= report.Policy.MinCostImprovement
@@ -44,9 +62,7 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 	cacheEvidenceImproved := oneOf(candidate.CacheSupportStatus, CacheSupportObserved, CacheSupportBilledVerified) && cacheHitImprovement >= report.Policy.MinCacheHitRateImprovement
 	affinityEvidenceImproved := oneOf(candidate.PoolAffinityGrade, PoolAffinityProbable, PoolAffinityVerified) && affinityImprovement >= report.Policy.MinAffinityImprovement
 	cacheTiebreakerMet := !costThresholdMet && improvement >= -report.Policy.MaxCacheTiebreakCostRegression && candidate.MetricsCoverage >= report.Policy.MinMetricsCoverage && (cacheEvidenceImproved || affinityEvidenceImproved)
-	if cacheTiebreakerMet {
-		decisionReasons = append(decisionReasons, "cache_quality_tiebreaker")
-	} else if !costThresholdMet {
+	if !cacheTiebreakerMet && !costThresholdMet {
 		blockingReasons = append(blockingReasons, "cost_improvement_below_threshold")
 		if !cacheEvidenceImproved && !affinityEvidenceImproved {
 			blockingReasons = append(blockingReasons, "cache_quality_improvement_below_threshold")
@@ -60,6 +76,9 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 	}
 	if len(blockingReasons) == 0 {
 		status = EffectivePricingDecisionRecommended
+		if cacheTiebreakerMet {
+			decisionReasons = append(decisionReasons, "cache_quality_tiebreaker")
+		}
 	}
 	reasons := append(decisionReasons, blockingReasons...)
 	now := s.nowUTC()
@@ -72,7 +91,7 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 		return EffectivePricingDecision{}, err
 	}
 	decision := EffectivePricingDecision{
-		ID: "epd_" + randomID(12), Model: request.Model, Protocol: request.Protocol,
+		ID: "epd_" + randomID(12), Model: request.Model, UpstreamModel: request.UpstreamModel, Protocol: request.Protocol,
 		CurrentProviderAccountID: request.CurrentProviderAccountID, CandidateProviderAccountID: request.CandidateProviderAccountID,
 		CurrentSnapshotID: currentSnapshot.ID, CandidateSnapshotID: candidateSnapshot.ID,
 		CurrentCostMicrosPer1M: current.EffectiveCostMicrosPer1M, CandidateCostMicrosPer1M: candidate.EffectiveCostMicrosPer1M,
@@ -97,6 +116,24 @@ func effectivePricingDecisionBlockingReasons(reasons []string) []string {
 		out = append(out, reason)
 	}
 	return out
+}
+
+func effectivePricingQualityRegressionReasons(current, candidate EffectivePricingReportRow, policy EffectivePricingPolicy) []string {
+	reasons := []string{}
+	if candidate.ErrorRate-current.ErrorRate > policy.MaxErrorRateRegression {
+		reasons = append(reasons, "error_rate_regression_exceeded")
+	}
+	if policy.Mode == EffectivePricingModeCostFirst {
+		return reasons
+	}
+	if current.P95LatencyMS <= 0 || candidate.P95LatencyMS <= 0 {
+		return append(reasons, "p95_latency_evidence_missing")
+	}
+	regression := float64(candidate.P95LatencyMS-current.P95LatencyMS) / float64(current.P95LatencyMS)
+	if regression > policy.MaxP95LatencyRegression {
+		reasons = append(reasons, "p95_latency_regression_exceeded")
+	}
+	return reasons
 }
 
 func (s *Service) ActOnEffectivePricingDecision(ctx context.Context, actor, id string, request EffectivePricingDecisionActionRequest) (EffectivePricingDecision, error) {
@@ -177,9 +214,9 @@ func (s *Service) OrderGatewayCandidatesByEffectivePricing(ctx context.Context, 
 	return candidates
 }
 
-func effectivePricingReportRowByAccount(rows []EffectivePricingReportRow, accountID string) (EffectivePricingReportRow, bool) {
+func effectivePricingReportRow(rows []EffectivePricingReportRow, accountID, upstreamModel, protocol string) (EffectivePricingReportRow, bool) {
 	for _, row := range rows {
-		if row.ProviderAccountID == accountID {
+		if row.ProviderAccountID == accountID && row.UpstreamModel == upstreamModel && row.Protocol == protocol {
 			return row, true
 		}
 	}
@@ -200,7 +237,7 @@ func effectivePriceSnapshotFromReportRow(row EffectivePricingReportRow, report E
 
 func (s *Service) effectivePricingDecisionByID(ctx context.Context, id string) (EffectivePricingDecision, error) {
 	id = strings.TrimSpace(id)
-	decisions, err := s.repo.ListEffectivePricingDecisions(ctx)
+	decisions, err := s.ListEffectivePricingDecisions(ctx)
 	if err != nil {
 		return EffectivePricingDecision{}, err
 	}

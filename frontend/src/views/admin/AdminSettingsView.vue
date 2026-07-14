@@ -35,7 +35,9 @@ const updateAction = ref('')
 const archiveAction = ref('')
 const backups = ref<SystemArchiveInfo[]>([])
 const remoteBackups = ref<S3BackupObject[]>([])
-const activeSettingsTab = ref<'general' | 'terms' | 'features' | 'security' | 'defaults' | 'gateway' | 'email' | 'backup'>('gateway')
+type SettingsTab = 'general' | 'terms' | 'features' | 'security' | 'defaults' | 'gateway' | 'email' | 'backup'
+
+const activeSettingsTab = ref<SettingsTab>('general')
 const smtpTestRecipient = ref('')
 const smtpTesting = ref(false)
 const s3Testing = ref(false)
@@ -62,6 +64,43 @@ const settingsTabs = [
   { id: 'email', label: 'settings.emailSettings', icon: Mail },
   { id: 'backup', label: 'settings.dataBackup', icon: Database }
 ] as const
+
+const settingsTabKeyboardActions = {
+  ArrowLeft: -1,
+  ArrowUp: -1,
+  ArrowRight: 1,
+  ArrowDown: 1,
+  Home: 'first',
+  End: 'last'
+} as const
+
+const activeSettingsTabLabel = computed(() => {
+  const tab = settingsTabs.find((item) => item.id === activeSettingsTab.value)
+  return tab ? t(tab.label) : ''
+})
+
+function selectSettingsTab(tab: SettingsTab) {
+  activeSettingsTab.value = tab
+}
+
+function focusSettingsTab(tab: SettingsTab) {
+  window.requestAnimationFrame(() => document.getElementById(`settings-tab-${tab}`)?.focus())
+}
+
+function handleSettingsTabKeydown(event: KeyboardEvent, tab: SettingsTab) {
+  const action = settingsTabKeyboardActions[event.key as keyof typeof settingsTabKeyboardActions]
+  if (action === undefined) return
+  event.preventDefault()
+  const currentIndex = settingsTabs.findIndex((item) => item.id === tab)
+  let nextIndex = currentIndex < 0 ? 0 : currentIndex
+  if (action === 'first') nextIndex = 0
+  else if (action === 'last') nextIndex = settingsTabs.length - 1
+  else nextIndex = (nextIndex + action + settingsTabs.length) % settingsTabs.length
+  const nextTab = settingsTabs[nextIndex]?.id
+  if (!nextTab) return
+  selectSettingsTab(nextTab)
+  focusSettingsTab(nextTab)
+}
 
 const socialOAuthProviders = [
   { key: 'github', name: 'GitHub', enabled: 'github_oauth_enabled', client: 'github_oauth_client_id', secret: 'github_oauth_client_secret', configured: 'github_oauth_configured' },
@@ -495,11 +534,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="content">
+  <main class="content settings-page">
     <section class="page-header">
       <div>
-        <h1>{{ t('admin.title') }}</h1>
-        <p>{{ t('admin.subtitle') }}</p>
+        <h1>{{ t('admin.settings') }}</h1>
+        <p>{{ t('settings.pageSubtitle') }}</p>
         <div class="status-line">
           <span class="pill">{{ t('common.version') }} {{ form.version || '-' }}</span>
           <span class="pill">{{ t('common.storage') }} {{ form.storage_mode || '-' }}</span>
@@ -511,10 +550,6 @@ onMounted(async () => {
           <RefreshCw :size="17" />
           {{ t('common.refresh') }}
         </button>
-        <button class="button" :disabled="saving" @click="save()">
-          <Save :size="17" />
-          {{ saving ? t('common.saving') : t('common.save') }}
-        </button>
       </div>
     </section>
 
@@ -522,20 +557,30 @@ onMounted(async () => {
     <div v-if="error" class="notice">{{ error }}</div>
 		<div v-if="restartReasons.length" class="notice profile-danger-notice"><strong>{{ t('settings.restartRequiredTitle') }}</strong><p>{{ t('settings.restartRequiredHelp') }}</p><ul><li v-for="reason in restartReasons" :key="reason">{{ t(`settings.restartReasons.${reason}`) }}</li></ul></div>
 
-    <nav class="settings-tabs" :aria-label="t('admin.settings')">
-      <button
-        v-for="tab in settingsTabs"
-        :key="tab.id"
-        type="button"
-        :class="{ active: activeSettingsTab === tab.id }"
-        @click="activeSettingsTab = tab.id"
-      >
-        <component :is="tab.icon" :size="17" />
-        {{ t(tab.label) }}
-      </button>
-    </nav>
+    <div class="settings-tabs-shell">
+      <nav class="settings-tabs-scroll" role="tablist" :aria-label="t('settings.tabsLabel')">
+        <div class="settings-tabs">
+          <button
+            v-for="tab in settingsTabs"
+            :id="`settings-tab-${tab.id}`"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            :aria-controls="`settings-panel-${tab.id}`"
+            :aria-selected="activeSettingsTab === tab.id"
+            :tabindex="activeSettingsTab === tab.id ? 0 : -1"
+            :class="{ active: activeSettingsTab === tab.id }"
+            @click="selectSettingsTab(tab.id)"
+            @keydown="handleSettingsTabKeydown($event, tab.id)"
+          >
+            <span class="settings-tab-icon"><component :is="tab.icon" :size="17" /></span>
+            <span class="settings-tab-label">{{ t(tab.label) }}</span>
+          </button>
+        </div>
+      </nav>
+    </div>
 
-    <section class="grid section-gap settings-content-grid">
+    <section :id="`settings-panel-${activeSettingsTab}`" class="grid section-gap settings-content-grid" role="tabpanel" :aria-labelledby="`settings-tab-${activeSettingsTab}`">
       <div v-if="activeSettingsTab === 'general'" class="panel">
         <div class="panel-header">
           <SlidersHorizontal :size="18" />
@@ -822,6 +867,14 @@ onMounted(async () => {
         </div>
       </div>
     </section>
+
+    <footer class="settings-save-bar" data-section="settings-save-bar">
+      <div><strong>{{ activeSettingsTabLabel }}</strong><span>{{ t('settings.saveCurrentSectionHelp') }}</span></div>
+      <button class="button" type="button" :disabled="saving || loading" @click="save()">
+        <Save :size="17" />
+        {{ saving ? t('common.saving') : t('settings.saveSettings') }}
+      </button>
+    </footer>
 
   </main>
 </template>
