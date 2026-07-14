@@ -69,7 +69,7 @@ describe('AdminSettingsView', () => {
     const tabs = wrapper.findAll('[role="tab"]')
     expect(tabs).toHaveLength(8)
     expect(tabs[0]?.attributes('aria-selected')).toBe('true')
-    expect(wrapper.get('h1').text()).toBe('System settings')
+    expect(wrapper.get('h1').text()).toBe('System Settings')
 
     await tabs[0]?.trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()

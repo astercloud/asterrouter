@@ -138,6 +138,8 @@ describe('AdminEffectivePricingView', () => {
 
     await wrapper.findAll('.effective-tabs button')[0].trigger('click')
     const upstreamBRows = wrapper.findAll('.ep-table tbody tr')
+    expect(upstreamBRows[0].findAll('button')[1].attributes('disabled')).toBeDefined()
+    expect(upstreamBRows[2].findAll('button')[1].attributes('disabled')).toBeUndefined()
     await upstreamBRows[2].findAll('button')[1].trigger('click')
     const dialog = wrapper.get('.effective-dialog')
     expect(dialog.get('input').element.value).toBe('')
