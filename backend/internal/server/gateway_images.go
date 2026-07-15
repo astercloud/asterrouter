@@ -25,6 +25,7 @@ var (
 	errDirectImageCapacityUnavailable = errors.New("direct image provider capacity is unavailable")
 	errDirectImageProviderUnknown     = errors.New("direct image provider submission state is unknown")
 	errDirectImageProviderFailed      = errors.New("direct image provider did not complete successfully")
+	errDirectImageProviderInvalid     = errors.New("direct image provider returned an invalid accepted response")
 )
 
 type directImageResponse struct {
@@ -332,11 +333,18 @@ func attemptDirectImageCandidates(ctx context.Context, control *controlplane.Ser
 				permit.Release()
 				return execution, err
 			}
+			if dispatchErr != nil {
+				permit.Release()
+				_ = control.DisputeBillingHold(ctx, operation.ID, "provider_response_ambiguous")
+				_ = control.CompleteAIAttempt(ctx, attempt.ID, controlplane.AIAttemptStatusFailed, "provider_response_ambiguous")
+				return execution, errors.Join(errDirectImageProviderInvalid, dispatchErr)
+			}
 			status := strings.ToLower(strings.TrimSpace(result.Task.Status))
 			if status != "succeeded" && status != "completed" || len(result.Outputs) == 0 {
 				permit.Release()
+				_ = control.DisputeBillingHold(ctx, operation.ID, "provider_response_invalid")
 				_ = control.CompleteAIAttempt(ctx, attempt.ID, controlplane.AIAttemptStatusFailed, "provider_not_terminal")
-				return execution, errDirectImageProviderFailed
+				return execution, errDirectImageProviderInvalid
 			}
 			execution.Attempts = append(execution.Attempts, gatewayRouteAttempt{AttemptID: attempt.ID, AccountID: provider.AccountID, ProviderID: provider.ID, RouteID: provider.RouteID, Model: provider.UpstreamModel, Outcome: "selected"})
 			execution.Release = permit.Release
@@ -386,6 +394,10 @@ func handleDirectImageExecutionError(c *gin.Context, control *controlplane.Servi
 	case errors.Is(err, errDirectImageProviderUnknown):
 		errorType = "provider_status_unknown"
 		message = "image provider submission status is unknown; retry with the same idempotency key only"
+	case errors.Is(err, errDirectImageProviderInvalid):
+		errorType = "provider_response_invalid"
+		message = "image provider accepted the request but did not return a valid final result"
+		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_invalid")
 	default:
 		_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "provider_request_failed")
 	}

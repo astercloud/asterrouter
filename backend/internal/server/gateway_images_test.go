@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,9 +22,9 @@ import (
 )
 
 type directImageAdapterStub struct {
-	selectCalls   int
-	dispatchCalls int
-	openCalls     int
+	selectCalls   atomic.Int64
+	dispatchCalls atomic.Int64
+	openCalls     atomic.Int64
 	supported     bool
 	result        controlplane.ProviderDispatchResult
 	dispatchErr   error
@@ -32,7 +33,7 @@ type directImageAdapterStub struct {
 }
 
 func (stub *directImageAdapterStub) SelectDirectAIAdapter(_ context.Context, _ controlplane.GatewayProvider, request gatewaycore.CanonicalRequest, _ string) (string, bool, error) {
-	stub.selectCalls++
+	stub.selectCalls.Add(1)
 	if request.PreviewMode == "required" {
 		return "", false, nil
 	}
@@ -40,12 +41,12 @@ func (stub *directImageAdapterStub) SelectDirectAIAdapter(_ context.Context, _ c
 }
 
 func (stub *directImageAdapterStub) DispatchDirectAI(_ context.Context, _ controlplane.GatewayProvider, _ controlplane.AIOperation, _ controlplane.AIAttempt, _ gatewaycore.CanonicalRequest, _ controlplane.ProviderDispatchCommand) (controlplane.ProviderDispatchResult, error) {
-	stub.dispatchCalls++
+	stub.dispatchCalls.Add(1)
 	return stub.result, stub.dispatchErr
 }
 
 func (stub *directImageAdapterStub) OpenDirectAIOutput(_ context.Context, _ controlplane.GatewayProvider, _ controlplane.AIOperation, _ controlplane.AIAttempt, _ gatewaycore.CanonicalRequest, _ controlplane.ProviderDispatchResult, output controlplane.ProviderOutputDescriptor) (io.ReadCloser, error) {
-	stub.openCalls++
+	stub.openCalls.Add(1)
 	if stub.openErr != nil {
 		return nil, stub.openErr
 	}
@@ -54,6 +55,14 @@ func (stub *directImageAdapterStub) OpenDirectAIOutput(_ context.Context, _ cont
 		return nil, errors.New("synthetic output not found")
 	}
 	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (stub *directImageAdapterStub) selected() int64 {
+	return stub.selectCalls.Load()
+}
+
+func (stub *directImageAdapterStub) dispatched() int64 {
+	return stub.dispatchCalls.Load()
 }
 
 type directImageHTTPFixture struct {
@@ -104,6 +113,7 @@ func newDirectImageHTTPFixture(t *testing.T, adapter *directImageAdapterStub, ro
 	if err != nil {
 		t.Fatal(err)
 	}
+	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	registerGatewayRoutes(router, control, allowDurableAIJobs{}, adapter)
 	candidates, _, err := control.GatewayProviderCandidatesForModel(context.Background(), "public-image")
@@ -168,12 +178,12 @@ func TestGatewayImageBlockingPersistsArtifactAndReplaysIdempotently(t *testing.T
 	}
 
 	replayed := performImageGeneration(fixture.handler, fixture.key, "image-blocking-idem", body)
-	if replayed.Code != http.StatusOK || replayed.Header().Get("Idempotent-Replayed") != "true" || replayed.Body.String() != first.Body.String() || adapter.dispatchCalls != 1 {
-		t.Fatalf("replay status=%d calls=%d headers=%v body=%s", replayed.Code, adapter.dispatchCalls, replayed.Header(), replayed.Body.String())
+	if replayed.Code != http.StatusOK || replayed.Header().Get("Idempotent-Replayed") != "true" || replayed.Body.String() != first.Body.String() || adapter.dispatched() != 1 {
+		t.Fatalf("replay status=%d calls=%d headers=%v body=%s", replayed.Code, adapter.dispatched(), replayed.Header(), replayed.Body.String())
 	}
 	conflict := performImageGeneration(fixture.handler, fixture.key, "image-blocking-idem", strings.Replace(body, "synthetic", "different", 1))
-	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "idempotency_conflict") || adapter.dispatchCalls != 1 {
-		t.Fatalf("conflict status=%d calls=%d body=%s", conflict.Code, adapter.dispatchCalls, conflict.Body.String())
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "idempotency_conflict") || adapter.dispatched() != 1 {
+		t.Fatalf("conflict status=%d calls=%d body=%s", conflict.Code, adapter.dispatched(), conflict.Body.String())
 	}
 }
 
@@ -199,8 +209,8 @@ func TestGatewayImageRequiredPreviewFailsClosedBeforeDispatch(t *testing.T) {
 	adapter := successfulDirectImageAdapter([]byte("unused"))
 	fixture := newDirectImageHTTPFixture(t, adapter, 1, 2, true)
 	response := performImageGeneration(fixture.handler, fixture.key, "image-preview-idem", `{"model":"public-image","prompt":"synthetic","response_mode":"stream","preview_mode":"required","delivery_mode":"artifact"}`)
-	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "unsupported_capability") || adapter.dispatchCalls != 0 {
-		t.Fatalf("status=%d calls=%d body=%s", response.Code, adapter.dispatchCalls, response.Body.String())
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "unsupported_capability") || adapter.dispatched() != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, adapter.dispatched(), response.Body.String())
 	}
 }
 
@@ -216,8 +226,8 @@ func TestGatewayImageCapacityBackpressureDoesNotDispatchOrCreateJob(t *testing.T
 	}
 	defer permit.Release()
 	response := performImageGeneration(fixture.handler, fixture.key, "image-capacity-idem", `{"model":"public-image","prompt":"synthetic","delivery_mode":"artifact"}`)
-	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "" || adapter.dispatchCalls != 0 {
-		t.Fatalf("status=%d calls=%d headers=%v body=%s", response.Code, adapter.dispatchCalls, response.Header(), response.Body.String())
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "" || adapter.dispatched() != 0 {
+		t.Fatalf("status=%d calls=%d headers=%v body=%s", response.Code, adapter.dispatched(), response.Header(), response.Body.String())
 	}
 	jobs, err := fixture.control.ListAIJobsAdmin(context.Background(), controlplane.AIJobQuery{Limit: 10})
 	if err != nil || len(jobs) != 0 {
@@ -230,8 +240,8 @@ func TestGatewayImageAsyncCreatesAndReplaysOneDurableJob(t *testing.T) {
 	fixture := newDirectImageHTTPFixture(t, adapter, 1, 2, true)
 	body := `{"model":"public-image","prompt":"synthetic","response_mode":"async"}`
 	first := performImageGeneration(fixture.handler, fixture.key, "image-async-idem", body)
-	if first.Code != http.StatusAccepted || first.Header().Get("Location") == "" || adapter.selectCalls != 0 || adapter.dispatchCalls != 0 {
-		t.Fatalf("first status=%d select=%d dispatch=%d headers=%v body=%s", first.Code, adapter.selectCalls, adapter.dispatchCalls, first.Header(), first.Body.String())
+	if first.Code != http.StatusAccepted || first.Header().Get("Location") == "" || adapter.selected() != 0 || adapter.dispatched() != 0 {
+		t.Fatalf("first status=%d select=%d dispatch=%d headers=%v body=%s", first.Code, adapter.selected(), adapter.dispatched(), first.Header(), first.Body.String())
 	}
 	var accepted publicAIJobResponse
 	if err := json.Unmarshal(first.Body.Bytes(), &accepted); err != nil || accepted.ID == "" || accepted.Capability.Operation != controlplane.GatewayOperationImageGeneration {
@@ -257,8 +267,8 @@ func TestGatewayImageUnknownSubmissionDoesNotFallbackOrLeakAdapterError(t *testi
 	}
 	fixture := newDirectImageHTTPFixture(t, adapter, 2, 2, true)
 	response := performImageGeneration(fixture.handler, fixture.key, "image-unknown-idem", `{"model":"public-image","prompt":"synthetic","delivery_mode":"artifact"}`)
-	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "provider_status_unknown") || adapter.dispatchCalls != 1 || adapter.selectCalls != 1 {
-		t.Fatalf("status=%d select=%d dispatch=%d body=%s", response.Code, adapter.selectCalls, adapter.dispatchCalls, response.Body.String())
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "provider_status_unknown") || adapter.dispatched() != 1 || adapter.selected() != 1 {
+		t.Fatalf("status=%d select=%d dispatch=%d body=%s", response.Code, adapter.selected(), adapter.dispatched(), response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), leaked) {
 		t.Fatalf("response leaked adapter error: %s", response.Body.String())
@@ -283,8 +293,8 @@ func TestGatewayImageArtifactFailureDoesNotRegenerateOrLeakReaderError(t *testin
 	adapter.openErr = errors.New(leaked)
 	fixture := newDirectImageHTTPFixture(t, adapter, 2, 2, true)
 	response := performImageGeneration(fixture.handler, fixture.key, "image-artifact-error-idem", `{"model":"public-image","prompt":"synthetic","delivery_mode":"artifact"}`)
-	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "artifact_delivery_error") || adapter.dispatchCalls != 1 || adapter.selectCalls != 1 {
-		t.Fatalf("status=%d select=%d dispatch=%d body=%s", response.Code, adapter.selectCalls, adapter.dispatchCalls, response.Body.String())
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "artifact_integrity_failed") || adapter.dispatched() != 1 || adapter.selected() != 1 {
+		t.Fatalf("status=%d select=%d dispatch=%d body=%s", response.Code, adapter.selected(), adapter.dispatched(), response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), leaked) {
 		t.Fatalf("response leaked reader error: %s", response.Body.String())
@@ -293,5 +303,25 @@ func TestGatewayImageArtifactFailureDoesNotRegenerateOrLeakReaderError(t *testin
 	encoded, _ := json.Marshal(traces)
 	if err != nil || bytes.Contains(encoded, []byte(leaked)) {
 		t.Fatalf("traces=%s err=%v", encoded, err)
+	}
+}
+
+func TestGatewayImageAcceptedInvalidResponseDisputesBillingWithoutFallback(t *testing.T) {
+	adapter := &directImageAdapterStub{
+		supported: true,
+		result: controlplane.ProviderDispatchResult{
+			Outcome: controlplane.ProviderDispatchOutcomeAccepted,
+			Task:    controlplane.ProviderTaskReference{ProviderTaskID: "accepted-without-output", Status: "succeeded"},
+		},
+	}
+	fixture := newDirectImageHTTPFixture(t, adapter, 2, 2, true)
+	response := performImageGeneration(fixture.handler, fixture.key, "image-invalid-provider-response", `{"model":"public-image","prompt":"synthetic","delivery_mode":"artifact"}`)
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "provider_response_invalid") || adapter.dispatched() != 1 || adapter.selected() != 1 {
+		t.Fatalf("status=%d select=%d dispatch=%d body=%s", response.Code, adapter.selected(), adapter.dispatched(), response.Body.String())
+	}
+	operationID := response.Header().Get("X-AsterRouter-Operation-ID")
+	hold, found, err := fixture.control.BillingHoldForOperation(context.Background(), operationID)
+	if err != nil || !found || hold.Status != controlplane.BillingHoldStatusDisputed {
+		t.Fatalf("billing hold=%+v found=%t err=%v", hold, found, err)
 	}
 }

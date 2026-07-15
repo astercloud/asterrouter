@@ -183,6 +183,27 @@ func TestBuiltinOpenAIImageAdapterRejectsArtifactPoliciesItCannotMaterialize(t *
 	}
 }
 
+func TestBuiltinOpenAIImageAdapterSelectsDirectFinalOnlyContract(t *testing.T) {
+	service := NewService(NewMemoryRepository())
+	if err := service.EnsureSeedData(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	provider := controlplane.GatewayProvider{Type: "openai_compatible"}
+	request := gatewaycore.CanonicalRequest{
+		Protocol: gatewaycore.ProtocolOpenAIImages, Operation: controlplane.GatewayOperationImageGeneration,
+		Modality: controlplane.GatewayModalityImage, Lane: gatewaycore.LaneDirect, PreviewMode: "preferred",
+	}
+	selected, supported, err := service.SelectDirectAIAdapter(context.Background(), provider, request, controlplane.GatewayArtifactPolicyTemporary)
+	if err != nil || !supported || selected != OpenAICompatibleProviderPluginID {
+		t.Fatalf("selected=%q supported=%t err=%v", selected, supported, err)
+	}
+	request.PreviewMode = "required"
+	selected, supported, err = service.SelectDirectAIAdapter(context.Background(), provider, request, controlplane.GatewayArtifactPolicyTemporary)
+	if err != nil || supported || selected != "" {
+		t.Fatalf("required preview selected=%q supported=%t err=%v", selected, supported, err)
+	}
+}
+
 func boolPointer(value bool) *bool { return &value }
 
 func waitForPluginCondition(t *testing.T, timeout time.Duration, condition func() bool) {
