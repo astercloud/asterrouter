@@ -63,6 +63,12 @@ func writeGatewayError(c *gin.Context, err error) {
 		openAIError(c, http.StatusServiceUnavailable, "artifact_proxy_unavailable", "artifact provider proxy is unavailable")
 	case errors.Is(err, controlplane.ErrArtifactSinkRequired):
 		openAIError(c, http.StatusServiceUnavailable, "artifact_sink_unavailable", "artifact customer sink is unavailable")
+	case errors.Is(err, controlplane.ErrArtifactUploadIncomplete):
+		openAIError(c, http.StatusConflict, "upload_incomplete", "upload session has not received all expected bytes")
+	case errors.Is(err, controlplane.ErrArtifactUploadOffset):
+		openAIError(c, http.StatusConflict, "upload_offset_conflict", "upload session chunks are not contiguous")
+	case errors.Is(err, controlplane.ErrArtifactUploadInvalid):
+		openAIError(c, http.StatusBadRequest, "invalid_upload", "upload session metadata is invalid")
 	case errors.Is(err, gatewaycore.ErrInvalidCanonicalRequest):
 		openAIError(c, http.StatusBadRequest, "invalid_request_error", "invalid gateway request")
 	case errors.Is(err, controlplane.ErrGatewayRouteUnavailable):

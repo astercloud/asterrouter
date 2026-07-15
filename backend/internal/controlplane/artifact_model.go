@@ -93,20 +93,20 @@ type ArtifactEvent struct {
 }
 
 type ArtifactQuery struct {
-	Owner        *ArtifactOwner
-	ProfileScope string
-	TenantID     string
-	Search       string
-	OperationID  string
-	JobID        string
-	AttemptID    string
+	Owner            *ArtifactOwner
+	ProfileScope     string
+	TenantID         string
+	Search           string
+	OperationID      string
+	JobID            string
+	AttemptID        string
 	SourceArtifactID string
-	Role         string
-	Policy       string
-	Status       string
-	RetainBefore *time.Time
-	Limit        int
-	Offset       int
+	Role             string
+	Policy           string
+	Status           string
+	RetainBefore     *time.Time
+	Limit            int
+	Offset           int
 }
 
 type ArtifactContentUpdate struct {
@@ -141,6 +141,7 @@ type ArtifactCreateInput struct {
 	ExpectedSHA256    string
 	MaxBytes          int64
 	RetainUntil       time.Time
+	Pending           bool
 }
 
 type ArtifactOwner = AIJobOwner

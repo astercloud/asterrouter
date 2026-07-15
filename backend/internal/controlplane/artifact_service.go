@@ -110,6 +110,56 @@ func (s *Service) CreateArtifactFromReader(ctx context.Context, input ArtifactCr
 	return s.storeArtifactContent(ctx, artifact, input, body)
 }
 
+// CreatePendingArtifact creates an input upload session without allocating a
+// content object. The caller stores the upload contract in ExternalReference;
+// the artifact remains owner-scoped and auditable from the first byte.
+func (s *Service) CreatePendingArtifact(ctx context.Context, input ArtifactCreateInput) (Artifact, error) {
+	input.Pending = true
+	operation, found, err := s.repo.FindAIOperation(ctx, strings.TrimSpace(input.OperationID))
+	if err != nil {
+		return Artifact{}, err
+	}
+	if !found {
+		return Artifact{}, ErrArtifactNotFound
+	}
+	policy, err := s.resolveArtifactPolicyAndReferences(ctx, operation, input)
+	if err != nil {
+		return Artifact{}, err
+	}
+	input.Policy = policy
+	if err := validateArtifactCreateInput(input, nil, s.nowUTC()); err != nil {
+		return Artifact{}, err
+	}
+	now := s.nowUTC()
+	retainUntil := input.RetainUntil.UTC()
+	if input.RetainUntil.IsZero() {
+		retainUntil = now.Add(ArtifactDefaultTTL)
+	}
+	artifactID := strings.TrimSpace(input.ID)
+	if artifactID == "" {
+		artifactID = "artifact_" + randomID(12)
+	}
+	if !validArtifactID(artifactID) {
+		return Artifact{}, errors.New("invalid artifact id")
+	}
+	artifact := Artifact{
+		ID: artifactID, OperationID: operation.ID, JobID: strings.TrimSpace(input.JobID), AttemptID: strings.TrimSpace(input.AttemptID),
+		SourceArtifactID: strings.TrimSpace(input.SourceArtifactID), Role: strings.TrimSpace(input.Role), Policy: policy,
+		Status: ArtifactStatusPending, StatusVersion: 1, MediaType: strings.TrimSpace(input.MediaType), StoreDriver: ArtifactStoreDriverNone,
+		ExternalReference: strings.TrimSpace(input.ExternalReference), RetainUntil: retainUntil, CreatedAt: now, UpdatedAt: now,
+		ProfileScope: operation.ProfileScope, TenantID: operation.TenantID, IntegrationID: operation.IntegrationID,
+		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, ExternalSubjectReference: operation.ExternalSubjectReference,
+	}
+	event, outbox, err := newArtifactEventRecords(artifact, "", "", now)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if err := s.repo.CreateArtifact(ctx, artifact, event, outbox); err != nil {
+		return Artifact{}, err
+	}
+	return artifact, nil
+}
+
 // ValidateInputArtifactsForAuth verifies artifact references embedded in a
 // canonical request before any Operation, Job, billing hold or provider
 // dispatch is created. The provider never becomes an authorization oracle.
@@ -218,6 +268,12 @@ func validateArtifactCreateInput(input ArtifactCreateInput, body io.Reader, now 
 	}
 	driver := strings.TrimSpace(input.StoreDriver)
 	if body == nil {
+		if input.Pending {
+			if input.Role != ArtifactRoleInput || driver != ArtifactStoreDriverNone {
+				return errors.New("pending upload must be an input artifact without a content store")
+			}
+			return nil
+		}
 		if driver != "" && driver != ArtifactStoreDriverNone {
 			return errors.New("metadata artifact cannot select a content store")
 		}
