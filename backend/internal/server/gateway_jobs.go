@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -20,6 +21,7 @@ type publicAIJobResponse struct {
 	StatusVersion  int                   `json:"status_version"`
 	Capability     publicAIJobCapability `json:"capability"`
 	ArtifactPolicy string                `json:"artifact_policy"`
+	ArtifactSinkID string                `json:"artifact_sink_id,omitempty"`
 	ErrorType      string                `json:"error_type,omitempty"`
 	CreatedAt      time.Time             `json:"created_at"`
 	UpdatedAt      time.Time             `json:"updated_at"`
@@ -34,7 +36,11 @@ type publicAIJobCapability struct {
 	Model     string `json:"model"`
 }
 
-func registerGatewayJobRoutes(r *gin.Engine, control *controlplane.Service) {
+type DurableAIJobAdmission interface {
+	SupportsDurableAIJob(context.Context, gatewaycore.CanonicalAuthContext, gatewaycore.CanonicalRequest) (bool, error)
+}
+
+func registerGatewayJobRoutes(r *gin.Engine, control *controlplane.Service, durableJobs DurableAIJobAdmission) {
 	registerGatewayJobEventRoute(r, control)
 	registerGatewayArtifactRoutes(r, control)
 
@@ -64,6 +70,19 @@ func registerGatewayJobRoutes(r *gin.Engine, control *controlplane.Service) {
 		}
 		if err := control.EnforceGatewayPolicy(c.Request.Context(), auth); err != nil {
 			writeGatewayError(c, err)
+			return
+		}
+		if durableJobs == nil {
+			openAIError(c, http.StatusServiceUnavailable, "unsupported_capability", "no executable provider adapter is available for this durable job")
+			return
+		}
+		supported, err := durableJobs.SupportsDurableAIJob(c.Request.Context(), canonicalAuth, request)
+		if err != nil {
+			openAIError(c, http.StatusServiceUnavailable, "service_unavailable", "durable job runtime capability check failed")
+			return
+		}
+		if !supported {
+			openAIError(c, http.StatusServiceUnavailable, "unsupported_capability", "no executable provider adapter is available for this durable job")
 			return
 		}
 		job, created, err := control.BeginDurableAIJob(c.Request.Context(), canonicalAuth, request)
@@ -163,7 +182,7 @@ func newPublicAIJobResponse(job controlplane.AIJob) publicAIJobResponse {
 	return publicAIJobResponse{
 		ID: job.ID, Object: "ai_job", OperationID: job.OperationID, Status: job.Status, StatusVersion: job.StatusVersion,
 		Capability:     publicAIJobCapability{Modality: job.Modality, Operation: job.Operation, Model: job.Model},
-		ArtifactPolicy: job.ArtifactPolicy, ErrorType: job.ErrorType, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
+		ArtifactPolicy: job.ArtifactPolicy, ArtifactSinkID: job.ArtifactSinkID, ErrorType: job.ErrorType, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 		CompletedAt: job.CompletedAt, ExpiresAt: job.ExpiresAt,
 		Links: map[string]string{"self": "/v1/jobs/" + job.ID, "events": "/v1/jobs/" + job.ID + "/events", "artifacts": "/v1/jobs/" + job.ID + "/artifacts"},
 	}

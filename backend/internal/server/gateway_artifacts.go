@@ -17,27 +17,28 @@ import (
 var errArtifactRangeInvalid = errors.New("invalid artifact byte range")
 
 type publicArtifactResponse struct {
-	ID               string            `json:"id"`
-	Object           string            `json:"object"`
-	OperationID      string            `json:"operation_id"`
-	JobID            string            `json:"job_id,omitempty"`
-	AttemptID        string            `json:"attempt_id,omitempty"`
-	SourceArtifactID string            `json:"source_artifact_id,omitempty"`
-	Role             string            `json:"role"`
-	Policy           string            `json:"policy"`
-	Status           string            `json:"status"`
-	StatusVersion    int               `json:"status_version"`
-	MediaType        string            `json:"media_type,omitempty"`
-	SizeBytes        int64             `json:"size_bytes"`
-	SHA256           string            `json:"sha256,omitempty"`
-	ErrorType        string            `json:"error_type,omitempty"`
-	RetainUntil      time.Time         `json:"retain_until"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
-	ReadyAt          *time.Time        `json:"ready_at,omitempty"`
-	DeliveredAt      *time.Time        `json:"delivered_at,omitempty"`
-	DeletedAt        *time.Time        `json:"deleted_at,omitempty"`
-	Links            map[string]string `json:"links"`
+	ID                string            `json:"id"`
+	Object            string            `json:"object"`
+	OperationID       string            `json:"operation_id"`
+	JobID             string            `json:"job_id,omitempty"`
+	AttemptID         string            `json:"attempt_id,omitempty"`
+	SourceArtifactID  string            `json:"source_artifact_id,omitempty"`
+	Role              string            `json:"role"`
+	Policy            string            `json:"policy"`
+	Status            string            `json:"status"`
+	StatusVersion     int               `json:"status_version"`
+	MediaType         string            `json:"media_type,omitempty"`
+	SizeBytes         int64             `json:"size_bytes"`
+	SHA256            string            `json:"sha256,omitempty"`
+	ExternalReference string            `json:"external_reference,omitempty"`
+	ErrorType         string            `json:"error_type,omitempty"`
+	RetainUntil       time.Time         `json:"retain_until"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+	ReadyAt           *time.Time        `json:"ready_at,omitempty"`
+	DeliveredAt       *time.Time        `json:"delivered_at,omitempty"`
+	DeletedAt         *time.Time        `json:"deleted_at,omitempty"`
+	Links             map[string]string `json:"links"`
 }
 
 func registerGatewayArtifactRoutes(r *gin.Engine, control *controlplane.Service) {
@@ -140,15 +141,22 @@ func artifactNotFound(c *gin.Context) {
 
 func newPublicArtifactResponse(artifact controlplane.Artifact) publicArtifactResponse {
 	links := map[string]string{"self": "/v1/artifacts/" + artifact.ID}
+	externalReference := ""
 	if artifact.StoreDriver != controlplane.ArtifactStoreDriverNone && artifact.StoreKey != "" &&
 		(artifact.Status == controlplane.ArtifactStatusReady || artifact.Status == controlplane.ArtifactStatusDelivered) {
 		links["content"] = "/v1/artifacts/" + artifact.ID + "/content"
+	}
+	if artifact.Policy == controlplane.GatewayArtifactPolicyProxyOnly && artifact.Status == controlplane.ArtifactStatusReady {
+		links["content"] = "/v1/artifacts/" + artifact.ID + "/content"
+	}
+	if artifact.Policy == controlplane.GatewayArtifactPolicyCustomerSink && artifact.Status == controlplane.ArtifactStatusDelivered {
+		externalReference = artifact.ExternalReference
 	}
 	return publicArtifactResponse{
 		ID: artifact.ID, Object: "artifact", OperationID: artifact.OperationID, JobID: artifact.JobID,
 		AttemptID: artifact.AttemptID, SourceArtifactID: artifact.SourceArtifactID, Role: artifact.Role, Policy: artifact.Policy,
 		Status: artifact.Status, StatusVersion: artifact.StatusVersion, MediaType: artifact.MediaType, SizeBytes: artifact.SizeBytes,
-		SHA256: artifact.SHA256, ErrorType: artifact.ErrorType, RetainUntil: artifact.RetainUntil, CreatedAt: artifact.CreatedAt,
+		SHA256: artifact.SHA256, ExternalReference: externalReference, ErrorType: artifact.ErrorType, RetainUntil: artifact.RetainUntil, CreatedAt: artifact.CreatedAt,
 		UpdatedAt: artifact.UpdatedAt, ReadyAt: artifact.ReadyAt, DeliveredAt: artifact.DeliveredAt, DeletedAt: artifact.DeletedAt,
 		Links: links,
 	}

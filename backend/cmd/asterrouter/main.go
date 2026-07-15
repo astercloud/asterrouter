@@ -21,6 +21,7 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/server"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
 	"github.com/astercloud/asterrouter/backend/internal/system"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -145,6 +146,11 @@ func main() {
 	}); err != nil {
 		log.Fatalf("configure durable ai job admission: %v", err)
 	}
+	deliveryQueue, closeAIJobInfrastructure, err := configureAIJobInfrastructure(context.Background(), cfg, controlService)
+	if err != nil {
+		log.Fatalf("initialize durable ai job infrastructure: %v", err)
+	}
+	defer closeAIJobInfrastructure()
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatalf("seed control plane repository: %v", err)
 	}
@@ -224,10 +230,11 @@ func main() {
 			Fingerprint:     cfg.InstanceFingerprint,
 			DisplayName:     cfg.InstanceDisplayName,
 		},
-		PackageCacheDir: cfg.PluginCacheDir,
-		PluginActiveDir: cfg.PluginActiveDir,
-		PluginHostURL:   cfg.PluginHostURL,
-		CoreVersion:     cfg.Version,
+		PackageCacheDir:      cfg.PluginCacheDir,
+		PluginActiveDir:      cfg.PluginActiveDir,
+		PluginHostURL:        cfg.PluginHostURL,
+		CoreVersion:          cfg.Version,
+		ArtifactSinkRegistry: controlService,
 	})
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatalf("seed plugin repository: %v", err)
@@ -235,6 +242,19 @@ func main() {
 	if err := pluginService.StartEnabledSidecars(context.Background()); err != nil {
 		log.Fatalf("start enabled plugin sidecars: %v", err)
 	}
+	if err := pluginService.StartEnabledArtifactSinks(context.Background()); err != nil {
+		log.Fatalf("start enabled artifact sink plugins: %v", err)
+	}
+	durableJobRuntime, err := controlplane.NewDurableAIJobRuntime(controlService, deliveryQueue, pluginService, controlplane.DurableAIJobRuntimeConfig{})
+	if err != nil {
+		log.Fatalf("initialize durable ai job runtime: %v", err)
+	}
+	durableJobRuntimeDone := make(chan error, 1)
+	go func() {
+		durableJobRuntimeDone <- durableJobRuntime.Run(monitorCtx, func(component string, err error) {
+			log.Printf("durable ai job runtime: %s: %v", component, err)
+		})
+	}()
 	officialCatalogURL := ""
 	officialCatalogKeyID := ""
 	officialCatalogPublicKey := ""
@@ -279,6 +299,8 @@ func main() {
 		PluginService:      pluginService,
 		SystemService:      systemService,
 		ExportJobStore:     exportJobStore,
+		DurableAIJobs:      durableJobRuntime,
+		AIJobRuntime:       durableJobRuntime,
 	})
 
 	httpServer := &http.Server{
@@ -304,7 +326,92 @@ func main() {
 	if err := httpServer.Shutdown(ctx); err != nil {
 		log.Printf("server shutdown failed: %v", err)
 	}
+	select {
+	case err := <-durableJobRuntimeDone:
+		if err != nil {
+			log.Printf("durable ai job runtime shutdown failed: %v", err)
+		}
+	case <-ctx.Done():
+		log.Printf("durable ai job runtime shutdown timed out: %v", ctx.Err())
+	}
 	if err := pluginService.Shutdown(context.Background()); err != nil {
 		log.Printf("plugin shutdown failed: %v", err)
 	}
+}
+
+func configureAIJobInfrastructure(ctx context.Context, cfg config.Config, service *controlplane.Service) (controlplane.AIJobDeliveryQueue, func(), error) {
+	queueDriver := strings.TrimSpace(cfg.AIJobQueueDriver)
+	if queueDriver == "" {
+		queueDriver = "memory"
+	}
+	affinityDriver := strings.TrimSpace(cfg.RoutingAffinityDriver)
+	if affinityDriver == "" {
+		affinityDriver = "repository"
+	}
+	if queueDriver != "memory" && queueDriver != "redis" {
+		return nil, func() {}, fmt.Errorf("unsupported durable ai job queue driver %q", queueDriver)
+	}
+	if affinityDriver != "repository" && affinityDriver != "redis" {
+		return nil, func() {}, fmt.Errorf("unsupported routing affinity driver %q", affinityDriver)
+	}
+	if queueDriver != "redis" && affinityDriver != "redis" {
+		queue, err := controlplane.NewMemoryAIJobDeliveryQueue(30 * time.Second)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		service.SetAIJobReadyIndex(controlplane.NewMemoryAIJobReadyIndex())
+		return queue, func() {}, nil
+	}
+	options, err := redis.ParseURL(strings.TrimSpace(cfg.RedisURL))
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("parse Redis URL: %w", err)
+	}
+	client := redis.NewClient(options)
+	closeClient := func() { _ = client.Close() }
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := client.Ping(pingCtx).Err(); err != nil {
+		closeClient()
+		return nil, func() {}, fmt.Errorf("connect to Redis: %w", err)
+	}
+	namespace := strings.TrimSpace(cfg.RedisNamespace)
+	if namespace == "" {
+		namespace = "asterrouter"
+	}
+	var queue controlplane.AIJobDeliveryQueue
+	if queueDriver == "redis" {
+		queue, err = controlplane.NewRedisAIJobDeliveryQueue(client, controlplane.RedisAIJobDeliveryQueueConfig{Namespace: namespace})
+		if err != nil {
+			closeClient()
+			return nil, func() {}, err
+		}
+		readyIndex, readyErr := controlplane.NewRedisAIJobReadyIndex(client, controlplane.RedisAIJobReadyIndexConfig{Namespace: namespace})
+		if readyErr != nil {
+			closeClient()
+			return nil, func() {}, readyErr
+		}
+		capacityStore, capacityErr := controlplane.NewRedisProviderCapacityStore(client, controlplane.RedisProviderCapacityStoreConfig{Namespace: namespace})
+		if capacityErr != nil {
+			closeClient()
+			return nil, func() {}, capacityErr
+		}
+		service.SetAIJobReadyIndex(readyIndex)
+		service.SetProviderCapacityStore(capacityStore)
+	} else {
+		queue, err = controlplane.NewMemoryAIJobDeliveryQueue(30 * time.Second)
+		if err != nil {
+			closeClient()
+			return nil, func() {}, err
+		}
+		service.SetAIJobReadyIndex(controlplane.NewMemoryAIJobReadyIndex())
+	}
+	if affinityDriver == "redis" {
+		coordinator, coordinatorErr := controlplane.NewRedisRoutingAffinityCoordinator(client, controlplane.RedisRoutingAffinityCoordinatorConfig{Namespace: namespace})
+		if coordinatorErr != nil {
+			closeClient()
+			return nil, func() {}, coordinatorErr
+		}
+		service.SetRoutingAffinityCoordinator(coordinator)
+	}
+	return queue, closeClient, nil
 }

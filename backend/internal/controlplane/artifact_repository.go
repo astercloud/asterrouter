@@ -129,6 +129,23 @@ func (r *MemoryRepository) QueryArtifacts(_ context.Context, query ArtifactQuery
 	return paginateArtifacts(out, query.Limit, query.Offset), nil
 }
 
+func (r *MemoryRepository) SummarizeArtifacts(_ context.Context, query ArtifactQuery) (ArtifactSummary, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	summary := newArtifactSummary()
+	query.Limit = 0
+	query.Offset = 0
+	for _, artifact := range r.artifacts {
+		if !artifactMatchesQuery(artifact, query) {
+			continue
+		}
+		summary.Total++
+		summary.SizeBytes += artifact.SizeBytes
+		summary.ByStatus[artifact.Status]++
+	}
+	return summary, nil
+}
+
 func (r *PostgresRepository) QueryArtifacts(ctx context.Context, query ArtifactQuery) ([]Artifact, error) {
 	limit := artifactQueryLimit(query.Limit)
 	owner := ArtifactOwner{}
@@ -137,13 +154,18 @@ func (r *PostgresRepository) QueryArtifacts(ctx context.Context, query ArtifactQ
 		owner = *query.Owner
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT `+artifactSelectColumns+` FROM artifacts
-WHERE (NOT $1 OR (profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7))
-  AND ($8='' OR operation_id=$8) AND ($9='' OR job_id=$9) AND ($10='' OR status=$10)
-  AND ($11::timestamptz IS NULL OR retain_until <= $11)
-ORDER BY created_at DESC, id DESC LIMIT $12 OFFSET $13`,
+	WHERE (NOT $1 OR (profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7))
+	  AND ($8='' OR profile_scope=$8) AND ($9='' OR tenant_id=$9)
+	  AND ($10='' OR id ILIKE '%'||$10||'%' OR operation_id ILIKE '%'||$10||'%' OR COALESCE(job_id,'') ILIKE '%'||$10||'%' OR COALESCE(attempt_id,'') ILIKE '%'||$10||'%')
+	  AND ($11='' OR operation_id=$11) AND ($12='' OR job_id=$12) AND ($13='' OR attempt_id=$13)
+	  AND ($14='' OR role=$14) AND ($15='' OR policy=$15) AND ($16='' OR status=$16)
+	  AND ($17::timestamptz IS NULL OR retain_until <= $17)
+	ORDER BY created_at DESC, id DESC LIMIT $18 OFFSET $19`,
 		ownerScoped, strings.TrimSpace(owner.ProfileScope), strings.TrimSpace(owner.TenantID), strings.TrimSpace(owner.IntegrationID),
 		strings.TrimSpace(owner.PrincipalType), strings.TrimSpace(owner.PrincipalID), strings.TrimSpace(owner.ExternalSubjectReference),
-		strings.TrimSpace(query.OperationID), strings.TrimSpace(query.JobID), strings.TrimSpace(query.Status), query.RetainBefore, limit, nonNegative(query.Offset))
+		strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID), strings.TrimSpace(query.Search), strings.TrimSpace(query.OperationID),
+		strings.TrimSpace(query.JobID), strings.TrimSpace(query.AttemptID), strings.TrimSpace(query.Role), strings.TrimSpace(query.Policy),
+		strings.TrimSpace(query.Status), query.RetainBefore, limit, nonNegative(query.Offset))
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +179,42 @@ ORDER BY created_at DESC, id DESC LIMIT $12 OFFSET $13`,
 		out = append(out, artifact)
 	}
 	return out, rows.Err()
+}
+
+func (r *PostgresRepository) SummarizeArtifacts(ctx context.Context, query ArtifactQuery) (ArtifactSummary, error) {
+	owner := ArtifactOwner{}
+	ownerScoped := query.Owner != nil
+	if query.Owner != nil {
+		owner = *query.Owner
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*), COALESCE(SUM(size_bytes),0) FROM artifacts
+	WHERE (NOT $1 OR (profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7))
+	  AND ($8='' OR profile_scope=$8) AND ($9='' OR tenant_id=$9)
+	  AND ($10='' OR id ILIKE '%'||$10||'%' OR operation_id ILIKE '%'||$10||'%' OR COALESCE(job_id,'') ILIKE '%'||$10||'%' OR COALESCE(attempt_id,'') ILIKE '%'||$10||'%')
+	  AND ($11='' OR operation_id=$11) AND ($12='' OR job_id=$12) AND ($13='' OR attempt_id=$13)
+	  AND ($14='' OR role=$14) AND ($15='' OR policy=$15) AND ($16='' OR status=$16)
+	  AND ($17::timestamptz IS NULL OR retain_until <= $17)
+	GROUP BY status`, ownerScoped, strings.TrimSpace(owner.ProfileScope), strings.TrimSpace(owner.TenantID), strings.TrimSpace(owner.IntegrationID),
+		strings.TrimSpace(owner.PrincipalType), strings.TrimSpace(owner.PrincipalID), strings.TrimSpace(owner.ExternalSubjectReference),
+		strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID), strings.TrimSpace(query.Search), strings.TrimSpace(query.OperationID),
+		strings.TrimSpace(query.JobID), strings.TrimSpace(query.AttemptID), strings.TrimSpace(query.Role), strings.TrimSpace(query.Policy),
+		strings.TrimSpace(query.Status), query.RetainBefore)
+	if err != nil {
+		return ArtifactSummary{}, err
+	}
+	defer rows.Close()
+	summary := newArtifactSummary()
+	for rows.Next() {
+		var status string
+		var count, sizeBytes int64
+		if err := rows.Scan(&status, &count, &sizeBytes); err != nil {
+			return ArtifactSummary{}, err
+		}
+		summary.Total += count
+		summary.SizeBytes += sizeBytes
+		summary.ByStatus[status] = count
+	}
+	return summary, rows.Err()
 }
 
 func (r *MemoryRepository) TransitionArtifact(_ context.Context, input ArtifactTransitionInput, transitionedAt time.Time) (Artifact, bool, error) {
@@ -291,11 +349,27 @@ func artifactMatchesQuery(artifact Artifact, query ArtifactQuery) bool {
 	if query.Owner != nil && !artifactOwnerMatches(artifact, *query.Owner) {
 		return false
 	}
+	if strings.TrimSpace(query.ProfileScope) != "" && artifact.ProfileScope != strings.TrimSpace(query.ProfileScope) {
+		return false
+	}
+	if strings.TrimSpace(query.TenantID) != "" && artifact.TenantID != strings.TrimSpace(query.TenantID) {
+		return false
+	}
+	if search := strings.ToLower(strings.TrimSpace(query.Search)); search != "" &&
+		!strings.Contains(strings.ToLower(artifact.ID), search) &&
+		!strings.Contains(strings.ToLower(artifact.OperationID), search) &&
+		!strings.Contains(strings.ToLower(artifact.JobID), search) &&
+		!strings.Contains(strings.ToLower(artifact.AttemptID), search) {
+		return false
+	}
 	if query.RetainBefore != nil && artifact.RetainUntil.After(*query.RetainBefore) {
 		return false
 	}
 	return (strings.TrimSpace(query.OperationID) == "" || artifact.OperationID == strings.TrimSpace(query.OperationID)) &&
 		(strings.TrimSpace(query.JobID) == "" || artifact.JobID == strings.TrimSpace(query.JobID)) &&
+		(strings.TrimSpace(query.AttemptID) == "" || artifact.AttemptID == strings.TrimSpace(query.AttemptID)) &&
+		(strings.TrimSpace(query.Role) == "" || artifact.Role == strings.TrimSpace(query.Role)) &&
+		(strings.TrimSpace(query.Policy) == "" || artifact.Policy == strings.TrimSpace(query.Policy)) &&
 		(strings.TrimSpace(query.Status) == "" || artifact.Status == strings.TrimSpace(query.Status))
 }
 
@@ -339,12 +413,12 @@ func sortArtifactEvents(events []ArtifactEvent) {
 
 func validateMemoryArtifactReferences(r *MemoryRepository, artifact Artifact) error {
 	operation, found := r.aiOperations[artifact.OperationID]
-	if !found || !artifactOwnerMatches(artifact, artifactOwnerFromOperation(operation)) {
+	if !found || !artifactOwnerMatches(artifact, artifactOwnerFromOperation(operation)) || artifact.Policy != artifactPolicySnapshot(operation.ArtifactPolicy) {
 		return errors.New("artifact operation ownership does not match")
 	}
 	if artifact.JobID != "" {
 		job, found := r.aiJobs[artifact.JobID]
-		if !found || job.OperationID != artifact.OperationID || !aiJobOwnerMatches(job, artifactOwnerFromOperation(operation)) {
+		if !found || job.OperationID != artifact.OperationID || !aiJobOwnerMatches(job, artifactOwnerFromOperation(operation)) || job.ArtifactPolicy != artifact.Policy {
 			return errors.New("artifact job reference does not match")
 		}
 	}
@@ -365,12 +439,12 @@ func validateMemoryArtifactReferences(r *MemoryRepository, artifact Artifact) er
 
 func validatePostgresArtifactReferences(ctx context.Context, tx *sql.Tx, artifact Artifact) error {
 	operation, err := scanAIOperation(tx.QueryRowContext(ctx, `SELECT `+aiOperationSelectColumns+` FROM ai_operations WHERE id=$1`, artifact.OperationID))
-	if err != nil || !artifactOwnerMatches(artifact, artifactOwnerFromOperation(operation)) {
+	if err != nil || !artifactOwnerMatches(artifact, artifactOwnerFromOperation(operation)) || artifact.Policy != artifactPolicySnapshot(operation.ArtifactPolicy) {
 		return errors.New("artifact operation ownership does not match")
 	}
 	if artifact.JobID != "" {
 		job, err := scanAIJob(tx.QueryRowContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs WHERE id=$1`, artifact.JobID))
-		if err != nil || job.OperationID != artifact.OperationID || !aiJobOwnerMatches(job, artifactOwnerFromOperation(operation)) {
+		if err != nil || job.OperationID != artifact.OperationID || !aiJobOwnerMatches(job, artifactOwnerFromOperation(operation)) || job.ArtifactPolicy != artifact.Policy {
 			return errors.New("artifact job reference does not match")
 		}
 	}
@@ -391,8 +465,12 @@ func validatePostgresArtifactReferences(ctx context.Context, tx *sql.Tx, artifac
 
 func prepareArtifactRepositoryTransition(artifact Artifact, input ArtifactTransitionInput, transitionedAt time.Time) (Artifact, ArtifactEvent, TransactionalOutboxEvent, error) {
 	if input.Content != nil {
-		if !oneOf(strings.TrimSpace(input.ToStatus), ArtifactStatusUploading, ArtifactStatusReady, ArtifactStatusFailed) {
-			return Artifact{}, ArtifactEvent{}, TransactionalOutboxEvent{}, errors.New("artifact content can only change during upload")
+		toStatus := strings.TrimSpace(input.ToStatus)
+		uploadUpdate := oneOf(artifact.Status, ArtifactStatusPending, ArtifactStatusUploading, ArtifactStatusFailed) &&
+			oneOf(toStatus, ArtifactStatusUploading, ArtifactStatusReady, ArtifactStatusFailed)
+		deliveryUpdate := artifact.Status == ArtifactStatusDelivering && oneOf(toStatus, ArtifactStatusDelivered, ArtifactStatusDeliveryFailed)
+		if !uploadUpdate && !deliveryUpdate {
+			return Artifact{}, ArtifactEvent{}, TransactionalOutboxEvent{}, errors.New("artifact content can only change during upload or delivery completion")
 		}
 		if err := applyArtifactContentUpdate(&artifact, *input.Content); err != nil {
 			return Artifact{}, ArtifactEvent{}, TransactionalOutboxEvent{}, err

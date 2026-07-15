@@ -88,21 +88,21 @@ func (s *Service) PreferGatewayCandidatesWithAffinity(ctx context.Context, input
 	supplierTTL, accountTTL := s.gatewayAffinityTTLs(ctx)
 	if strings.TrimSpace(input.StickyKey) != "" {
 		key := s.gatewayAffinityScopeKey(AffinityBindingAccount, input)
-		if binding, found, err := s.repo.FindRoutingAffinityBinding(ctx, key, now); err == nil && found {
+		if binding, found, err := s.findRoutingAffinityBinding(ctx, key, now); err == nil && found {
 			if preferred, ok := preferBoundGatewayCandidate(candidates, binding, true, "session account affinity reused"); ok {
 				binding.LastReusedAt = now
 				binding.ExpiresAt = now.Add(accountTTL)
-				_ = s.repo.SaveRoutingAffinityBinding(ctx, binding)
+				_ = s.refreshRoutingAffinityBinding(ctx, binding, accountTTL)
 				return preferred
 			}
 		}
 	}
 	key := s.gatewayAffinityScopeKey(AffinityBindingSupplier, input)
-	if binding, found, err := s.repo.FindRoutingAffinityBinding(ctx, key, now); err == nil && found {
+	if binding, found, err := s.findRoutingAffinityBinding(ctx, key, now); err == nil && found {
 		if preferred, ok := preferBoundGatewayCandidate(candidates, binding, false, "customer supplier affinity reused"); ok {
 			binding.LastReusedAt = now
 			binding.ExpiresAt = now.Add(supplierTTL)
-			_ = s.repo.SaveRoutingAffinityBinding(ctx, binding)
+			_ = s.refreshRoutingAffinityBinding(ctx, binding, supplierTTL)
 			return preferred
 		}
 	}
@@ -120,8 +120,12 @@ func (s *Service) BindGatewayCandidateAffinity(ctx context.Context, input Gatewa
 		ProviderID: provider.ID, Model: strings.TrimSpace(input.Model), Protocol: strings.TrimSpace(input.Protocol),
 		PolicyVersion: input.PolicyVersion, CreatedAt: now, LastReusedAt: now, ExpiresAt: now.Add(supplierTTL),
 	}
-	if err := s.repo.SaveRoutingAffinityBinding(ctx, supplierBinding); err != nil {
+	supplierWinner, err := s.claimRoutingAffinityBinding(ctx, supplierBinding, supplierTTL)
+	if err != nil {
 		return err
+	}
+	if supplierWinner.ProviderID != provider.ID {
+		return nil
 	}
 	if strings.TrimSpace(input.StickyKey) == "" || !provider.StickyEnabled || strings.TrimSpace(provider.AccountID) == "" || strings.TrimSpace(provider.RouteID) == "" {
 		return nil
@@ -135,7 +139,47 @@ func (s *Service) BindGatewayCandidateAffinity(ctx context.Context, input Gatewa
 		Model: strings.TrimSpace(input.Model), Protocol: strings.TrimSpace(input.Protocol), PolicyVersion: input.PolicyVersion,
 		CreatedAt: now, LastReusedAt: now, ExpiresAt: now.Add(accountTTL),
 	}
-	return s.repo.SaveRoutingAffinityBinding(ctx, accountBinding)
+	_, err = s.claimRoutingAffinityBinding(ctx, accountBinding, accountTTL)
+	return err
+}
+
+func (s *Service) findRoutingAffinityBinding(ctx context.Context, scopeKey string, now time.Time) (RoutingAffinityBinding, bool, error) {
+	if coordinator := s.routingAffinityCoordinatorValue(); coordinator != nil {
+		binding, found, err := coordinator.Find(ctx, scopeKey)
+		if err == nil && found && binding.ExpiresAt.After(now) {
+			return binding, true, nil
+		}
+	}
+	return s.repo.FindRoutingAffinityBinding(ctx, scopeKey, now)
+}
+
+func (s *Service) claimRoutingAffinityBinding(ctx context.Context, binding RoutingAffinityBinding, ttl time.Duration) (RoutingAffinityBinding, error) {
+	if coordinator := s.routingAffinityCoordinatorValue(); coordinator != nil {
+		winner, _, err := coordinator.Claim(ctx, binding, ttl)
+		if err == nil {
+			if saveErr := s.repo.SaveRoutingAffinityBinding(ctx, winner); saveErr != nil {
+				return RoutingAffinityBinding{}, saveErr
+			}
+			return winner, nil
+		}
+	}
+	if err := s.repo.SaveRoutingAffinityBinding(ctx, binding); err != nil {
+		return RoutingAffinityBinding{}, err
+	}
+	return binding, nil
+}
+
+func (s *Service) refreshRoutingAffinityBinding(ctx context.Context, binding RoutingAffinityBinding, ttl time.Duration) error {
+	if coordinator := s.routingAffinityCoordinatorValue(); coordinator != nil {
+		refreshed, err := coordinator.Refresh(ctx, binding, ttl)
+		if err == nil {
+			if !refreshed {
+				return nil
+			}
+			return s.repo.SaveRoutingAffinityBinding(ctx, binding)
+		}
+	}
+	return s.repo.SaveRoutingAffinityBinding(ctx, binding)
 }
 
 func preferBoundGatewayCandidate(candidates []GatewayProvider, binding RoutingAffinityBinding, requireAccount bool, reason string) ([]GatewayProvider, bool) {

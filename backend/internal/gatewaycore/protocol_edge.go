@@ -136,6 +136,106 @@ func CanonicalizeOpenAIModels(header http.Header) (CanonicalRequest, error) {
 	}, nil
 }
 
+func CanonicalizeOpenAIImageGeneration(raw []byte, header http.Header) (CanonicalRequest, error) {
+	var payload map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload == nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	model, _ := payload["model"].(string)
+	prompt, _ := payload["prompt"].(string)
+	model = strings.TrimSpace(model)
+	prompt = strings.TrimSpace(prompt)
+	if model == "" || prompt == "" {
+		return CanonicalRequest{}, fmt.Errorf("%w: model and prompt are required", ErrInvalidCanonicalRequest)
+	}
+	outputCount := 1
+	if value, exists := payload["n"]; exists {
+		number, ok := value.(float64)
+		if !ok || number != float64(int(number)) || number < 1 || number > 10 {
+			return CanonicalRequest{}, fmt.Errorf("%w: n must be an integer from 1 to 10", ErrInvalidCanonicalRequest)
+		}
+		outputCount = int(number)
+	}
+	responseMode := strings.ToLower(strings.TrimSpace(stringValue(payload["response_mode"])))
+	stream, _ := payload["stream"].(bool)
+	if responseMode == "" {
+		if stream {
+			responseMode = "stream"
+		} else {
+			responseMode = "blocking"
+		}
+	}
+	if responseMode != "blocking" && responseMode != "stream" && responseMode != "async" {
+		return CanonicalRequest{}, fmt.Errorf("%w: invalid response_mode", ErrInvalidCanonicalRequest)
+	}
+	previewMode := strings.ToLower(strings.TrimSpace(stringValue(payload["preview_mode"])))
+	if previewMode == "" {
+		previewMode = "none"
+		if partial, ok := payload["partial_images"].(float64); ok && partial > 0 {
+			previewMode = "required"
+		}
+	}
+	if previewMode != "none" && previewMode != "preferred" && previewMode != "required" {
+		return CanonicalRequest{}, fmt.Errorf("%w: invalid preview_mode", ErrInvalidCanonicalRequest)
+	}
+	if previewMode == "required" && responseMode != "stream" {
+		return CanonicalRequest{}, fmt.Errorf("%w: required previews need response_mode=stream", ErrInvalidCanonicalRequest)
+	}
+	deliveryMode := strings.ToLower(strings.TrimSpace(stringValue(payload["delivery_mode"])))
+	if deliveryMode == "" {
+		deliveryMode = "inline"
+		if responseMode == "async" {
+			deliveryMode = "artifact"
+		}
+	}
+	if deliveryMode != "inline" && deliveryMode != "artifact" && deliveryMode != "customer_sink" {
+		return CanonicalRequest{}, fmt.Errorf("%w: invalid delivery_mode", ErrInvalidCanonicalRequest)
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: a valid idempotency key is required", ErrInvalidCanonicalRequest)
+	}
+	input := make(map[string]any, len(payload))
+	for key, value := range payload {
+		switch key {
+		case "model", "response_mode", "preview_mode", "delivery_mode", "stream", "partial_images":
+			continue
+		default:
+			input[key] = value
+		}
+	}
+	input["prompt"] = prompt
+	input["n"] = outputCount
+	canonicalPayload, err := json.Marshal(map[string]any{
+		"model": model, "operation": "image_generation", "modality": "image", "input": input,
+		"response_mode": responseMode, "preview_mode": previewMode, "delivery_mode": deliveryMode,
+	})
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(canonicalPayload)
+	lane := LaneDirect
+	if responseMode == "async" {
+		lane = LaneDurable
+	}
+	return CanonicalRequest{
+		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
+		Protocol: ProtocolOpenAIImages, Operation: "image_generation", Modality: "image", Lane: lane,
+		Model: model, Stream: responseMode == "stream", IdempotencyKey: idempotencyKey,
+		ResponseMode: responseMode, PreviewMode: previewMode, DeliveryMode: deliveryMode, OutputCount: outputCount,
+		Payload: canonicalPayload,
+	}, nil
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
 func CanonicalizeDurableJob(raw []byte, header http.Header) (CanonicalRequest, error) {
 	var payload struct {
 		Model     string          `json:"model"`

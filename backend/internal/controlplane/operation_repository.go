@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,9 +12,9 @@ import (
 
 const aiOperationSelectColumns = `id, profile_scope, tenant_id, credential_id, credential_source, integration_id,
 principal_type, principal_id, external_subject_reference, client_request_id, request_fingerprint, idempotency_key,
-protocol, operation, modality, lane, model, status, error_type, created_at, updated_at, completed_at`
+protocol, operation, modality, lane, model, artifact_policy, artifact_sink_id, status, error_type, created_at, updated_at, completed_at`
 
-const aiAttemptSelectColumns = `id, operation_id, attempt_number, provider_id, provider_account_id, route_id,
+const aiAttemptSelectColumns = `id, operation_id, attempt_number, provider_id, provider_account_id, provider_adapter_id, route_id,
 upstream_model, status, error_type, dispatch_state, dispatch_version, dispatch_key, dispatch_intent_json,
 dispatch_submitted_at, provider_task_id, provider_request_id, provider_task_status, provider_accepted_at,
 last_reconciled_at, reconcile_after, created_at, updated_at, completed_at`
@@ -25,6 +26,11 @@ func normalizeAIAttempt(attempt *AIAttempt) {
 	if attempt.DispatchKey == "" {
 		attempt.DispatchKey = attempt.ID
 	}
+}
+
+func normalizeAIOperation(operation *AIOperation) {
+	operation.ArtifactPolicy = artifactPolicySnapshot(operation.ArtifactPolicy)
+	operation.ArtifactSinkID = artifactSinkSnapshot(operation.ArtifactPolicy, operation.ArtifactSinkID)
 }
 
 func applyAIAttemptDispatchUpdate(current *AIAttempt, requested AIAttempt) {
@@ -71,7 +77,7 @@ type aiAttemptScanner interface {
 func scanAIAttempt(scanner aiAttemptScanner) (AIAttempt, error) {
 	var attempt AIAttempt
 	err := scanner.Scan(
-		&attempt.ID, &attempt.OperationID, &attempt.AttemptNumber, &attempt.ProviderID, &attempt.ProviderAccountID, &attempt.RouteID,
+		&attempt.ID, &attempt.OperationID, &attempt.AttemptNumber, &attempt.ProviderID, &attempt.ProviderAccountID, &attempt.ProviderAdapterID, &attempt.RouteID,
 		&attempt.UpstreamModel, &attempt.Status, &attempt.ErrorType, &attempt.DispatchState, &attempt.DispatchVersion, &attempt.DispatchKey,
 		&attempt.DispatchIntentJSON, &attempt.DispatchSubmittedAt, &attempt.ProviderTaskID, &attempt.ProviderRequestID, &attempt.ProviderTaskStatus,
 		&attempt.ProviderAcceptedAt, &attempt.LastReconciledAt, &attempt.ReconcileAfter, &attempt.CreatedAt, &attempt.UpdatedAt, &attempt.CompletedAt,
@@ -83,6 +89,7 @@ func scanAIAttempt(scanner aiAttemptScanner) (AIAttempt, error) {
 }
 
 func (r *MemoryRepository) CreateAIOperation(_ context.Context, operation AIOperation) (AIOperation, bool, error) {
+	normalizeAIOperation(&operation)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if operation.IdempotencyKey != "" {
@@ -178,6 +185,24 @@ func (r *MemoryRepository) FindAIAttempt(_ context.Context, id string) (AIAttemp
 	return attempt, found, nil
 }
 
+func (r *MemoryRepository) ListAIAttemptsByOperationID(_ context.Context, operationID string) ([]AIAttempt, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	attempts := make([]AIAttempt, 0)
+	for _, attempt := range r.aiAttempts {
+		if attempt.OperationID == strings.TrimSpace(operationID) {
+			attempts = append(attempts, attempt)
+		}
+	}
+	sort.SliceStable(attempts, func(i, j int) bool {
+		if attempts[i].AttemptNumber == attempts[j].AttemptNumber {
+			return attempts[i].ID < attempts[j].ID
+		}
+		return attempts[i].AttemptNumber < attempts[j].AttemptNumber
+	})
+	return attempts, nil
+}
+
 func (r *MemoryRepository) UpdateAIAttemptDispatch(_ context.Context, requested AIAttempt, expectedVersion int) (AIAttempt, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -197,6 +222,44 @@ func (r *MemoryRepository) UpdateAIAttemptDispatch(_ context.Context, requested 
 	return current, true, nil
 }
 
+func (r *MemoryRepository) ScheduleAIAttemptReconciliation(_ context.Context, id string, expectedVersion int, scheduledAt time.Time, audit AuditLog) (AIAttempt, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, found := r.aiAttempts[strings.TrimSpace(id)]
+	if !found || current.Status != AIAttemptStatusRunning || current.DispatchVersion != expectedVersion ||
+		!oneOf(current.DispatchState, AIAttemptDispatchSubmitted, AIAttemptDispatchAccepted, AIAttemptDispatchUnknown) {
+		return current, false, nil
+	}
+	if _, exists := r.auditLogs[audit.ID]; exists {
+		return current, false, fmt.Errorf("audit log %q already exists", audit.ID)
+	}
+	requested := current
+	requested.ReconcileAfter = timePointer(scheduledAt)
+	requested.UpdatedAt = scheduledAt
+	applyAIAttemptDispatchUpdate(&current, requested)
+	r.aiAttempts[current.ID] = current
+	r.auditLogs[audit.ID] = audit
+	return current, true, nil
+}
+
+func (r *MemoryRepository) ScheduleArtifactDeliveryRetry(_ context.Context, artifactID string, requested AIAttempt, expectedVersion int, audit AuditLog) (AIAttempt, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	artifact, artifactFound := r.artifacts[strings.TrimSpace(artifactID)]
+	current, attemptFound := r.aiAttempts[requested.ID]
+	if !artifactFound || artifact.Status != ArtifactStatusDeliveryFailed || artifact.Policy != GatewayArtifactPolicyCustomerSink || artifact.AttemptID != requested.ID ||
+		!attemptFound || current.Status != AIAttemptStatusRunning || current.DispatchVersion != expectedVersion {
+		return current, false, nil
+	}
+	if _, exists := r.auditLogs[audit.ID]; exists {
+		return current, false, fmt.Errorf("audit log %q already exists", audit.ID)
+	}
+	applyAIAttemptDispatchUpdate(&current, requested)
+	r.aiAttempts[current.ID] = current
+	r.auditLogs[audit.ID] = audit
+	return current, true, nil
+}
+
 func (r *MemoryRepository) ListAIAttemptsForReconciliation(_ context.Context, now time.Time, limit int) ([]AIAttempt, error) {
 	if limit <= 0 {
 		return []AIAttempt{}, nil
@@ -206,6 +269,31 @@ func (r *MemoryRepository) ListAIAttemptsForReconciliation(_ context.Context, no
 	result := make([]AIAttempt, 0, limit)
 	for _, attempt := range r.aiAttempts {
 		if !aiAttemptDueForReconciliation(attempt, now) {
+			continue
+		}
+		result = append(result, attempt)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return aiAttemptReconciliationTime(result[i]).Before(aiAttemptReconciliationTime(result[j]))
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (r *MemoryRepository) ListDurableAIAttemptsForReconciliation(_ context.Context, now time.Time, limit int) ([]AIAttempt, error) {
+	if limit <= 0 {
+		return []AIAttempt{}, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]AIAttempt, 0, limit)
+	for _, attempt := range r.aiAttempts {
+		if !aiAttemptDueForReconciliation(attempt, now) {
+			continue
+		}
+		if _, found := memoryAIJobByOperationID(r.aiJobs, attempt.OperationID); !found {
 			continue
 		}
 		result = append(result, attempt)
@@ -436,7 +524,7 @@ func scanAIOperation(scanner apiKeyScanner) (AIOperation, error) {
 		&operation.ID, &operation.ProfileScope, &operation.TenantID, &operation.CredentialID, &operation.CredentialSource, &operation.IntegrationID,
 		&operation.PrincipalType, &operation.PrincipalID, &operation.ExternalSubjectReference, &operation.ClientRequestID,
 		&operation.RequestFingerprint, &operation.IdempotencyKey, &operation.Protocol, &operation.Operation, &operation.Modality,
-		&operation.Lane, &operation.Model, &operation.Status, &operation.ErrorType, &operation.CreatedAt, &operation.UpdatedAt, &completedAt,
+		&operation.Lane, &operation.Model, &operation.ArtifactPolicy, &operation.ArtifactSinkID, &operation.Status, &operation.ErrorType, &operation.CreatedAt, &operation.UpdatedAt, &completedAt,
 	)
 	if err != nil {
 		return AIOperation{}, err
@@ -448,21 +536,23 @@ func scanAIOperation(scanner apiKeyScanner) (AIOperation, error) {
 }
 
 func insertAIOperation(ctx context.Context, executor usageRecordExecutor, operation AIOperation) (sql.Result, error) {
+	normalizeAIOperation(&operation)
 	return executor.ExecContext(ctx, `
 INSERT INTO ai_operations(
   id, profile_scope, tenant_id, credential_id, credential_source, integration_id,
   principal_type, principal_id, external_subject_reference, client_request_id, request_fingerprint, idempotency_key,
-  protocol, operation, modality, lane, model, status, error_type, created_at, updated_at, completed_at
+  protocol, operation, modality, lane, model, artifact_policy, artifact_sink_id, status, error_type, created_at, updated_at, completed_at
 )
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULL)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULL)
 ON CONFLICT (profile_scope, tenant_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key) WHERE idempotency_key <> '' DO NOTHING
 `, operation.ID, operation.ProfileScope, operation.TenantID, operation.CredentialID, operation.CredentialSource, operation.IntegrationID,
 		operation.PrincipalType, operation.PrincipalID, operation.ExternalSubjectReference, operation.ClientRequestID,
 		operation.RequestFingerprint, operation.IdempotencyKey, operation.Protocol, operation.Operation, operation.Modality,
-		operation.Lane, operation.Model, operation.Status, operation.ErrorType, operation.CreatedAt, operation.UpdatedAt)
+		operation.Lane, operation.Model, operation.ArtifactPolicy, operation.ArtifactSinkID, operation.Status, operation.ErrorType, operation.CreatedAt, operation.UpdatedAt)
 }
 
 func (r *PostgresRepository) CreateAIOperation(ctx context.Context, operation AIOperation) (AIOperation, bool, error) {
+	normalizeAIOperation(&operation)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AIOperation{}, false, err
@@ -536,12 +626,12 @@ func (r *PostgresRepository) CreateAIAttempt(ctx context.Context, attempt AIAtte
 func (r *PostgresRepository) CreateOrGetAIAttempt(ctx context.Context, attempt AIAttempt) (AIAttempt, bool, error) {
 	normalizeAIAttempt(&attempt)
 	result, err := r.db.ExecContext(ctx, `
-INSERT INTO ai_attempts(id, operation_id, attempt_number, provider_id, provider_account_id, route_id, upstream_model, status, error_type,
+INSERT INTO ai_attempts(id, operation_id, attempt_number, provider_id, provider_account_id, provider_adapter_id, route_id, upstream_model, status, error_type,
 dispatch_state, dispatch_version, dispatch_key, dispatch_intent_json, dispatch_submitted_at, provider_task_id, provider_request_id,
 provider_task_status, provider_accepted_at, last_reconciled_at, reconcile_after, created_at, updated_at, completed_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NULL,'','','',NULL,NULL,NULL,$14,$15,NULL)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULL,'','','',NULL,NULL,NULL,$15,$16,NULL)
 ON CONFLICT(operation_id, attempt_number) DO NOTHING
-`, attempt.ID, attempt.OperationID, attempt.AttemptNumber, attempt.ProviderID, attempt.ProviderAccountID, attempt.RouteID, attempt.UpstreamModel, attempt.Status, attempt.ErrorType,
+`, attempt.ID, attempt.OperationID, attempt.AttemptNumber, attempt.ProviderID, attempt.ProviderAccountID, attempt.ProviderAdapterID, attempt.RouteID, attempt.UpstreamModel, attempt.Status, attempt.ErrorType,
 		attempt.DispatchState, attempt.DispatchVersion, attempt.DispatchKey, attempt.DispatchIntentJSON, attempt.CreatedAt, attempt.UpdatedAt)
 	if err != nil {
 		return AIAttempt{}, false, err
@@ -560,6 +650,23 @@ func (r *PostgresRepository) FindAIAttempt(ctx context.Context, id string) (AIAt
 		return AIAttempt{}, false, nil
 	}
 	return attempt, err == nil, err
+}
+
+func (r *PostgresRepository) ListAIAttemptsByOperationID(ctx context.Context, operationID string) ([]AIAttempt, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+aiAttemptSelectColumns+` FROM ai_attempts WHERE operation_id=$1 ORDER BY attempt_number, id`, strings.TrimSpace(operationID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	attempts := make([]AIAttempt, 0)
+	for rows.Next() {
+		attempt, scanErr := scanAIAttempt(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		attempts = append(attempts, attempt)
+	}
+	return attempts, rows.Err()
 }
 
 func (r *PostgresRepository) FindAIAttemptByOperationNumber(ctx context.Context, operationID string, attemptNumber int) (AIAttempt, bool, error) {
@@ -591,12 +698,100 @@ WHERE id=$12 AND status=$13 AND dispatch_version=$14`, requested.DispatchState, 
 	return current, rows == 1, nil
 }
 
+func (r *PostgresRepository) ScheduleAIAttemptReconciliation(ctx context.Context, id string, expectedVersion int, scheduledAt time.Time, audit AuditLog) (AIAttempt, bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AIAttempt{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	updated, err := scanAIAttempt(tx.QueryRowContext(ctx, `UPDATE ai_attempts
+SET dispatch_version=dispatch_version+1, reconcile_after=$1, updated_at=$1
+WHERE id=$2 AND status=$3 AND dispatch_version=$4 AND dispatch_state IN ($5,$6,$7)
+RETURNING `+aiAttemptSelectColumns, scheduledAt, strings.TrimSpace(id), AIAttemptStatusRunning, expectedVersion,
+		AIAttemptDispatchSubmitted, AIAttemptDispatchAccepted, AIAttemptDispatchUnknown))
+	if errors.Is(err, sql.ErrNoRows) {
+		current, findErr := scanAIAttempt(tx.QueryRowContext(ctx, `SELECT `+aiAttemptSelectColumns+` FROM ai_attempts WHERE id=$1`, strings.TrimSpace(id)))
+		if errors.Is(findErr, sql.ErrNoRows) {
+			return AIAttempt{}, false, nil
+		}
+		return current, false, findErr
+	}
+	if err != nil {
+		return AIAttempt{}, false, err
+	}
+	if err := insertAuditLog(ctx, tx, audit); err != nil {
+		return AIAttempt{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AIAttempt{}, false, err
+	}
+	return updated, true, nil
+}
+
+func (r *PostgresRepository) ScheduleArtifactDeliveryRetry(ctx context.Context, artifactID string, requested AIAttempt, expectedVersion int, audit AuditLog) (AIAttempt, bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AIAttempt{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	updated, err := scanAIAttempt(tx.QueryRowContext(ctx, `UPDATE ai_attempts SET dispatch_state=$1, dispatch_version=dispatch_version+1,
+dispatch_key=$2, dispatch_intent_json=$3, dispatch_submitted_at=$4, provider_task_id=$5, provider_request_id=$6,
+provider_task_status=$7, provider_accepted_at=$8, last_reconciled_at=$9, reconcile_after=$10, updated_at=$11
+WHERE id=$12 AND status=$13 AND dispatch_version=$14 AND EXISTS (
+	SELECT 1 FROM artifacts WHERE artifacts.id=$15 AND artifacts.attempt_id=ai_attempts.id AND artifacts.status=$16 AND artifacts.policy=$17
+)
+RETURNING `+aiAttemptSelectColumns, requested.DispatchState, requested.DispatchKey, requested.DispatchIntentJSON,
+		requested.DispatchSubmittedAt, requested.ProviderTaskID, requested.ProviderRequestID, requested.ProviderTaskStatus, requested.ProviderAcceptedAt,
+		requested.LastReconciledAt, requested.ReconcileAfter, requested.UpdatedAt, requested.ID, AIAttemptStatusRunning, expectedVersion,
+		strings.TrimSpace(artifactID), ArtifactStatusDeliveryFailed, GatewayArtifactPolicyCustomerSink))
+	if errors.Is(err, sql.ErrNoRows) {
+		current, findErr := scanAIAttempt(tx.QueryRowContext(ctx, `SELECT `+aiAttemptSelectColumns+` FROM ai_attempts WHERE id=$1`, requested.ID))
+		if errors.Is(findErr, sql.ErrNoRows) {
+			return AIAttempt{}, false, nil
+		}
+		return current, false, findErr
+	}
+	if err != nil {
+		return AIAttempt{}, false, err
+	}
+	if err := insertAuditLog(ctx, tx, audit); err != nil {
+		return AIAttempt{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AIAttempt{}, false, err
+	}
+	return updated, true, nil
+}
+
 func (r *PostgresRepository) ListAIAttemptsForReconciliation(ctx context.Context, now time.Time, limit int) ([]AIAttempt, error) {
 	if limit <= 0 {
 		return []AIAttempt{}, nil
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT `+aiAttemptSelectColumns+` FROM ai_attempts
 WHERE status=$1 AND dispatch_state IN ($2,$3,$4) AND (reconcile_after IS NULL OR reconcile_after <= $5)
+ORDER BY COALESCE(reconcile_after, updated_at), updated_at LIMIT $6`, AIAttemptStatusRunning, AIAttemptDispatchSubmitted, AIAttemptDispatchAccepted, AIAttemptDispatchUnknown, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]AIAttempt, 0, limit)
+	for rows.Next() {
+		attempt, scanErr := scanAIAttempt(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, attempt)
+	}
+	return result, rows.Err()
+}
+
+func (r *PostgresRepository) ListDurableAIAttemptsForReconciliation(ctx context.Context, now time.Time, limit int) ([]AIAttempt, error) {
+	if limit <= 0 {
+		return []AIAttempt{}, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT `+aiAttemptSelectColumns+` FROM ai_attempts
+WHERE status=$1 AND dispatch_state IN ($2,$3,$4) AND (reconcile_after IS NULL OR reconcile_after <= $5)
+AND EXISTS (SELECT 1 FROM ai_jobs WHERE ai_jobs.operation_id=ai_attempts.operation_id)
 ORDER BY COALESCE(reconcile_after, updated_at), updated_at LIMIT $6`, AIAttemptStatusRunning, AIAttemptDispatchSubmitted, AIAttemptDispatchAccepted, AIAttemptDispatchUnknown, now, limit)
 	if err != nil {
 		return nil, err

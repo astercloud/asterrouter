@@ -175,6 +175,33 @@ func TestArtifactDeletionFailureCanRetry(t *testing.T) {
 	}
 }
 
+func TestDirectArtifactUsesFrozenOperationPolicy(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	store := NewMemoryArtifactStore()
+	if err := svc.SetArtifactStore(store); err != nil {
+		t.Fatal(err)
+	}
+	auth := operationTestAuth()
+	auth.ArtifactPolicy = GatewayArtifactPolicyManaged
+	operation, _, err := svc.BeginCanonicalOperation(context.Background(), auth, operationTestRequest("direct-artifact-idem", "direct-artifact-fingerprint"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := ArtifactCreateInput{
+		OperationID: operation.ID, Role: ArtifactRoleFinal, StoreDriver: ArtifactStoreDriverMemory,
+		ExpectedSizeBytes: 4, MaxBytes: 16, Policy: GatewayArtifactPolicyProxyOnly,
+	}
+	if _, err := svc.CreateArtifactFromReader(context.Background(), input, bytes.NewBufferString("data")); err == nil {
+		t.Fatal("CreateArtifactFromReader() accepted a policy wider than the operation snapshot")
+	}
+	input.Policy = ""
+	artifact, err := svc.CreateArtifactFromReader(context.Background(), input, bytes.NewBufferString("data"))
+	if err != nil || artifact.Status != ArtifactStatusReady || artifact.Policy != GatewayArtifactPolicyManaged {
+		t.Fatalf("CreateArtifactFromReader() artifact=%+v err=%v", artifact, err)
+	}
+}
+
 type flakyDeleteArtifactStore struct {
 	*MemoryArtifactStore
 	mu       sync.Mutex

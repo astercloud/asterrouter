@@ -27,11 +27,13 @@ const (
 	GatewayScopeArtifactsRead   = "artifacts:read"
 	GatewayScopeArtifactsDelete = "artifacts:delete"
 
-	GatewayOperationListModels     = "list_models"
-	GatewayOperationChatCompletion = "chat_completion"
+	GatewayOperationListModels      = "list_models"
+	GatewayOperationChatCompletion  = "chat_completion"
+	GatewayOperationImageGeneration = "image_generation"
 
 	GatewayModalityMetadata = "metadata"
 	GatewayModalityText     = "text"
+	GatewayModalityImage    = "image"
 
 	GatewayLanePolicyDirectOnly       = "direct_only"
 	GatewayLanePolicyDurableOnly      = "durable_only"
@@ -338,6 +340,7 @@ type APIKeyRecord struct {
 	AllowedCIDRs             []string   `json:"allowed_cidrs"`
 	LanePolicy               string     `json:"lane_policy"`
 	ArtifactPolicy           string     `json:"artifact_policy"`
+	ArtifactSinkID           string     `json:"artifact_sink_id,omitempty"`
 	RotationFamilyID         string     `json:"rotation_family_id"`
 	ReplacesKeyID            string     `json:"replaces_key_id"`
 	ReplacedByKeyID          string     `json:"replaced_by_key_id"`
@@ -368,6 +371,7 @@ type APIKeyCreateRequest struct {
 	AllowedCIDRs             []string `json:"allowed_cidrs"`
 	LanePolicy               string   `json:"lane_policy"`
 	ArtifactPolicy           string   `json:"artifact_policy"`
+	ArtifactSinkID           string   `json:"artifact_sink_id"`
 	ExpiresAt                string   `json:"expires_at"`
 	KeyType                  string   `json:"key_type"`
 	CustomerID               string   `json:"customer_id"`
@@ -395,6 +399,7 @@ type APIKeyUpdateRequest struct {
 	AllowedCIDRs             []string `json:"allowed_cidrs"`
 	LanePolicy               string   `json:"lane_policy"`
 	ArtifactPolicy           string   `json:"artifact_policy"`
+	ArtifactSinkID           string   `json:"artifact_sink_id"`
 	ExpiresAt                string   `json:"expires_at"`
 	Status                   string   `json:"status"`
 	KeyType                  string   `json:"key_type"`
@@ -854,8 +859,10 @@ type GatewayProvider struct {
 	AttemptID        string
 	ID               string
 	Name             string
+	Type             string
 	BaseURL          string
 	APIKey           string
+	AdapterID        string
 	AccountID        string
 	AccountName      string
 	Concurrency      int

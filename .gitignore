@@ -21,6 +21,8 @@ docs/*
 !docs/product-positioning.md
 !docs/roadmap/
 docs/roadmap/*
+!docs/roadmap/effectivepricing/
+!docs/roadmap/effectivepricing/**
 !docs/roadmap/v2/
 docs/roadmap/v2/*
 !docs/roadmap/v2/README.md

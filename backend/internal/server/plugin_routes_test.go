@@ -486,6 +486,146 @@ func TestAdminPluginConfigEndpointsAuditAndMaskSecrets(t *testing.T) {
 	t.Fatalf("plugin configure audit event not found: %+v", audit)
 }
 
+func TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{})
+	const accessKey = "artifact-access-key-value"
+	const secretKey = "artifact-secret-key-value"
+	body := bytes.NewBufferString(`{
+  "name":"Customer media delivery",
+  "provider":"r2",
+  "endpoint":"https://account.r2.cloudflarestorage.com",
+  "region":"auto",
+  "bucket":"customer-media",
+  "prefix":"generated",
+  "reference_base_url":"https://media.example/generated",
+  "allowed_profile_scope":"platform",
+  "allowed_tenant_id":"tenant-a",
+  "path_style":true,
+  "enabled":true,
+  "secrets":{"access_key":"` + accessKey + `","secret_key":"` + secretKey + `"}
+}`)
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", body)
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+	if strings.Contains(putRec.Body.String(), accessKey) || strings.Contains(putRec.Body.String(), secretKey) || strings.Contains(putRec.Body.String(), "secrets") {
+		t.Fatalf("artifact sink response leaked credentials: %s", putRec.Body.String())
+	}
+	var putResponse struct {
+		Data plugins.ArtifactSinkDestination `json:"data"`
+	}
+	if err := json.Unmarshal(putRec.Body.Bytes(), &putResponse); err != nil {
+		t.Fatalf("decode put response: %v", err)
+	}
+	if putResponse.Data.ID != "customer-media" || putResponse.Data.Provider != "r2" || putResponse.Data.SecretHints["access_key"] == "" || putResponse.Data.SecretHints["secret_key"] == "" {
+		t.Fatalf("put response = %+v", putResponse.Data)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks", nil)
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK || strings.Contains(getRec.Body.String(), accessKey) || strings.Contains(getRec.Body.String(), secretKey) {
+		t.Fatalf("get status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var getResponse struct {
+		Data []plugins.ArtifactSinkDestination `json:"data"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResponse); err != nil || len(getResponse.Data) != 1 || getResponse.Data[0].ID != "customer-media" {
+		t.Fatalf("get response=%+v err=%v", getResponse.Data, err)
+	}
+
+	audit, err := control.ListAuditLogs(context.Background(), 20)
+	if err != nil {
+		t.Fatalf("ListAuditLogs(): %v", err)
+	}
+	foundConfigure := false
+	for _, event := range audit {
+		serialized, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			t.Fatalf("marshal audit event: %v", marshalErr)
+		}
+		if strings.Contains(string(serialized), accessKey) || strings.Contains(string(serialized), secretKey) {
+			t.Fatalf("audit event leaked credentials: %s", serialized)
+		}
+		foundConfigure = foundConfigure || event.ResourceType == "plugin" && event.Action == "configure_artifact_sink" && event.ResourceID == "customer-media"
+	}
+	if !foundConfigure {
+		t.Fatalf("artifact sink configure audit missing: %+v", audit)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", nil)
+	deleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+	missingRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRec, httptest.NewRequest(http.MethodDelete, "/api/v1/admin/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", nil))
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing delete status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+}
+
+func TestAdminArtifactSinkDestinationRBACAndInvalidPayloads(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{AdminToken: "secret"})
+	user, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{
+		Email: "artifact-auditor@example.com", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleReadOnlyAuditor,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkspaceUser(): %v", err)
+	}
+	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
+		UserID: user.ID, Role: controlplane.RoleReadOnlyAuditor, ScopeType: controlplane.RoleScopeGlobal,
+	}); err != nil {
+		t.Fatalf("CreateRoleBinding(): %v", err)
+	}
+	baseURL := "/api/v1/admin/plugins/" + plugins.ArtifactS3SinkPluginID + "/artifact-sinks"
+	for _, test := range []struct {
+		method string
+		path   string
+		body   string
+		want   int
+	}{
+		{method: http.MethodGet, path: baseURL, want: http.StatusOK},
+		{method: http.MethodPut, path: baseURL + "/blocked", body: `{}`, want: http.StatusForbidden},
+		{method: http.MethodDelete, path: baseURL + "/blocked", want: http.StatusForbidden},
+	} {
+		req := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("X-Actor", user.Email)
+		if test.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != test.want {
+			t.Fatalf("%s %s status=%d want=%d body=%s", test.method, test.path, rec.Code, test.want, rec.Body.String())
+		}
+	}
+
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "malformed JSON", body: `{"name":`},
+		{name: "insecure endpoint", body: `{"name":"Invalid","provider":"r2","endpoint":"http://storage.example","region":"auto","bucket":"media","enabled":true,"secrets":{"access_key":"access","secret_key":"secret"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, baseURL+"/invalid", strings.NewReader(test.body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestAdminPluginDeliveriesEndpoint(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,1 @@
+ALTER TABLE ai_attempts ADD COLUMN IF NOT EXISTS provider_adapter_id TEXT NOT NULL DEFAULT '';

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
@@ -103,6 +104,29 @@ func TestGatewayDurableJobQueueBackpressure(t *testing.T) {
 	second := performGatewayJobRequest(handler, http.MethodPost, "/v1/jobs", owner.Key, "limited-job-second", body)
 	if second.Code != http.StatusTooManyRequests || second.Header().Get("Retry-After") == "" || !strings.Contains(second.Body.String(), "queue_capacity_exceeded") {
 		t.Fatalf("second status=%d headers=%v body=%s", second.Code, second.Header(), second.Body.String())
+	}
+}
+
+func TestGatewayDurableJobFailsClosedWithoutExecutableAdapter(t *testing.T) {
+	handler, control := newTestRuntimeWithDurableAdmission(t, config.Config{}, nil)
+	if _, err := control.CreateGatewayModel(context.Background(), "test", controlplane.GatewayModelRequest{
+		ModelID: "unavailable-image-job", Name: "Unavailable image job", Modality: "image", Status: controlplane.GatewayModelStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := durableJobAPIKeyRequest("unavailable job owner")
+	request.ModelAllowlist = []string{"unavailable-image-job"}
+	owner, err := control.CreateAPIKey(context.Background(), "test", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := performGatewayJobRequest(handler, http.MethodPost, "/v1/jobs", owner.Key, "unavailable-job", `{"model":"unavailable-image-job","operation":"image_generation","modality":"image","input":{"prompt":"synthetic"}}`)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "unsupported_capability") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	jobs, err := control.ClaimReadyAIJobs(context.Background(), "fail-closed-test", time.Minute, 1)
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("jobs=%+v err=%v", jobs, err)
 	}
 }
 

@@ -1,8 +1,10 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -34,6 +36,9 @@ func TestDurableAIJobWorkerAndReconcilerContract(t *testing.T) {
 			base := time.Date(2026, time.July, 14, 15, 0, 0, 0, time.UTC)
 			svc := NewService(repo, "/v1", "durable-worker-secret")
 			svc.now = func() time.Time { return base }
+			if err := svc.SetArtifactStore(NewMemoryArtifactStore()); err != nil {
+				t.Fatal(err)
+			}
 			setupDurableWorkerRoutes(t, svc)
 			responseLost := errors.New("provider response lost")
 			adapter := &durableAIJobAdapterStub{dispatchSteps: []durableDispatchStep{
@@ -46,6 +51,7 @@ func TestDurableAIJobWorkerAndReconcilerContract(t *testing.T) {
 			}, reconcileResult: ProviderDispatchResult{
 				Outcome:        ProviderDispatchOutcomeAccepted,
 				Task:           ProviderTaskReference{ProviderTaskID: "task-recovered", ProviderRequestID: "request-recovered", Status: "succeeded"},
+				Outputs:        []ProviderOutputDescriptor{{OutputID: "final-image", Role: ArtifactRoleFinal, MediaType: "image/png", ExpectedSizeBytes: -1}},
 				ReconcileAfter: base.Add(time.Hour),
 			}}
 
@@ -100,6 +106,17 @@ func TestDurableAIJobWorkerAndReconcilerContract(t *testing.T) {
 			}
 
 			svc.now = func() time.Time { return base.Add(2 * time.Minute) }
+			accounts, err := svc.repo.ListProviderAccounts(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, account := range accounts {
+				account.Status = AccountStatusDisabled
+				account.Schedulable = false
+				if err := svc.repo.SaveProviderAccount(ctx, account); err != nil {
+					t.Fatal(err)
+				}
+			}
 			reconcileReport, err := svc.RunDurableAIJobReconcilerOnce(ctx, 10, adapter)
 			if err != nil || reconcileReport.Reconciled != 1 || reconcileReport.Completed != 1 || reconcileReport.Errors != 0 || adapter.ReconcileCalls() != 1 {
 				t.Fatalf("reconcile report=%+v calls=%d err=%v", reconcileReport, adapter.ReconcileCalls(), err)
@@ -236,6 +253,13 @@ func (s *durableAIJobAdapterStub) ReconcileProviderTask(_ context.Context, provi
 	}
 	s.reconcileCalls++
 	return s.reconcileResult, s.reconcileErr
+}
+
+func (s *durableAIJobAdapterStub) OpenProviderOutput(_ context.Context, provider GatewayProvider, job AIJob, attempt AIAttempt, output ProviderOutputDescriptor) (io.ReadCloser, error) {
+	if provider.APIKey == "" || job.ID == "" || attempt.ID == "" || output.OutputID == "" {
+		return nil, errors.New("incomplete provider output command")
+	}
+	return io.NopCloser(bytes.NewBufferString("provider-output-" + output.OutputID)), nil
 }
 
 func (s *durableAIJobAdapterStub) DispatchCalls() int {

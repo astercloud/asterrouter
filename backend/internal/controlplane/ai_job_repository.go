@@ -13,7 +13,7 @@ import (
 
 const aiJobSelectColumns = `id, operation_id, profile_scope, tenant_id, credential_id, credential_source,
 integration_id, principal_type, principal_id, external_subject_reference, request_fingerprint, idempotency_key,
-protocol, operation, modality, model, artifact_policy, request_payload_ciphertext, status, status_version, priority,
+protocol, operation, modality, model, artifact_policy, artifact_sink_id, request_payload_ciphertext, status, status_version, priority,
 next_eligible_at, queue_lease_until, queue_lease_token, queue_worker_id, fence_token, error_type,
 created_at, updated_at, completed_at, expires_at`
 
@@ -23,6 +23,7 @@ type aiJobExecutor interface {
 }
 
 func (r *MemoryRepository) CreateDurableAIJob(_ context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent, limits AIJobAdmissionLimits, billing BillingHoldAdmission) (AIJob, bool, error) {
+	normalizeAIOperation(&operation)
 	if err := validateDurableAIJobAdmission(operation, job, event, outbox); err != nil {
 		return AIJob{}, false, err
 	}
@@ -81,12 +82,18 @@ func (r *MemoryRepository) FindAIJob(_ context.Context, id string) (AIJob, bool,
 func (r *MemoryRepository) FindAIJobByOperationID(_ context.Context, operationID string) (AIJob, bool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, job := range r.aiJobs {
-		if job.OperationID == strings.TrimSpace(operationID) {
-			return job, true, nil
+	job, found := memoryAIJobByOperationID(r.aiJobs, operationID)
+	return job, found, nil
+}
+
+func memoryAIJobByOperationID(jobs map[string]AIJob, operationID string) (AIJob, bool) {
+	operationID = strings.TrimSpace(operationID)
+	for _, job := range jobs {
+		if job.OperationID == operationID {
+			return job, true
 		}
 	}
-	return AIJob{}, false, nil
+	return AIJob{}, false
 }
 
 func (r *MemoryRepository) FindOwnedAIJob(_ context.Context, id string, owner AIJobOwner) (AIJob, bool, error) {
@@ -97,6 +104,33 @@ func (r *MemoryRepository) FindOwnedAIJob(_ context.Context, id string, owner AI
 		return AIJob{}, false, nil
 	}
 	return job, true, nil
+}
+
+func (r *MemoryRepository) QueryAIJobs(_ context.Context, query AIJobQuery) ([]AIJob, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	jobs := make([]AIJob, 0)
+	for _, job := range r.aiJobs {
+		if aiJobMatchesQuery(job, query) {
+			jobs = append(jobs, job)
+		}
+	}
+	sortAIJobsForAdmin(jobs)
+	return paginateAIJobs(jobs, query.Limit, query.Offset), nil
+}
+
+func (r *MemoryRepository) SummarizeAIJobs(_ context.Context, query AIJobQuery) (AIJobSummary, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	summary := newAIJobSummary()
+	for _, job := range r.aiJobs {
+		if !aiJobMatchesQuery(job, query) {
+			continue
+		}
+		summary.Total++
+		summary.ByStatus[job.Status]++
+	}
+	return summary, nil
 }
 
 func (r *MemoryRepository) RequestAIJobCancellation(_ context.Context, id string, owner AIJobOwner, requestedAt time.Time) (AIJob, bool, bool, error) {
@@ -143,6 +177,57 @@ func (r *MemoryRepository) RequestAIJobCancellation(_ context.Context, id string
 	r.aiJobs[id] = updated
 	r.aiJobEvents[event.ID] = event
 	r.transactionalOutboxEvents[outbox.ID] = outbox
+	return updated, true, true, nil
+}
+
+func (r *MemoryRepository) RequestAIJobAdminCancellation(_ context.Context, id string, requestedAt time.Time, audit AuditLog) (AIJob, bool, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	job, found := r.aiJobs[strings.TrimSpace(id)]
+	if !found {
+		return AIJob{}, false, false, nil
+	}
+	switch job.Status {
+	case AIJobStatusCanceling, AIJobStatusCanceled:
+		return job, false, true, nil
+	case AIJobStatusSucceeded, AIJobStatusFailed, AIJobStatusUnknown, AIJobStatusExpired:
+		return job, false, true, ErrAIJobNotCancelable
+	}
+	toStatus := AIJobStatusCanceling
+	if job.Status == AIJobStatusAccepted || job.Status == AIJobStatusQueued {
+		toStatus = AIJobStatusCanceled
+	}
+	updated, event, outbox, err := prepareAIJobTransition(job, toStatus, "admin_requested", requestedAt)
+	if err != nil {
+		return AIJob{}, false, true, err
+	}
+	if job.Status == AIJobStatusDispatching {
+		updated.FenceToken++
+	}
+	if _, exists := r.aiJobEvents[event.ID]; exists {
+		return AIJob{}, false, true, fmt.Errorf("ai job event %q already exists", event.ID)
+	}
+	if err := validateMemoryOutboxInsert(r.transactionalOutboxEvents, outbox); err != nil {
+		return AIJob{}, false, true, err
+	}
+	if _, exists := r.auditLogs[audit.ID]; exists {
+		return AIJob{}, false, true, fmt.Errorf("audit log %q already exists", audit.ID)
+	}
+	operation, ok := r.aiOperations[job.OperationID]
+	if !ok {
+		return AIJob{}, false, true, fmt.Errorf("ai operation %q not found", job.OperationID)
+	}
+	if toStatus == AIJobStatusCanceled {
+		if err := releaseMemoryBillingHoldForOperation(r, job.OperationID, "job_canceled_before_dispatch", requestedAt); err != nil {
+			return AIJob{}, false, true, err
+		}
+	}
+	applyMemoryOperationJobStatus(&operation, updated.Status, updated.ErrorType, requestedAt)
+	r.aiOperations[operation.ID] = operation
+	r.aiJobs[job.ID] = updated
+	r.aiJobEvents[event.ID] = event
+	r.transactionalOutboxEvents[outbox.ID] = outbox
+	r.auditLogs[audit.ID] = audit
 	return updated, true, true, nil
 }
 
@@ -390,6 +475,7 @@ func (r *MemoryRepository) ListAIJobEvents(_ context.Context, jobID string) ([]A
 }
 
 func (r *PostgresRepository) CreateDurableAIJob(ctx context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent, limits AIJobAdmissionLimits, billing BillingHoldAdmission) (AIJob, bool, error) {
+	normalizeAIOperation(&operation)
 	if err := validateDurableAIJobAdmission(operation, job, event, outbox); err != nil {
 		return AIJob{}, false, err
 	}
@@ -486,6 +572,56 @@ WHERE id=$1 AND profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND prin
 	return job, err == nil, err
 }
 
+func (r *PostgresRepository) QueryAIJobs(ctx context.Context, query AIJobQuery) ([]AIJob, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs
+WHERE ($1='' OR profile_scope=$1) AND ($2='' OR tenant_id=$2)
+  AND ($3='' OR id ILIKE '%'||$3||'%' OR operation_id ILIKE '%'||$3||'%' OR tenant_id ILIKE '%'||$3||'%' OR model ILIKE '%'||$3||'%')
+  AND ($4='' OR model=$4) AND ($5='' OR modality=$5) AND ($6='' OR operation=$6)
+  AND ($7='' OR status=$7) AND ($8='' OR artifact_policy=$8)
+ORDER BY created_at DESC, id DESC LIMIT $9 OFFSET $10`, strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID),
+		strings.TrimSpace(query.Search), strings.TrimSpace(query.Model), strings.TrimSpace(query.Modality), strings.TrimSpace(query.Operation),
+		strings.TrimSpace(query.Status), strings.TrimSpace(query.ArtifactPolicy), aiJobAdminQueryLimit(query.Limit), nonNegative(query.Offset))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := make([]AIJob, 0)
+	for rows.Next() {
+		job, scanErr := scanAIJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func (r *PostgresRepository) SummarizeAIJobs(ctx context.Context, query AIJobQuery) (AIJobSummary, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM ai_jobs
+WHERE ($1='' OR profile_scope=$1) AND ($2='' OR tenant_id=$2)
+  AND ($3='' OR id ILIKE '%'||$3||'%' OR operation_id ILIKE '%'||$3||'%' OR tenant_id ILIKE '%'||$3||'%' OR model ILIKE '%'||$3||'%')
+  AND ($4='' OR model=$4) AND ($5='' OR modality=$5) AND ($6='' OR operation=$6)
+  AND ($7='' OR status=$7) AND ($8='' OR artifact_policy=$8)
+GROUP BY status`, strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID), strings.TrimSpace(query.Search),
+		strings.TrimSpace(query.Model), strings.TrimSpace(query.Modality), strings.TrimSpace(query.Operation),
+		strings.TrimSpace(query.Status), strings.TrimSpace(query.ArtifactPolicy))
+	if err != nil {
+		return AIJobSummary{}, err
+	}
+	defer rows.Close()
+	summary := newAIJobSummary()
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return AIJobSummary{}, err
+		}
+		summary.Total += count
+		summary.ByStatus[status] = count
+	}
+	return summary, rows.Err()
+}
+
 func (r *PostgresRepository) RequestAIJobCancellation(ctx context.Context, id string, owner AIJobOwner, requestedAt time.Time) (AIJob, bool, bool, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -528,6 +664,56 @@ WHERE id=$1 AND profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND prin
 		if err := releasePostgresBillingHoldForOperation(ctx, tx, job.OperationID, "job_canceled_before_dispatch", requestedAt); err != nil {
 			return AIJob{}, false, true, err
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return AIJob{}, false, true, err
+	}
+	return updated, true, true, nil
+}
+
+func (r *PostgresRepository) RequestAIJobAdminCancellation(ctx context.Context, id string, requestedAt time.Time, audit AuditLog) (AIJob, bool, bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AIJob{}, false, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	job, err := scanAIJob(tx.QueryRowContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs WHERE id=$1 FOR UPDATE`, strings.TrimSpace(id)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return AIJob{}, false, false, nil
+	}
+	if err != nil {
+		return AIJob{}, false, false, err
+	}
+	switch job.Status {
+	case AIJobStatusCanceling, AIJobStatusCanceled:
+		if err := tx.Commit(); err != nil {
+			return AIJob{}, false, true, err
+		}
+		return job, false, true, nil
+	case AIJobStatusSucceeded, AIJobStatusFailed, AIJobStatusUnknown, AIJobStatusExpired:
+		return job, false, true, ErrAIJobNotCancelable
+	}
+	toStatus := AIJobStatusCanceling
+	if job.Status == AIJobStatusAccepted || job.Status == AIJobStatusQueued {
+		toStatus = AIJobStatusCanceled
+	}
+	updated, event, outbox, err := prepareAIJobTransition(job, toStatus, "admin_requested", requestedAt)
+	if err != nil {
+		return AIJob{}, false, true, err
+	}
+	if job.Status == AIJobStatusDispatching {
+		updated.FenceToken++
+	}
+	if err := persistAIJobTransition(ctx, tx, job, updated, event, outbox); err != nil {
+		return AIJob{}, false, true, err
+	}
+	if toStatus == AIJobStatusCanceled {
+		if err := releasePostgresBillingHoldForOperation(ctx, tx, job.OperationID, "job_canceled_before_dispatch", requestedAt); err != nil {
+			return AIJob{}, false, true, err
+		}
+	}
+	if err := insertAuditLog(ctx, tx, audit); err != nil {
+		return AIJob{}, false, true, err
 	}
 	if err := tx.Commit(); err != nil {
 		return AIJob{}, false, true, err
@@ -785,10 +971,55 @@ func (r *PostgresRepository) ListAIJobEvents(ctx context.Context, jobID string) 
 	return out, rows.Err()
 }
 
+func aiJobMatchesQuery(job AIJob, query AIJobQuery) bool {
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	if search != "" && !strings.Contains(strings.ToLower(job.ID), search) &&
+		!strings.Contains(strings.ToLower(job.OperationID), search) &&
+		!strings.Contains(strings.ToLower(job.TenantID), search) &&
+		!strings.Contains(strings.ToLower(job.Model), search) {
+		return false
+	}
+	return (strings.TrimSpace(query.ProfileScope) == "" || job.ProfileScope == strings.TrimSpace(query.ProfileScope)) &&
+		(strings.TrimSpace(query.TenantID) == "" || job.TenantID == strings.TrimSpace(query.TenantID)) &&
+		(strings.TrimSpace(query.Model) == "" || job.Model == strings.TrimSpace(query.Model)) &&
+		(strings.TrimSpace(query.Modality) == "" || job.Modality == strings.TrimSpace(query.Modality)) &&
+		(strings.TrimSpace(query.Operation) == "" || job.Operation == strings.TrimSpace(query.Operation)) &&
+		(strings.TrimSpace(query.Status) == "" || job.Status == strings.TrimSpace(query.Status)) &&
+		(strings.TrimSpace(query.ArtifactPolicy) == "" || job.ArtifactPolicy == strings.TrimSpace(query.ArtifactPolicy))
+}
+
+func sortAIJobsForAdmin(jobs []AIJob) {
+	sort.SliceStable(jobs, func(i, j int) bool {
+		if jobs[i].CreatedAt.Equal(jobs[j].CreatedAt) {
+			return jobs[i].ID > jobs[j].ID
+		}
+		return jobs[i].CreatedAt.After(jobs[j].CreatedAt)
+	})
+}
+
+func paginateAIJobs(jobs []AIJob, limit, offset int) []AIJob {
+	offset = nonNegative(offset)
+	if offset >= len(jobs) {
+		return []AIJob{}
+	}
+	limit = aiJobAdminQueryLimit(limit)
+	end := min(offset+limit, len(jobs))
+	return append([]AIJob(nil), jobs[offset:end]...)
+}
+
+func aiJobAdminQueryLimit(limit int) int {
+	if limit <= 0 || limit > 100 {
+		return 100
+	}
+	return limit
+}
+
 func validateDurableAIJobAdmission(operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent) error {
 	if operation.ID == "" || operation.ID != job.OperationID || operation.Lane != "durable" || operation.IdempotencyKey == "" ||
 		job.ID == "" || job.Status != AIJobStatusQueued || job.StatusVersion != 1 || job.RequestFingerprint == "" ||
 		job.RequestFingerprint != operation.RequestFingerprint || job.IdempotencyKey != operation.IdempotencyKey || job.RequestPayloadCiphertext == "" ||
+		!validArtifactPolicy(operation.ArtifactPolicy) || !validArtifactSinkBinding(operation.ArtifactPolicy, operation.ArtifactSinkID) ||
+		job.ArtifactPolicy != operation.ArtifactPolicy || job.ArtifactSinkID != operation.ArtifactSinkID ||
 		event.JobID != job.ID || event.Version != job.StatusVersion || event.EventType != AIJobEventQueued ||
 		outbox.AggregateType != AIJobOutboxAggregate || outbox.AggregateID != job.ID || outbox.EventVersion != job.StatusVersion || outbox.EventType != event.EventType {
 		return errors.New("invalid durable ai job admission records")
@@ -932,7 +1163,7 @@ func scanAIJob(scanner apiKeyScanner) (AIJob, error) {
 	if err := scanner.Scan(
 		&job.ID, &job.OperationID, &job.ProfileScope, &job.TenantID, &job.CredentialID, &job.CredentialSource,
 		&job.IntegrationID, &job.PrincipalType, &job.PrincipalID, &job.ExternalSubjectReference, &job.RequestFingerprint, &job.IdempotencyKey,
-		&job.Protocol, &job.Operation, &job.Modality, &job.Model, &job.ArtifactPolicy, &job.RequestPayloadCiphertext, &job.Status, &job.StatusVersion,
+		&job.Protocol, &job.Operation, &job.Modality, &job.Model, &job.ArtifactPolicy, &job.ArtifactSinkID, &job.RequestPayloadCiphertext, &job.Status, &job.StatusVersion,
 		&job.Priority, &job.NextEligibleAt, &leaseUntil, &job.QueueLeaseToken, &job.QueueWorkerID, &job.FenceToken, &job.ErrorType,
 		&job.CreatedAt, &job.UpdatedAt, &completedAt, &job.ExpiresAt,
 	); err != nil {
@@ -950,13 +1181,13 @@ func scanAIJob(scanner apiKeyScanner) (AIJob, error) {
 func insertAIJob(ctx context.Context, executor usageRecordExecutor, job AIJob) error {
 	_, err := executor.ExecContext(ctx, `INSERT INTO ai_jobs(
 id, operation_id, profile_scope, tenant_id, credential_id, credential_source, integration_id, principal_type, principal_id,
-external_subject_reference, request_fingerprint, idempotency_key, protocol, operation, modality, model, artifact_policy,
+external_subject_reference, request_fingerprint, idempotency_key, protocol, operation, modality, model, artifact_policy, artifact_sink_id,
 request_payload_ciphertext, status, status_version, priority, next_eligible_at, queue_lease_until, queue_lease_token, queue_worker_id,
 fence_token, error_type, created_at, updated_at, completed_at, expires_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,NULL,'','',$23,$24,$25,$26,NULL,$27)`,
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULL,'','',$24,$25,$26,$27,NULL,$28)`,
 		job.ID, job.OperationID, job.ProfileScope, job.TenantID, job.CredentialID, job.CredentialSource, job.IntegrationID,
 		job.PrincipalType, job.PrincipalID, job.ExternalSubjectReference, job.RequestFingerprint, job.IdempotencyKey,
-		job.Protocol, job.Operation, job.Modality, job.Model, job.ArtifactPolicy, job.RequestPayloadCiphertext, job.Status, job.StatusVersion,
+		job.Protocol, job.Operation, job.Modality, job.Model, job.ArtifactPolicy, job.ArtifactSinkID, job.RequestPayloadCiphertext, job.Status, job.StatusVersion,
 		job.Priority, job.NextEligibleAt, job.FenceToken, job.ErrorType, job.CreatedAt, job.UpdatedAt, job.ExpiresAt)
 	return err
 }

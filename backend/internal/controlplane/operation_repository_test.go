@@ -43,7 +43,7 @@ func TestAIAttemptProviderDispatchContract(t *testing.T) {
 			if err := svc.MarkAIOperationRunning(ctx, operation.ID); err != nil {
 				t.Fatal(err)
 			}
-			provider := GatewayProvider{ID: "provider-dispatch", AccountID: "account-dispatch", RouteID: "route-dispatch", UpstreamModel: "upstream-dispatch"}
+			provider := GatewayProvider{ID: "provider-dispatch", AccountID: "account-dispatch", AdapterID: "adapter-dispatch", RouteID: "route-dispatch", UpstreamModel: "upstream-dispatch"}
 			attempt, err := svc.BeginAIAttempt(ctx, operation.ID, 1, provider)
 			if err != nil {
 				t.Fatal(err)
@@ -51,6 +51,12 @@ func TestAIAttemptProviderDispatchContract(t *testing.T) {
 			replayed, err := svc.BeginAIAttempt(ctx, operation.ID, 1, provider)
 			if err != nil || replayed.ID != attempt.ID {
 				t.Fatalf("BeginAIAttempt replay=%+v err=%v", replayed, err)
+			}
+			adapterChanged := provider
+			adapterChanged.AdapterID = "adapter-must-not-replace-snapshot"
+			replayed, err = svc.BeginAIAttempt(ctx, operation.ID, 1, adapterChanged)
+			if err != nil || replayed.ProviderAdapterID != provider.AdapterID {
+				t.Fatalf("BeginAIAttempt adapter replay=%+v err=%v", replayed, err)
 			}
 			if _, err := svc.BeginAIAttempt(ctx, operation.ID, 1, GatewayProvider{ID: provider.ID, AccountID: "different-account", RouteID: provider.RouteID, UpstreamModel: provider.UpstreamModel}); !errors.Is(err, ErrAIAttemptDispatchConflict) {
 				t.Fatalf("conflicting attempt provider error=%v", err)
@@ -60,7 +66,7 @@ func TestAIAttemptProviderDispatchContract(t *testing.T) {
 			if err != nil || !changed || prepared.DispatchState != AIAttemptDispatchPrepared || prepared.DispatchVersion != 1 {
 				t.Fatalf("PrepareAIAttemptDispatch() attempt=%+v changed=%t err=%v", prepared, changed, err)
 			}
-			if prepared.DispatchIntentJSON == "" || strings.Contains(prepared.DispatchIntentJSON, "prompt") || strings.Contains(prepared.DispatchIntentJSON, "secret") {
+			if prepared.ProviderAdapterID != provider.AdapterID || prepared.DispatchIntentJSON == "" || !strings.Contains(prepared.DispatchIntentJSON, provider.AdapterID) || strings.Contains(prepared.DispatchIntentJSON, "prompt") || strings.Contains(prepared.DispatchIntentJSON, "secret") {
 				t.Fatalf("dispatch intent contains sensitive request data: %s", prepared.DispatchIntentJSON)
 			}
 			preparedReplay, changed, err := svc.PrepareAIAttemptDispatch(ctx, attempt.ID)
@@ -107,11 +113,85 @@ func TestAIAttemptProviderDispatchContract(t *testing.T) {
 			if err != nil || len(ready) != 1 || ready[0].ProviderTaskID != reference.ProviderTaskID {
 				t.Fatalf("AIAttemptsForReconciliation() attempts=%+v err=%v", ready, err)
 			}
+			durableReady, err := svc.DurableAIAttemptsForReconciliation(ctx, 10)
+			if err != nil || len(durableReady) != 0 {
+				t.Fatalf("direct attempt leaked into durable reconciliation: attempts=%+v err=%v", durableReady, err)
+			}
 			observed, changed, err := svc.RecordAIAttemptReconciliation(ctx, attempt.ID, reconfirmed.DispatchVersion, "running", base.Add(10*time.Minute))
 			if err != nil || !changed || observed.ProviderTaskStatus != "running" || observed.DispatchVersion != reconfirmed.DispatchVersion+1 {
 				t.Fatalf("RecordAIAttemptReconciliation() attempt=%+v changed=%t err=%v", observed, changed, err)
 			}
 		})
+	}
+}
+
+func TestAIOperationFreezesArtifactPolicyAcrossReplay(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*testing.T) Repository
+	}{
+		{name: "memory", open: func(*testing.T) Repository { return NewMemoryRepository() }},
+		{name: "postgres", open: func(t *testing.T) Repository {
+			schema := testutil.NewPostgresSchema(t)
+			repo, err := NewPostgresRepository(context.Background(), schema.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return repo
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := test.open(t)
+			t.Cleanup(func() { _ = repo.Close() })
+			svc := NewService(repo, "/v1")
+			auth := operationTestAuth()
+			auth.ArtifactPolicy = GatewayArtifactPolicyManaged
+			request := operationTestRequest("operation-policy-idem", "operation-policy-fingerprint")
+			operation, created, err := svc.BeginCanonicalOperation(context.Background(), auth, request)
+			if err != nil || !created || operation.ArtifactPolicy != GatewayArtifactPolicyManaged {
+				t.Fatalf("BeginCanonicalOperation() operation=%+v created=%t err=%v", operation, created, err)
+			}
+			auth.ArtifactPolicy = GatewayArtifactPolicyProxyOnly
+			replayed, created, err := svc.BeginCanonicalOperation(context.Background(), auth, request)
+			if err != nil || created || replayed.ID != operation.ID || replayed.ArtifactPolicy != GatewayArtifactPolicyManaged {
+				t.Fatalf("replay operation=%+v created=%t err=%v", replayed, created, err)
+			}
+			persisted, found, err := repo.FindAIOperation(context.Background(), operation.ID)
+			if err != nil || !found || persisted.ArtifactPolicy != GatewayArtifactPolicyManaged {
+				t.Fatalf("FindAIOperation() operation=%+v found=%t err=%v", persisted, found, err)
+			}
+		})
+	}
+}
+
+func TestAIOperationArtifactPolicySnapshotFailsClosed(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	auth := operationTestAuth()
+	auth.ArtifactPolicy = "unknown_policy"
+	operation, _, err := svc.BeginCanonicalOperation(context.Background(), auth, operationTestRequest("policy-fail-closed", "policy-fail-closed-fingerprint"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.ArtifactPolicy != GatewayArtifactPolicyProxyOnly {
+		t.Fatalf("artifact policy snapshot=%q, want %q", operation.ArtifactPolicy, GatewayArtifactPolicyProxyOnly)
+	}
+}
+
+func TestAIOperationFreezesCustomerArtifactSinkAcrossReplay(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	auth := operationTestAuth()
+	auth.ArtifactPolicy = GatewayArtifactPolicyCustomerSink
+	auth.ArtifactSinkID = "sink-snapshot-v1"
+	request := operationTestRequest("sink-policy-idem", "sink-policy-fingerprint")
+	operation, created, err := svc.BeginCanonicalOperation(context.Background(), auth, request)
+	if err != nil || !created || operation.ArtifactSinkID != "sink-snapshot-v1" {
+		t.Fatalf("operation=%+v created=%t err=%v", operation, created, err)
+	}
+	auth.ArtifactSinkID = "sink-snapshot-v2"
+	replayed, created, err := svc.BeginCanonicalOperation(context.Background(), auth, request)
+	if err != nil || created || replayed.ID != operation.ID || replayed.ArtifactSinkID != "sink-snapshot-v1" {
+		t.Fatalf("replay=%+v created=%t err=%v", replayed, created, err)
 	}
 }
 
@@ -199,7 +279,7 @@ func TestAIAttemptDispatchPersistsAcrossPostgresRestart(t *testing.T) {
 	if err := svc.MarkAIOperationRunning(ctx, operation.ID); err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := svc.BeginAIAttempt(ctx, operation.ID, 1, GatewayProvider{ID: "provider-restart", AccountID: "account-restart", RouteID: "route-restart", UpstreamModel: "model-restart"})
+	attempt, err := svc.BeginAIAttempt(ctx, operation.ID, 1, GatewayProvider{ID: "provider-restart", AccountID: "account-restart", AdapterID: "adapter-restart", RouteID: "route-restart", UpstreamModel: "model-restart"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +304,7 @@ func TestAIAttemptDispatchPersistsAcrossPostgresRestart(t *testing.T) {
 	restarted := NewService(reopened, "/v1")
 	restarted.now = func() time.Time { return base.Add(2 * time.Minute) }
 	found, ok, err := restarted.AIAttempt(ctx, persisted.ID)
-	if err != nil || !ok || found.DispatchState != AIAttemptDispatchAccepted || found.ProviderTaskID != "task-restart" || found.DispatchIntentJSON == "" {
+	if err != nil || !ok || found.DispatchState != AIAttemptDispatchAccepted || found.ProviderTaskID != "task-restart" || found.ProviderAdapterID != "adapter-restart" || found.DispatchIntentJSON == "" {
 		t.Fatalf("restarted attempt=%+v found=%t err=%v", found, ok, err)
 	}
 	due, err := restarted.AIAttemptsForReconciliation(ctx, 10)

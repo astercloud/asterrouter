@@ -7,6 +7,7 @@ type Protocol string
 const (
 	ProtocolOpenAIModels      Protocol = "openai_models"
 	ProtocolOpenAIChat        Protocol = "openai_chat_completions"
+	ProtocolOpenAIImages      Protocol = "openai_images_generations"
 	ProtocolOpenAIResponses   Protocol = "openai_responses"
 	ProtocolAnthropicMessages Protocol = "anthropic_messages"
 	ProtocolGeminiGenerate    Protocol = "gemini_generate_content"
@@ -48,6 +49,10 @@ type CanonicalRequest struct {
 	MessageCount    int             `json:"message_count"`
 	IdempotencyKey  string          `json:"idempotency_key,omitempty"`
 	StickyKey       string          `json:"sticky_key,omitempty"`
+	ResponseMode    string          `json:"response_mode,omitempty"`
+	PreviewMode     string          `json:"preview_mode,omitempty"`
+	DeliveryMode    string          `json:"delivery_mode,omitempty"`
+	OutputCount     int             `json:"output_count,omitempty"`
 	SourceIP        string          `json:"-"`
 	Payload         json.RawMessage `json:"-"`
 }
@@ -84,4 +89,5 @@ type CanonicalAuthContext struct {
 	Limits                   CanonicalLimits  `json:"limits"`
 	LanePolicy               string           `json:"lane_policy"`
 	ArtifactPolicy           string           `json:"artifact_policy"`
+	ArtifactSinkID           string           `json:"artifact_sink_id,omitempty"`
 }

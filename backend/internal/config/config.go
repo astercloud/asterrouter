@@ -50,6 +50,10 @@ type Config struct {
 	AIJobQueueProfileLimit   int
 	AIJobQueueTenantLimit    int
 	AIJobQueuePrincipalLimit int
+	AIJobQueueDriver         string
+	RoutingAffinityDriver    string
+	RedisURL                 string
+	RedisNamespace           string
 	ArtifactStoreDriver      string
 	ArtifactLocalRoot        string
 	ArtifactS3Endpoint       string
@@ -116,6 +120,10 @@ func Load() Config {
 		AIJobQueueProfileLimit:   getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_PROFILE_LIMIT"),
 		AIJobQueueTenantLimit:    getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_TENANT_LIMIT"),
 		AIJobQueuePrincipalLimit: getNonNegativeIntEnv("ASTER_AI_JOB_QUEUE_PRINCIPAL_LIMIT"),
+		AIJobQueueDriver:         getEnv("ASTER_AI_JOB_QUEUE_DRIVER", "memory"),
+		RoutingAffinityDriver:    getEnv("ASTER_ROUTING_AFFINITY_DRIVER", "repository"),
+		RedisURL:                 strings.TrimSpace(os.Getenv("ASTER_REDIS_URL")),
+		RedisNamespace:           getEnv("ASTER_REDIS_NAMESPACE", "asterrouter"),
 		ArtifactStoreDriver:      getEnv("ASTER_ARTIFACT_STORE_DRIVER", "none"),
 		ArtifactLocalRoot:        getEnv("ASTER_ARTIFACT_LOCAL_ROOT", "data/artifacts"),
 		ArtifactS3Endpoint:       strings.TrimSpace(os.Getenv("ASTER_ARTIFACT_S3_ENDPOINT")),
@@ -163,6 +171,27 @@ func defaultString(value string, fallback string) string {
 func ValidateRuntime(cfg Config) error {
 	if cfg.AIJobQueueProfileLimit < 0 || cfg.AIJobQueueTenantLimit < 0 || cfg.AIJobQueuePrincipalLimit < 0 {
 		return errors.New("ASTER_AI_JOB_QUEUE_PROFILE_LIMIT, ASTER_AI_JOB_QUEUE_TENANT_LIMIT, and ASTER_AI_JOB_QUEUE_PRINCIPAL_LIMIT must be non-negative integers")
+	}
+	switch strings.TrimSpace(cfg.AIJobQueueDriver) {
+	case "", "memory":
+	case "redis":
+		if strings.TrimSpace(cfg.RedisURL) == "" {
+			return errors.New("ASTER_REDIS_URL is required when ASTER_AI_JOB_QUEUE_DRIVER=redis")
+		}
+	default:
+		return errors.New("ASTER_AI_JOB_QUEUE_DRIVER must be memory or redis")
+	}
+	switch strings.TrimSpace(cfg.RoutingAffinityDriver) {
+	case "", "repository":
+	case "redis":
+		if strings.TrimSpace(cfg.RedisURL) == "" {
+			return errors.New("ASTER_REDIS_URL is required when ASTER_ROUTING_AFFINITY_DRIVER=redis")
+		}
+	default:
+		return errors.New("ASTER_ROUTING_AFFINITY_DRIVER must be repository or redis")
+	}
+	if strings.TrimSpace(cfg.RedisNamespace) != "" && !validRuntimeNamespace(cfg.RedisNamespace) {
+		return errors.New("ASTER_REDIS_NAMESPACE must contain only letters, numbers, dots, underscores, or hyphens")
 	}
 	if strings.TrimSpace(cfg.DeploymentRole) != "" {
 		deploymentRole := normalizeProfile(cfg.DeploymentRole)
@@ -231,6 +260,21 @@ func ValidateRuntime(cfg Config) error {
 		}
 	}
 	return nil
+}
+
+func validRuntimeNamespace(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 96 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || strings.ContainsRune("._-", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func getEnv(key, fallback string) string {

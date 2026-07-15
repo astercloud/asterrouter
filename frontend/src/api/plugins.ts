@@ -1,5 +1,7 @@
 import { apiClient } from './client'
 import type {
+  ArtifactSinkDestination,
+  ArtifactSinkDestinationRequest,
   LicenseActivateRequest,
   LicenseRedeemRequest,
   LicenseImportRequest,
@@ -49,6 +51,23 @@ export async function getPluginConfig(id: string): Promise<PluginConfig> {
 export async function updatePluginConfig(id: string, payload: PluginConfigRequest): Promise<PluginConfig> {
   const response = await apiClient.put<PluginConfig>(`/admin/plugins/${encodeURIComponent(id)}/config`, payload)
   return response.data
+}
+
+export async function getArtifactSinkDestinations(pluginID: string): Promise<ArtifactSinkDestination[]> {
+  const response = await apiClient.get<ArtifactSinkDestination[]>(`/admin/plugins/${encodeURIComponent(pluginID)}/artifact-sinks`)
+  return response.data
+}
+
+export async function upsertArtifactSinkDestination(pluginID: string, sinkID: string, payload: ArtifactSinkDestinationRequest): Promise<ArtifactSinkDestination> {
+  const response = await apiClient.put<ArtifactSinkDestination>(
+    `/admin/plugins/${encodeURIComponent(pluginID)}/artifact-sinks/${encodeURIComponent(sinkID)}`,
+    payload
+  )
+  return response.data
+}
+
+export async function deleteArtifactSinkDestination(pluginID: string, sinkID: string): Promise<void> {
+  await apiClient.delete(`/admin/plugins/${encodeURIComponent(pluginID)}/artifact-sinks/${encodeURIComponent(sinkID)}`)
 }
 
 export async function getPluginAPITokens(pluginID = ''): Promise<PluginAPIToken[]> {

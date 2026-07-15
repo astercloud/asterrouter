@@ -7,6 +7,7 @@ import AdminPluginsView from './AdminPluginsView.vue'
 vi.mock('@/api/plugins', () => ({
   activateOfficialLicense: vi.fn(),
   createPluginAPIToken: vi.fn(),
+  deleteArtifactSinkDestination: vi.fn(),
   disablePlugin: vi.fn(),
   downloadPluginPackage: vi.fn(),
   enablePlugin: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock('@/api/plugins', () => ({
   getOfficialFeedStatuses: vi.fn(),
   getOfficialFeedSyncRuns: vi.fn(),
   getOfficialLicenseStatus: vi.fn(),
+  getArtifactSinkDestinations: vi.fn(),
   getPluginAPITokens: vi.fn(),
   getPluginCatalog: vi.fn(),
   getPluginConfig: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock('@/api/plugins', () => ({
   syncOfficialCatalog: vi.fn(),
   syncOfficialFeed: vi.fn(),
   uninstallPluginPackage: vi.fn(),
+  upsertArtifactSinkDestination: vi.fn(),
   updatePluginConfig: vi.fn()
 }))
 
@@ -80,6 +83,7 @@ function mockPluginState(options: { trust?: boolean; paidLocked?: number; enable
   vi.mocked(plugins.getPluginAPITokens).mockResolvedValue([])
   vi.mocked(plugins.getOfficialFeedStatuses).mockResolvedValue([])
   vi.mocked(plugins.getOfficialFeedSyncRuns).mockResolvedValue([])
+  vi.mocked(plugins.getArtifactSinkDestinations).mockResolvedValue([])
   vi.mocked(plugins.getSidecarRuntimeStatus).mockResolvedValue({
     plugin_id: catalogPlugin.id,
     enabled: Boolean(enabled),
@@ -133,6 +137,30 @@ describe('AdminPluginsView workbench', () => {
     expect(wrapper.text()).toContain('The catalog has not synchronized')
     expect(wrapper.text()).toContain('Locked plugins need')
     expect(wrapper.text()).toContain('No plugins are enabled')
+
+    wrapper.unmount()
+  })
+
+  it('uses the dedicated destination manager for the artifact sink plugin', async () => {
+    vi.mocked(plugins.getPluginCatalog).mockResolvedValue({
+      summary: { total: 1, enabled: 0, free: 1, paid_locked: 0, configurable: 1 },
+      plugins: [{
+        ...catalogPlugin,
+        id: 'com.asterrouter.artifact.s3-compatible-sink',
+        plugin_id: 'com.asterrouter.artifact.s3-compatible-sink',
+        name: 'S3-compatible Artifact Delivery',
+        category: 'artifact_sink',
+        status: 'disabled'
+      }]
+    })
+    const wrapper = mount(AdminPluginsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.get('[data-tab="registry"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-artifact-sinks]').exists()).toBe(true)
+    expect(plugins.getArtifactSinkDestinations).toHaveBeenCalledWith('com.asterrouter.artifact.s3-compatible-sink')
+    expect(wrapper.text()).not.toContain('Sidecar')
 
     wrapper.unmount()
   })

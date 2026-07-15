@@ -30,6 +30,16 @@ type publicAIJobEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type publicAIJobArtifactEvent struct {
+	ID        string                 `json:"id"`
+	JobID     string                 `json:"job_id"`
+	Version   int                    `json:"version"`
+	Type      string                 `json:"type"`
+	Status    string                 `json:"status"`
+	Artifact  publicArtifactResponse `json:"artifact"`
+	CreatedAt time.Time              `json:"created_at"`
+}
+
 func registerGatewayJobEventRoute(r *gin.Engine, control *controlplane.Service) {
 	r.GET("/v1/jobs/:job_id/events", func(c *gin.Context) {
 		if control == nil {
@@ -90,11 +100,28 @@ func streamPublicAIJobEvents(c *gin.Context, control *controlplane.Service, cred
 	defer reauthTicker.Stop()
 	heartbeatTicker := time.NewTicker(aiJobEventHeartbeat)
 	defer heartbeatTicker.Stop()
+	emittedArtifacts := map[string]struct{}{}
 
 	for {
 		job, found, err := control.AIJobForAuth(c.Request.Context(), auth, jobID)
 		if err != nil || !found {
 			return
+		}
+		artifacts, found, err := control.ArtifactsForJobAndAuth(c.Request.Context(), auth, jobID)
+		if err != nil || !found {
+			return
+		}
+		for _, artifact := range artifacts {
+			if !artifactAvailableForJobEvent(artifact) {
+				continue
+			}
+			if _, emitted := emittedArtifacts[artifact.ID]; emitted {
+				continue
+			}
+			if err := writePublicAIJobArtifactEvent(c, artifact); err != nil {
+				return
+			}
+			emittedArtifacts[artifact.ID] = struct{}{}
 		}
 		events, err := control.AIJobEvents(c.Request.Context(), jobID)
 		if err != nil {
@@ -133,6 +160,32 @@ func streamPublicAIJobEvents(c *gin.Context, control *controlplane.Service, cred
 		case <-pollTicker.C:
 		}
 	}
+}
+
+func artifactAvailableForJobEvent(artifact controlplane.Artifact) bool {
+	if artifact.Policy == controlplane.GatewayArtifactPolicyCustomerSink {
+		return artifact.Status == controlplane.ArtifactStatusDelivered
+	}
+	return artifact.Status == controlplane.ArtifactStatusReady || artifact.Status == controlplane.ArtifactStatusDelivered
+}
+
+func writePublicAIJobArtifactEvent(c *gin.Context, artifact controlplane.Artifact) error {
+	if artifact.ID == "" || artifact.JobID == "" || artifact.StatusVersion <= 0 {
+		return errors.New("invalid artifact event")
+	}
+	const eventType = "job.artifact.available"
+	payload, err := json.Marshal(publicAIJobArtifactEvent{
+		ID: artifact.ID + ":" + strconv.Itoa(artifact.StatusVersion), JobID: artifact.JobID, Version: artifact.StatusVersion,
+		Type: eventType, Status: artifact.Status, Artifact: newPublicArtifactResponse(artifact), CreatedAt: artifact.UpdatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, payload); err != nil {
+		return err
+	}
+	c.Writer.Flush()
+	return nil
 }
 
 func writePublicAIJobEvent(c *gin.Context, event controlplane.AIJobEvent) error {

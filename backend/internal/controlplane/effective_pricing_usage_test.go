@@ -21,6 +21,7 @@ func TestRecordGatewayUsageEstimatesProcurementCostFromCacheAwarePrice(t *testin
 		CacheWrite1hMicrosPer1MTokens:  2_000_000,
 		OutputMicrosPer1MTokens:        2_000_000,
 		RequestMicros:                  1_000,
+		RechargeMultiplier:             0.5,
 		Confidence:                     ProcurementCostConfidenceEstimated, Status: ProcurementPriceStatusActive,
 		EffectiveFrom: now.Add(-time.Hour), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
 	}
@@ -48,8 +49,8 @@ func TestRecordGatewayUsageEstimatesProcurementCostFromCacheAwarePrice(t *testin
 		t.Fatalf("ListUsageRecords() records=%+v err=%v", records, err)
 	}
 	record := records[0]
-	if record.ProcurementCostMicros == nil || *record.ProcurementCostMicros != 1_109 {
-		t.Fatalf("procurement cost = %+v, want 1109 micros", record.ProcurementCostMicros)
+	if record.ProcurementCostMicros == nil || *record.ProcurementCostMicros != 555 {
+		t.Fatalf("procurement cost = %+v, want 555 micros after recharge discount", record.ProcurementCostMicros)
 	}
 	if record.ProcurementCostCurrency != "USD" || record.ProcurementCostSource != "procurement_price" || record.ProcurementCostConfidence != ProcurementCostConfidenceEstimated || record.ProcurementPriceID != price.ID {
 		t.Fatalf("procurement evidence = %+v", record)

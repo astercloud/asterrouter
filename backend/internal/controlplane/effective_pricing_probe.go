@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -40,8 +41,8 @@ func (s *Service) RunProviderCacheProbe(ctx context.Context, actor string, reque
 	if request.ProviderAccountID == "" || request.UpstreamModel == "" {
 		return ProviderCacheProbeRun{}, errors.New("provider_account_id and upstream_model are required")
 	}
-	if !oneOf(request.Protocol, string(gatewaycore.ProtocolOpenAIChat), string(gatewaycore.ProtocolAnthropicMessages)) {
-		return ProviderCacheProbeRun{}, errors.New("cache probes support openai_chat_completions or anthropic_messages")
+	if !oneOf(request.Protocol, string(gatewaycore.ProtocolOpenAIChat), string(gatewaycore.ProtocolAnthropicMessages), string(gatewaycore.ProtocolGeminiGenerate)) {
+		return ProviderCacheProbeRun{}, errors.New("cache probes support openai_chat_completions, anthropic_messages, or gemini_generate_content")
 	}
 	if request.PrefixTokens < minCacheProbePrefixTokens || request.PrefixTokens > maxCacheProbePrefixTokens {
 		return ProviderCacheProbeRun{}, fmt.Errorf("prefix_tokens must be between %d and %d", minCacheProbePrefixTokens, maxCacheProbePrefixTokens)
@@ -194,11 +195,9 @@ func (s *Service) runCacheProbePhase(ctx context.Context, provider ProviderConne
 	if err != nil {
 		return cacheProbePhaseObservation{}, err
 	}
-	endpoint := strings.TrimRight(provider.BaseURL, "/")
-	if request.Protocol == string(gatewaycore.ProtocolAnthropicMessages) {
-		endpoint += "/messages"
-	} else {
-		endpoint += "/chat/completions"
+	endpoint := cacheProbeEndpoint(provider.BaseURL, request.Protocol, request.UpstreamModel)
+	if endpoint == "" {
+		return cacheProbePhaseObservation{}, errors.New("provider base URL is required for a cache probe")
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
@@ -209,6 +208,8 @@ func (s *Service) runCacheProbePhase(ctx context.Context, provider ProviderConne
 	if request.Protocol == string(gatewaycore.ProtocolAnthropicMessages) {
 		httpRequest.Header.Set("X-Api-Key", secret)
 		httpRequest.Header.Set("Anthropic-Version", "2023-06-01")
+	} else if request.Protocol == string(gatewaycore.ProtocolGeminiGenerate) {
+		httpRequest.Header.Set("X-Goog-API-Key", secret)
 	} else {
 		httpRequest.Header.Set("Authorization", "Bearer "+secret)
 	}
@@ -259,6 +260,12 @@ func cacheProbePayload(protocol, model, prefixText, suffix, sessionHash string, 
 			"system":   []map[string]any{{"type": "text", "text": prefixText, "cache_control": map[string]any{"type": "ephemeral"}}},
 			"messages": []map[string]any{{"role": "user", "content": suffix}},
 		}
+	} else if protocol == string(gatewaycore.ProtocolGeminiGenerate) {
+		payload = map[string]any{
+			"model": model, "systemInstruction": map[string]any{"parts": []map[string]any{{"text": prefixText}}},
+			"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": suffix}}}},
+			"generationConfig": map[string]any{"maxOutputTokens": 1, "temperature": 0},
+		}
 	} else {
 		payload = map[string]any{
 			"model": model, "max_tokens": 1, "temperature": 0,
@@ -275,6 +282,24 @@ func cacheProbePayload(protocol, model, prefixText, suffix, sessionHash string, 
 		payload[capability.AffinityField] = sessionHash
 	}
 	return json.Marshal(payload)
+}
+
+func cacheProbeEndpoint(baseURL, protocol, model string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		return ""
+	}
+	switch protocol {
+	case string(gatewaycore.ProtocolAnthropicMessages):
+		return base + "/messages"
+	case string(gatewaycore.ProtocolGeminiGenerate):
+		if !strings.HasSuffix(base, "/v1") && !strings.HasSuffix(base, "/v1beta") {
+			base += "/v1beta"
+		}
+		return base + "/models/" + url.PathEscape(model) + ":generateContent"
+	default:
+		return base + "/chat/completions"
+	}
 }
 
 func readCacheProbeResponse(reader io.Reader, startedAt time.Time) ([]byte, int64, error) {
@@ -473,6 +498,9 @@ func cacheProbeFailureIsCapabilityEvidence(reason string) bool {
 func probeUsageSchema(protocol string) string {
 	if protocol == string(gatewaycore.ProtocolAnthropicMessages) {
 		return gatewaycore.UsageNormalizationAnthropic
+	}
+	if protocol == string(gatewaycore.ProtocolGeminiGenerate) {
+		return gatewaycore.UsageNormalizationGemini
 	}
 	return gatewaycore.UsageNormalizationOpenAI
 }

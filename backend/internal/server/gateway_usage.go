@@ -13,6 +13,7 @@ const (
 	usageNormalizationPartial     = gatewaycore.UsageNormalizationPartial
 	usageNormalizationOpenAI      = gatewaycore.UsageNormalizationOpenAI
 	usageNormalizationAnthropic   = gatewaycore.UsageNormalizationAnthropic
+	usageNormalizationGemini      = gatewaycore.UsageNormalizationGemini
 	usageNormalizationGeneric     = gatewaycore.UsageNormalizationGeneric
 	maxGatewaySSEPendingLineBytes = 1 << 20
 )

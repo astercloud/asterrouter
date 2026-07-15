@@ -35,9 +35,14 @@ func (s *Service) BeginCanonicalOperation(ctx context.Context, auth gatewaycore.
 		Modality:                 strings.TrimSpace(request.Modality),
 		Lane:                     string(request.Lane),
 		Model:                    strings.TrimSpace(request.Model),
+		ArtifactPolicy:           artifactPolicySnapshot(auth.ArtifactPolicy),
+		ArtifactSinkID:           artifactSinkSnapshot(auth.ArtifactPolicy, auth.ArtifactSinkID),
 		Status:                   AIOperationStatusAccepted,
 		CreatedAt:                now,
 		UpdatedAt:                now,
+	}
+	if !validArtifactSinkBinding(operation.ArtifactPolicy, operation.ArtifactSinkID) {
+		return AIOperation{}, false, ErrArtifactSinkRequired
 	}
 	billing, err := s.newBillingHoldAdmission(ctx, operation, auth, request)
 	if err != nil {
@@ -85,7 +90,8 @@ func (s *Service) BeginAIAttempt(ctx context.Context, operationID string, attemp
 	now := s.nowUTC()
 	attempt := AIAttempt{
 		ID: "attempt_" + randomID(12), OperationID: strings.TrimSpace(operationID), AttemptNumber: attemptNumber,
-		ProviderID: provider.ID, ProviderAccountID: provider.AccountID, RouteID: provider.RouteID, UpstreamModel: provider.UpstreamModel,
+		ProviderID: provider.ID, ProviderAccountID: provider.AccountID, ProviderAdapterID: provider.AdapterID,
+		RouteID: provider.RouteID, UpstreamModel: provider.UpstreamModel,
 		Status: AIAttemptStatusRunning, DispatchState: AIAttemptDispatchPending, CreatedAt: now, UpdatedAt: now,
 	}
 	attempt.DispatchKey = attempt.ID
@@ -126,7 +132,7 @@ func (s *Service) PrepareAIAttemptDispatch(ctx context.Context, attemptID string
 	intent := ProviderDispatchIntent{
 		Version: 1, AttemptID: attempt.ID, OperationID: attempt.OperationID, DispatchKey: attempt.DispatchKey,
 		RequestFingerprint: operation.RequestFingerprint, ProviderID: attempt.ProviderID, ProviderAccountID: attempt.ProviderAccountID,
-		RouteID: attempt.RouteID, UpstreamModel: attempt.UpstreamModel,
+		ProviderAdapterID: attempt.ProviderAdapterID, RouteID: attempt.RouteID, UpstreamModel: attempt.UpstreamModel,
 	}
 	payload, err := json.Marshal(intent)
 	if err != nil {
@@ -323,6 +329,10 @@ func (s *Service) ProveAIAttemptNotCreated(ctx context.Context, attemptID string
 
 func (s *Service) AIAttemptsForReconciliation(ctx context.Context, limit int) ([]AIAttempt, error) {
 	return s.repo.ListAIAttemptsForReconciliation(ctx, s.nowUTC(), limit)
+}
+
+func (s *Service) DurableAIAttemptsForReconciliation(ctx context.Context, limit int) ([]AIAttempt, error) {
+	return s.repo.ListDurableAIAttemptsForReconciliation(ctx, s.nowUTC(), limit)
 }
 
 func (s *Service) updateAIAttemptDispatch(ctx context.Context, requested AIAttempt, expectedVersion int) (AIAttempt, bool, error) {

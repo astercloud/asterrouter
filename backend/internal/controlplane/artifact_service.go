@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 )
+
+const artifactIngestLease = 2 * time.Minute
 
 func (s *Service) SetArtifactStore(store ArtifactStore) error {
 	if store == nil {
@@ -24,6 +27,7 @@ func (s *Service) SetArtifactStore(store ArtifactStore) error {
 	s.artifactStoreMu.Lock()
 	defer s.artifactStoreMu.Unlock()
 	s.artifactStores[driver] = store
+	s.artifactPrimaryDriver = driver
 	return nil
 }
 
@@ -32,6 +36,14 @@ func (s *Service) artifactStore(driver string) (ArtifactStore, bool) {
 	defer s.artifactStoreMu.RUnlock()
 	store, found := s.artifactStores[strings.TrimSpace(driver)]
 	return store, found
+}
+
+func (s *Service) primaryArtifactStoreDriver() (string, bool) {
+	s.artifactStoreMu.RLock()
+	defer s.artifactStoreMu.RUnlock()
+	driver := strings.TrimSpace(s.artifactPrimaryDriver)
+	_, found := s.artifactStores[driver]
+	return driver, driver != "" && found
 }
 
 func (s *Service) CreateArtifactFromReader(ctx context.Context, input ArtifactCreateInput, body io.Reader) (Artifact, error) {
@@ -55,8 +67,15 @@ func (s *Service) CreateArtifactFromReader(ctx context.Context, input ArtifactCr
 	if input.RetainUntil.IsZero() {
 		retainUntil = now.Add(ArtifactDefaultTTL)
 	}
+	artifactID := strings.TrimSpace(input.ID)
+	if artifactID == "" {
+		artifactID = "artifact_" + randomID(12)
+	}
+	if !validArtifactID(artifactID) {
+		return Artifact{}, errors.New("invalid artifact id")
+	}
 	artifact := Artifact{
-		ID: "artifact_" + randomID(12), OperationID: operation.ID, JobID: strings.TrimSpace(input.JobID),
+		ID: artifactID, OperationID: operation.ID, JobID: strings.TrimSpace(input.JobID),
 		AttemptID: strings.TrimSpace(input.AttemptID), SourceArtifactID: strings.TrimSpace(input.SourceArtifactID),
 		ProfileScope: operation.ProfileScope, TenantID: operation.TenantID, IntegrationID: operation.IntegrationID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, ExternalSubjectReference: operation.ExternalSubjectReference,
@@ -72,8 +91,12 @@ func (s *Service) CreateArtifactFromReader(ctx context.Context, input ArtifactCr
 		return Artifact{}, err
 	}
 	if body == nil {
+		sizeBytes := input.ExpectedSizeBytes
+		if sizeBytes < 0 {
+			sizeBytes = 0
+		}
 		return s.transitionArtifact(ctx, artifact, ArtifactStatusReady, "", &ArtifactContentUpdate{
-			MediaType: artifact.MediaType, SizeBytes: 0, StoreDriver: ArtifactStoreDriverNone,
+			MediaType: artifact.MediaType, SizeBytes: sizeBytes, SHA256: strings.ToLower(strings.TrimSpace(input.ExpectedSHA256)), StoreDriver: ArtifactStoreDriverNone,
 			ExternalReference: artifact.ExternalReference,
 		})
 	}
@@ -81,7 +104,11 @@ func (s *Service) CreateArtifactFromReader(ctx context.Context, input ArtifactCr
 }
 
 func (s *Service) resolveArtifactPolicyAndReferences(ctx context.Context, operation AIOperation, input ArtifactCreateInput) (string, error) {
-	policy := strings.TrimSpace(input.Policy)
+	policy := artifactPolicySnapshot(operation.ArtifactPolicy)
+	requestedPolicy := strings.TrimSpace(input.Policy)
+	if requestedPolicy != "" && requestedPolicy != policy {
+		return "", errors.New("artifact policy must match the operation policy snapshot")
+	}
 	if strings.TrimSpace(input.JobID) != "" {
 		job, found, err := s.repo.FindAIJob(ctx, strings.TrimSpace(input.JobID))
 		if err != nil {
@@ -90,10 +117,9 @@ func (s *Service) resolveArtifactPolicyAndReferences(ctx context.Context, operat
 		if !found || job.OperationID != operation.ID || !aiJobOwnerMatches(job, artifactOwnerFromOperation(operation)) {
 			return "", ErrArtifactNotFound
 		}
-		if policy != "" && policy != job.ArtifactPolicy {
-			return "", errors.New("artifact policy must match the job policy snapshot")
+		if job.ArtifactPolicy != policy {
+			return "", errors.New("artifact policy snapshots do not match")
 		}
-		policy = job.ArtifactPolicy
 	}
 	if strings.TrimSpace(input.AttemptID) != "" {
 		attempt, found, err := s.repo.FindAIAttempt(ctx, strings.TrimSpace(input.AttemptID))
@@ -164,6 +190,45 @@ func (s *Service) storeArtifactContent(ctx context.Context, artifact Artifact, i
 	if err != nil {
 		return Artifact{}, err
 	}
+	return s.writeArtifactContent(ctx, uploading, input, body, store)
+}
+
+func (s *Service) resumeArtifactContent(ctx context.Context, artifact Artifact, input ArtifactCreateInput, body io.Reader) (Artifact, error) {
+	if body == nil {
+		return Artifact{}, errors.New("artifact content reader is required")
+	}
+	if oneOf(artifact.Status, ArtifactStatusReady, ArtifactStatusDelivered) {
+		return artifact, nil
+	}
+	if !oneOf(artifact.Status, ArtifactStatusPending, ArtifactStatusUploading, ArtifactStatusFailed) {
+		return Artifact{}, ErrArtifactUnavailable
+	}
+	if artifact.Status == ArtifactStatusUploading && artifact.UpdatedAt.After(s.nowUTC().Add(-artifactIngestLease)) {
+		return Artifact{}, ErrArtifactIngestInProgress
+	}
+	driver := strings.TrimSpace(input.StoreDriver)
+	if artifact.StoreDriver != ArtifactStoreDriverNone && strings.TrimSpace(artifact.StoreDriver) != "" {
+		driver = artifact.StoreDriver
+	}
+	store, found := s.artifactStore(driver)
+	if !found {
+		return Artifact{}, ErrArtifactStoreRequired
+	}
+	storeKey := artifact.ID + "/content"
+	uploading, err := s.transitionArtifact(ctx, artifact, ArtifactStatusUploading, "ingest_claimed", &ArtifactContentUpdate{
+		MediaType: strings.TrimSpace(input.MediaType), SizeBytes: 0, StoreDriver: driver, StoreKey: storeKey,
+		ExternalReference: strings.TrimSpace(input.ExternalReference),
+	})
+	if err != nil {
+		return Artifact{}, err
+	}
+	input.StoreDriver = driver
+	return s.writeArtifactContent(ctx, uploading, input, body, store)
+}
+
+func (s *Service) writeArtifactContent(ctx context.Context, uploading Artifact, input ArtifactCreateInput, body io.Reader, store ArtifactStore) (Artifact, error) {
+	storeKey := uploading.StoreKey
+	driver := uploading.StoreDriver
 	maxBytes := input.MaxBytes
 	if maxBytes <= 0 {
 		maxBytes = ArtifactDefaultMaxBytes
@@ -172,7 +237,12 @@ func (s *Service) storeArtifactContent(ctx context.Context, artifact Artifact, i
 	counter := &artifactByteCounter{}
 	limited := io.LimitReader(body, maxBytes+1)
 	reader := io.TeeReader(limited, io.MultiWriter(hasher, counter))
-	_, storeErr := store.Put(ctx, storeKey, reader, -1, strings.TrimSpace(input.MediaType))
+	heartbeat := s.startArtifactIngestHeartbeat(ctx, uploading)
+	_, storeErr := store.Put(heartbeat.Context(), storeKey, reader, -1, strings.TrimSpace(input.MediaType))
+	uploading, heartbeatErr := heartbeat.Stop()
+	if heartbeatErr != nil {
+		return Artifact{}, errors.Join(storeErr, heartbeatErr)
+	}
 	actualSHA := hex.EncodeToString(hasher.Sum(nil))
 	content := &ArtifactContentUpdate{
 		MediaType: strings.TrimSpace(input.MediaType), SizeBytes: counter.total, SHA256: actualSHA,
@@ -192,6 +262,92 @@ func (s *Service) storeArtifactContent(ctx context.Context, artifact Artifact, i
 		return failed, storeErr
 	}
 	return s.transitionArtifact(ctx, uploading, ArtifactStatusReady, "", content)
+}
+
+type artifactStatusHeartbeat struct {
+	service *Service
+	ctx     context.Context
+	cancel  context.CancelFunc
+	done    chan struct{}
+	status  string
+	reason  string
+	lease   time.Duration
+
+	mu       sync.Mutex
+	artifact Artifact
+	err      error
+}
+
+func (s *Service) startArtifactIngestHeartbeat(ctx context.Context, artifact Artifact) *artifactStatusHeartbeat {
+	return s.startArtifactStatusHeartbeat(ctx, artifact, ArtifactStatusUploading, "ingest_heartbeat", artifactIngestLease)
+}
+
+func (s *Service) startArtifactStatusHeartbeat(ctx context.Context, artifact Artifact, status, reason string, lease time.Duration) *artifactStatusHeartbeat {
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	if lease <= 0 {
+		lease = artifactIngestLease
+	}
+	heartbeat := &artifactStatusHeartbeat{
+		service: s, ctx: heartbeatCtx, cancel: cancel, done: make(chan struct{}), artifact: artifact,
+		status: strings.TrimSpace(status), reason: strings.TrimSpace(reason), lease: lease,
+	}
+	go heartbeat.run()
+	return heartbeat
+}
+
+func (h *artifactStatusHeartbeat) Context() context.Context { return h.ctx }
+
+func (h *artifactStatusHeartbeat) run() {
+	defer close(h.done)
+	ticker := time.NewTicker(h.lease / 3)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-ticker.C:
+			h.mu.Lock()
+			current := h.artifact
+			h.mu.Unlock()
+			updated, changed, err := h.service.repo.TransitionArtifact(h.ctx, ArtifactTransitionInput{
+				ArtifactID: current.ID, ExpectedVersion: current.StatusVersion, ToStatus: h.status, Reason: h.reason,
+			}, h.service.nowUTC())
+			if err != nil || !changed {
+				if err == nil {
+					err = ErrArtifactStateConflict
+				}
+				h.mu.Lock()
+				h.err = err
+				h.mu.Unlock()
+				h.cancel()
+				return
+			}
+			h.mu.Lock()
+			h.artifact = updated
+			h.mu.Unlock()
+		}
+	}
+}
+
+func (h *artifactStatusHeartbeat) Stop() (Artifact, error) {
+	h.cancel()
+	<-h.done
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.artifact, h.err
+}
+
+func validArtifactID(id string) bool {
+	if !strings.HasPrefix(id, "artifact_") || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 type artifactByteCounter struct {
@@ -260,6 +416,10 @@ func (s *Service) OpenArtifactForAuth(ctx context.Context, auth gatewaycore.Cano
 	artifact, found, err := s.ArtifactForAuth(ctx, auth, id)
 	if err != nil || !found {
 		return Artifact{}, ArtifactRead{}, found, err
+	}
+	if artifact.Policy == GatewayArtifactPolicyProxyOnly {
+		opened, proxyErr := s.openProxiedArtifact(ctx, artifact, byteRange)
+		return artifact, opened, true, proxyErr
 	}
 	if !artifactDownloadable(artifact, s.nowUTC()) {
 		return artifact, ArtifactRead{}, true, ErrArtifactUnavailable

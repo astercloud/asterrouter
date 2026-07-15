@@ -64,6 +64,8 @@ type AIOperation struct {
 	Modality                 string     `json:"modality"`
 	Lane                     string     `json:"lane"`
 	Model                    string     `json:"model"`
+	ArtifactPolicy           string     `json:"artifact_policy"`
+	ArtifactSinkID           string     `json:"artifact_sink_id,omitempty"`
 	Status                   string     `json:"status"`
 	ErrorType                string     `json:"error_type,omitempty"`
 	CreatedAt                time.Time  `json:"created_at"`
@@ -77,6 +79,7 @@ type AIAttempt struct {
 	AttemptNumber       int        `json:"attempt_number"`
 	ProviderID          string     `json:"provider_id"`
 	ProviderAccountID   string     `json:"provider_account_id"`
+	ProviderAdapterID   string     `json:"provider_adapter_id"`
 	RouteID             string     `json:"route_id"`
 	UpstreamModel       string     `json:"upstream_model"`
 	Status              string     `json:"status"`
@@ -107,15 +110,16 @@ type ProviderDispatchIntent struct {
 	RequestFingerprint string `json:"request_fingerprint"`
 	ProviderID         string `json:"provider_id"`
 	ProviderAccountID  string `json:"provider_account_id"`
+	ProviderAdapterID  string `json:"provider_adapter_id"`
 	RouteID            string `json:"route_id"`
 	UpstreamModel      string `json:"upstream_model"`
 }
 
 type ProviderTaskReference struct {
-	ProviderTaskID    string
-	ProviderRequestID string
-	Status            string
-	AcceptedAt        time.Time
+	ProviderTaskID    string    `json:"provider_task_id"`
+	ProviderRequestID string    `json:"provider_request_id,omitempty"`
+	Status            string    `json:"status"`
+	AcceptedAt        time.Time `json:"accepted_at,omitempty"`
 }
 
 type BillingLedgerEntry struct {

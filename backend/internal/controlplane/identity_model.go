@@ -23,6 +23,8 @@ const (
 	RBACResourceAPIKeys         = "api_keys"
 	RBACResourceUsage           = "usage"
 	RBACResourceTraces          = "traces"
+	RBACResourceAIJobs          = "ai_jobs"
+	RBACResourceArtifacts       = "artifacts"
 	RBACResourceAlerts          = "alerts"
 	RBACResourceIdentity        = "identity"
 	RBACResourcePlatformTenants = "platform_tenants"

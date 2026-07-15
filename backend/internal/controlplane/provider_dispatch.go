@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -18,14 +19,15 @@ const (
 )
 
 type ProviderDispatchCommand struct {
-	Intent  ProviderDispatchIntent
-	Payload []byte
+	Intent  ProviderDispatchIntent `json:"intent"`
+	Payload []byte                 `json:"payload"`
 }
 
 type ProviderDispatchResult struct {
-	Outcome        string
-	Task           ProviderTaskReference
-	ReconcileAfter time.Time
+	Outcome        string                     `json:"outcome"`
+	Task           ProviderTaskReference      `json:"task"`
+	Outputs        []ProviderOutputDescriptor `json:"outputs,omitempty"`
+	ReconcileAfter time.Time                  `json:"reconcile_after,omitempty"`
 }
 
 type ProviderDispatchExecutor interface {
@@ -104,6 +106,9 @@ func (s *Service) ReconcileAIAttemptDispatch(ctx context.Context, attemptID stri
 
 func (s *Service) resolveProviderDispatchResult(ctx context.Context, attempt AIAttempt, result ProviderDispatchResult) (AIAttempt, error) {
 	next := result.ReconcileAfter
+	if result.Outcome == ProviderDispatchOutcomeAccepted && isDurableProviderTerminalStatus(strings.ToLower(strings.TrimSpace(result.Task.Status))) {
+		next = s.nowUTC()
+	}
 	if next.IsZero() {
 		next = s.nowUTC().Add(providerDispatchDefaultReconcileDelay)
 	}
@@ -142,6 +147,9 @@ func providerDispatchIntentFromAttempt(attempt AIAttempt) (ProviderDispatchInten
 	}
 	if intent.Version != 1 || intent.AttemptID != attempt.ID || intent.OperationID != attempt.OperationID || intent.DispatchKey != attempt.DispatchKey ||
 		intent.ProviderID != attempt.ProviderID || intent.ProviderAccountID != attempt.ProviderAccountID || intent.RouteID != attempt.RouteID || intent.UpstreamModel != attempt.UpstreamModel || intent.RequestFingerprint == "" {
+		return ProviderDispatchIntent{}, ErrAIAttemptDispatchConflict
+	}
+	if intent.ProviderAdapterID != attempt.ProviderAdapterID {
 		return ProviderDispatchIntent{}, ErrAIAttemptDispatchConflict
 	}
 	return intent, nil

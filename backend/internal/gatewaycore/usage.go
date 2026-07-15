@@ -11,6 +11,7 @@ const (
 	UsageNormalizationPartial   = "partial"
 	UsageNormalizationOpenAI    = "normalized_openai"
 	UsageNormalizationAnthropic = "normalized_anthropic"
+	UsageNormalizationGemini    = "normalized_gemini"
 	UsageNormalizationGeneric   = "normalized_generic"
 )
 
@@ -65,13 +66,19 @@ func MergeNormalizedUsage(current, next NormalizedUsage) NormalizedUsage {
 		current.CacheWrite1hTokens = next.CacheWrite1hTokens
 	}
 	current.CacheFieldsPresent = current.CacheFieldsPresent || next.CacheFieldsPresent
-	if current.UsageNormalizationStatus == "" || current.UsageNormalizationStatus == UsageNormalizationMissing || current.UsageNormalizationStatus == UsageNormalizationInvalid || current.UsageNormalizationStatus == UsageNormalizationPartial || next.UsageNormalizationStatus == UsageNormalizationOpenAI || next.UsageNormalizationStatus == UsageNormalizationAnthropic {
+	if current.UsageNormalizationStatus == "" || current.UsageNormalizationStatus == UsageNormalizationMissing || current.UsageNormalizationStatus == UsageNormalizationInvalid || current.UsageNormalizationStatus == UsageNormalizationPartial || next.UsageNormalizationStatus == UsageNormalizationOpenAI || next.UsageNormalizationStatus == UsageNormalizationAnthropic || next.UsageNormalizationStatus == UsageNormalizationGemini {
 		current.UsageNormalizationStatus = next.UsageNormalizationStatus
 	}
 	return current
 }
 
 func usageObjectFromRoot(root map[string]json.RawMessage) (map[string]json.RawMessage, bool) {
+	if raw, ok := root["usageMetadata"]; ok {
+		var usage map[string]json.RawMessage
+		if json.Unmarshal(raw, &usage) == nil {
+			return usage, true
+		}
+	}
 	if raw, ok := root["usage"]; ok {
 		var usage map[string]json.RawMessage
 		if json.Unmarshal(raw, &usage) == nil {
@@ -93,6 +100,14 @@ func usageObjectFromRoot(root map[string]json.RawMessage) (map[string]json.RawMe
 }
 
 func normalizeUsageObject(usage map[string]json.RawMessage) NormalizedUsage {
+	geminiPromptTokens, hasGeminiPrompt := usageInt(usage, "promptTokenCount")
+	geminiCachedTokens, hasGeminiCached := usageInt(usage, "cachedContentTokenCount")
+	geminiCandidatesTokens, hasGeminiCandidates := usageInt(usage, "candidatesTokenCount")
+	geminiThoughtsTokens, hasGeminiThoughts := usageInt(usage, "thoughtsTokenCount")
+	geminiCacheDetailsTokens, hasGeminiCacheDetails := usageModalityTokenSum(usage, "cacheTokensDetails")
+	if hasGeminiPrompt || hasGeminiCached || hasGeminiCandidates || hasGeminiThoughts || hasGeminiCacheDetails || hasGeminiUsageField(usage) {
+		return normalizeGeminiUsage(geminiPromptTokens, geminiCachedTokens, geminiCandidatesTokens, geminiThoughtsTokens, geminiCacheDetailsTokens, hasGeminiPrompt, hasGeminiCached, hasGeminiCandidates, hasGeminiThoughts, hasGeminiCacheDetails)
+	}
 	promptTokens, hasPromptTokens := usageInt(usage, "prompt_tokens")
 	completionTokens, hasCompletionTokens := usageInt(usage, "completion_tokens")
 	inputTokens, hasInputTokens := usageInt(usage, "input_tokens")
@@ -122,6 +137,31 @@ func normalizeUsageObject(usage map[string]json.RawMessage) NormalizedUsage {
 		}
 	}
 	return NormalizedUsage{UsageNormalizationStatus: UsageNormalizationPartial}
+}
+
+func normalizeGeminiUsage(promptTokens, cachedTokens, candidatesTokens, thoughtsTokens, cacheDetailsTokens int, hasPromptTokens, hasCachedTokens, hasCandidatesTokens, hasThoughtsTokens, hasCacheDetailsTokens bool) NormalizedUsage {
+	if !hasCachedTokens && hasCacheDetailsTokens {
+		cachedTokens = cacheDetailsTokens
+		hasCachedTokens = true
+	}
+	outputTokens := candidatesTokens + thoughtsTokens
+	hasOutputTokens := hasCandidatesTokens || hasThoughtsTokens
+	uncachedTokens := maxInt(0, promptTokens-cachedTokens)
+	return NormalizedUsage{
+		InputTokens: promptTokens, OutputTokens: outputTokens, inputTokensPresent: hasPromptTokens, outputTokensPresent: hasOutputTokens,
+		TotalInputTokens: intPointerWhen(hasPromptTokens, promptTokens), UncachedInputTokens: intPointerWhen(hasPromptTokens, uncachedTokens),
+		CacheReadTokens: intPointerWhen(hasCachedTokens, cachedTokens), CacheFieldsPresent: hasCachedTokens || hasCacheDetailsTokens,
+		UsageNormalizationStatus: UsageNormalizationGemini,
+	}
+}
+
+func hasGeminiUsageField(usage map[string]json.RawMessage) bool {
+	for _, key := range []string{"toolUsePromptTokenCount", "totalTokenCount", "promptTokensDetails", "candidatesTokensDetails", "toolUsePromptTokensDetails", "serviceTier"} {
+		if _, ok := usage[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeOpenAIUsage(usage map[string]json.RawMessage, inputTokens, outputTokens int, hasInputTokens, hasOutputTokens bool) NormalizedUsage {
@@ -199,6 +239,26 @@ func usageObject(object map[string]json.RawMessage, key string) (map[string]json
 		return nil, false
 	}
 	return value, true
+}
+
+func usageModalityTokenSum(object map[string]json.RawMessage, key string) (int, bool) {
+	raw, ok := object[key]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, false
+	}
+	var values []map[string]json.RawMessage
+	if json.Unmarshal(raw, &values) != nil {
+		return 0, false
+	}
+	total := 0
+	for _, value := range values {
+		count, present := usageInt(value, "tokenCount")
+		if !present {
+			return 0, false
+		}
+		total += count
+	}
+	return total, true
 }
 
 func intPointerWhen(present bool, value int) *int {

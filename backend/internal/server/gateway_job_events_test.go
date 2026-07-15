@@ -86,6 +86,45 @@ func TestGatewayJobEventSSEStreamsLiveCancellation(t *testing.T) {
 	}
 }
 
+func TestGatewayJobEventSSEPublishesAvailableArtifactWithoutChangingCursor(t *testing.T) {
+	handler, control, owner, job := gatewayJobEventTestRuntime(t)
+	if err := control.SetArtifactStore(controlplane.NewMemoryArtifactStore()); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := control.CreateArtifactFromReader(context.Background(), controlplane.ArtifactCreateInput{
+		OperationID: job.OperationID, JobID: job.ID, Role: controlplane.ArtifactRoleFinal,
+		Policy: controlplane.GatewayArtifactPolicyTemporary, MediaType: "image/png", StoreDriver: controlplane.ArtifactStoreDriverMemory,
+		ExpectedSizeBytes: 5, MaxBytes: 16,
+	}, strings.NewReader("image"))
+	if err != nil {
+		t.Fatalf("CreateArtifactFromReader(): %v", err)
+	}
+	cancel := performGatewayJobRequest(handler, http.MethodPost, "/v1/jobs/"+job.ID+"/cancel", owner.Key, "", "")
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+
+	stream := performGatewayJobEventRequest(handler, job.ID, owner.Key, "1")
+	body := stream.Body.String()
+	if stream.Code != http.StatusOK || !strings.Contains(body, "event: job.artifact.available") || !strings.Contains(body, artifact.ID) || !strings.Contains(body, `"status":"ready"`) {
+		t.Fatalf("artifact event status=%d body=%s", stream.Code, body)
+	}
+	if strings.Contains(body, "id: "+artifact.ID) || !strings.Contains(body, "id: 2\nevent: job.cancelled") {
+		t.Fatalf("artifact event changed job cursor: %s", body)
+	}
+}
+
+func TestArtifactAvailableEventWaitsForCustomerSinkDelivery(t *testing.T) {
+	artifact := controlplane.Artifact{ID: "artifact-customer", Policy: controlplane.GatewayArtifactPolicyCustomerSink, Status: controlplane.ArtifactStatusReady}
+	if artifactAvailableForJobEvent(artifact) {
+		t.Fatal("customer sink artifact became available before delivery")
+	}
+	artifact.Status = controlplane.ArtifactStatusDelivered
+	if !artifactAvailableForJobEvent(artifact) {
+		t.Fatal("delivered customer sink artifact is not available")
+	}
+}
+
 func TestGatewayJobEventSSERevalidatesCredentialDuringConnection(t *testing.T) {
 	handler, control, owner, job := gatewayJobEventTestRuntime(t)
 	server := httptest.NewServer(handler)

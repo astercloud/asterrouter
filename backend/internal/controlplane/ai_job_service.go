@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Service) BeginDurableAIJob(ctx context.Context, auth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest) (AIJob, bool, error) {
-	if request.Lane != gatewaycore.LaneDurable || request.Protocol != gatewaycore.ProtocolAsterJobs || strings.TrimSpace(request.IdempotencyKey) == "" {
+	if request.Lane != gatewaycore.LaneDurable || !durableAIJobProtocolSupported(request.Protocol) || strings.TrimSpace(request.IdempotencyKey) == "" {
 		if strings.TrimSpace(request.IdempotencyKey) == "" {
 			return AIJob{}, false, ErrAIJobIdempotencyRequired
 		}
@@ -38,14 +38,20 @@ func (s *Service) BeginDurableAIJob(ctx context.Context, auth gatewaycore.Canoni
 		ExternalSubjectReference: strings.TrimSpace(auth.ExternalSubjectReference), ClientRequestID: strings.TrimSpace(request.ClientRequestID),
 		RequestFingerprint: strings.TrimSpace(request.Fingerprint), IdempotencyKey: strings.TrimSpace(request.IdempotencyKey),
 		Protocol: string(request.Protocol), Operation: strings.TrimSpace(request.Operation), Modality: strings.TrimSpace(request.Modality),
-		Lane: string(request.Lane), Model: strings.TrimSpace(request.Model), Status: AIOperationStatusAccepted, CreatedAt: now, UpdatedAt: now,
+		Lane: string(request.Lane), Model: strings.TrimSpace(request.Model), ArtifactPolicy: artifactPolicySnapshot(auth.ArtifactPolicy),
+		ArtifactSinkID: artifactSinkSnapshot(auth.ArtifactPolicy, auth.ArtifactSinkID),
+		Status:         AIOperationStatusAccepted, CreatedAt: now, UpdatedAt: now,
+	}
+	if !validArtifactSinkBinding(operation.ArtifactPolicy, operation.ArtifactSinkID) {
+		return AIJob{}, false, ErrArtifactSinkRequired
 	}
 	job := AIJob{
 		ID: "job_" + randomID(12), OperationID: operation.ID, ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
 		CredentialID: operation.CredentialID, CredentialSource: operation.CredentialSource, IntegrationID: operation.IntegrationID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, ExternalSubjectReference: operation.ExternalSubjectReference,
 		RequestFingerprint: operation.RequestFingerprint, IdempotencyKey: operation.IdempotencyKey, Protocol: operation.Protocol,
-		Operation: operation.Operation, Modality: operation.Modality, Model: operation.Model, ArtifactPolicy: strings.TrimSpace(auth.ArtifactPolicy),
+		Operation: operation.Operation, Modality: operation.Modality, Model: operation.Model, ArtifactPolicy: operation.ArtifactPolicy,
+		ArtifactSinkID:           operation.ArtifactSinkID,
 		RequestPayloadCiphertext: requestPayloadCiphertext, Status: AIJobStatusQueued, StatusVersion: 1, NextEligibleAt: now,
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(AIJobDefaultTTL),
 	}
@@ -66,6 +72,10 @@ func (s *Service) BeginDurableAIJob(ctx context.Context, auth gatewaycore.Canoni
 	}
 	s.registerAIJobReadyState(ctx, createdJob)
 	return createdJob, created, nil
+}
+
+func durableAIJobProtocolSupported(protocol gatewaycore.Protocol) bool {
+	return protocol == gatewaycore.ProtocolAsterJobs || protocol == gatewaycore.ProtocolOpenAIImages
 }
 
 func (s *Service) SetAIJobReadyIndex(index AIJobReadyIndex) {

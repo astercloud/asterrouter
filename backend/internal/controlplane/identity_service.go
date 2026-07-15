@@ -960,7 +960,7 @@ func (s *Service) roleBindingFromRequest(ctx context.Context, req RoleBindingReq
 func validRBACResource(resource string) bool {
 	return oneOf(resource,
 		RBACResourceDashboard, RBACResourceRouting, RBACResourceProviders, RBACResourceAPIKeys,
-		RBACResourceUsage, RBACResourceTraces, RBACResourceAlerts, RBACResourceIdentity,
+		RBACResourceUsage, RBACResourceTraces, RBACResourceAIJobs, RBACResourceArtifacts, RBACResourceAlerts, RBACResourceIdentity,
 		RBACResourcePolicies, RBACResourceAudit, RBACResourceExports, RBACResourcePlugins,
 		RBACResourceSettings, RBACResourceSystem,
 	)

@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 )
 
 func TestRunProviderCacheProbeObservesReuseAndCapturesEvidence(t *testing.T) {
@@ -136,6 +138,71 @@ func TestRunProviderCacheProbeSkipsWithoutSpendingWhenDisabledOrBudgetExhausted(
 	}
 }
 
+func TestRunProviderCacheProbeSupportsGeminiUsageAndEndpoint(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := int(calls.Add(1))
+		if r.URL.Path != "/v1beta/models/probe-model:generateContent" || r.Header.Get("X-Goog-API-Key") != "probe-secret" {
+			t.Errorf("unexpected Gemini request path=%s api-key=%q", r.URL.Path, r.Header.Get("X-Goog-API-Key"))
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode Gemini request: %v", err)
+		}
+		if _, ok := payload["systemInstruction"]; !ok {
+			t.Errorf("Gemini probe did not send a stable systemInstruction: %s", mustJSON(payload))
+		}
+		cached := 0
+		if call == 2 {
+			cached = 200
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-ID", fmt.Sprintf("gemini-probe-request-%d", call))
+		_, _ = fmt.Fprintf(w, `{"usageMetadata":{"promptTokenCount":256,"cachedContentTokenCount":%d,"candidatesTokenCount":2,"thoughtsTokenCount":3,"totalTokenCount":261}}`, cached)
+	}))
+	defer upstream.Close()
+
+	svc, repo, accountID := newCacheProbeTestServiceForProtocol(t, upstream.URL, 0, 100_000, 100_000, string(gatewaycore.ProtocolGeminiGenerate))
+	run, err := svc.RunProviderCacheProbe(context.Background(), "tester", CacheProbeRequest{
+		ProviderAccountID: accountID, UpstreamModel: "probe-model", Protocol: string(gatewaycore.ProtocolGeminiGenerate),
+		PrefixTokens: 256, MaxCostMicros: 100_000,
+	})
+	if err != nil {
+		t.Fatalf("RunProviderCacheProbe(Gemini): %v", err)
+	}
+	if run.Status != CacheProbeStatusSucceeded || run.ReuseCacheReadTokens != 200 || run.WarmCacheReadTokens != 0 || run.ControlCacheReadTokens != 0 || !run.CacheFieldsPresent {
+		t.Fatalf("Gemini probe run = %+v", run)
+	}
+	capabilities, err := repo.ListProviderCacheCapabilities(context.Background())
+	if err != nil || len(capabilities) != 1 || capabilities[0].UsageSchema != gatewaycore.UsageNormalizationGemini {
+		t.Fatalf("Gemini capability=%+v err=%v", capabilities, err)
+	}
+}
+
+func TestGeminiCacheProbePayloadDoesNotTranslatePromptCacheKey(t *testing.T) {
+	payload, err := cacheProbePayload(string(gatewaycore.ProtocolGeminiGenerate), "gemini-2.5-flash", "stable-prefix", "suffix", "session-hash", ProviderCacheCapability{CacheControlMode: CacheControlModePromptCacheKey})
+	if err != nil {
+		t.Fatalf("cacheProbePayload(Gemini): %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode Gemini payload: %v", err)
+	}
+	if _, found := decoded["prompt_cache_key"]; found {
+		t.Fatalf("native Gemini payload unexpectedly contains prompt_cache_key: %s", string(payload))
+	}
+	if _, found := decoded["systemInstruction"]; !found {
+		t.Fatalf("native Gemini payload missing systemInstruction: %s", string(payload))
+	}
+}
+
+func TestCacheProbeEndpointBuildsNativeGeminiPath(t *testing.T) {
+	got := cacheProbeEndpoint("https://generativelanguage.googleapis.com/v1beta", string(gatewaycore.ProtocolGeminiGenerate), "gemini-2.5-flash")
+	if got != "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" {
+		t.Fatalf("cacheProbeEndpoint() = %q", got)
+	}
+}
+
 func TestReserveProviderCacheProbeRunIsAtomicInMemory(t *testing.T) {
 	repo := NewMemoryRepository()
 	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
@@ -168,6 +235,10 @@ func TestReserveProviderCacheProbeRunIsAtomicInMemory(t *testing.T) {
 }
 
 func newCacheProbeTestService(t *testing.T, baseURL string, cooldownSeconds int, dailyTokenBudget, dailyCostBudget int64) (*Service, *MemoryRepository, string) {
+	return newCacheProbeTestServiceForProtocol(t, baseURL, cooldownSeconds, dailyTokenBudget, dailyCostBudget, string(gatewaycore.ProtocolOpenAIChat))
+}
+
+func newCacheProbeTestServiceForProtocol(t *testing.T, baseURL string, cooldownSeconds int, dailyTokenBudget, dailyCostBudget int64, protocol string) (*Service, *MemoryRepository, string) {
 	t.Helper()
 	ctx := context.Background()
 	repo := NewMemoryRepository()
@@ -187,10 +258,11 @@ func newCacheProbeTestService(t *testing.T, baseURL string, cooldownSeconds int,
 		t.Fatal(err)
 	}
 	_, err = svc.CreateProcurementPrice(ctx, "tester", ProcurementPriceRequest{
-		ProviderID: provider.ID, ProviderAccountID: account.ID, UpstreamModel: "probe-model", Protocol: "openai_chat_completions",
-		Currency: "USD", UncachedInputMicrosPer1MTokens: 1_000_000, CacheReadMicrosPer1MTokens: 100_000,
-		OutputMicrosPer1MTokens: 2_000_000, ReferenceInputMicrosPer1MTokens: 1_000_000,
-		ReferenceOutputMicrosPer1MTokens: 2_000_000, SourceKind: "manual", Confidence: ProcurementCostConfidenceEstimated,
+		ProviderID: provider.ID, ProviderAccountID: account.ID, UpstreamModel: "probe-model", Protocol: protocol,
+		Currency: "USD", UncachedInputMicrosPer1MTokens: pricingMicros(1_000_000), CacheReadMicrosPer1MTokens: pricingMicros(100_000),
+		CacheWrite5mMicrosPer1MTokens: pricingMicros(0), CacheWrite1hMicrosPer1MTokens: pricingMicros(0),
+		OutputMicrosPer1MTokens: pricingMicros(2_000_000), RequestMicros: pricingMicros(0), ReferenceInputMicrosPer1MTokens: pricingMicros(1_000_000),
+		ReferenceOutputMicrosPer1MTokens: pricingMicros(2_000_000), SourceKind: "manual", Confidence: ProcurementCostConfidenceEstimated,
 		Status: ProcurementPriceStatusActive,
 	})
 	if err != nil {
@@ -207,4 +279,13 @@ func newCacheProbeTestService(t *testing.T, baseURL string, cooldownSeconds int,
 		t.Fatal(err)
 	}
 	return svc, repo, account.ID
+}
+
+func mustJSON(value any) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
+}
+
+func pricingMicros(value int64) *int64 {
+	return &value
 }

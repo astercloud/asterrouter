@@ -253,7 +253,7 @@ func TestAIJobAdmissionRollsBackOnOutboxConflict(t *testing.T) {
 			CredentialSource: string(auth.CredentialSource), PrincipalType: auth.PrincipalType, PrincipalID: auth.PrincipalID,
 			RequestFingerprint: "fingerprint-rollback", IdempotencyKey: "job-idem-rollback", Protocol: string(gatewaycore.ProtocolAsterJobs),
 			Operation: "image_generation", Modality: "image", Lane: string(gatewaycore.LaneDurable), Model: "image-model",
-			Status: AIOperationStatusAccepted, CreatedAt: now, UpdatedAt: now,
+			ArtifactPolicy: GatewayArtifactPolicyManaged, Status: AIOperationStatusAccepted, CreatedAt: now, UpdatedAt: now,
 		}
 		job := AIJob{
 			ID: "job_rollback", OperationID: operation.ID, ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,

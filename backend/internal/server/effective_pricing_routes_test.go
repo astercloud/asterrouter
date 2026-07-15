@@ -24,13 +24,31 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 		t.Fatal(err)
 	}
 	account := createGatewayTestAccount(t, control, provider, "upstream-model", "account-secret", 10, 2)
-	priceBody := fmt.Sprintf(`{"provider_id":%q,"provider_account_id":%q,"upstream_model":"upstream-model","protocol":"openai_chat_completions","currency":"USD","uncached_input_micros_per_1m_tokens":1000000,"cache_read_micros_per_1m_tokens":100000,"output_micros_per_1m_tokens":2000000,"reference_input_micros_per_1m_tokens":1000000,"reference_output_micros_per_1m_tokens":2000000,"quoted_multiplier":0.2,"recharge_multiplier":1,"source_kind":"manual","confidence":"estimated","status":"active"}`, provider.ID, account.ID)
+	incompletePriceBody := fmt.Sprintf(`{"provider_id":%q,"provider_account_id":%q,"upstream_model":"upstream-model","protocol":"openai_chat_completions","currency":"USD","uncached_input_micros_per_1m_tokens":1000000,"cache_read_micros_per_1m_tokens":100000,"cache_write_5m_micros_per_1m_tokens":1250000,"output_micros_per_1m_tokens":2000000,"request_micros":0,"reference_input_micros_per_1m_tokens":1000000,"reference_output_micros_per_1m_tokens":2000000}`, provider.ID, account.ID)
+	incompletePrice := httptest.NewRequest(http.MethodPost, "/api/v1/admin/procurement-prices", bytes.NewBufferString(incompletePriceBody))
+	incompletePrice.Header.Set("Content-Type", "application/json")
+	incompletePriceRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(incompletePriceRecorder, incompletePrice)
+	if incompletePriceRecorder.Code != http.StatusBadRequest || !bytes.Contains(incompletePriceRecorder.Body.Bytes(), []byte("cache_write_1h_micros_per_1m_tokens is required")) {
+		t.Fatalf("incomplete price status=%d body=%s", incompletePriceRecorder.Code, incompletePriceRecorder.Body.String())
+	}
+
+	priceBody := fmt.Sprintf(`{"provider_id":%q,"provider_account_id":%q,"upstream_model":"upstream-model","protocol":"openai_chat_completions","currency":"USD","uncached_input_micros_per_1m_tokens":1000000,"cache_read_micros_per_1m_tokens":100000,"cache_write_5m_micros_per_1m_tokens":1250000,"cache_write_1h_micros_per_1m_tokens":2000000,"output_micros_per_1m_tokens":2000000,"request_micros":0,"reference_input_micros_per_1m_tokens":1000000,"reference_output_micros_per_1m_tokens":2000000,"quoted_multiplier":0.2,"recharge_multiplier":1,"source_kind":"manual","confidence":"estimated","status":"active"}`, provider.ID, account.ID)
 	create := httptest.NewRequest(http.MethodPost, "/api/v1/admin/procurement-prices", bytes.NewBufferString(priceBody))
 	create.Header.Set("Content-Type", "application/json")
 	createRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(createRecorder, create)
 	if createRecorder.Code != http.StatusOK {
 		t.Fatalf("create price status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+
+	capabilityBody := fmt.Sprintf(`{"provider_account_id":%q,"upstream_model":"upstream-model","protocol":"openai_chat_completions","support_status":"claimed","pool_affinity_grade":"unknown","affinity_transport":"header","affinity_field":"X-Session-ID","cache_control_mode":"prompt_cache_key","usage_schema":"openai"}`, account.ID)
+	capability := httptest.NewRequest(http.MethodPut, "/api/v1/admin/provider-cache-capabilities", bytes.NewBufferString(capabilityBody))
+	capability.Header.Set("Content-Type", "application/json")
+	capabilityRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(capabilityRecorder, capability)
+	if capabilityRecorder.Code != http.StatusOK || !bytes.Contains(capabilityRecorder.Body.Bytes(), []byte(`"affinity_field":"X-Session-ID"`)) {
+		t.Fatalf("capability status=%d body=%s", capabilityRecorder.Code, capabilityRecorder.Body.String())
 	}
 
 	if err := control.RecordGatewayUsage(context.Background(), controlplane.GatewayAuthContext{APIKey: controlplane.APIKeyRecord{ID: "billing-key"}}, controlplane.GatewayUsageInput{
@@ -61,7 +79,7 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 	report := httptest.NewRequest(http.MethodGet, "/api/v1/admin/effective-pricing/report?model=upstream-model&protocol=openai_chat_completions&window_hours=24", nil)
 	reportRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(reportRecorder, report)
-	if reportRecorder.Code != http.StatusOK || !bytes.Contains(reportRecorder.Body.Bytes(), []byte(`"procurement_cost_confidence"`)) && !bytes.Contains(reportRecorder.Body.Bytes(), []byte(`"cost_confidence":"exact"`)) {
+	if reportRecorder.Code != http.StatusOK || !bytes.Contains(reportRecorder.Body.Bytes(), []byte(`"cost_available":true`)) || !bytes.Contains(reportRecorder.Body.Bytes(), []byte(`"cache_read_micros_per_1m_tokens":100000`)) || !bytes.Contains(reportRecorder.Body.Bytes(), []byte(`"cost_confidence":"exact"`)) {
 		t.Fatalf("report status=%d body=%s", reportRecorder.Code, reportRecorder.Body.String())
 	}
 }
@@ -101,9 +119,10 @@ func TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfir
 	account := createGatewayTestAccount(t, control, provider, "probe-model", "account-secret", 10, 2)
 	if _, err := control.CreateProcurementPrice(context.Background(), "tester", controlplane.ProcurementPriceRequest{
 		ProviderID: provider.ID, ProviderAccountID: account.ID, UpstreamModel: "probe-model", Protocol: "openai_chat_completions",
-		Currency: "USD", UncachedInputMicrosPer1MTokens: 1_000_000, CacheReadMicrosPer1MTokens: 100_000,
-		OutputMicrosPer1MTokens: 2_000_000, ReferenceInputMicrosPer1MTokens: 1_000_000,
-		ReferenceOutputMicrosPer1MTokens: 2_000_000, SourceKind: "manual", Confidence: "estimated", Status: "active",
+		Currency: "USD", UncachedInputMicrosPer1MTokens: pricingMicrosValue(1_000_000), CacheReadMicrosPer1MTokens: pricingMicrosValue(100_000),
+		CacheWrite5mMicrosPer1MTokens: pricingMicrosValue(0), CacheWrite1hMicrosPer1MTokens: pricingMicrosValue(0),
+		OutputMicrosPer1MTokens: pricingMicrosValue(2_000_000), RequestMicros: pricingMicrosValue(0), ReferenceInputMicrosPer1MTokens: pricingMicrosValue(1_000_000),
+		ReferenceOutputMicrosPer1MTokens: pricingMicrosValue(2_000_000), SourceKind: "manual", Confidence: "estimated", Status: "active",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -140,4 +159,8 @@ func TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfir
 	if response.Data.Status != controlplane.CacheProbeStatusSucceeded || response.Data.ReuseCacheReadTokens != 240 || response.Data.ReuseUpstreamRequestID != "route-probe-2" || calls.Load() != 3 {
 		t.Fatalf("response=%+v calls=%d", response.Data, calls.Load())
 	}
+}
+
+func pricingMicrosValue(value int64) *int64 {
+	return &value
 }

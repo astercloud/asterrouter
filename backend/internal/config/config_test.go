@@ -207,6 +207,31 @@ func TestValidateRuntimeRejectsInvalidDurableAIJobQueueLimit(t *testing.T) {
 	}
 }
 
+func TestDurableAIJobInfrastructureConfiguration(t *testing.T) {
+	t.Setenv("ASTER_AI_JOB_QUEUE_DRIVER", "redis")
+	t.Setenv("ASTER_ROUTING_AFFINITY_DRIVER", "redis")
+	t.Setenv("ASTER_REDIS_URL", "redis://127.0.0.1:6379/0")
+	t.Setenv("ASTER_REDIS_NAMESPACE", "tenant-a.runtime")
+	cfg := Load()
+	if cfg.AIJobQueueDriver != "redis" || cfg.RoutingAffinityDriver != "redis" || cfg.RedisURL == "" || cfg.RedisNamespace != "tenant-a.runtime" {
+		t.Fatalf("Load() durable runtime config=%+v", cfg)
+	}
+	if err := ValidateRuntime(cfg); err != nil {
+		t.Fatalf("ValidateRuntime()=%v", err)
+	}
+	for _, invalid := range []Config{
+		{BuildType: "source", AIJobQueueDriver: "redis"},
+		{BuildType: "source", AIJobQueueDriver: "unsupported"},
+		{BuildType: "source", RoutingAffinityDriver: "redis"},
+		{BuildType: "source", RoutingAffinityDriver: "unsupported"},
+		{BuildType: "source", AIJobQueueDriver: "memory", RedisNamespace: "invalid namespace"},
+	} {
+		if err := ValidateRuntime(invalid); err == nil {
+			t.Fatalf("ValidateRuntime(%+v) accepted invalid durable runtime configuration", invalid)
+		}
+	}
+}
+
 func TestArtifactStoreConfigurationIsOptionalAndValidated(t *testing.T) {
 	if err := ValidateRuntime(Config{BuildType: "source", ArtifactStoreDriver: "none"}); err != nil {
 		t.Fatalf("optional artifact store: %v", err)

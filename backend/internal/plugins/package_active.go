@@ -16,11 +16,18 @@ import (
 var packagePathSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
 
 type sidecarManifest struct {
-	ID         string            `json:"id"`
-	Version    string            `json:"version"`
-	Runtime    string            `json:"runtime"`
-	Entrypoint map[string]string `json:"entrypoint"`
-	DataFeeds  []string          `json:"data_feeds,omitempty"`
+	ID               string                              `json:"id"`
+	Version          string                              `json:"version"`
+	Runtime          string                              `json:"runtime"`
+	Entrypoint       map[string]string                   `json:"entrypoint"`
+	DataFeeds        []string                            `json:"data_feeds,omitempty"`
+	ProviderAdapters []providerAdapterManifestCapability `json:"provider_adapters,omitempty"`
+}
+
+type providerAdapterManifestCapability struct {
+	ProviderTypes []string `json:"provider_types"`
+	Modalities    []string `json:"modalities"`
+	Operations    []string `json:"operations"`
 }
 
 func inspectPackageRuntime(cachePath string) (string, bool, error) {
@@ -193,7 +200,51 @@ func readSidecarManifest(path string) (sidecarManifest, error) {
 			return sidecarManifest{}, fmt.Errorf("plugin manifest contains invalid data feed permission")
 		}
 	}
+	for index := range manifest.ProviderAdapters {
+		capability := &manifest.ProviderAdapters[index]
+		capability.ProviderTypes = cleanLowerStringList(capability.ProviderTypes)
+		capability.Modalities = cleanLowerStringList(capability.Modalities)
+		capability.Operations = cleanLowerStringList(capability.Operations)
+		if len(capability.ProviderTypes) == 0 || len(capability.Modalities) == 0 || len(capability.Operations) == 0 {
+			return sidecarManifest{}, fmt.Errorf("plugin manifest contains an incomplete provider adapter capability")
+		}
+		for _, values := range [][]string{capability.ProviderTypes, capability.Modalities, capability.Operations} {
+			for _, value := range values {
+				if !validProviderAdapterCapabilityToken(value) {
+					return sidecarManifest{}, fmt.Errorf("plugin manifest contains an invalid provider adapter capability")
+				}
+			}
+		}
+	}
 	return manifest, nil
+}
+
+func cleanLowerStringList(values []string) []string {
+	cleaned := cleanStringList(values)
+	out := make([]string, 0, len(cleaned))
+	seen := make(map[string]struct{}, len(cleaned))
+	for _, value := range cleaned {
+		value = strings.ToLower(value)
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func validProviderAdapterCapabilityToken(value string) bool {
+	if value == "" || len(value) > 96 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || strings.ContainsRune("._-", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func extractTarGzip(source string, targetDir string) error {

@@ -9,12 +9,13 @@ import (
 )
 
 var (
-	ErrArtifactNotFound      = errors.New("artifact not found")
-	ErrArtifactStateConflict = errors.New("artifact state changed concurrently")
-	ErrArtifactStoreRequired = errors.New("artifact store is required")
-	ErrArtifactTooLarge      = errors.New("artifact exceeds the configured size limit")
-	ErrArtifactIntegrity     = errors.New("artifact integrity verification failed")
-	ErrArtifactUnavailable   = errors.New("artifact content is unavailable")
+	ErrArtifactNotFound         = errors.New("artifact not found")
+	ErrArtifactStateConflict    = errors.New("artifact state changed concurrently")
+	ErrArtifactStoreRequired    = errors.New("artifact store is required")
+	ErrArtifactTooLarge         = errors.New("artifact exceeds the configured size limit")
+	ErrArtifactIntegrity        = errors.New("artifact integrity verification failed")
+	ErrArtifactUnavailable      = errors.New("artifact content is unavailable")
+	ErrArtifactIngestInProgress = errors.New("artifact ingest is already in progress")
 )
 
 const (
@@ -93,8 +94,14 @@ type ArtifactEvent struct {
 
 type ArtifactQuery struct {
 	Owner        *ArtifactOwner
+	ProfileScope string
+	TenantID     string
+	Search       string
 	OperationID  string
 	JobID        string
+	AttemptID    string
+	Role         string
+	Policy       string
 	Status       string
 	RetainBefore *time.Time
 	Limit        int
@@ -119,6 +126,7 @@ type ArtifactTransitionInput struct {
 }
 
 type ArtifactCreateInput struct {
+	ID                string
 	OperationID       string
 	JobID             string
 	AttemptID         string
@@ -162,19 +170,44 @@ func validArtifactPolicy(policy string) bool {
 	return oneOf(policy, GatewayArtifactPolicyProxyOnly, GatewayArtifactPolicyTemporary, GatewayArtifactPolicyManaged, GatewayArtifactPolicyCustomerSink, GatewayArtifactPolicyMetadataOnly)
 }
 
+func artifactPolicySnapshot(policy string) string {
+	policy = strings.TrimSpace(policy)
+	if !validArtifactPolicy(policy) {
+		return GatewayArtifactPolicyProxyOnly
+	}
+	return policy
+}
+
+func artifactSinkSnapshot(policy, sinkID string) string {
+	if artifactPolicySnapshot(policy) != GatewayArtifactPolicyCustomerSink {
+		return ""
+	}
+	return strings.TrimSpace(sinkID)
+}
+
+func validArtifactSinkBinding(policy, sinkID string) bool {
+	sinkID = strings.TrimSpace(sinkID)
+	if artifactPolicySnapshot(policy) != GatewayArtifactPolicyCustomerSink {
+		return sinkID == ""
+	}
+	return validArtifactSinkID(sinkID)
+}
+
 func artifactStatusTransitionAllowed(fromStatus, toStatus string) bool {
 	switch fromStatus {
 	case ArtifactStatusPending:
 		return oneOf(toStatus, ArtifactStatusUploading, ArtifactStatusReady, ArtifactStatusFailed, ArtifactStatusDeleteRequested)
 	case ArtifactStatusUploading:
-		return oneOf(toStatus, ArtifactStatusReady, ArtifactStatusFailed, ArtifactStatusDeleteRequested)
+		return oneOf(toStatus, ArtifactStatusUploading, ArtifactStatusReady, ArtifactStatusFailed, ArtifactStatusDeleteRequested)
 	case ArtifactStatusReady:
 		return oneOf(toStatus, ArtifactStatusDelivering, ArtifactStatusDeleteRequested, ArtifactStatusExpired)
 	case ArtifactStatusDelivering:
-		return oneOf(toStatus, ArtifactStatusDelivered, ArtifactStatusDeliveryFailed, ArtifactStatusDeleteRequested)
+		return oneOf(toStatus, ArtifactStatusDelivering, ArtifactStatusDelivered, ArtifactStatusDeliveryFailed, ArtifactStatusDeleteRequested)
 	case ArtifactStatusDeliveryFailed:
 		return oneOf(toStatus, ArtifactStatusDelivering, ArtifactStatusDeleteRequested, ArtifactStatusExpired)
-	case ArtifactStatusDelivered, ArtifactStatusFailed, ArtifactStatusExpired:
+	case ArtifactStatusFailed:
+		return oneOf(toStatus, ArtifactStatusUploading, ArtifactStatusDeleteRequested)
+	case ArtifactStatusDelivered, ArtifactStatusExpired:
 		return toStatus == ArtifactStatusDeleteRequested
 	case ArtifactStatusDeleteRequested, ArtifactStatusDeleteFailed:
 		return toStatus == ArtifactStatusDeleting

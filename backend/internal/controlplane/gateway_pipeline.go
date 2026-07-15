@@ -192,12 +192,17 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 		},
 		LanePolicy:     keyPolicy.lanePolicy,
 		ArtifactPolicy: keyPolicy.artifactPolicy,
+		ArtifactSinkID: keyPolicy.artifactSinkID,
 	}
 }
 
 func gatewayModelSupportsCanonicalRequest(model GatewayModel, request gatewaycore.CanonicalRequest) bool {
-	if request.Protocol == gatewaycore.ProtocolOpenAIChat {
+	switch request.Protocol {
+	case gatewaycore.ProtocolOpenAIChat:
 		return model.Modality == "chat" || model.Modality == "multimodal"
+	case gatewaycore.ProtocolOpenAIImages:
+		return model.Modality == GatewayModalityImage || model.Modality == "multimodal"
+	default:
+		return false
 	}
-	return false
 }

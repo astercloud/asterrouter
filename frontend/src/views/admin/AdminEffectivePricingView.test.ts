@@ -15,6 +15,7 @@ vi.mock('@/api/control', () => ({
   getProviderCacheCapabilities: vi.fn(),
   getProviderCacheProbeRuns: vi.fn(),
   runProviderCacheProbe: vi.fn(),
+  updateProviderCacheCapability: vi.fn(),
   updateEffectivePricingPolicy: vi.fn()
 }))
 
@@ -35,7 +36,12 @@ describe('AdminEffectivePricingView', () => {
       rows: [{
         provider_id: 'provider-a', provider_name: 'Channel A', provider_account_id: 'account-a',
         provider_account_name: 'Procurement A', upstream_model: 'model-a', protocol: 'openai_chat_completions',
-        currency: 'USD', quoted_multiplier: 0.2, billed_multiplier: 0.6, effective_multiplier: 0.5,
+        currency: 'USD', cost_available: true,
+        uncached_input_micros_per_1m_tokens: 1000000, cache_read_micros_per_1m_tokens: 100000,
+        cache_write_5m_micros_per_1m_tokens: 1250000, cache_write_1h_micros_per_1m_tokens: 2000000,
+        output_micros_per_1m_tokens: 3000000, request_micros: 50,
+        reference_input_micros_per_1m_tokens: 1000000, reference_output_micros_per_1m_tokens: 3000000,
+        recharge_multiplier: 0.9, quoted_multiplier: 0.2, billed_multiplier: 0.6, effective_multiplier: 0.5,
         effective_cost_micros_per_1m: 500000, request_count: 1000, error_rate: 0.01, p95_latency_ms: 420,
         uncached_cost_micros_per_1m: 1000000, cache_savings_micros_per_1m: 500000,
         cache_savings_rate: 0.5, cache_economics_available: true,
@@ -53,6 +59,7 @@ describe('AdminEffectivePricingView', () => {
       id: 'account-a', provider_id: 'provider-a', name: 'Procurement A', status: 'active', models: ['model-a']
     } as never])
     vi.mocked(control.runProviderCacheProbe).mockResolvedValue({ status: 'succeeded' } as never)
+    vi.mocked(control.updateProviderCacheCapability).mockResolvedValue({ support_status: 'claimed' } as never)
   })
 
   it('renders effective cost evidence and responsive tab content', async () => {
@@ -63,11 +70,14 @@ describe('AdminEffectivePricingView', () => {
     expect(wrapper.text()).toContain('0.50x')
     expect(wrapper.text()).toContain('420 ms')
     expect(wrapper.text()).toContain('Net cache savings 50%')
+    expect(wrapper.text()).toContain('1.25x')
     expect(wrapper.findAll('.ep-table tbody tr')).toHaveLength(1)
+    expect(wrapper.get('.effective-filters option[value="gemini_generate_content"]').text()).toBe('Gemini Generate Content')
 
     await wrapper.find('.ep-table tbody button').trigger('click')
     expect(wrapper.find('.evidence-drawer').exists()).toBe(true)
     expect(wrapper.get('.evidence-drawer').text()).toContain('Uncached equivalent cost')
+    expect(wrapper.get('.evidence-drawer').text()).toContain('5-minute cache write price')
     await wrapper.get('.evidence-drawer .icon-button').trigger('click')
 
     const tabs = wrapper.findAll('.effective-tabs button')
@@ -82,6 +92,79 @@ describe('AdminEffectivePricingView', () => {
     wrapper.unmount()
   })
 
+  it('renders observed zero cost as a real value instead of missing evidence', async () => {
+    const report = await control.getEffectivePricingReport({})
+    vi.mocked(control.getEffectivePricingReport).mockResolvedValue({
+      ...report,
+      rows: [{
+        ...report.rows[0],
+        cost_available: true,
+        effective_multiplier: 0,
+        effective_cost_micros_per_1m: 0
+      }]
+    })
+
+    const wrapper = mount(AdminEffectivePricingView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const cells = wrapper.get('.ep-table tbody tr').findAll('td')
+    expect(cells[3].text()).toBe('0.00x')
+    expect(cells[4].get('strong').text()).toBe('$0.00')
+    expect(cells[3].text()).not.toBe('-')
+    expect(cells[4].get('strong').text()).not.toBe('-')
+
+    wrapper.unmount()
+  })
+
+  it('captures the complete cache-aware procurement price', async () => {
+    const wrapper = mount(AdminEffectivePricingView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    await wrapper.findAll('.effective-panel .panel-header button')[1].trigger('click')
+    const dialog = wrapper.get('.effective-dialog')
+    expect(dialog.text()).toContain('5-minute cache write price')
+    expect(dialog.text()).toContain('1-hour cache write price')
+    expect(dialog.text()).toContain('Per-request fee')
+    expect(dialog.text()).toContain('Recharge paid multiplier')
+    expect(dialog.find('option[value="gemini_generate_content"]').exists()).toBe(true)
+
+    const field = (label: string) => dialog.findAll('.field').find((item) => item.text().includes(label))!
+    await field('5-minute cache write price').get('input').setValue(1250000)
+    await field('1-hour cache write price').get('input').setValue(2000000)
+    await field('Per-request fee').get('input').setValue(75)
+    await field('Recharge paid multiplier').get('input').setValue(0.8)
+    await dialog.trigger('submit')
+    await flushPromises()
+
+    expect(control.createProcurementPrice).toHaveBeenCalledWith(expect.objectContaining({
+      provider_account_id: 'account-a', cache_write_5m_micros_per_1m_tokens: 1250000,
+      cache_write_1h_micros_per_1m_tokens: 2000000, request_micros: 75, recharge_multiplier: 0.8
+    }))
+    wrapper.unmount()
+  })
+
+  it('configures verified third-party affinity transport from the cache view', async () => {
+    const wrapper = mount(AdminEffectivePricingView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    await wrapper.findAll('.effective-tabs button')[1].trigger('click')
+    await wrapper.get('.cache-row button').trigger('click')
+    const dialog = wrapper.get('.effective-dialog')
+    const field = (label: string) => dialog.findAll('.field').find((item) => item.text().includes(label))!
+    await field('Affinity transport').get('select').setValue('header')
+    await field('Affinity field').get('input').setValue('X-Session-ID')
+    await field('Cache control mode').get('select').setValue('prompt_cache_key')
+    await dialog.trigger('submit')
+    await flushPromises()
+
+    expect(control.updateProviderCacheCapability).toHaveBeenCalledWith({
+      provider_account_id: 'account-a', upstream_model: 'model-a', protocol: 'openai_chat_completions',
+      support_status: 'claimed', pool_affinity_grade: 'unknown', affinity_transport: 'header',
+      affinity_field: 'X-Session-ID', cache_control_mode: 'prompt_cache_key', usage_schema: 'auto'
+    })
+    wrapper.unmount()
+  })
+
   it('requires explicit cost confirmation before running a cache probe', async () => {
     const wrapper = mount(AdminEffectivePricingView, { global: { plugins: [i18n] } })
     await flushPromises()
@@ -89,6 +172,7 @@ describe('AdminEffectivePricingView', () => {
     await wrapper.findAll('.effective-tabs button')[3].trigger('click')
     await wrapper.get('.effective-panel .panel-header button').trigger('click')
     expect(wrapper.find('.effective-dialog').exists()).toBe(true)
+    expect(wrapper.find('.effective-dialog option[value="gemini_generate_content"]').exists()).toBe(true)
 
     const submit = wrapper.get('.modal-footer button[type="submit"]')
     expect(submit.attributes('disabled')).toBeDefined()

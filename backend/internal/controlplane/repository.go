@@ -51,6 +51,9 @@ type Repository interface {
 	FindAIJobByOperationID(ctx context.Context, operationID string) (AIJob, bool, error)
 	FindOwnedAIJob(ctx context.Context, id string, owner AIJobOwner) (AIJob, bool, error)
 	RequestAIJobCancellation(ctx context.Context, id string, owner AIJobOwner, requestedAt time.Time) (AIJob, bool, bool, error)
+	QueryAIJobs(ctx context.Context, query AIJobQuery) ([]AIJob, error)
+	SummarizeAIJobs(ctx context.Context, query AIJobQuery) (AIJobSummary, error)
+	RequestAIJobAdminCancellation(ctx context.Context, id string, requestedAt time.Time, audit AuditLog) (AIJob, bool, bool, error)
 	ClaimQueuedAIJobs(ctx context.Context, now, leaseUntil time.Time, workerID, leaseToken string, limit int) ([]AIJob, error)
 	ClaimAIJobsByReadyReferences(ctx context.Context, references []AIJobReadyReference, now, leaseUntil time.Time, workerID, leaseToken string, limit int) ([]AIJob, error)
 	ListAIJobsForReadyIndex(ctx context.Context, limit int) ([]AIJob, error)
@@ -63,13 +66,18 @@ type Repository interface {
 	FindArtifact(ctx context.Context, id string) (Artifact, bool, error)
 	FindOwnedArtifact(ctx context.Context, id string, owner ArtifactOwner) (Artifact, bool, error)
 	QueryArtifacts(ctx context.Context, query ArtifactQuery) ([]Artifact, error)
+	SummarizeArtifacts(ctx context.Context, query ArtifactQuery) (ArtifactSummary, error)
 	TransitionArtifact(ctx context.Context, input ArtifactTransitionInput, transitionedAt time.Time) (Artifact, bool, error)
 	ListArtifactEvents(ctx context.Context, artifactID string) ([]ArtifactEvent, error)
 	CreateAIAttempt(ctx context.Context, attempt AIAttempt) error
 	CreateOrGetAIAttempt(ctx context.Context, attempt AIAttempt) (AIAttempt, bool, error)
 	FindAIAttempt(ctx context.Context, id string) (AIAttempt, bool, error)
+	ListAIAttemptsByOperationID(ctx context.Context, operationID string) ([]AIAttempt, error)
 	UpdateAIAttemptDispatch(ctx context.Context, attempt AIAttempt, expectedVersion int) (AIAttempt, bool, error)
+	ScheduleAIAttemptReconciliation(ctx context.Context, id string, expectedVersion int, scheduledAt time.Time, audit AuditLog) (AIAttempt, bool, error)
+	ScheduleArtifactDeliveryRetry(ctx context.Context, artifactID string, attempt AIAttempt, expectedVersion int, audit AuditLog) (AIAttempt, bool, error)
 	ListAIAttemptsForReconciliation(ctx context.Context, now time.Time, limit int) ([]AIAttempt, error)
+	ListDurableAIAttemptsForReconciliation(ctx context.Context, now time.Time, limit int) ([]AIAttempt, error)
 	CompleteAIAttempt(ctx context.Context, id, status, errorType string, completedAt time.Time) (bool, error)
 	FindBillingHoldByOperationID(ctx context.Context, operationID string) (BillingHold, bool, error)
 	TransitionBillingHold(ctx context.Context, operationID string, expectedVersion int, toStatus string, settledAmount int, reason string, transitionedAt time.Time) (BillingHold, bool, error)
@@ -1550,9 +1558,10 @@ CREATE TABLE IF NOT EXISTS api_keys (
   monthly_video_seconds_limit INTEGER NOT NULL DEFAULT 0,
   monthly_audio_seconds_limit INTEGER NOT NULL DEFAULT 0,
   allowed_cidrs TEXT NOT NULL DEFAULT '[]',
-  lane_policy TEXT NOT NULL DEFAULT 'direct_only',
-  artifact_policy TEXT NOT NULL DEFAULT 'proxy_only',
-  rotation_family_id TEXT NOT NULL DEFAULT '',
+	  lane_policy TEXT NOT NULL DEFAULT 'direct_only',
+	  artifact_policy TEXT NOT NULL DEFAULT 'proxy_only',
+	  artifact_sink_id TEXT NOT NULL DEFAULT '',
+	  rotation_family_id TEXT NOT NULL DEFAULT '',
   replaces_key_id TEXT NOT NULL DEFAULT '',
   replaced_by_key_id TEXT NOT NULL DEFAULT '',
   rotation_grace_expires_at TIMESTAMPTZ,
@@ -1584,7 +1593,8 @@ ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS monthly_video_seconds_limit INTEGE
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS monthly_audio_seconds_limit INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS allowed_cidrs TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS lane_policy TEXT NOT NULL DEFAULT 'direct_only';
-ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS artifact_policy TEXT NOT NULL DEFAULT 'proxy_only';
+	ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS artifact_policy TEXT NOT NULL DEFAULT 'proxy_only';
+	ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS artifact_sink_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotation_family_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS replaces_key_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS replaced_by_key_id TEXT NOT NULL DEFAULT '';
@@ -1673,13 +1683,18 @@ CREATE TABLE IF NOT EXISTS ai_operations (
   operation TEXT NOT NULL,
   modality TEXT NOT NULL,
   lane TEXT NOT NULL,
-  model TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL,
+	  model TEXT NOT NULL DEFAULT '',
+	  artifact_policy TEXT NOT NULL DEFAULT 'proxy_only',
+	  artifact_sink_id TEXT NOT NULL DEFAULT '',
+	  status TEXT NOT NULL,
   error_type TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
   completed_at TIMESTAMPTZ
 );
+
+	ALTER TABLE ai_operations ADD COLUMN IF NOT EXISTS artifact_policy TEXT NOT NULL DEFAULT 'proxy_only';
+	ALTER TABLE ai_operations ADD COLUMN IF NOT EXISTS artifact_sink_id TEXT NOT NULL DEFAULT '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS ai_operations_idempotency_scope_idx
   ON ai_operations(profile_scope, tenant_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
@@ -1745,9 +1760,10 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
   protocol TEXT NOT NULL,
   operation TEXT NOT NULL,
   modality TEXT NOT NULL,
-  model TEXT NOT NULL,
-  artifact_policy TEXT NOT NULL,
-  request_payload_ciphertext TEXT NOT NULL,
+	  model TEXT NOT NULL,
+	  artifact_policy TEXT NOT NULL,
+	  artifact_sink_id TEXT NOT NULL DEFAULT '',
+	  request_payload_ciphertext TEXT NOT NULL,
   status TEXT NOT NULL,
   status_version INTEGER NOT NULL,
   priority INTEGER NOT NULL DEFAULT 0,
@@ -1794,6 +1810,7 @@ CREATE TABLE IF NOT EXISTS ai_attempts (
   attempt_number INTEGER NOT NULL,
   provider_id TEXT NOT NULL DEFAULT '',
   provider_account_id TEXT NOT NULL DEFAULT '',
+  provider_adapter_id TEXT NOT NULL DEFAULT '',
   route_id TEXT NOT NULL DEFAULT '',
   upstream_model TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL,
@@ -1816,6 +1833,7 @@ CREATE TABLE IF NOT EXISTS ai_attempts (
 );
 
 ALTER TABLE ai_attempts ADD COLUMN IF NOT EXISTS dispatch_state TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE ai_attempts ADD COLUMN IF NOT EXISTS provider_adapter_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE ai_attempts ADD COLUMN IF NOT EXISTS dispatch_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ai_attempts ADD COLUMN IF NOT EXISTS dispatch_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE ai_attempts ADD COLUMN IF NOT EXISTS dispatch_intent_json TEXT NOT NULL DEFAULT '';
@@ -2877,7 +2895,7 @@ profile_scope, platform_tenant_id, gateway_principal_id, tenant_id, principal_ty
 policy_id, scopes, model_allowlist, allowed_modalities, allowed_operations,
 qps_limit, rpm_limit, tpm_limit, concurrency_limit, monthly_token_limit, monthly_budget_cents,
 monthly_image_limit, monthly_video_seconds_limit, monthly_audio_seconds_limit,
-allowed_cidrs, lane_policy, artifact_policy, rotation_family_id,
+allowed_cidrs, lane_policy, artifact_policy, artifact_sink_id, rotation_family_id,
 replaces_key_id, replaced_by_key_id, rotation_grace_expires_at,
 expires_at, last_used_at, created_at, updated_at`
 
@@ -2895,7 +2913,7 @@ func scanAPIKey(scanner apiKeyScanner) (APIKeyRecord, error) {
 		&key.PolicyID, &scopes, &allowlist, &modalities, &operations,
 		&key.QPSLimit, &key.RPMLimit, &key.TPMLimit, &key.ConcurrencyLimit, &key.MonthlyTokenLimit, &key.MonthlyBudgetCents,
 		&key.MonthlyImageLimit, &key.MonthlyVideoSecondsLimit, &key.MonthlyAudioSecondsLimit,
-		&allowedCIDRs, &key.LanePolicy, &key.ArtifactPolicy, &key.RotationFamilyID,
+		&allowedCIDRs, &key.LanePolicy, &key.ArtifactPolicy, &key.ArtifactSinkID, &key.RotationFamilyID,
 		&key.ReplacesKeyID, &key.ReplacedByKeyID, &rotationGraceExpiresAt,
 		&expiresAt, &lastUsedAt, &key.CreatedAt, &key.UpdatedAt,
 	)
@@ -2963,13 +2981,13 @@ INSERT INTO api_keys(
   policy_id, scopes, model_allowlist, allowed_modalities, allowed_operations,
   qps_limit, rpm_limit, tpm_limit, concurrency_limit, monthly_token_limit, monthly_budget_cents,
   monthly_image_limit, monthly_video_seconds_limit, monthly_audio_seconds_limit,
-  allowed_cidrs, lane_policy, artifact_policy, rotation_family_id,
+  allowed_cidrs, lane_policy, artifact_policy, artifact_sink_id, rotation_family_id,
   replaces_key_id, replaced_by_key_id, rotation_grace_expires_at,
   expires_at, last_used_at, created_at, updated_at
 )
 VALUES(
   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-  $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40
+  $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41
 )
 `
 
@@ -3006,6 +3024,7 @@ ON CONFLICT(id) DO UPDATE SET
   allowed_cidrs = EXCLUDED.allowed_cidrs,
   lane_policy = EXCLUDED.lane_policy,
   artifact_policy = EXCLUDED.artifact_policy,
+  artifact_sink_id = EXCLUDED.artifact_sink_id,
   rotation_family_id = EXCLUDED.rotation_family_id,
   replaces_key_id = EXCLUDED.replaces_key_id,
   replaced_by_key_id = EXCLUDED.replaced_by_key_id,
@@ -3027,7 +3046,7 @@ func apiKeyWriteArgs(key APIKeyRecord) []any {
 		key.PolicyID, scopes, allowlist, modalities, operations,
 		key.QPSLimit, key.RPMLimit, key.TPMLimit, key.ConcurrencyLimit, key.MonthlyTokenLimit, key.MonthlyBudgetCents,
 		key.MonthlyImageLimit, key.MonthlyVideoSecondsLimit, key.MonthlyAudioSecondsLimit,
-		allowedCIDRs, key.LanePolicy, key.ArtifactPolicy, key.RotationFamilyID,
+		allowedCIDRs, key.LanePolicy, key.ArtifactPolicy, key.ArtifactSinkID, key.RotationFamilyID,
 		key.ReplacesKeyID, key.ReplacedByKeyID, key.RotationGraceExpiresAt,
 		key.ExpiresAt, key.LastUsedAt, key.CreatedAt, key.UpdatedAt,
 	}

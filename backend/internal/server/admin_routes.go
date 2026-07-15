@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, exportJobs CSVExportJobStore) {
+func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, exportJobs CSVExportJobStore, runtime AIJobRuntimeStatusProvider) {
 	if control == nil {
 		return
 	}
@@ -22,6 +22,8 @@ func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, 
 	registerAPIKeyAdminRoutes(admin, control)
 	registerModelPricingAdminRoutes(admin, control)
 	registerEffectivePricingAdminRoutes(admin, control)
+	registerAIJobAdminRoutes(admin, control, runtime, "")
+	registerArtifactAdminRoutes(admin, control)
 	registerObservabilityAdminRoutesForScope(admin, control, "")
 	registerAlertAdminRoutes(admin, control)
 	registerCSVExportJobRoutes(admin.Group("/export-jobs"), control, exportJobs)

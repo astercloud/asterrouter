@@ -73,6 +73,105 @@ func TestAggregateCacheEconomicsPreservesNegativeSavingsAndCoverageGate(t *testi
 	}
 }
 
+func TestEffectivePricingReportDistinguishesZeroCostFromMissingEvidence(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 15, 3, 0, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	svc.now = func() time.Time { return now }
+
+	for _, item := range []struct {
+		providerID string
+		accountID  string
+		name       string
+	}{
+		{providerID: "provider-free", accountID: "account-free", name: "Free Channel"},
+		{providerID: "provider-paid", accountID: "account-paid", name: "Paid Channel"},
+		{providerID: "provider-unknown", accountID: "account-unknown", name: "Unknown Channel"},
+	} {
+		seedEffectivePricingProvider(t, repo, now, item.providerID, item.accountID, item.name)
+	}
+
+	for _, price := range []ProcurementPrice{
+		{
+			ID: "price-free", ProviderID: "provider-free", ProviderAccountID: "account-free",
+			UpstreamModel: "model", Protocol: "openai_chat_completions", Currency: "USD",
+			ReferenceInputMicrosPer1MTokens: 1_000_000, Confidence: ProcurementCostConfidenceExact,
+			Status: ProcurementPriceStatusActive, EffectiveFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "price-paid", ProviderID: "provider-paid", ProviderAccountID: "account-paid",
+			UpstreamModel: "model", Protocol: "openai_chat_completions", Currency: "USD",
+			UncachedInputMicrosPer1MTokens: 1_000_000, CacheReadMicrosPer1MTokens: 100_000,
+			CacheWrite5mMicrosPer1MTokens: 1_250_000, CacheWrite1hMicrosPer1MTokens: 2_000_000,
+			OutputMicrosPer1MTokens: 3_000_000, RequestMicros: 50, RechargeMultiplier: 0.9,
+			ReferenceInputMicrosPer1MTokens: 1_000_000, Confidence: ProcurementCostConfidenceExact,
+			Status: ProcurementPriceStatusActive, EffectiveFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+		},
+	} {
+		if err := repo.SaveProcurementPrice(ctx, price); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, input := range []GatewayUsageInput{
+		{ProviderID: "provider-free", ProviderAccountID: "account-free"},
+		{ProviderID: "provider-paid", ProviderAccountID: "account-paid"},
+		{ProviderID: "provider-unknown", ProviderAccountID: "account-unknown"},
+	} {
+		total, uncached := 100, 100
+		input.Model, input.UpstreamModel, input.Protocol = "public", "model", "openai_chat_completions"
+		input.Status, input.InputTokens, input.TotalInputTokens = "forwarded", total, &total
+		input.UncachedInputTokens, input.CacheFieldsPresent, input.UsageNormalizationStatus = &uncached, true, "normalized_openai"
+		if err := svc.RecordGatewayUsage(ctx, GatewayAuthContext{APIKey: APIKeyRecord{ID: "key-" + input.ProviderAccountID}}, input); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, err := svc.EffectivePricingReport(ctx, EffectivePricingReportQuery{Model: "model", Protocol: "openai_chat_completions", WindowHours: 24})
+	if err != nil {
+		t.Fatalf("EffectivePricingReport(): %v", err)
+	}
+	if len(report.Rows) != 3 || report.Rows[0].ProviderAccountID != "account-free" || report.Rows[1].ProviderAccountID != "account-paid" || report.Rows[2].ProviderAccountID != "account-unknown" {
+		t.Fatalf("zero and missing cost order = %+v", report.Rows)
+	}
+	if !report.Rows[0].CostAvailable || report.Rows[0].EffectiveCostMicrosPer1M != 0 || report.Rows[2].CostAvailable {
+		t.Fatalf("cost availability = %+v", report.Rows)
+	}
+	paid := report.Rows[1]
+	if paid.EffectiveCostMicrosPer1M != 1_350_000 || paid.UncachedCostMicrosPer1M != 1_350_000 || paid.CacheReadMicrosPer1MTokens != 100_000 || paid.CacheWrite5mMicrosPer1MTokens != 1_250_000 || paid.CacheWrite1hMicrosPer1MTokens != 2_000_000 || paid.RequestMicros != 50 || paid.RechargeMultiplier != 0.9 {
+		t.Fatalf("procurement price breakdown = %+v", paid)
+	}
+}
+
+func TestCreateProcurementPriceRequiresExplicitCacheComponents(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 15, 3, 30, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	svc.now = func() time.Time { return now }
+	seedEffectivePricingProvider(t, repo, now, "provider-a", "account-a", "Channel A")
+
+	request := ProcurementPriceRequest{
+		ProviderID: "provider-a", ProviderAccountID: "account-a", UpstreamModel: "model", Protocol: "openai_chat_completions",
+		Currency: "USD", UncachedInputMicrosPer1MTokens: pricingMicros(1_000_000), CacheReadMicrosPer1MTokens: pricingMicros(0),
+		CacheWrite5mMicrosPer1MTokens: pricingMicros(0), OutputMicrosPer1MTokens: pricingMicros(2_000_000),
+		RequestMicros: pricingMicros(0), ReferenceInputMicrosPer1MTokens: pricingMicros(1_000_000),
+		ReferenceOutputMicrosPer1MTokens: pricingMicros(2_000_000), Confidence: ProcurementCostConfidenceEstimated,
+	}
+	if _, err := svc.CreateProcurementPrice(ctx, "tester", request); err == nil || !strings.Contains(err.Error(), "cache_write_1h_micros_per_1m_tokens is required") {
+		t.Fatalf("missing cache write price err=%v", err)
+	}
+	request.CacheWrite1hMicrosPer1MTokens = pricingMicros(0)
+	price, err := svc.CreateProcurementPrice(ctx, "tester", request)
+	if err != nil {
+		t.Fatalf("explicit zero cache prices should be accepted: %v", err)
+	}
+	if price.CacheReadMicrosPer1MTokens != 0 || price.CacheWrite5mMicrosPer1MTokens != 0 || price.CacheWrite1hMicrosPer1MTokens != 0 || price.RechargeMultiplier != 1 {
+		t.Fatalf("explicit zero/default multiplier price=%+v", price)
+	}
+}
+
 func TestImportProviderBillingLineReconcilesUsageByUpstreamRequestID(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
@@ -400,6 +499,50 @@ func TestUpsertProviderCacheCapabilityRejectsReservedAffinityField(t *testing.T)
 	})
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("reserved affinity field err=%v", err)
+	}
+}
+
+func TestUpsertProviderCacheCapabilityProtectsObservedEvidence(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 15, 4, 0, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	seedEffectivePricingProvider(t, repo, now, "provider-a", "account-a", "Channel A")
+
+	_, err := svc.UpsertProviderCacheCapability(ctx, "tester", ProviderCacheCapabilityRequest{
+		ProviderAccountID: "account-a", UpstreamModel: "model", Protocol: "openai_chat_completions",
+		SupportStatus: CacheSupportBilledVerified, PoolAffinityGrade: PoolAffinityUnknown,
+	})
+	if err == nil || !strings.Contains(err.Error(), "system-managed") {
+		t.Fatalf("manual billed verification err=%v", err)
+	}
+	_, err = svc.UpsertProviderCacheCapability(ctx, "tester", ProviderCacheCapabilityRequest{
+		ProviderAccountID: "account-a", UpstreamModel: "model", Protocol: "openai_chat_completions",
+		SupportStatus: CacheSupportAccepted, PoolAffinityGrade: PoolAffinityVerified,
+	})
+	if err == nil || !strings.Contains(err.Error(), "system-managed") {
+		t.Fatalf("manual pool verification err=%v", err)
+	}
+
+	id := "cachecap_" + prefix(hashAPIKey("account-a\x00model\x00openai_chat_completions"), 24)
+	observedAt := now.Add(-time.Hour)
+	if err := repo.SaveProviderCacheCapability(ctx, ProviderCacheCapability{
+		ID: id, ProviderAccountID: "account-a", UpstreamModel: "model", Protocol: "openai_chat_completions",
+		SupportStatus: CacheSupportObserved, PoolAffinityGrade: PoolAffinityVerified,
+		MetricsCoverage: 0.9, CacheTokenHitRate: 0.7, LastObservedAt: &observedAt, CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: observedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.UpsertProviderCacheCapability(ctx, "tester", ProviderCacheCapabilityRequest{
+		ProviderAccountID: "account-a", UpstreamModel: "model", Protocol: "openai_chat_completions",
+		SupportStatus: CacheSupportObserved, PoolAffinityGrade: PoolAffinityVerified,
+		AffinityTransport: AffinityTransportHeader, AffinityField: "X-Session-ID", CacheControlMode: CacheControlModePromptCacheKey,
+	})
+	if err != nil {
+		t.Fatalf("preserve observed capability: %v", err)
+	}
+	if updated.SupportStatus != CacheSupportObserved || updated.PoolAffinityGrade != PoolAffinityVerified || updated.MetricsCoverage != 0.9 || updated.CacheTokenHitRate != 0.7 || updated.AffinityField != "X-Session-ID" {
+		t.Fatalf("observed capability was not preserved: %+v", updated)
 	}
 }
 

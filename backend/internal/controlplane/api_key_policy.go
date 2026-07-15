@@ -33,6 +33,7 @@ type apiKeyPolicyFields struct {
 	allowedCIDRs             []string
 	lanePolicy               string
 	artifactPolicy           string
+	artifactSinkID           string
 }
 
 func apiKeyPolicyFromCreateRequest(req APIKeyCreateRequest) apiKeyPolicyFields {
@@ -42,7 +43,7 @@ func apiKeyPolicyFromCreateRequest(req APIKeyCreateRequest) apiKeyPolicyFields {
 		monthlyTokenLimit: req.MonthlyTokenLimit, monthlyBudgetCents: req.MonthlyBudgetCents,
 		monthlyImageLimit: req.MonthlyImageLimit, monthlyVideoSecondsLimit: req.MonthlyVideoSecondsLimit,
 		monthlyAudioSecondsLimit: req.MonthlyAudioSecondsLimit, allowedCIDRs: req.AllowedCIDRs,
-		lanePolicy: req.LanePolicy, artifactPolicy: req.ArtifactPolicy,
+		lanePolicy: req.LanePolicy, artifactPolicy: req.ArtifactPolicy, artifactSinkID: req.ArtifactSinkID,
 	}
 }
 
@@ -53,7 +54,7 @@ func apiKeyPolicyFromUpdateRequest(req APIKeyUpdateRequest) apiKeyPolicyFields {
 		monthlyTokenLimit: req.MonthlyTokenLimit, monthlyBudgetCents: req.MonthlyBudgetCents,
 		monthlyImageLimit: req.MonthlyImageLimit, monthlyVideoSecondsLimit: req.MonthlyVideoSecondsLimit,
 		monthlyAudioSecondsLimit: req.MonthlyAudioSecondsLimit, allowedCIDRs: req.AllowedCIDRs,
-		lanePolicy: req.LanePolicy, artifactPolicy: req.ArtifactPolicy,
+		lanePolicy: req.LanePolicy, artifactPolicy: req.ArtifactPolicy, artifactSinkID: req.ArtifactSinkID,
 	}
 }
 
@@ -62,7 +63,7 @@ func apiKeyPolicyForUpdate(record APIKeyRecord, req APIKeyUpdateRequest) apiKeyP
 	if req.Scopes != nil || req.AllowedModalities != nil || req.AllowedOperations != nil || req.AllowedCIDRs != nil ||
 		req.RPMLimit != 0 || req.TPMLimit != 0 || req.ConcurrencyLimit != 0 || req.MonthlyBudgetCents != 0 ||
 		req.MonthlyImageLimit != 0 || req.MonthlyVideoSecondsLimit != 0 || req.MonthlyAudioSecondsLimit != 0 ||
-		strings.TrimSpace(req.LanePolicy) != "" || strings.TrimSpace(req.ArtifactPolicy) != "" {
+		strings.TrimSpace(req.LanePolicy) != "" || strings.TrimSpace(req.ArtifactPolicy) != "" || strings.TrimSpace(req.ArtifactSinkID) != "" {
 		return requested
 	}
 	requested = apiKeyPolicyFromRecord(record)
@@ -114,6 +115,14 @@ func normalizeAPIKeyPolicy(fields apiKeyPolicyFields) (apiKeyPolicyFields, error
 	if !oneOf(fields.artifactPolicy, GatewayArtifactPolicyProxyOnly, GatewayArtifactPolicyTemporary, GatewayArtifactPolicyManaged, GatewayArtifactPolicyCustomerSink, GatewayArtifactPolicyMetadataOnly) {
 		return apiKeyPolicyFields{}, errors.New("artifact_policy is not supported")
 	}
+	requestedSinkID := strings.TrimSpace(fields.artifactSinkID)
+	fields.artifactSinkID = artifactSinkSnapshot(fields.artifactPolicy, requestedSinkID)
+	if fields.artifactPolicy != GatewayArtifactPolicyCustomerSink && requestedSinkID != "" {
+		return apiKeyPolicyFields{}, errors.New("artifact_sink_id is only supported with customer_sink policy")
+	}
+	if !validArtifactSinkBinding(fields.artifactPolicy, fields.artifactSinkID) {
+		return apiKeyPolicyFields{}, errors.New("artifact_sink_id is required and must be valid for customer_sink policy")
+	}
 	return fields, nil
 }
 
@@ -133,6 +142,7 @@ func applyAPIKeyPolicy(record *APIKeyRecord, fields apiKeyPolicyFields) {
 	record.AllowedCIDRs = fields.allowedCIDRs
 	record.LanePolicy = fields.lanePolicy
 	record.ArtifactPolicy = fields.artifactPolicy
+	record.ArtifactSinkID = fields.artifactSinkID
 }
 
 func applyAPIKeyPrincipal(record *APIKeyRecord, platformIdentity *platformCredentialIdentity) {
@@ -175,7 +185,7 @@ func apiKeyPolicyFromRecord(record APIKeyRecord) apiKeyPolicyFields {
 		monthlyTokenLimit: record.MonthlyTokenLimit, monthlyBudgetCents: record.MonthlyBudgetCents,
 		monthlyImageLimit: record.MonthlyImageLimit, monthlyVideoSecondsLimit: record.MonthlyVideoSecondsLimit,
 		monthlyAudioSecondsLimit: record.MonthlyAudioSecondsLimit, allowedCIDRs: record.AllowedCIDRs,
-		lanePolicy: record.LanePolicy, artifactPolicy: record.ArtifactPolicy,
+		lanePolicy: record.LanePolicy, artifactPolicy: record.ArtifactPolicy, artifactSinkID: record.ArtifactSinkID,
 	}
 }
 

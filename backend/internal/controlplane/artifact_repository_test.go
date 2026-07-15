@@ -50,6 +50,33 @@ func TestArtifactRepositoryContract(t *testing.T) {
 			if err != nil || len(query) != 0 {
 				t.Fatalf("cross-owner query=%+v err=%v", query, err)
 			}
+			query, err = repo.QueryArtifacts(ctx, ArtifactQuery{Role: ArtifactRoleFinal, Limit: 10})
+			if err != nil || len(query) != 1 || query[0].ID != artifact.ID {
+				t.Fatalf("role query=%+v err=%v", query, err)
+			}
+			query, err = repo.QueryArtifacts(ctx, ArtifactQuery{
+				ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
+				Policy: GatewayArtifactPolicyManaged, Limit: 10,
+			})
+			if err != nil || len(query) != 1 || query[0].ID != artifact.ID {
+				t.Fatalf("scope and policy query=%+v err=%v", query, err)
+			}
+			query, err = repo.QueryArtifacts(ctx, ArtifactQuery{Search: "CONTRACT", Limit: 10})
+			if err != nil || len(query) != 1 || query[0].ID != artifact.ID {
+				t.Fatalf("search query=%+v err=%v", query, err)
+			}
+			query, err = repo.QueryArtifacts(ctx, ArtifactQuery{TenantID: "other-tenant", Limit: 10})
+			if err != nil || len(query) != 0 {
+				t.Fatalf("other tenant query=%+v err=%v", query, err)
+			}
+			summary, err := repo.SummarizeArtifacts(ctx, ArtifactQuery{ProfileScope: operation.ProfileScope, Limit: 1, Offset: 99})
+			if err != nil || summary.Total != 1 || summary.ByStatus[ArtifactStatusPending] != 1 || summary.SizeBytes != 0 {
+				t.Fatalf("artifact summary=%+v err=%v", summary, err)
+			}
+			query, err = repo.QueryArtifacts(ctx, ArtifactQuery{AttemptID: "attempt-missing", Limit: 10})
+			if err != nil || len(query) != 0 {
+				t.Fatalf("attempt query=%+v err=%v", query, err)
+			}
 			updated, changed, err := repo.TransitionArtifact(ctx, ArtifactTransitionInput{
 				ArtifactID: artifact.ID, ExpectedVersion: artifact.StatusVersion, ToStatus: ArtifactStatusUploading,
 				Content: &ArtifactContentUpdate{MediaType: "image/png", StoreDriver: ArtifactStoreDriverMemory, StoreKey: artifact.ID + "/content"},
@@ -121,6 +148,7 @@ func artifactTestOperation(id, principalID string, at time.Time) AIOperation {
 		CredentialSource: "api_key", PrincipalType: GatewayPrincipalTypeService, PrincipalID: principalID,
 		RequestFingerprint: id + "-fingerprint", Protocol: "aster_jobs", Operation: "image_generation", Modality: "image",
 		Lane: "durable", Model: "image-model", Status: AIOperationStatusAccepted, CreatedAt: at, UpdatedAt: at,
+		ArtifactPolicy: GatewayArtifactPolicyManaged,
 	}
 }
 

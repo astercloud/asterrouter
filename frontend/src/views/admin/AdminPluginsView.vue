@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ArrowRight, CheckCircle2, CircleAlert, Copy, Download, FileClock, KeyRound, LockKeyhole, Plus, RefreshCw, Search, Settings2, ShieldCheck, Trash2, Upload, X, XCircle } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import ArtifactSinkDestinationsPanel from './ArtifactSinkDestinationsPanel.vue'
 import {
   activateOfficialLicense,
   createPluginAPIToken,
@@ -32,6 +33,7 @@ import {
 import type { OfficialCatalogStatus, OfficialFeedClientInfo, OfficialFeedStatus, OfficialFeedSyncRun, OfficialLicenseStatus, Plugin, PluginAPIToken, PluginCatalog, PluginConfig, PluginDeliveryAttempt, PluginPackage, SidecarRuntimeStatus } from '@/types'
 
 const { t } = useI18n()
+const artifactSinkPluginID = 'com.asterrouter.artifact.s3-compatible-sink'
 const loading = ref(false)
 const catalogStatusLoading = ref(false)
 const catalogSyncing = ref(false)
@@ -1392,11 +1394,11 @@ onMounted(load)
             <p>{{ activePlugin.description }}</p>
           </div>
           <div class="row-actions">
-            <button class="button secondary" type="button" :disabled="!canConfigure(activePlugin)" @click="openConfig(activePlugin)">
+            <button v-if="activePlugin.plugin_id !== artifactSinkPluginID" class="button secondary" type="button" :disabled="!canConfigure(activePlugin)" @click="openConfig(activePlugin)">
               <Settings2 :size="15" />
               {{ t('plugins.configure') }}
             </button>
-            <button class="button secondary" type="button" :disabled="activePlugin.category !== 'notification'" @click="openDeliveries(activePlugin)">
+            <button v-if="activePlugin.plugin_id !== artifactSinkPluginID" class="button secondary" type="button" :disabled="activePlugin.category !== 'notification'" @click="openDeliveries(activePlugin)">
               <FileClock :size="15" />
               {{ t('plugins.deliveries') }}
             </button>
@@ -1438,7 +1440,9 @@ onMounted(load)
           </div>
         </div>
 
-        <section class="plugin-detail-section">
+        <ArtifactSinkDestinationsPanel v-if="activePlugin.plugin_id === artifactSinkPluginID" :plugin-id="activePlugin.id" />
+
+        <section v-if="activePlugin.plugin_id !== artifactSinkPluginID" class="plugin-detail-section">
           <div class="plugin-section-title">
             <h3>{{ t('plugins.runtimeStatus') }}</h3>
             <button class="button secondary tiny-button" type="button" :disabled="runtimeStatusLoading" @click="loadRuntimeStatus(activePlugin)">

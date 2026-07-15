@@ -48,7 +48,7 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 	if !currentFound || !candidateFound {
 		return EffectivePricingDecision{}, errors.New("current and candidate accounts must both have comparable usage")
 	}
-	if current.EffectiveCostMicrosPer1M <= 0 || candidate.EffectiveCostMicrosPer1M <= 0 {
+	if !current.CostAvailable || !candidate.CostAvailable || current.EffectiveCostMicrosPer1M <= 0 || candidate.EffectiveCostMicrosPer1M < 0 {
 		return EffectivePricingDecision{}, errors.New("current and candidate accounts require effective cost evidence")
 	}
 	improvement := float64(current.EffectiveCostMicrosPer1M-candidate.EffectiveCostMicrosPer1M) / float64(current.EffectiveCostMicrosPer1M)

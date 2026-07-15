@@ -33,7 +33,13 @@ type Options struct {
 	PluginService      *plugins.Service
 	SystemService      *system.Service
 	ExportJobStore     CSVExportJobStore
+	DurableAIJobs      DurableAIJobAdmission
+	AIJobRuntime       AIJobRuntimeStatusProvider
 	authBindingStore   *authBindingStore
+}
+
+type AIJobRuntimeStatusProvider interface {
+	Status() controlplane.DurableAIJobRuntimeStatus
 }
 
 func New(opts Options) http.Handler {
@@ -805,7 +811,7 @@ func New(opts Options) http.Handler {
 	admin.Use(requireProfile(opts.SettingsService, "enterprise"))
 	admin.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceEnterprise))
 	admin.Use(requireRBAC(opts.ControlService))
-	registerAdminRoutes(admin, opts.ControlService, exportJobStore)
+	registerAdminRoutes(admin, opts.ControlService, exportJobStore, opts.AIJobRuntime)
 	registerPluginRoutes(admin.Group("/plugins"), opts.PluginService, opts.ControlService, "enterprise")
 	registerSystemRoutes(admin.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
 	admin.GET("/settings", func(c *gin.Context) {
@@ -967,10 +973,10 @@ func New(opts Options) http.Handler {
 	platformAPI.Use(requireProfile(opts.SettingsService, "platform"))
 	platformAPI.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfacePlatform))
 	platformAPI.Use(requireSurfaceRBAC(opts.ControlService, controlplane.SurfacePlatform))
-	registerPlatformRoutes(platformAPI, opts.ControlService, opts.PluginService)
+	registerPlatformRoutes(platformAPI, opts.ControlService, opts.PluginService, opts.AIJobRuntime)
 	registerSurfaceSettings(platformAPI, opts.SettingsService, opts.ControlService)
 	registerSystemRoutes(platformAPI.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
-	registerGatewayRoutes(r, opts.ControlService)
+	registerGatewayRoutes(r, opts.ControlService, opts.DurableAIJobs, opts.PluginService)
 
 	serveSPA(r, opts.Config.FrontendDir)
 	return r

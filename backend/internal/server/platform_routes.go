@@ -16,7 +16,7 @@ import (
 // Platform surface. It intentionally excludes Enterprise identity and Relay
 // billing resources: a platform operator configures AI delivery, not an
 // external product's users, sessions, subscriptions, or balances.
-func registerPlatformRoutes(platform *gin.RouterGroup, control *controlplane.Service, pluginService *plugins.Service) {
+func registerPlatformRoutes(platform *gin.RouterGroup, control *controlplane.Service, pluginService *plugins.Service, runtime AIJobRuntimeStatusProvider) {
 	if control == nil {
 		return
 	}
@@ -35,6 +35,7 @@ func registerPlatformRoutes(platform *gin.RouterGroup, control *controlplane.Ser
 	registerGatewayModelAdminRoutes(platform, control)
 	registerGovernancePolicyAdminRoutes(platform, control)
 	registerModelPricingAdminRoutes(platform, control)
+	registerAIJobAdminRoutes(platform, control, runtime, controlplane.ProfileScopePlatform)
 	registerPlatformAPIKeyRoutes(platform, control)
 	registerExternalAuthIntegrationRoutes(platform, control)
 	registerPlatformUsageSinkRoutes(platform, control)

@@ -380,6 +380,48 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 		_ = recordPluginEvent(c, control, "configure", config.PluginID, fmt.Sprintf("Updated plugin config %s", config.PluginID))
 		httpx.OK(c, config)
 	})
+	group.GET("/:id/artifact-sinks", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		destinations, err := svc.ArtifactSinkDestinations(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			writePluginError(c, err)
+			return
+		}
+		httpx.OK(c, destinations)
+	})
+	group.PUT("/:id/artifact-sinks/:sink_id", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		var request plugins.ArtifactSinkDestinationRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1712, "invalid artifact sink destination payload")
+			return
+		}
+		destination, err := svc.UpsertArtifactSinkDestination(c.Request.Context(), c.Param("id"), c.Param("sink_id"), request)
+		if err != nil {
+			writePluginError(c, err)
+			return
+		}
+		_ = recordPluginEvent(c, control, "configure_artifact_sink", destination.ID, fmt.Sprintf("Updated artifact sink destination %s", destination.Name))
+		httpx.OK(c, destination)
+	})
+	group.DELETE("/:id/artifact-sinks/:sink_id", func(c *gin.Context) {
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		if err := svc.DeleteArtifactSinkDestination(c.Request.Context(), c.Param("id"), c.Param("sink_id")); err != nil {
+			writePluginError(c, err)
+			return
+		}
+		_ = recordPluginEvent(c, control, "delete_artifact_sink", c.Param("sink_id"), "Deleted artifact sink destination")
+		httpx.OK(c, gin.H{"status": "deleted"})
+	})
 	group.GET("/:id/packages", func(c *gin.Context) {
 		if svc == nil {
 			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
@@ -489,8 +531,12 @@ func writePluginError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, plugins.ErrPluginNotFound):
 		httpx.Error(c, http.StatusNotFound, 1704, err.Error())
+	case errors.Is(err, plugins.ErrArtifactSinkDestinationNotFound):
+		httpx.Error(c, http.StatusNotFound, 1713, err.Error())
 	case errors.Is(err, plugins.ErrPluginLocked), errors.Is(err, plugins.ErrPluginCoreRequired):
 		httpx.Error(c, http.StatusConflict, 1709, err.Error())
+	case errors.Is(err, plugins.ErrArtifactSinkRegistryRequired):
+		httpx.Error(c, http.StatusServiceUnavailable, 1714, err.Error())
 	case errors.Is(err, plugins.ErrPluginNotConfigurable), errors.Is(err, plugins.ErrPluginConfigInvalid):
 		httpx.Error(c, http.StatusBadRequest, 1711, err.Error())
 	default:

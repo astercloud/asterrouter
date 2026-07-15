@@ -5,6 +5,19 @@ import type {
   APIKeyCreateResponse,
   APIKeyRecord,
   APIKeyUpdateRequest,
+  AIAttemptReconcileScheduleResult,
+  AIJobAdminActionResult,
+  AIJobAdminDetail,
+  AIJobAdminRecord,
+  AIJobListQuery,
+  AIJobRuntimeStatus,
+  AIJobSummary,
+  ArtifactAdminDetail,
+  ArtifactAdminRecord,
+  ArtifactDeliveryRetryResult,
+  ArtifactListQuery,
+  ArtifactRuntime,
+  ArtifactSummary,
   AlertEvent,
   AlertSummary,
   AuditLog,
@@ -45,6 +58,7 @@ import type {
   ProviderBillingLine,
   ProviderBillingLineRequest,
   ProviderCacheCapability,
+  ProviderCacheCapabilityRequest,
   ProviderCacheProbeRun,
   ProviderHealthCheck,
   ProviderConnection,
@@ -357,6 +371,11 @@ export async function getProviderCacheCapabilities(): Promise<ProviderCacheCapab
   return listOrEmpty(response.data)
 }
 
+export async function updateProviderCacheCapability(payload: ProviderCacheCapabilityRequest): Promise<ProviderCacheCapability> {
+  const response = await apiClient.put<ProviderCacheCapability>('/admin/provider-cache-capabilities', payload)
+  return response.data
+}
+
 export async function getProviderCacheProbeRuns(limit = 100): Promise<ProviderCacheProbeRun[]> {
   const response = await apiClient.get<ProviderCacheProbeRun[] | null>('/admin/provider-cache-probes', { params: { limit } })
   return listOrEmpty(response.data)
@@ -470,6 +489,61 @@ export async function getGatewayTraces(params?: RecordListQuery): Promise<Gatewa
 
 export async function getGatewayTraceSummary(params?: RecordListQuery): Promise<GatewayTraceSummary> {
   const response = await apiClient.get<GatewayTraceSummary>('/admin/gateway-traces/summary', { params })
+  return response.data
+}
+
+export async function getArtifacts(params?: ArtifactListQuery): Promise<ArtifactAdminRecord[]> {
+  const response = await apiClient.get<ArtifactAdminRecord[] | null>('/admin/artifacts', { params })
+  return listOrEmpty(response.data)
+}
+
+export async function getArtifactSummary(params?: ArtifactListQuery): Promise<ArtifactSummary> {
+  const response = await apiClient.get<ArtifactSummary>('/admin/artifacts/summary', { params })
+  return response.data
+}
+
+export async function getArtifact(id: string): Promise<ArtifactAdminDetail> {
+  const response = await apiClient.get<ArtifactAdminDetail>(`/admin/artifacts/${id}`)
+  return response.data
+}
+
+export async function getArtifactRuntimes(): Promise<ArtifactRuntime[]> {
+  const response = await apiClient.get<ArtifactRuntime[] | null>('/admin/artifact-runtimes')
+  return listOrEmpty(response.data)
+}
+
+export async function retryArtifactDelivery(id: string): Promise<ArtifactDeliveryRetryResult> {
+  const response = await apiClient.post<ArtifactDeliveryRetryResult>(`/admin/artifacts/${id}/retry-delivery`)
+  return response.data
+}
+
+export async function getAIJobs(params?: AIJobListQuery): Promise<AIJobAdminRecord[]> {
+  const response = await apiClient.get<AIJobAdminRecord[] | null>('/admin/ai-jobs', { params })
+  return listOrEmpty(response.data)
+}
+
+export async function getAIJobSummary(params?: AIJobListQuery): Promise<AIJobSummary> {
+  const response = await apiClient.get<AIJobSummary>('/admin/ai-jobs/summary', { params })
+  return response.data
+}
+
+export async function getAIJobRuntime(): Promise<AIJobRuntimeStatus> {
+  const response = await apiClient.get<AIJobRuntimeStatus>('/admin/ai-jobs/runtime')
+  return response.data
+}
+
+export async function getAIJob(id: string): Promise<AIJobAdminDetail> {
+  const response = await apiClient.get<AIJobAdminDetail>(`/admin/ai-jobs/${id}`)
+  return response.data
+}
+
+export async function cancelAIJob(id: string): Promise<AIJobAdminActionResult> {
+  const response = await apiClient.post<AIJobAdminActionResult>(`/admin/ai-jobs/${id}/cancel`)
+  return response.data
+}
+
+export async function scheduleAIJobAttemptReconciliation(jobID: string, attemptID: string): Promise<AIAttemptReconcileScheduleResult> {
+  const response = await apiClient.post<AIAttemptReconcileScheduleResult>(`/admin/ai-jobs/${jobID}/attempts/${attemptID}/reconcile`)
   return response.data
 }
 

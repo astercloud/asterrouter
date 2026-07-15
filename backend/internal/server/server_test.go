@@ -13,13 +13,24 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 	operatorcore "github.com/astercloud/asterrouter/backend/internal/operator"
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
 	"github.com/astercloud/asterrouter/backend/internal/system"
 )
 
+type allowDurableAIJobs struct{}
+
+func (allowDurableAIJobs) SupportsDurableAIJob(context.Context, gatewaycore.CanonicalAuthContext, gatewaycore.CanonicalRequest) (bool, error) {
+	return true, nil
+}
+
 func newTestRuntime(t *testing.T, cfg config.Config) (http.Handler, *controlplane.Service) {
+	return newTestRuntimeWithDurableAdmission(t, cfg, allowDurableAIJobs{})
+}
+
+func newTestRuntimeWithDurableAdmission(t *testing.T, cfg config.Config, durableJobs DurableAIJobAdmission) (http.Handler, *controlplane.Service) {
 	t.Helper()
 	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
@@ -32,7 +43,11 @@ func newTestRuntime(t *testing.T, cfg config.Config) (http.Handler, *controlplan
 		t.Fatalf("Plugin EnsureSeedData(): %v", err)
 	}
 	systemService := system.NewService(system.Config{Version: "test", BuildType: "source"})
-	return New(Options{Config: cfg, SettingsService: settingsService, ControlService: controlService, OperatorService: operatorService, PluginService: pluginService, SystemService: systemService}), controlService
+	var runtime AIJobRuntimeStatusProvider
+	if value, ok := durableJobs.(AIJobRuntimeStatusProvider); ok {
+		runtime = value
+	}
+	return New(Options{Config: cfg, SettingsService: settingsService, ControlService: controlService, OperatorService: operatorService, PluginService: pluginService, SystemService: systemService, DurableAIJobs: durableJobs, AIJobRuntime: runtime}), controlService
 }
 
 func newTestHandler(t *testing.T, cfg config.Config) http.Handler {

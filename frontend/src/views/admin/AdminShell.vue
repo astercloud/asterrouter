@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   Activity,
+  Archive,
   BadgeDollarSign,
   Boxes,
   BellRing,
@@ -10,6 +11,7 @@ import {
   Gauge,
   FlaskConical,
   KeyRound,
+  ListChecks,
   PieChart,
   Plug,
   RadioTower,
@@ -56,7 +58,9 @@ const navGroups = [
       { to: '/admin/usage', label: 'admin.usage', icon: WalletCards },
       { to: '/admin/cost-allocation', label: 'admin.costAllocation', icon: PieChart },
       { to: '/admin/traces', label: 'admin.traces', icon: Activity },
-      { to: '/admin/alerts', label: 'admin.alerts', icon: BellRing }
+      { to: '/admin/alerts', label: 'admin.alerts', icon: BellRing },
+      { to: '/admin/artifacts', label: 'admin.artifacts', icon: Archive },
+      { to: '/admin/ai-jobs', label: 'admin.aiJobs', icon: ListChecks }
     ]
   },
   {

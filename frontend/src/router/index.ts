@@ -11,6 +11,8 @@ const SetupView = () => import('@/views/SetupView.vue')
 const AdminShell = () => import('@/views/admin/AdminShell.vue')
 const AdminApiKeysView = () => import('@/views/admin/AdminApiKeysView.vue')
 const AdminAlertsView = () => import('@/views/admin/AdminAlertsView.vue')
+const AdminArtifactsView = () => import('@/views/admin/AdminArtifactsView.vue')
+const AdminAIJobsView = () => import('@/views/admin/AdminAIJobsView.vue')
 const AdminAuditView = () => import('@/views/admin/AdminAuditView.vue')
 const AdminCostAllocationView = () => import('@/views/admin/AdminCostAllocationView.vue')
 const AdminDashboardView = () => import('@/views/admin/AdminDashboardView.vue')
@@ -180,6 +182,8 @@ const router = createRouter({
         { path: 'cost-allocation', component: AdminCostAllocationView, meta: { titleKey: 'admin.costAllocation', descriptionKey: 'costAllocation.subtitle' } },
         { path: 'traces', component: AdminGatewayTracesView, meta: { titleKey: 'admin.traces', descriptionKey: 'traces.subtitle' } },
         { path: 'alerts', component: AdminAlertsView, meta: { titleKey: 'admin.alerts', descriptionKey: 'alerts.subtitle' } },
+        { path: 'artifacts', component: AdminArtifactsView, meta: { titleKey: 'admin.artifacts', descriptionKey: 'artifactOps.subtitle' } },
+        { path: 'ai-jobs', component: AdminAIJobsView, meta: { titleKey: 'admin.aiJobs', descriptionKey: 'aiJobOps.subtitle' } },
         { path: 'exports', component: AdminExportJobsView, meta: { titleKey: 'admin.exports', descriptionKey: 'exports.subtitle' } },
         { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },

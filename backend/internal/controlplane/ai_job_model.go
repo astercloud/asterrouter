@@ -59,6 +59,7 @@ type AIJob struct {
 	Modality                 string     `json:"modality"`
 	Model                    string     `json:"model"`
 	ArtifactPolicy           string     `json:"artifact_policy"`
+	ArtifactSinkID           string     `json:"artifact_sink_id,omitempty"`
 	RequestPayload           string     `json:"-"`
 	RequestPayloadCiphertext string     `json:"-"`
 	Status                   string     `json:"status"`
@@ -119,7 +120,7 @@ func aiJobStatusTransitionAllowed(fromStatus, toStatus, reason string) bool {
 	case AIJobStatusRunning:
 		return oneOf(toStatus, AIJobStatusSucceeded, AIJobStatusFailed, AIJobStatusCanceling, AIJobStatusUnknown)
 	case AIJobStatusCanceling:
-		return oneOf(toStatus, AIJobStatusCanceled, AIJobStatusSucceeded)
+		return oneOf(toStatus, AIJobStatusCanceled, AIJobStatusSucceeded, AIJobStatusFailed)
 	case AIJobStatusUnknown:
 		if toStatus == AIJobStatusQueued {
 			return strings.TrimSpace(reason) == "proven_not_created"

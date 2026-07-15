@@ -19,6 +19,13 @@ type DurableAIJobAdapter interface {
 	ReconcileProviderTask(context.Context, GatewayProvider, AIJob, AIAttempt, ProviderDispatchIntent, ProviderTaskReference) (ProviderDispatchResult, error)
 }
 
+// DurableAIJobAdapterSelector is implemented by composite adapter hosts. The
+// selected ID is snapshotted on the Attempt so reconciliation cannot drift to
+// a different protocol plugin after a restart or plugin lifecycle change.
+type DurableAIJobAdapterSelector interface {
+	SelectDurableAIJobAdapter(context.Context, GatewayProvider, AIJob) (adapterID string, supported bool, err error)
+}
+
 type DurableAIJobWorkerReport struct {
 	Claimed    int
 	Accepted   int
@@ -59,19 +66,34 @@ func (s *Service) RunDurableAIJobWorkerOnce(ctx context.Context, workerID string
 
 func (s *Service) dispatchClaimedAIJob(ctx context.Context, job AIJob, adapter DurableAIJobAdapter) (string, error) {
 	excluded := map[string]struct{}{}
+	adapterUnavailable := false
 	for attemptNumber := 1; ; attemptNumber++ {
 		candidates, err := s.durableAIJobCandidates(ctx, job, excluded)
 		if err != nil {
 			return job.Status, err
 		}
 		if len(candidates) == 0 {
-			updated, transitionErr := s.RequeueAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, "capacity_unavailable", AIJobDefaultRetryAfter)
+			reason := "capacity_unavailable"
+			if adapterUnavailable {
+				reason = "adapter_unavailable"
+			}
+			updated, transitionErr := s.RequeueAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, reason, AIJobDefaultRetryAfter)
 			if transitionErr != nil {
 				return job.Status, transitionErr
 			}
 			return updated.Status, nil
 		}
 		provider := candidates[0]
+		adapterID, supported, selectErr := selectDurableAIJobAdapter(ctx, adapter, provider, job)
+		if selectErr != nil {
+			return job.Status, selectErr
+		}
+		if !supported {
+			adapterUnavailable = true
+			excluded[durableProviderCandidateKey(provider)] = struct{}{}
+			continue
+		}
+		provider.AdapterID = adapterID
 		permit, _, capacityAcquired, capacityErr := s.TryAcquireProviderAccountPermitContext(
 			ctx, provider, estimateDurableAIJobTokens(job), providerCapacityLeaseID(job.OperationID, attemptNumber),
 		)
@@ -87,8 +109,9 @@ func (s *Service) dispatchClaimedAIJob(ctx context.Context, job AIJob, adapter D
 			permit.Release()
 			return job.Status, err
 		}
+		provider.AdapterID = attempt.ProviderAdapterID
 		executor := durableAIJobDispatchExecutor{adapter: adapter, provider: provider, job: job, attempt: attempt}
-		updatedAttempt, _, dispatchErr := s.ExecuteAIAttemptDispatch(ctx, attempt.ID, []byte(job.RequestPayload), executor)
+		updatedAttempt, dispatchResult, dispatchErr := s.ExecuteAIAttemptDispatch(ctx, attempt.ID, []byte(job.RequestPayload), executor)
 		switch updatedAttempt.DispatchState {
 		case AIAttemptDispatchAccepted:
 			capacityErr = permit.Retain(ctx, providerCapacityRetentionDuration(s.nowUTC(), updatedAttempt.ReconcileAfter))
@@ -97,7 +120,9 @@ func (s *Service) dispatchClaimedAIJob(ctx context.Context, job AIJob, adapter D
 			if transitionErr != nil {
 				return job.Status, errors.Join(capacityErr, billingErr, transitionErr)
 			}
-			return updatedJob.Status, errors.Join(dispatchErrIfAccepted(dispatchErr), capacityErr, billingErr)
+			progressedJob, progressErr := s.applyAcceptedProviderProgress(ctx, provider, updatedJob, updatedAttempt, dispatchResult, adapter)
+			capacitySyncErr := s.syncProviderCapacityForAttempt(ctx, updatedAttempt)
+			return progressedJob.Status, errors.Join(dispatchErrIfAccepted(dispatchErr), capacityErr, capacitySyncErr, billingErr, progressErr)
 		case AIAttemptDispatchProvenNotCreated:
 			permit.Release()
 			excluded[durableProviderCandidateKey(provider)] = struct{}{}
@@ -128,7 +153,7 @@ func (s *Service) RunDurableAIJobReconcilerOnce(ctx context.Context, limit int, 
 	if adapter == nil {
 		return DurableAIJobWorkerReport{}, ErrDurableAIJobAdapterRequired
 	}
-	attempts, err := s.AIAttemptsForReconciliation(ctx, limit)
+	attempts, err := s.DurableAIAttemptsForReconciliation(ctx, limit)
 	if err != nil {
 		return DurableAIJobWorkerReport{}, err
 	}
@@ -185,7 +210,7 @@ func (s *Service) reconcileAIAttempt(ctx context.Context, attempt AIAttempt, ada
 	}
 	capacityErr := s.restoreProviderCapacityForAttempt(ctx, attempt)
 	executor := durableAIJobReconcileExecutor{adapter: adapter, provider: provider, job: job, attempt: attempt}
-	updatedAttempt, _, reconcileErr := s.ReconcileAIAttemptDispatch(ctx, attempt.ID, executor)
+	updatedAttempt, dispatchResult, reconcileErr := s.ReconcileAIAttemptDispatch(ctx, attempt.ID, executor)
 	reconcileErr = errors.Join(reconcileErr, capacityErr, s.syncProviderCapacityForAttempt(ctx, updatedAttempt))
 	if reconcileErr != nil && updatedAttempt.DispatchState != AIAttemptDispatchAccepted && updatedAttempt.DispatchState != AIAttemptDispatchProvenNotCreated {
 		billingErr := s.DisputeBillingHold(ctx, operation.ID, "provider_status_unknown")
@@ -214,9 +239,22 @@ func (s *Service) reconcileAIAttempt(ctx context.Context, attempt AIAttempt, ada
 		}
 		job = updatedJob
 	}
-	status := strings.ToLower(strings.TrimSpace(updatedAttempt.ProviderTaskStatus))
-	if !isDurableProviderTerminalStatus(status) {
-		return reconcileErr
+	_, progressErr := s.applyAcceptedProviderProgress(ctx, provider, job, updatedAttempt, dispatchResult, adapter)
+	return errors.Join(reconcileErr, progressErr)
+}
+
+func (s *Service) applyAcceptedProviderProgress(ctx context.Context, provider GatewayProvider, job AIJob, attempt AIAttempt, result ProviderDispatchResult, adapter DurableAIJobAdapter) (AIJob, error) {
+	status := strings.ToLower(strings.TrimSpace(attempt.ProviderTaskStatus))
+	providerTerminal := isDurableProviderTerminalStatus(status)
+	providerSucceeded := oneOf(status, "succeeded", "completed")
+	if len(result.Outputs) > 0 && (!providerTerminal || providerSucceeded) {
+		if _, outputErr := s.ingestProviderOutputs(ctx, provider, job, attempt, result.Outputs, adapter); outputErr != nil {
+			deferErr := s.deferAIAttemptReconciliation(ctx, attempt, AIJobDefaultRetryAfter)
+			return job, errors.Join(outputErr, deferErr)
+		}
+	}
+	if !providerTerminal {
+		return job, nil
 	}
 	terminal := AIJobStatusSucceeded
 	attemptStatus := AIAttemptStatusSucceeded
@@ -228,25 +266,50 @@ func (s *Service) reconcileAIAttempt(ctx context.Context, attempt AIAttempt, ada
 		terminal = AIJobStatusCanceled
 		attemptStatus = AIAttemptStatusCanceled
 	}
+	if terminal == AIJobStatusSucceeded {
+		artifacts, artifactErr := s.repo.QueryArtifacts(ctx, ArtifactQuery{JobID: job.ID, AttemptID: attempt.ID, Role: ArtifactRoleFinal, Limit: 1})
+		if artifactErr != nil {
+			return job, artifactErr
+		}
+		if deliverableErr := providerOutputsDeliverable(job, attempt.ID, artifacts); deliverableErr != nil {
+			deferErr := s.deferAIAttemptReconciliation(ctx, attempt, AIJobDefaultRetryAfter)
+			return job, errors.Join(deliverableErr, deferErr)
+		}
+	}
 	if !aiJobTerminalStatus(job.Status) {
 		if !oneOf(job.Status, AIJobStatusRunning, AIJobStatusCanceling) {
-			return errors.Join(reconcileErr, fmt.Errorf("ai job %q cannot apply provider terminal status from %q", job.ID, job.Status))
+			return job, fmt.Errorf("ai job %q cannot apply provider terminal status from %q", job.ID, job.Status)
 		}
 		updatedJob, transitionErr := s.TransitionAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, terminal, status)
 		if transitionErr != nil {
-			return errors.Join(reconcileErr, transitionErr)
+			return job, transitionErr
 		}
 		job = updatedJob
 	}
 	if job.Status != terminal {
-		return errors.Join(reconcileErr, fmt.Errorf("provider terminal status %q conflicts with ai job status %q", status, job.Status))
+		return job, fmt.Errorf("provider terminal status %q conflicts with ai job status %q", status, job.Status)
 	}
-	if updatedAttempt.Status == AIAttemptStatusRunning {
-		if completeErr := s.CompleteAIAttempt(ctx, updatedAttempt.ID, attemptStatus, status); completeErr != nil {
-			return errors.Join(reconcileErr, completeErr)
+	if attempt.Status == AIAttemptStatusRunning {
+		if completeErr := s.CompleteAIAttempt(ctx, attempt.ID, attemptStatus, status); completeErr != nil {
+			return job, completeErr
 		}
 	}
-	return reconcileErr
+	return job, nil
+}
+
+func (s *Service) deferAIAttemptReconciliation(ctx context.Context, attempt AIAttempt, delay time.Duration) error {
+	current, found, err := s.repo.FindAIAttempt(ctx, attempt.ID)
+	if err != nil || !found || current.Status != AIAttemptStatusRunning {
+		return err
+	}
+	if delay <= 0 {
+		delay = AIJobDefaultRetryAfter
+	}
+	_, _, err = s.RecordAIAttemptReconciliation(ctx, current.ID, current.DispatchVersion, current.ProviderTaskStatus, s.nowUTC().Add(delay))
+	if errors.Is(err, ErrAIAttemptDispatchState) {
+		return nil
+	}
+	return err
 }
 
 func estimateDurableAIJobTokens(job AIJob) int {
@@ -298,16 +361,70 @@ func (s *Service) durableAIJobCandidates(ctx context.Context, job AIJob, exclude
 }
 
 func (s *Service) durableProviderForAttempt(ctx context.Context, job AIJob, attempt AIAttempt) (GatewayProvider, error) {
-	candidates, err := s.durableAIJobCandidates(ctx, job, nil)
+	accounts, err := s.repo.ListProviderAccounts(ctx)
 	if err != nil {
 		return GatewayProvider{}, err
 	}
-	for _, candidate := range candidates {
-		if candidate.AccountID == attempt.ProviderAccountID && candidate.RouteID == attempt.RouteID {
-			return candidate, nil
+	var account ProviderAccount
+	accountFound := false
+	for _, candidate := range accounts {
+		if candidate.ID == attempt.ProviderAccountID && candidate.ProviderID == attempt.ProviderID {
+			account = candidate
+			accountFound = true
+			break
 		}
 	}
-	return GatewayProvider{}, fmt.Errorf("provider route %q/account %q is unavailable for reconciliation", attempt.RouteID, attempt.ProviderAccountID)
+	if !accountFound {
+		return GatewayProvider{}, fmt.Errorf("provider account %q is unavailable for reconciliation", attempt.ProviderAccountID)
+	}
+	providers, err := s.repo.ListProviders(ctx)
+	if err != nil {
+		return GatewayProvider{}, err
+	}
+	provider, providerFound := providerByIDMap(providers)[attempt.ProviderID]
+	if !providerFound || !validHTTPURL(provider.BaseURL) {
+		return GatewayProvider{}, fmt.Errorf("provider %q is unavailable for reconciliation", attempt.ProviderID)
+	}
+	secret, err := decryptSecret(s.secretKey, account.SecretCiphertext)
+	if err != nil {
+		return GatewayProvider{}, err
+	}
+	route := ModelRoute{ID: attempt.RouteID, ProviderAccountID: attempt.ProviderAccountID, UpstreamModel: attempt.UpstreamModel}
+	if routes, listErr := s.repo.ListModelRoutes(ctx); listErr == nil {
+		for _, candidate := range routes {
+			if candidate.ID == attempt.RouteID && candidate.ProviderAccountID == attempt.ProviderAccountID && candidate.UpstreamModel == attempt.UpstreamModel {
+				route = candidate
+				break
+			}
+		}
+	}
+	return GatewayProvider{
+		ID: provider.ID, Name: provider.Name, Type: provider.Type, BaseURL: provider.BaseURL, APIKey: secret,
+		AdapterID: attempt.ProviderAdapterID, AccountID: account.ID, AccountName: account.Name, Concurrency: account.Concurrency,
+		GatewayModelID: route.GatewayModelID, RequestedModel: job.Model, UpstreamModel: attempt.UpstreamModel,
+		RouteID: attempt.RouteID, RouteGroup: route.RouteGroup, RoutePriority: route.Priority, RouteWeight: route.Weight,
+		AccountWeight: account.Weight, RPMLimit: account.RPMLimit, TPMLimit: account.TPMLimit, CircuitState: account.CircuitState,
+		Source: "attempt_snapshot", SelectionReason: "reconcile the provider task bound to the durable attempt",
+	}, nil
+}
+
+func selectDurableAIJobAdapter(ctx context.Context, adapter DurableAIJobAdapter, provider GatewayProvider, job AIJob) (string, bool, error) {
+	if adapter == nil {
+		return "", false, ErrDurableAIJobAdapterRequired
+	}
+	selector, ok := adapter.(DurableAIJobAdapterSelector)
+	if !ok {
+		return "", true, nil
+	}
+	adapterID, supported, err := selector.SelectDurableAIJobAdapter(ctx, provider, job)
+	if err != nil || !supported {
+		return "", supported, err
+	}
+	adapterID = strings.TrimSpace(adapterID)
+	if adapterID == "" {
+		return "", false, errors.New("durable ai job adapter selector returned an empty adapter id")
+	}
+	return adapterID, true, nil
 }
 
 func durableProviderCandidateKey(provider GatewayProvider) string {

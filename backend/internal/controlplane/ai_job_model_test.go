@@ -17,6 +17,7 @@ func TestAIJobStatusTransitionContract(t *testing.T) {
 		{AIJobStatusUnknown, AIJobStatusQueued, "", false},
 		{AIJobStatusUnknown, AIJobStatusQueued, "proven_not_created", true},
 		{AIJobStatusCanceling, AIJobStatusSucceeded, "", true},
+		{AIJobStatusCanceling, AIJobStatusFailed, "provider_error", true},
 		{AIJobStatusSucceeded, AIJobStatusExpired, "", true},
 		{AIJobStatusSucceeded, AIJobStatusRunning, "", false},
 		{AIJobStatusExpired, AIJobStatusQueued, "", false},

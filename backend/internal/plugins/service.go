@@ -10,50 +10,65 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 )
 
 var (
-	ErrPluginNotFound        = errors.New("plugin not found")
-	ErrPluginSurface         = errors.New("plugin is not available on this surface")
-	ErrPluginLocked          = errors.New("plugin entitlement is missing")
-	ErrPluginCoreRequired    = errors.New("core plugin cannot be disabled")
-	ErrPluginNotConfigurable = errors.New("plugin is not configurable")
-	ErrPluginConfigInvalid   = errors.New("plugin configuration is invalid")
+	ErrPluginNotFound                  = errors.New("plugin not found")
+	ErrPluginSurface                   = errors.New("plugin is not available on this surface")
+	ErrPluginLocked                    = errors.New("plugin entitlement is missing")
+	ErrPluginCoreRequired              = errors.New("core plugin cannot be disabled")
+	ErrPluginNotConfigurable           = errors.New("plugin is not configurable")
+	ErrPluginConfigInvalid             = errors.New("plugin configuration is invalid")
+	ErrArtifactSinkRegistryRequired    = errors.New("artifact sink registry is required")
+	ErrArtifactSinkDestinationNotFound = errors.New("artifact sink destination not found")
 )
 
 type Service struct {
-	repo               Repository
-	secretKey          string
-	httpClient         *http.Client
-	catalogConfig      OfficialCatalogConfig
-	licenseConfig      OfficialLicenseConfig
-	licenseInstanceID  string
-	licenseFingerprint string
-	packageCacheDir    string
-	packageActiveDir   string
-	pluginHostURL      string
-	coreVersion        string
-	targetOS           string
-	targetArch         string
-	now                func() time.Time
-	sidecarsMu         sync.Mutex
-	packageMu          sync.Mutex
-	sidecars           map[string]*sidecarProcess
-	supervisors        map[string]*sidecarSupervisor
+	repo                      Repository
+	secretKey                 string
+	httpClient                *http.Client
+	providerAdapterHTTPClient *http.Client
+	catalogConfig             OfficialCatalogConfig
+	licenseConfig             OfficialLicenseConfig
+	licenseInstanceID         string
+	licenseFingerprint        string
+	packageCacheDir           string
+	packageActiveDir          string
+	pluginHostURL             string
+	coreVersion               string
+	targetOS                  string
+	targetArch                string
+	now                       func() time.Time
+	sidecarsMu                sync.Mutex
+	packageMu                 sync.Mutex
+	sidecars                  map[string]*sidecarProcess
+	supervisors               map[string]*sidecarSupervisor
+	artifactSinkRegistry      ArtifactSinkRegistry
+	artifactSinkStoreFactory  ArtifactSinkStoreFactory
+	artifactSinkMu            sync.Mutex
+	registeredArtifactSinks   map[string]controlplane.ArtifactSink
+	openAIImageCacheMu        sync.Mutex
+	openAIImageTasks          map[string]openAIImageTaskCache
+	openAIImageCacheBytes     int64
 }
 
 type ServiceOptions struct {
-	SecretKey       string
-	HTTPClient      *http.Client
-	OfficialCatalog OfficialCatalogConfig
-	OfficialLicense OfficialLicenseConfig
-	PackageCacheDir string
-	PluginActiveDir string
-	PluginHostURL   string
-	CoreVersion     string
-	TargetOS        string
-	TargetArch      string
-	Now             func() time.Time
+	SecretKey                 string
+	HTTPClient                *http.Client
+	ProviderAdapterHTTPClient *http.Client
+	OfficialCatalog           OfficialCatalogConfig
+	OfficialLicense           OfficialLicenseConfig
+	PackageCacheDir           string
+	PluginActiveDir           string
+	PluginHostURL             string
+	CoreVersion               string
+	TargetOS                  string
+	TargetArch                string
+	Now                       func() time.Time
+	ArtifactSinkRegistry      ArtifactSinkRegistry
+	ArtifactSinkStoreFactory  ArtifactSinkStoreFactory
 }
 
 func NewService(repo Repository, secretKey ...string) *Service {
@@ -73,6 +88,17 @@ func NewServiceWithOptions(repo Repository, options ServiceOptions) *Service {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
+	providerAdapterClient := options.ProviderAdapterHTTPClient
+	if providerAdapterClient == nil {
+		providerAdapterTransport := http.DefaultTransport.(*http.Transport).Clone()
+		providerAdapterTransport.ResponseHeaderTimeout = 5 * time.Minute
+		providerAdapterClient = &http.Client{
+			Transport: providerAdapterTransport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return errors.New("provider adapter redirects are not allowed")
+			},
+		}
+	}
 	now := options.Now
 	if now == nil {
 		now = time.Now
@@ -80,22 +106,27 @@ func NewServiceWithOptions(repo Repository, options ServiceOptions) *Service {
 	cacheDir := defaultString(strings.TrimSpace(options.PackageCacheDir), defaultPackageCacheDir())
 	activeDir := defaultString(strings.TrimSpace(options.PluginActiveDir), defaultPackageActiveDir(cacheDir))
 	return &Service{
-		repo:               repo,
-		secretKey:          key,
-		httpClient:         client,
-		catalogConfig:      normalizeOfficialCatalogConfig(options.OfficialCatalog),
-		licenseConfig:      normalizeOfficialLicenseConfig(options.OfficialLicense, options.OfficialCatalog),
-		licenseInstanceID:  strings.TrimSpace(options.OfficialLicense.InstanceID),
-		licenseFingerprint: strings.TrimSpace(options.OfficialLicense.Fingerprint),
-		packageCacheDir:    cacheDir,
-		packageActiveDir:   activeDir,
-		pluginHostURL:      strings.TrimRight(strings.TrimSpace(options.PluginHostURL), "/"),
-		coreVersion:        defaultString(strings.TrimSpace(options.CoreVersion), "0.1.0-dev"),
-		targetOS:           defaultString(strings.ToLower(strings.TrimSpace(options.TargetOS)), runtime.GOOS),
-		targetArch:         defaultString(strings.ToLower(strings.TrimSpace(options.TargetArch)), runtime.GOARCH),
-		now:                now,
-		sidecars:           map[string]*sidecarProcess{},
-		supervisors:        map[string]*sidecarSupervisor{},
+		repo:                      repo,
+		secretKey:                 key,
+		httpClient:                client,
+		providerAdapterHTTPClient: providerAdapterClient,
+		catalogConfig:             normalizeOfficialCatalogConfig(options.OfficialCatalog),
+		licenseConfig:             normalizeOfficialLicenseConfig(options.OfficialLicense, options.OfficialCatalog),
+		licenseInstanceID:         strings.TrimSpace(options.OfficialLicense.InstanceID),
+		licenseFingerprint:        strings.TrimSpace(options.OfficialLicense.Fingerprint),
+		packageCacheDir:           cacheDir,
+		packageActiveDir:          activeDir,
+		pluginHostURL:             strings.TrimRight(strings.TrimSpace(options.PluginHostURL), "/"),
+		coreVersion:               defaultString(strings.TrimSpace(options.CoreVersion), "0.1.0-dev"),
+		targetOS:                  defaultString(strings.ToLower(strings.TrimSpace(options.TargetOS)), runtime.GOOS),
+		targetArch:                defaultString(strings.ToLower(strings.TrimSpace(options.TargetArch)), runtime.GOARCH),
+		now:                       now,
+		sidecars:                  map[string]*sidecarProcess{},
+		supervisors:               map[string]*sidecarSupervisor{},
+		artifactSinkRegistry:      options.ArtifactSinkRegistry,
+		artifactSinkStoreFactory:  options.ArtifactSinkStoreFactory,
+		registeredArtifactSinks:   map[string]controlplane.ArtifactSink{},
+		openAIImageTasks:          map[string]openAIImageTaskCache{},
 	}
 }
 
@@ -217,6 +248,14 @@ func (s *Service) Enable(ctx context.Context, id string) (Plugin, error) {
 	}
 	plugin.Status = StatusEnabled
 	plugin.UpdatedAt = now
+	if plugin.ID == ArtifactS3SinkPluginID {
+		if err := s.enableArtifactSinkPlugin(ctx, plugin); err != nil {
+			statusRollbackErr := s.repo.UpdateStatus(ctx, plugin.ID, StatusDisabled, now)
+			plugin.Status = StatusDisabled
+			runtimeRollbackErr := s.syncArtifactSinkPlugin(ctx, plugin)
+			return Plugin{}, errors.Join(err, statusRollbackErr, runtimeRollbackErr)
+		}
+	}
 	if _, ok, err := s.sidecarTarget(ctx, plugin.ID); err != nil {
 		return Plugin{}, err
 	} else if ok {
@@ -244,6 +283,11 @@ func (s *Service) Disable(ctx context.Context, id string) (Plugin, error) {
 	}
 	plugin.Status = StatusDisabled
 	plugin.UpdatedAt = now
+	if plugin.ID == ArtifactS3SinkPluginID {
+		if err := s.syncArtifactSinkPlugin(ctx, plugin); err != nil {
+			return Plugin{}, err
+		}
+	}
 	_ = s.stopSidecarSupervisor(ctx, plugin.ID)
 	return plugin, nil
 }
@@ -253,6 +297,8 @@ func (s *Service) Health(ctx context.Context) error {
 }
 
 func (s *Service) Shutdown(ctx context.Context) error {
+	s.stopArtifactSinkPlugins()
+	s.clearOpenAIImageTaskCache()
 	s.sidecarsMu.Lock()
 	supervisors := make([]*sidecarSupervisor, 0, len(s.supervisors))
 	for key, supervisor := range s.supervisors {

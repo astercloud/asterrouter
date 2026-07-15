@@ -43,6 +43,7 @@ func scanBillingHold(scanner billingHoldScanner) (BillingHold, error) {
 }
 
 func (r *MemoryRepository) CreateAIOperationWithBillingHold(_ context.Context, operation AIOperation, admission BillingHoldAdmission) (AIOperation, bool, error) {
+	normalizeAIOperation(&operation)
 	if err := validateBillingHoldAdmission(operation, admission); err != nil {
 		return AIOperation{}, false, err
 	}
@@ -73,6 +74,7 @@ func (r *MemoryRepository) CreateAIOperationWithBillingHold(_ context.Context, o
 }
 
 func (r *PostgresRepository) CreateAIOperationWithBillingHold(ctx context.Context, operation AIOperation, admission BillingHoldAdmission) (AIOperation, bool, error) {
+	normalizeAIOperation(&operation)
 	if err := validateBillingHoldAdmission(operation, admission); err != nil {
 		return AIOperation{}, false, err
 	}

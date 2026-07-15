@@ -1,6 +1,7 @@
 package gatewaycore
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -91,6 +92,47 @@ func TestCanonicalizeOpenAIModelsProducesCanonicalEnvelope(t *testing.T) {
 	}
 	if got.ID != "op_models-1" || got.Protocol != ProtocolOpenAIModels || got.Operation != "list_models" || got.Modality != "metadata" || got.Lane != LaneDirect || got.Model != "" || len(got.Fingerprint) != 64 {
 		t.Fatalf("canonical models request = %+v", got)
+	}
+}
+
+func TestCanonicalizeOpenAIImageGenerationFreezesInteractionContract(t *testing.T) {
+	header := http.Header{"X-Request-Id": []string{"image-1"}, "Idempotency-Key": []string{"image-idem-1"}}
+	first, err := CanonicalizeOpenAIImageGeneration([]byte(`{"model":"image-model","prompt":" synthetic ","n":2,"stream":true,"delivery_mode":"artifact"}`), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := CanonicalizeOpenAIImageGeneration([]byte(`{"delivery_mode":"artifact","response_mode":"stream","prompt":"synthetic","n":2,"model":"image-model"}`), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != "op_image-1" || first.Protocol != ProtocolOpenAIImages || first.Lane != LaneDirect || !first.Stream ||
+		first.ResponseMode != "stream" || first.PreviewMode != "none" || first.DeliveryMode != "artifact" || first.OutputCount != 2 ||
+		first.Fingerprint != second.Fingerprint || string(first.Payload) != string(second.Payload) {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	var canonical struct {
+		Input map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(first.Payload, &canonical); err != nil || canonical.Input["stream"] != nil || canonical.Input["delivery_mode"] != nil {
+		t.Fatalf("provider input retained transport controls: %s err=%v", first.Payload, err)
+	}
+}
+
+func TestCanonicalizeOpenAIImageGenerationRejectsUnsafeContracts(t *testing.T) {
+	validHeader := http.Header{"Idempotency-Key": []string{"image-idem"}}
+	tests := []struct {
+		body   string
+		header http.Header
+	}{
+		{body: `{"model":"image-model","prompt":"synthetic"}`},
+		{body: `{"model":"image-model","prompt":"synthetic","n":0}`, header: validHeader},
+		{body: `{"model":"image-model","prompt":"synthetic","response_mode":"blocking","preview_mode":"required"}`, header: validHeader},
+		{body: `{"model":"image-model","prompt":"synthetic","delivery_mode":"unknown"}`, header: validHeader},
+	}
+	for _, test := range tests {
+		if _, err := CanonicalizeOpenAIImageGeneration([]byte(test.body), test.header); !errors.Is(err, ErrInvalidCanonicalRequest) {
+			t.Fatalf("body=%s error=%v", test.body, err)
+		}
 	}
 }
 

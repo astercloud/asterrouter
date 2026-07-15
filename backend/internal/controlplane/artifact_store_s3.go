@@ -15,13 +15,14 @@ import (
 )
 
 type S3ArtifactStoreConfig struct {
-	Endpoint  string
-	Region    string
-	Bucket    string
-	Prefix    string
-	AccessKey string
-	SecretKey string
-	PathStyle bool
+	Endpoint     string
+	Region       string
+	Bucket       string
+	Prefix       string
+	AccessKey    string
+	SecretKey    string
+	SessionToken string
+	PathStyle    bool
 }
 
 type artifactS3Client interface {
@@ -47,7 +48,7 @@ func NewS3ArtifactStore(ctx context.Context, config S3ArtifactStoreConfig) (*S3A
 	}
 	loaded, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(config.Region),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(config.AccessKey, config.SecretKey, "")),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(config.AccessKey, config.SecretKey, config.SessionToken)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load S3 artifact config: %w", err)

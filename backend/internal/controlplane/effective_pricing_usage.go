@@ -67,6 +67,10 @@ func (s *Service) estimateGatewayProcurementCost(ctx context.Context, input Gate
 		}
 		costMicros += value
 	}
+	costMicros, ok := applyRechargeMultiplier(costMicros, price.RechargeMultiplier)
+	if !ok {
+		return gatewayProcurementCostEstimate{}, false, nil
+	}
 	confidence := strings.TrimSpace(price.Confidence)
 	if confidence == "" {
 		confidence = ProcurementCostConfidenceEstimated

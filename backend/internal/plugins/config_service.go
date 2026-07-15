@@ -38,6 +38,9 @@ func (s *Service) UpdateConfig(ctx context.Context, id string, req ConfigRequest
 	if !plugin.Configurable {
 		return Config{}, ErrPluginNotConfigurable
 	}
+	if plugin.ID == ArtifactS3SinkPluginID {
+		return Config{}, fmt.Errorf("%w: use artifact sink destination configuration", ErrPluginConfigInvalid)
+	}
 	if plugin.Status == StatusLocked {
 		return Config{}, ErrPluginLocked
 	}

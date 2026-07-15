@@ -39,8 +39,9 @@ const (
 	gatewayFingerprintContextKey = "gateway_request_fingerprint"
 )
 
-func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service) {
-	registerGatewayJobRoutes(r, control)
+func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service, durableJobs DurableAIJobAdmission, directAI controlplane.DirectAIProviderAdapter) {
+	registerGatewayJobRoutes(r, control, durableJobs)
+	registerGatewayImageRoutes(r, control, durableJobs, directAI)
 
 	r.GET("/v1/models", func(c *gin.Context) {
 		if control == nil {

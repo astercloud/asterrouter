@@ -91,6 +91,15 @@ func TestCreateAPIKeyRejectsInvalidExtendedPolicy(t *testing.T) {
 		{name: "invalid cidr", mutate: func(req *APIKeyCreateRequest) { req.AllowedCIDRs = []string{"not-an-address"} }},
 		{name: "invalid lane", mutate: func(req *APIKeyCreateRequest) { req.LanePolicy = "automatic" }},
 		{name: "invalid artifact", mutate: func(req *APIKeyCreateRequest) { req.ArtifactPolicy = "public_forever" }},
+		{name: "customer sink missing id", mutate: func(req *APIKeyCreateRequest) { req.ArtifactPolicy = GatewayArtifactPolicyCustomerSink }},
+		{name: "sink id with managed policy", mutate: func(req *APIKeyCreateRequest) {
+			req.ArtifactPolicy = GatewayArtifactPolicyManaged
+			req.ArtifactSinkID = "sink-managed"
+		}},
+		{name: "invalid sink id", mutate: func(req *APIKeyCreateRequest) {
+			req.ArtifactPolicy = GatewayArtifactPolicyCustomerSink
+			req.ArtifactSinkID = "sink/invalid"
+		}},
 		{name: "invalid scope", mutate: func(req *APIKeyCreateRequest) { req.Scopes = []string{"Gateway Invoke"} }},
 	}
 	for _, test := range tests {
@@ -101,6 +110,20 @@ func TestCreateAPIKeyRejectsInvalidExtendedPolicy(t *testing.T) {
 				t.Fatal("CreateAPIKey() accepted invalid extended policy")
 			}
 		})
+	}
+}
+
+func TestCreateAPIKeyFreezesCustomerArtifactSinkPolicy(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
+		Name: "customer sink", ModelAllowlist: []string{"image-model"}, LanePolicy: GatewayLanePolicyDurableOnly,
+		ArtifactPolicy: GatewayArtifactPolicyCustomerSink, ArtifactSinkID: "sink-customer-images",
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(): %v", err)
+	}
+	if created.Record.ArtifactPolicy != GatewayArtifactPolicyCustomerSink || created.Record.ArtifactSinkID != "sink-customer-images" {
+		t.Fatalf("artifact sink policy=%+v", created.Record)
 	}
 }
 

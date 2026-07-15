@@ -46,6 +46,18 @@ func TestParseGatewayUsageNormalizesCacheSchemas(t *testing.T) {
 			wantInput: 100, wantOutput: 0, wantTotal: testIntPointer(100), wantUncached: testIntPointer(10), wantRead: testIntPointer(90), wantWrite5m: testIntPointer(0),
 			wantCachePresent: true, wantStatus: usageNormalizationAnthropic,
 		},
+		{
+			name:      "gemini json usage metadata",
+			body:      `{"usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":60,"candidatesTokenCount":20,"thoughtsTokenCount":5,"totalTokenCount":125}}`,
+			wantInput: 100, wantOutput: 25, wantTotal: testIntPointer(100), wantUncached: testIntPointer(40), wantRead: testIntPointer(60),
+			wantCachePresent: true, wantStatus: usageNormalizationGemini,
+		},
+		{
+			name:      "gemini cache details and explicit zero output",
+			body:      `{"usageMetadata":{"promptTokenCount":100,"cacheTokensDetails":[{"modality":"TEXT","tokenCount":60}],"candidatesTokenCount":0}}`,
+			wantInput: 100, wantOutput: 0, wantTotal: testIntPointer(100), wantUncached: testIntPointer(40), wantRead: testIntPointer(60),
+			wantCachePresent: true, wantStatus: usageNormalizationGemini,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -71,6 +83,16 @@ func TestGatewaySSEUsageCollectorMergesUsageEvents(t *testing.T) {
 		t.Fatalf("merged observation = %+v", got)
 	}
 	assertOptionalInt(t, "read", got.CacheReadTokens, testIntPointer(90))
+}
+
+func TestGatewaySSEUsageCollectorMergesGeminiFinalUsage(t *testing.T) {
+	collector := gatewaySSEUsageCollector{}
+	collector.Write([]byte("event: message\ndata: {\"candidates\":[{}]}\n\n"))
+	collector.Write([]byte("data: {\"usageMetadata\":{\"promptTokenCount\":100,\"cachedContentTokenCount\":60,\"candidatesTokenCount\":20,\"thoughtsTokenCount\":5}}\n\ndata: [DONE]\n\n"))
+	got := collector.Observation()
+	if got.InputTokens != 100 || got.OutputTokens != 25 || got.CacheReadTokens == nil || *got.CacheReadTokens != 60 || got.UsageNormalizationStatus != usageNormalizationGemini {
+		t.Fatalf("merged Gemini observation = %+v", got)
+	}
 }
 
 func TestParseGatewayUsageDistinguishesMissingAndInvalid(t *testing.T) {

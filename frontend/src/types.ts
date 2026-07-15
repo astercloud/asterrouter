@@ -707,6 +707,18 @@ export interface ProviderCacheCapability {
   updated_at: string
 }
 
+export interface ProviderCacheCapabilityRequest {
+  provider_account_id: string
+  upstream_model: string
+  protocol: string
+  support_status: string
+  pool_affinity_grade: string
+  affinity_transport: string
+  affinity_field: string
+  cache_control_mode: string
+  usage_schema: string
+}
+
 export interface ProviderCacheProbeRun {
   id: string
   provider_id: string
@@ -798,6 +810,16 @@ export interface EffectivePricingReportRow {
   upstream_model: string
   protocol: string
   currency: string
+  cost_available: boolean
+  uncached_input_micros_per_1m_tokens: number
+  cache_read_micros_per_1m_tokens: number
+  cache_write_5m_micros_per_1m_tokens: number
+  cache_write_1h_micros_per_1m_tokens: number
+  output_micros_per_1m_tokens: number
+  request_micros: number
+  reference_input_micros_per_1m_tokens: number
+  reference_output_micros_per_1m_tokens: number
+  recharge_multiplier: number
   quoted_multiplier: number
   billed_multiplier: number
   effective_multiplier: number
@@ -871,6 +893,7 @@ export interface APIKeyRecord {
   allowed_cidrs: string[]
   lane_policy: string
   artifact_policy: string
+  artifact_sink_id?: string
   rotation_family_id: string
   replaces_key_id: string
   replaced_by_key_id: string
@@ -901,6 +924,7 @@ export interface APIKeyCreateRequest {
   allowed_cidrs?: string[]
   lane_policy?: string
   artifact_policy?: string
+  artifact_sink_id?: string
   expires_at: string
   key_type?: string
   customer_id?: string
@@ -928,6 +952,7 @@ export interface APIKeyUpdateRequest {
   allowed_cidrs?: string[]
   lane_policy?: string
   artifact_policy?: string
+  artifact_sink_id?: string
   expires_at: string
   status: string
   key_type?: string
@@ -1341,6 +1366,40 @@ export interface PluginConfigRequest {
   secrets: Record<string, string>
 }
 
+export type ArtifactSinkProvider = 's3' | 'r2' | 'oss'
+
+export interface ArtifactSinkDestination {
+  id: string
+  name: string
+  provider: ArtifactSinkProvider
+  endpoint?: string
+  region: string
+  bucket: string
+  prefix?: string
+  reference_base_url?: string
+  allowed_profile_scope?: string
+  allowed_tenant_id?: string
+  path_style: boolean
+  enabled: boolean
+  secret_hints: Record<string, string>
+}
+
+export interface ArtifactSinkDestinationRequest {
+  name: string
+  provider: ArtifactSinkProvider
+  endpoint: string
+  region: string
+  bucket: string
+  prefix: string
+  reference_base_url: string
+  allowed_profile_scope: string
+  allowed_tenant_id: string
+  path_style: boolean
+  enabled: boolean
+  secrets: Record<string, string>
+  clear_session_token: boolean
+}
+
 export interface PluginAPIToken {
   id: string
   name: string
@@ -1592,6 +1651,198 @@ export interface RecordListQuery {
   resource_type?: string
   from?: string
   to?: string
+}
+
+export interface ArtifactListQuery {
+  limit?: number
+  offset?: number
+  q?: string
+  profile_scope?: string
+  tenant_id?: string
+  operation_id?: string
+  job_id?: string
+  attempt_id?: string
+  role?: string
+  policy?: string
+  status?: string
+}
+
+export interface ArtifactAdminRecord {
+  id: string
+  operation_id: string
+  job_id?: string
+  attempt_id?: string
+  source_artifact_id?: string
+  profile_scope: string
+  tenant_id?: string
+  role: string
+  policy: string
+  status: string
+  status_version: number
+  media_type?: string
+  size_bytes: number
+  sha256?: string
+  store_driver: string
+  error_type?: string
+  sink_id?: string
+  provider_id?: string
+  runtime_status?: string
+  retain_until: string
+  created_at: string
+  updated_at: string
+  ready_at?: string
+  delivered_at?: string
+  deleted_at?: string
+}
+
+export interface ArtifactEvent {
+  id: string
+  artifact_id: string
+  version: number
+  event_type: string
+  from_status?: string
+  to_status: string
+  reason?: string
+  created_at: string
+}
+
+export interface ArtifactAdminDetail {
+  artifact: ArtifactAdminRecord
+  events: ArtifactEvent[]
+}
+
+export interface ArtifactSummary {
+  total: number
+  size_bytes: number
+  by_status: Record<string, number>
+}
+
+export interface ArtifactRuntime {
+  kind: 'sink' | 'proxy'
+  id: string
+  status: string
+}
+
+export interface ArtifactDeliveryRetryResult {
+  artifact_id: string
+  attempt_id: string
+  status: string
+  scheduled_at: string
+}
+
+export interface AIJobListQuery {
+  limit?: number
+  offset?: number
+  q?: string
+  profile_scope?: string
+  tenant_id?: string
+  model?: string
+  modality?: string
+  operation?: string
+  status?: string
+  artifact_policy?: string
+}
+
+export interface AIJobAdminRecord {
+  id: string
+  operation_id: string
+  profile_scope: string
+  tenant_id?: string
+  protocol: string
+  operation: string
+  modality: string
+  model: string
+  artifact_policy: string
+  artifact_sink_id?: string
+  status: string
+  status_version: number
+  priority: number
+  next_eligible_at: string
+  error_type?: string
+  created_at: string
+  updated_at: string
+  completed_at?: string
+  expires_at: string
+}
+
+export interface AIAttemptAdminRecord {
+  id: string
+  attempt_number: number
+  provider_id: string
+  provider_account_id: string
+  provider_adapter_id: string
+  route_id: string
+  upstream_model: string
+  status: string
+  error_type?: string
+  dispatch_state: string
+  dispatch_version: number
+  provider_task_id?: string
+  provider_task_status?: string
+  dispatch_submitted_at?: string
+  provider_accepted_at?: string
+  last_reconciled_at?: string
+  reconcile_after?: string
+  created_at: string
+  updated_at: string
+  completed_at?: string
+}
+
+export interface AIJobAdminDetail {
+  job: AIJobAdminRecord
+  attempts: AIAttemptAdminRecord[]
+  events: AIJobEvent[]
+  artifacts: ArtifactAdminRecord[]
+}
+
+export interface AIJobEvent {
+  id: string
+  job_id: string
+  version: number
+  event_type: string
+  from_status?: string
+  to_status: string
+  reason?: string
+  created_at: string
+}
+
+export interface AIJobSummary {
+  total: number
+  by_status: Record<string, number>
+}
+
+export interface AIJobRuntimeComponentStatus {
+  last_run_at?: string
+  last_success_at?: string
+  last_error_at?: string
+  last_error?: string
+  runs: number
+  errors: number
+}
+
+export interface AIJobRuntimeStatus {
+  running: boolean
+  queue_driver: string
+  worker_id: string
+  started_at?: string
+  scheduler: AIJobRuntimeComponentStatus
+  delivery: AIJobRuntimeComponentStatus
+  reconciler: AIJobRuntimeComponentStatus
+  rebuilder: AIJobRuntimeComponentStatus
+}
+
+export interface AIJobAdminActionResult {
+  job_id: string
+  status: string
+  changed: boolean
+  updated_at: string
+}
+
+export interface AIAttemptReconcileScheduleResult {
+  job_id: string
+  attempt_id: string
+  status: string
+  scheduled_at: string
 }
 
 export interface GatewayTraceSummary {

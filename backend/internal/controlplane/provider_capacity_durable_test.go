@@ -14,6 +14,9 @@ func TestDurableAIJobProviderCapacityRetainedUntilProviderTerminalState(t *testi
 	now := base
 	svc := NewService(NewMemoryRepository(), "/v1", "provider-capacity-durable-secret")
 	svc.now = func() time.Time { return now }
+	if err := svc.SetArtifactStore(NewMemoryArtifactStore()); err != nil {
+		t.Fatal(err)
+	}
 	accountID := setupSingleDurableCapacityRoute(t, svc)
 	adapter := &durableAIJobAdapterStub{
 		dispatchSteps: []durableDispatchStep{
@@ -21,7 +24,8 @@ func TestDurableAIJobProviderCapacityRetainedUntilProviderTerminalState(t *testi
 			{result: ProviderDispatchResult{Outcome: ProviderDispatchOutcomeAccepted, Task: ProviderTaskReference{ProviderTaskID: "task-capacity-second", Status: "running"}, ReconcileAfter: base.Add(time.Hour)}},
 		},
 		reconcileResult: ProviderDispatchResult{
-			Outcome: ProviderDispatchOutcomeAccepted, Task: ProviderTaskReference{ProviderTaskID: "task-capacity-first", Status: "succeeded"}, ReconcileAfter: base.Add(time.Hour),
+			Outcome: ProviderDispatchOutcomeAccepted, Task: ProviderTaskReference{ProviderTaskID: "task-capacity-first", Status: "succeeded"},
+			Outputs: []ProviderOutputDescriptor{{OutputID: "capacity-final-image", Role: ArtifactRoleFinal, MediaType: "image/png", ExpectedSizeBytes: -1}}, ReconcileAfter: base.Add(time.Hour),
 		},
 	}
 

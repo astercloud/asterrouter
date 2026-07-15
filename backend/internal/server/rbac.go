@@ -38,6 +38,16 @@ func requireRBAC(control *controlplane.Service) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if !access.Global && len(access.DepartmentIDs) > 0 && resourceForRequest(c) == controlplane.RBACResourceArtifacts {
+			httpx.Error(c, http.StatusForbidden, 1451, "artifact administration requires global access")
+			c.Abort()
+			return
+		}
+		if !access.Global && len(access.DepartmentIDs) > 0 && resourceForRequest(c) == controlplane.RBACResourceAIJobs {
+			httpx.Error(c, http.StatusForbidden, 1451, "AI job administration requires global access")
+			c.Abort()
+			return
+		}
 		if !access.Global && len(access.DepartmentIDs) > 0 && strings.HasPrefix(strings.TrimPrefix(c.FullPath(), "/api/v1/admin"), "/organization-groups") {
 			httpx.Error(c, http.StatusForbidden, 1451, "organization group management requires global identity access")
 			c.Abort()
@@ -225,6 +235,10 @@ func resourceForRequest(c *gin.Context) string {
 		return controlplane.RBACResourceUsage
 	case strings.HasPrefix(path, "/gateway-traces"):
 		return controlplane.RBACResourceTraces
+	case strings.HasPrefix(path, "/ai-jobs"):
+		return controlplane.RBACResourceAIJobs
+	case strings.HasPrefix(path, "/artifacts"), strings.HasPrefix(path, "/artifact-runtimes"):
+		return controlplane.RBACResourceArtifacts
 	case strings.HasPrefix(path, "/alerts"):
 		return controlplane.RBACResourceAlerts
 	case strings.HasPrefix(path, "/users"), strings.HasPrefix(path, "/role-bindings"), strings.HasPrefix(path, "/departments"), strings.HasPrefix(path, "/organization-groups"):

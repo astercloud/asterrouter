@@ -51,11 +51,18 @@ type Service struct {
 	credentialCapacityStore        CredentialCapacityStore
 	providerCapacityMu             sync.RWMutex
 	providerCapacityStore          ProviderCapacityStore
+	routingAffinityMu              sync.RWMutex
+	routingAffinityCoordinator     RoutingAffinityCoordinator
 	aiJobRuntimeMu                 sync.RWMutex
 	aiJobReadyIndex                AIJobReadyIndex
 	aiJobAdmissionLimits           AIJobAdmissionLimits
 	artifactStoreMu                sync.RWMutex
 	artifactStores                 map[string]ArtifactStore
+	artifactPrimaryDriver          string
+	artifactSinkMu                 sync.RWMutex
+	artifactSinks                  map[string]ArtifactSink
+	artifactProxyMu                sync.RWMutex
+	artifactProxies                map[string]ArtifactProxy
 	outboxPublisherMu              sync.RWMutex
 	outboxPublisher                TransactionalOutboxPublisher
 	rateMu                         sync.Mutex
@@ -98,7 +105,7 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 		return errors.New("platform usage sink redirects are not allowed")
 	}}, providerCacheProbeHTTPClient: &http.Client{Timeout: providerProbeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider cache probe redirects are not allowed")
-	}}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: NewMemoryProviderCapacityStore(), artifactStores: map[string]ArtifactStore{}}
+	}}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: NewMemoryProviderCapacityStore(), artifactStores: map[string]ArtifactStore{}, artifactSinks: map[string]ArtifactSink{}, artifactProxies: map[string]ArtifactProxy{}}
 }
 
 func (s *Service) nowUTC() time.Time {
@@ -162,6 +169,24 @@ func (s *Service) SetCustomerNotificationDispatcher(dispatcher CustomerNotificat
 
 func (s *Service) SetUsageObserver(observer UsageObserver) {
 	s.usageObserver = observer
+}
+
+func (s *Service) SetRoutingAffinityCoordinator(coordinator RoutingAffinityCoordinator) {
+	if s == nil {
+		return
+	}
+	s.routingAffinityMu.Lock()
+	s.routingAffinityCoordinator = coordinator
+	s.routingAffinityMu.Unlock()
+}
+
+func (s *Service) routingAffinityCoordinatorValue() RoutingAffinityCoordinator {
+	if s == nil {
+		return nil
+	}
+	s.routingAffinityMu.RLock()
+	defer s.routingAffinityMu.RUnlock()
+	return s.routingAffinityCoordinator
 }
 
 func (s *Service) EnsureSeedData(ctx context.Context) error {
@@ -1749,6 +1774,7 @@ func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model s
 		routes = append(routes, GatewayProvider{
 			ID:               entry.provider.ID,
 			Name:             entry.provider.Name,
+			Type:             entry.provider.Type,
 			BaseURL:          entry.provider.BaseURL,
 			APIKey:           secret,
 			AccountID:        entry.account.ID,

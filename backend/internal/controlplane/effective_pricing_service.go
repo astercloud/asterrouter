@@ -67,14 +67,32 @@ func (s *Service) procurementPriceFromRequest(ctx context.Context, request Procu
 	if _, err := s.providerByID(ctx, request.ProviderID); err != nil {
 		return ProcurementPrice{}, err
 	}
-	prices := []int64{request.UncachedInputMicrosPer1MTokens, request.CacheReadMicrosPer1MTokens, request.CacheWrite5mMicrosPer1MTokens, request.CacheWrite1hMicrosPer1MTokens, request.OutputMicrosPer1MTokens, request.RequestMicros, request.ReferenceInputMicrosPer1MTokens, request.ReferenceOutputMicrosPer1MTokens}
-	for _, value := range prices {
-		if value < 0 {
+	prices := []struct {
+		name  string
+		value *int64
+	}{
+		{"uncached_input_micros_per_1m_tokens", request.UncachedInputMicrosPer1MTokens},
+		{"cache_read_micros_per_1m_tokens", request.CacheReadMicrosPer1MTokens},
+		{"cache_write_5m_micros_per_1m_tokens", request.CacheWrite5mMicrosPer1MTokens},
+		{"cache_write_1h_micros_per_1m_tokens", request.CacheWrite1hMicrosPer1MTokens},
+		{"output_micros_per_1m_tokens", request.OutputMicrosPer1MTokens},
+		{"request_micros", request.RequestMicros},
+		{"reference_input_micros_per_1m_tokens", request.ReferenceInputMicrosPer1MTokens},
+		{"reference_output_micros_per_1m_tokens", request.ReferenceOutputMicrosPer1MTokens},
+	}
+	for _, price := range prices {
+		if price.value == nil {
+			return ProcurementPrice{}, fmt.Errorf("%s is required; use 0 only when the price is explicitly free", price.name)
+		}
+		if *price.value < 0 {
 			return ProcurementPrice{}, errors.New("procurement prices must be non-negative")
 		}
 	}
-	if request.QuotedMultiplier < 0 || request.RechargeMultiplier < 0 {
-		return ProcurementPrice{}, errors.New("multipliers must be non-negative")
+	if request.RechargeMultiplier == 0 {
+		request.RechargeMultiplier = 1
+	}
+	if request.QuotedMultiplier < 0 || math.IsNaN(request.QuotedMultiplier) || math.IsInf(request.QuotedMultiplier, 0) || request.RechargeMultiplier <= 0 || math.IsNaN(request.RechargeMultiplier) || math.IsInf(request.RechargeMultiplier, 0) {
+		return ProcurementPrice{}, errors.New("quoted_multiplier must be non-negative and recharge_multiplier must be positive")
 	}
 	status := strings.TrimSpace(request.Status)
 	if status == "" {
@@ -124,13 +142,13 @@ func (s *Service) procurementPriceFromRequest(ctx context.Context, request Procu
 	return ProcurementPrice{
 		ProviderID: request.ProviderID, ProviderAccountID: request.ProviderAccountID,
 		UpstreamModel: request.UpstreamModel, Protocol: request.Protocol, Currency: currency,
-		UncachedInputMicrosPer1MTokens: request.UncachedInputMicrosPer1MTokens,
-		CacheReadMicrosPer1MTokens:     request.CacheReadMicrosPer1MTokens,
-		CacheWrite5mMicrosPer1MTokens:  request.CacheWrite5mMicrosPer1MTokens,
-		CacheWrite1hMicrosPer1MTokens:  request.CacheWrite1hMicrosPer1MTokens,
-		OutputMicrosPer1MTokens:        request.OutputMicrosPer1MTokens, RequestMicros: request.RequestMicros,
-		ReferenceInputMicrosPer1MTokens:  request.ReferenceInputMicrosPer1MTokens,
-		ReferenceOutputMicrosPer1MTokens: request.ReferenceOutputMicrosPer1MTokens,
+		UncachedInputMicrosPer1MTokens: *request.UncachedInputMicrosPer1MTokens,
+		CacheReadMicrosPer1MTokens:     *request.CacheReadMicrosPer1MTokens,
+		CacheWrite5mMicrosPer1MTokens:  *request.CacheWrite5mMicrosPer1MTokens,
+		CacheWrite1hMicrosPer1MTokens:  *request.CacheWrite1hMicrosPer1MTokens,
+		OutputMicrosPer1MTokens:        *request.OutputMicrosPer1MTokens, RequestMicros: *request.RequestMicros,
+		ReferenceInputMicrosPer1MTokens:  *request.ReferenceInputMicrosPer1MTokens,
+		ReferenceOutputMicrosPer1MTokens: *request.ReferenceOutputMicrosPer1MTokens,
 		QuotedMultiplier:                 request.QuotedMultiplier, RechargeMultiplier: request.RechargeMultiplier,
 		SourceKind: sourceKind, SourceReference: strings.TrimSpace(request.SourceReference), EvidenceHash: strings.TrimSpace(request.EvidenceHash),
 		Confidence: confidence, Status: status, EffectiveFrom: effectiveFrom, ExpiresAt: expiresAt, CreatedAt: createdAt, UpdatedAt: now,
@@ -281,12 +299,26 @@ func (s *Service) UpsertProviderCacheCapability(ctx context.Context, actor strin
 	if _, err := s.providerAccountByID(ctx, request.ProviderAccountID); err != nil {
 		return ProviderCacheCapability{}, err
 	}
+	id := "cachecap_" + prefix(hashAPIKey(request.ProviderAccountID+"\x00"+request.UpstreamModel+"\x00"+request.Protocol), 24)
+	existingCapabilities, err := s.repo.ListProviderCacheCapabilities(ctx)
+	if err != nil {
+		return ProviderCacheCapability{}, err
+	}
+	existingCapability := ProviderCacheCapability{}
+	for _, current := range existingCapabilities {
+		if current.ID == id {
+			existingCapability = current
+			break
+		}
+	}
 	supportStatus := strings.TrimSpace(request.SupportStatus)
 	if supportStatus == "" {
 		supportStatus = CacheSupportUnknown
 	}
-	if !oneOf(supportStatus, CacheSupportUnknown, CacheSupportClaimed, CacheSupportAccepted, CacheSupportObserved, CacheSupportBilledVerified, CacheSupportDegraded, CacheSupportUnsupported) {
-		return ProviderCacheCapability{}, errors.New("invalid cache support status")
+	if !oneOf(supportStatus, CacheSupportUnknown, CacheSupportClaimed, CacheSupportAccepted) {
+		if existingCapability.ID == "" || supportStatus != existingCapability.SupportStatus {
+			return ProviderCacheCapability{}, errors.New("observed cache support status is system-managed")
+		}
 	}
 	poolAffinity := strings.TrimSpace(request.PoolAffinityGrade)
 	if poolAffinity == "" {
@@ -294,6 +326,9 @@ func (s *Service) UpsertProviderCacheCapability(ctx context.Context, actor strin
 	}
 	if !oneOf(poolAffinity, PoolAffinityUnknown, PoolAffinityVerified, PoolAffinityProbable, PoolAffinityOpaque, PoolAffinityFragmented) {
 		return ProviderCacheCapability{}, errors.New("invalid pool affinity grade")
+	}
+	if existingCapability.ID == "" && poolAffinity != PoolAffinityUnknown || existingCapability.ID != "" && poolAffinity != existingCapability.PoolAffinityGrade {
+		return ProviderCacheCapability{}, errors.New("pool affinity grade is system-managed")
 	}
 	transport := strings.TrimSpace(request.AffinityTransport)
 	if transport == "" {
@@ -317,33 +352,25 @@ func (s *Service) UpsertProviderCacheCapability(ctx context.Context, actor strin
 		return ProviderCacheCapability{}, errors.New("invalid cache control mode")
 	}
 	now := s.nowUTC()
-	id := "cachecap_" + prefix(hashAPIKey(request.ProviderAccountID+"\x00"+request.UpstreamModel+"\x00"+request.Protocol), 24)
 	capability := ProviderCacheCapability{
 		ID: id, ProviderAccountID: request.ProviderAccountID, UpstreamModel: request.UpstreamModel, Protocol: request.Protocol,
 		SupportStatus: supportStatus, PoolAffinityGrade: poolAffinity, AffinityTransport: transport,
 		AffinityField: affinityField, CacheControlMode: cacheControlMode,
 		UsageSchema: strings.TrimSpace(request.UsageSchema), CreatedAt: now, UpdatedAt: now,
 	}
-	existing, err := s.repo.ListProviderCacheCapabilities(ctx)
-	if err != nil {
-		return ProviderCacheCapability{}, err
-	}
-	for _, current := range existing {
-		if current.ID == id {
-			capability.MetricsCoverage = current.MetricsCoverage
-			capability.EligibleRequestHitRate = current.EligibleRequestHitRate
-			capability.CacheTokenHitRate = current.CacheTokenHitRate
-			capability.CacheWriteReadRatio = current.CacheWriteReadRatio
-			capability.AffinityConsistencyRate = current.AffinityConsistencyRate
-			capability.BillingConsistencyRate = current.BillingConsistencyRate
-			capability.ProductionSampleCount = current.ProductionSampleCount
-			capability.ProbeSampleCount = current.ProbeSampleCount
-			capability.DegradedReason = current.DegradedReason
-			capability.LastObservedAt = current.LastObservedAt
-			capability.LastVerifiedAt = current.LastVerifiedAt
-			capability.CreatedAt = current.CreatedAt
-			break
-		}
+	if existingCapability.ID != "" {
+		capability.MetricsCoverage = existingCapability.MetricsCoverage
+		capability.EligibleRequestHitRate = existingCapability.EligibleRequestHitRate
+		capability.CacheTokenHitRate = existingCapability.CacheTokenHitRate
+		capability.CacheWriteReadRatio = existingCapability.CacheWriteReadRatio
+		capability.AffinityConsistencyRate = existingCapability.AffinityConsistencyRate
+		capability.BillingConsistencyRate = existingCapability.BillingConsistencyRate
+		capability.ProductionSampleCount = existingCapability.ProductionSampleCount
+		capability.ProbeSampleCount = existingCapability.ProbeSampleCount
+		capability.DegradedReason = existingCapability.DegradedReason
+		capability.LastObservedAt = existingCapability.LastObservedAt
+		capability.LastVerifiedAt = existingCapability.LastVerifiedAt
+		capability.CreatedAt = existingCapability.CreatedAt
 	}
 	if capability.UsageSchema == "" {
 		capability.UsageSchema = "auto"
@@ -511,6 +538,8 @@ func (s *Service) EffectivePricingReport(ctx context.Context, query EffectivePri
 			continue
 		}
 		price, hasPrice := activeProcurementPrice(prices, GatewayUsageInput{ProviderID: aggregate.ProviderID, ProviderAccountID: aggregate.ProviderAccountID, UpstreamModel: aggregate.UpstreamModel, Protocol: aggregate.Protocol}, windowEnd)
+		completeProcurementCost := aggregate.RequestCount > 0 && aggregate.ProcurementCostRecordCount == aggregate.RequestCount
+		costAvailable := hasPrice || completeProcurementCost
 		costMicros, confidence := effectiveAggregateCost(aggregate, price, hasPrice)
 		tokenCount := aggregate.TotalInputTokens + aggregate.OutputTokens
 		effectiveCostPer1M := scaledPerMillion(costMicros, tokenCount)
@@ -553,8 +582,16 @@ func (s *Service) EffectivePricingReport(ctx context.Context, query EffectivePri
 		row := EffectivePricingReportRow{
 			ProviderID: aggregate.ProviderID, ProviderName: providerNames[aggregate.ProviderID],
 			ProviderAccountID: aggregate.ProviderAccountID, ProviderAccountName: accountNames[aggregate.ProviderAccountID],
-			UpstreamModel: aggregate.UpstreamModel, Protocol: aggregate.Protocol, Currency: price.Currency,
-			QuotedMultiplier: price.QuotedMultiplier, BilledMultiplier: safeRatio(billingAmount, referenceCost),
+			UpstreamModel: aggregate.UpstreamModel, Protocol: aggregate.Protocol, Currency: price.Currency, CostAvailable: costAvailable,
+			UncachedInputMicrosPer1MTokens: price.UncachedInputMicrosPer1MTokens,
+			CacheReadMicrosPer1MTokens:     price.CacheReadMicrosPer1MTokens,
+			CacheWrite5mMicrosPer1MTokens:  price.CacheWrite5mMicrosPer1MTokens,
+			CacheWrite1hMicrosPer1MTokens:  price.CacheWrite1hMicrosPer1MTokens,
+			OutputMicrosPer1MTokens:        price.OutputMicrosPer1MTokens, RequestMicros: price.RequestMicros,
+			ReferenceInputMicrosPer1MTokens:  price.ReferenceInputMicrosPer1MTokens,
+			ReferenceOutputMicrosPer1MTokens: price.ReferenceOutputMicrosPer1MTokens,
+			RechargeMultiplier:               normalizedRechargeMultiplier(price.RechargeMultiplier),
+			QuotedMultiplier:                 price.QuotedMultiplier, BilledMultiplier: safeRatio(billingAmount, referenceCost),
 			EffectiveMultiplier: effectiveMultiplier, EffectiveCostMicrosPer1M: effectiveCostPer1M,
 			UncachedCostMicrosPer1M: uncachedCostPer1M, CacheSavingsMicrosPer1M: cacheSavingsPer1M,
 			CacheSavingsRate: cacheSavingsRate, CacheEconomicsAvailable: cacheEconomicsAvailable,
@@ -579,10 +616,10 @@ func (s *Service) EffectivePricingReport(ctx context.Context, query EffectivePri
 		rows = append(rows, row)
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].EffectiveCostMicrosPer1M == 0 {
+		if !rows[i].CostAvailable {
 			return false
 		}
-		if rows[j].EffectiveCostMicrosPer1M == 0 {
+		if !rows[j].CostAvailable {
 			return true
 		}
 		return rows[i].EffectiveCostMicrosPer1M < rows[j].EffectiveCostMicrosPer1M
@@ -656,11 +693,15 @@ func effectiveAggregateCost(aggregate EffectivePricingUsageAggregate, price Proc
 	for _, component := range components {
 		cost += scaledTokenCost(component.tokens, component.rate)
 	}
+	adjustedCost, ok := applyRechargeMultiplier(cost, price.RechargeMultiplier)
+	if !ok {
+		return 0, ProcurementCostConfidenceUnknown
+	}
 	confidence := price.Confidence
 	if confidence == "" {
 		confidence = ProcurementCostConfidenceEstimated
 	}
-	return cost, confidence
+	return adjustedCost, confidence
 }
 
 func aggregateReferenceCost(aggregate EffectivePricingUsageAggregate, price ProcurementPrice, hasPrice bool) int64 {
@@ -675,17 +716,26 @@ func aggregateCacheEconomics(aggregate EffectivePricingUsageAggregate, price Pro
 	if !hasPrice || tokenCount <= 0 || aggregate.TotalInputTokens <= 0 || price.UncachedInputMicrosPer1MTokens <= 0 {
 		return 0, 0, 0, false
 	}
-	uncachedInputCost := scaledTokenCost(aggregate.TotalInputTokens, price.UncachedInputMicrosPer1MTokens)
-	uncachedRequestCost := price.RequestMicros*aggregate.RequestCount + uncachedInputCost + scaledTokenCost(aggregate.OutputTokens, price.OutputMicrosPer1MTokens)
+	uncachedInputCost, ok := applyRechargeMultiplier(scaledTokenCost(aggregate.TotalInputTokens, price.UncachedInputMicrosPer1MTokens), price.RechargeMultiplier)
+	if !ok {
+		return 0, 0, 0, false
+	}
+	uncachedRequestCost, ok := applyRechargeMultiplier(price.RequestMicros*aggregate.RequestCount+scaledTokenCost(aggregate.TotalInputTokens, price.UncachedInputMicrosPer1MTokens)+scaledTokenCost(aggregate.OutputTokens, price.OutputMicrosPer1MTokens), price.RechargeMultiplier)
+	if !ok {
+		return 0, 0, 0, false
+	}
 	uncachedCostPer1M := scaledPerMillion(uncachedRequestCost, tokenCount)
 	componentTokens := aggregate.UncachedInputTokens + aggregate.CacheReadTokens + aggregate.CacheWrite5mTokens + aggregate.CacheWrite1hTokens
 	if aggregate.CacheMetricsRequestCount <= 0 || componentTokens != aggregate.TotalInputTokens {
 		return uncachedCostPer1M, 0, 0, false
 	}
-	modeledInputCost := scaledTokenCost(aggregate.UncachedInputTokens, price.UncachedInputMicrosPer1MTokens) +
-		scaledTokenCost(aggregate.CacheReadTokens, price.CacheReadMicrosPer1MTokens) +
-		scaledTokenCost(aggregate.CacheWrite5mTokens, price.CacheWrite5mMicrosPer1MTokens) +
-		scaledTokenCost(aggregate.CacheWrite1hTokens, price.CacheWrite1hMicrosPer1MTokens)
+	modeledInputCost, ok := applyRechargeMultiplier(scaledTokenCost(aggregate.UncachedInputTokens, price.UncachedInputMicrosPer1MTokens)+
+		scaledTokenCost(aggregate.CacheReadTokens, price.CacheReadMicrosPer1MTokens)+
+		scaledTokenCost(aggregate.CacheWrite5mTokens, price.CacheWrite5mMicrosPer1MTokens)+
+		scaledTokenCost(aggregate.CacheWrite1hTokens, price.CacheWrite1hMicrosPer1MTokens), price.RechargeMultiplier)
+	if !ok {
+		return uncachedCostPer1M, 0, 0, false
+	}
 	savings := uncachedInputCost - modeledInputCost
 	return uncachedCostPer1M, scaledSignedPerMillion(savings, tokenCount), float64(savings) / float64(uncachedInputCost), true
 }
@@ -695,6 +745,25 @@ func scaledTokenCost(tokens, rate int64) int64 {
 		return 0
 	}
 	return int64(math.Round(float64(tokens) * float64(rate) / 1_000_000))
+}
+
+func applyRechargeMultiplier(costMicros int64, multiplier float64) (int64, bool) {
+	if costMicros < 0 {
+		return 0, false
+	}
+	multiplier = normalizedRechargeMultiplier(multiplier)
+	adjusted := float64(costMicros) * multiplier
+	if math.IsNaN(adjusted) || math.IsInf(adjusted, 0) || adjusted > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(math.Round(adjusted)), true
+}
+
+func normalizedRechargeMultiplier(multiplier float64) float64 {
+	if multiplier <= 0 {
+		return 1
+	}
+	return multiplier
 }
 
 func scaledPerMillion(costMicros, tokens int64) int64 {

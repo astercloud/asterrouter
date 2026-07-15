@@ -49,6 +49,10 @@ func writeGatewayError(c *gin.Context, err error) {
 		openAIError(c, http.StatusGone, "artifact_unavailable", "artifact content is unavailable")
 	case errors.Is(err, controlplane.ErrArtifactStoreRequired):
 		openAIError(c, http.StatusServiceUnavailable, "artifact_store_unavailable", "artifact content store is unavailable")
+	case errors.Is(err, controlplane.ErrArtifactProxyRequired):
+		openAIError(c, http.StatusServiceUnavailable, "artifact_proxy_unavailable", "artifact provider proxy is unavailable")
+	case errors.Is(err, controlplane.ErrArtifactSinkRequired):
+		openAIError(c, http.StatusServiceUnavailable, "artifact_sink_unavailable", "artifact customer sink is unavailable")
 	case errors.Is(err, gatewaycore.ErrInvalidCanonicalRequest):
 		openAIError(c, http.StatusBadRequest, "invalid_request_error", "invalid gateway request")
 	case errors.Is(err, controlplane.ErrGatewayRouteUnavailable):
