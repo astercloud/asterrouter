@@ -140,6 +140,11 @@ func registerGatewayUploadRoutes(r *gin.Engine, control *controlplane.Service) {
 			writeGatewayError(c, err)
 			return
 		}
+		if err := control.ReleaseBillingHold(c.Request.Context(), operation.ID, "upload_no_provider_charge"); err != nil {
+			_ = control.CompleteAIOperation(c.Request.Context(), operation.ID, controlplane.AIOperationStatusFailed, "upload_billing_release_failed")
+			writeGatewayError(c, err)
+			return
+		}
 		if err := control.CompleteAIOperation(c.Request.Context(), operation.ID, controlplane.AIOperationStatusSucceeded, ""); err != nil {
 			writeGatewayError(c, err)
 			return

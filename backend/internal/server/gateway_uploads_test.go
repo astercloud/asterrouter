@@ -48,6 +48,10 @@ func TestGatewayUploadCreatesOwnedInputArtifactAndReplaysIdempotently(t *testing
 	if err := json.Unmarshal(first.Body.Bytes(), &uploaded); err != nil || uploaded.ID == "" || uploaded.Status != controlplane.ArtifactStatusReady || uploaded.Offset != int64(len(payload)) {
 		t.Fatalf("upload=%+v err=%v body=%s", uploaded, err, first.Body.String())
 	}
+	hold, found, err := control.BillingHoldForOperation(context.Background(), uploaded.OperationID)
+	if err != nil || !found || hold.Status != controlplane.BillingHoldStatusReleased {
+		t.Fatalf("upload billing hold=%+v found=%t err=%v", hold, found, err)
+	}
 	content := performGatewayArtifactRequest(handler, http.MethodGet, "/v1/artifacts/"+uploaded.ArtifactID+"/content", key.Key, "")
 	if content.Code != http.StatusOK || !bytes.Equal(content.Body.Bytes(), payload) {
 		t.Fatalf("content status=%d body=%q", content.Code, content.Body.String())
@@ -99,5 +103,14 @@ func TestGatewayUploadFailsClosedWithoutStoreOrChecksum(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_request_error") {
 		t.Fatalf("no-checksum status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, "/v1/uploads", bytes.NewBufferString("payload"))
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	req.Header.Set("Idempotency-Key", "upload-offset")
+	req.Header.Set("Upload-Offset", "1")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Body.String(), "upload_resumable_not_supported") {
+		t.Fatalf("offset status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
