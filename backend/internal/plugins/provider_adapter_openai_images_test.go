@@ -125,6 +125,14 @@ func TestBuiltinOpenAIImageAdapterRunsDurableJobToArtifact(t *testing.T) {
 	if calls := upstreamCalls.Load(); calls != 1 {
 		t.Fatalf("upstream calls=%d, want exactly one", calls)
 	}
+	usage, err := controlService.UsageReport(context.Background(), 10)
+	if err != nil || len(usage.Recent) != 1 || usage.TotalOutputImages != 1 || usage.Recent[0].UsageDimensions[controlplane.UsageDimensionOutputImages].Quantity != 1 {
+		t.Fatalf("durable image usage=%+v err=%v", usage, err)
+	}
+	hold, found, err := controlService.BillingHoldForOperation(context.Background(), job.OperationID)
+	if err != nil || !found || hold.Status != controlplane.BillingHoldStatusSettled {
+		t.Fatalf("durable image billing hold=%+v found=%t err=%v", hold, found, err)
+	}
 
 	cancelRuntime()
 	select {

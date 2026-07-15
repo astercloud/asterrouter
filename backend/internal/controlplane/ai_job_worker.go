@@ -116,11 +116,23 @@ func (s *Service) dispatchClaimedAIJob(ctx context.Context, job AIJob, adapter D
 		case AIAttemptDispatchAccepted:
 			capacityErr = permit.Retain(ctx, providerCapacityRetentionDuration(s.nowUTC(), updatedAttempt.ReconcileAfter))
 			billingErr := s.CommitBillingHold(ctx, job.OperationID, "provider_task_accepted")
-			updatedJob, transitionErr := s.TransitionAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, AIJobStatusRunning, "")
-			if transitionErr != nil {
-				return job.Status, errors.Join(capacityErr, billingErr, transitionErr)
+			currentJob, found, findErr := s.repo.FindAIJob(ctx, job.ID)
+			if findErr != nil || !found {
+				if findErr == nil {
+					findErr = fmt.Errorf("ai job %q not found after provider acceptance", job.ID)
+				}
+				return job.Status, errors.Join(capacityErr, billingErr, findErr)
 			}
-			progressedJob, progressErr := s.applyAcceptedProviderProgress(ctx, provider, updatedJob, updatedAttempt, dispatchResult, adapter)
+			if currentJob.Status == AIJobStatusCanceling {
+				job = currentJob
+			} else {
+				updatedJob, transitionErr := s.TransitionAIJob(ctx, job.ID, currentJob.StatusVersion, currentJob.FenceToken, AIJobStatusRunning, "")
+				if transitionErr != nil {
+					return job.Status, errors.Join(capacityErr, billingErr, transitionErr)
+				}
+				job = updatedJob
+			}
+			progressedJob, progressErr := s.applyAcceptedProviderProgress(ctx, provider, job, updatedAttempt, dispatchResult, adapter)
 			capacitySyncErr := s.syncProviderCapacityForAttempt(ctx, updatedAttempt)
 			return progressedJob.Status, errors.Join(dispatchErrIfAccepted(dispatchErr), capacityErr, capacitySyncErr, billingErr, progressErr)
 		case AIAttemptDispatchProvenNotCreated:
@@ -243,10 +255,15 @@ func (s *Service) reconcileAIAttempt(ctx context.Context, attempt AIAttempt, ada
 	return errors.Join(reconcileErr, progressErr)
 }
 
-func (s *Service) applyAcceptedProviderProgress(ctx context.Context, provider GatewayProvider, job AIJob, attempt AIAttempt, result ProviderDispatchResult, adapter DurableAIJobAdapter) (AIJob, error) {
+func (s *Service) applyAcceptedProviderProgress(ctx context.Context, provider GatewayProvider, job AIJob, attempt AIAttempt, result ProviderDispatchResult, adapter DurableAIJobAdapter) (returnedJob AIJob, returnedErr error) {
 	status := strings.ToLower(strings.TrimSpace(attempt.ProviderTaskStatus))
 	providerTerminal := isDurableProviderTerminalStatus(status)
 	providerSucceeded := oneOf(status, "succeeded", "completed")
+	var progressErr error
+	if result.Progress != nil {
+		_, _, progressErr = s.RecordAIJobProgress(ctx, job, attempt, *result.Progress)
+	}
+	defer func() { returnedErr = errors.Join(returnedErr, progressErr) }()
 	if len(result.Outputs) > 0 && (!providerTerminal || providerSucceeded) {
 		if _, outputErr := s.ingestProviderOutputs(ctx, provider, job, attempt, result.Outputs, adapter); outputErr != nil {
 			deferErr := s.deferAIAttemptReconciliation(ctx, attempt, AIJobDefaultRetryAfter)
@@ -267,13 +284,54 @@ func (s *Service) applyAcceptedProviderProgress(ctx context.Context, provider Ga
 		attemptStatus = AIAttemptStatusCanceled
 	}
 	if terminal == AIJobStatusSucceeded {
-		artifacts, artifactErr := s.repo.QueryArtifacts(ctx, ArtifactQuery{JobID: job.ID, AttemptID: attempt.ID, Role: ArtifactRoleFinal, Limit: 1})
+		artifacts, artifactErr := s.repo.QueryArtifacts(ctx, ArtifactQuery{JobID: job.ID, AttemptID: attempt.ID, Role: ArtifactRoleFinal, Limit: 100})
 		if artifactErr != nil {
 			return job, artifactErr
 		}
 		if deliverableErr := providerOutputsDeliverable(job, attempt.ID, artifacts); deliverableErr != nil {
 			deferErr := s.deferAIAttemptReconciliation(ctx, attempt, AIJobDefaultRetryAfter)
 			return job, errors.Join(deliverableErr, deferErr)
+		}
+		usageDimensions, usageErr := durableProviderUsageDimensions(job, result, artifacts)
+		var billing ProviderBillingObservation
+		if usageErr == nil {
+			billing, usageErr = normalizeProviderSuccessBilling(result.Billing, usageDimensions)
+		}
+		if usageErr == nil {
+			operation, found, operationErr := s.repo.FindAIOperation(ctx, job.OperationID)
+			if operationErr != nil {
+				usageErr = operationErr
+			} else if !found {
+				usageErr = fmt.Errorf("ai operation %q not found", job.OperationID)
+			} else {
+				input := GatewayUsageInput{
+					UsageSource: "provider_final", Status: "forwarded", UsageDimensions: usageDimensions,
+					UsageNormalizationStatus: "normalized_provider_media", UpstreamRequestID: result.Task.ProviderRequestID,
+				}
+				applyProviderBillingUsageFields(&input, billing)
+				usageErr = s.recordAIOperationUsage(ctx, operation, attempt, input)
+			}
+		}
+		if usageErr != nil {
+			deferErr := s.deferAIAttemptReconciliation(ctx, attempt, AIJobDefaultRetryAfter)
+			return job, errors.Join(usageErr, deferErr)
+		}
+	}
+	billingResolved := true
+	var billingErr error
+	if terminal != AIJobStatusSucceeded {
+		operation, found, operationErr := s.repo.FindAIOperation(ctx, job.OperationID)
+		if operationErr != nil {
+			billingErr = operationErr
+		} else if !found {
+			billingErr = fmt.Errorf("ai operation %q not found", job.OperationID)
+		} else {
+			billingResolved, billingErr = s.finalizeAIOperationTerminalBilling(ctx, operation, attempt, terminal, result, 1)
+		}
+		if !billingResolved {
+			if disputeErr := s.DisputeBillingHold(ctx, job.OperationID, "provider_billing_unresolved"); disputeErr != nil {
+				return job, errors.Join(billingErr, disputeErr)
+			}
 		}
 	}
 	if !aiJobTerminalStatus(job.Status) {
@@ -288,6 +346,10 @@ func (s *Service) applyAcceptedProviderProgress(ctx context.Context, provider Ga
 	}
 	if job.Status != terminal {
 		return job, fmt.Errorf("provider terminal status %q conflicts with ai job status %q", status, job.Status)
+	}
+	if !billingResolved {
+		deferErr := s.deferAIAttemptReconciliation(ctx, attempt, AIJobDefaultRetryAfter)
+		return job, errors.Join(billingErr, deferErr)
 	}
 	if attempt.Status == AIAttemptStatusRunning {
 		if completeErr := s.CompleteAIAttempt(ctx, attempt.ID, attemptStatus, status); completeErr != nil {
@@ -361,6 +423,10 @@ func (s *Service) durableAIJobCandidates(ctx context.Context, job AIJob, exclude
 }
 
 func (s *Service) durableProviderForAttempt(ctx context.Context, job AIJob, attempt AIAttempt) (GatewayProvider, error) {
+	return s.providerForAttempt(ctx, job.Model, attempt, "reconcile the provider task bound to the durable attempt")
+}
+
+func (s *Service) providerForAttempt(ctx context.Context, requestedModel string, attempt AIAttempt, selectionReason string) (GatewayProvider, error) {
 	accounts, err := s.repo.ListProviderAccounts(ctx)
 	if err != nil {
 		return GatewayProvider{}, err
@@ -401,10 +467,10 @@ func (s *Service) durableProviderForAttempt(ctx context.Context, job AIJob, atte
 	return GatewayProvider{
 		ID: provider.ID, Name: provider.Name, Type: provider.Type, BaseURL: provider.BaseURL, APIKey: secret,
 		AdapterID: attempt.ProviderAdapterID, AccountID: account.ID, AccountName: account.Name, Concurrency: account.Concurrency,
-		GatewayModelID: route.GatewayModelID, RequestedModel: job.Model, UpstreamModel: attempt.UpstreamModel,
+		GatewayModelID: route.GatewayModelID, RequestedModel: requestedModel, UpstreamModel: attempt.UpstreamModel,
 		RouteID: attempt.RouteID, RouteGroup: route.RouteGroup, RoutePriority: route.Priority, RouteWeight: route.Weight,
 		AccountWeight: account.Weight, RPMLimit: account.RPMLimit, TPMLimit: account.TPMLimit, CircuitState: account.CircuitState,
-		Source: "attempt_snapshot", SelectionReason: "reconcile the provider task bound to the durable attempt",
+		Source: "attempt_snapshot", SelectionReason: selectionReason,
 	}, nil
 }
 

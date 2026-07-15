@@ -351,6 +351,7 @@ func TestOperationUsageLedgerContract(t *testing.T) {
 			input := GatewayUsageInput{
 				OperationID: operation.ID, AttemptID: attempt.ID, UsageVersion: 1, UsageSource: "upstream_final",
 				RequestFingerprint: request.Fingerprint, Model: request.Model, Status: "forwarded", InputTokens: 7, OutputTokens: 11, CostCents: 3,
+				UsageDimensions: UsageDimensions{UsageDimensionOutputImages: {Quantity: 2, Unit: UsageUnitCount, Source: "provider", Confidence: UsageConfidenceReported}},
 			}
 			if err := svc.RecordGatewayUsage(ctx, operationTestLegacyAuth(), input); err != nil {
 				t.Fatalf("RecordGatewayUsage(first): %v", err)
@@ -359,7 +360,7 @@ func TestOperationUsageLedgerContract(t *testing.T) {
 				t.Fatalf("RecordGatewayUsage(replay): %v", err)
 			}
 			usage, err := repo.QueryUsageRecords(ctx, UsageQuery{Limit: 10})
-			if err != nil || len(usage) != 1 || usage[0].OperationID != operation.ID || usage[0].AttemptID != attempt.ID || usage[0].UsageVersion != 1 {
+			if err != nil || len(usage) != 1 || usage[0].OperationID != operation.ID || usage[0].AttemptID != attempt.ID || usage[0].UsageVersion != 1 || usage[0].UsageDimensions[UsageDimensionOutputImages].Quantity != 2 {
 				t.Fatalf("usage=%+v err=%v", usage, err)
 			}
 			billing, err := repo.ListBillingLedgerEntries(ctx, operation.ID)
@@ -375,6 +376,11 @@ func TestOperationUsageLedgerContract(t *testing.T) {
 			conflict.RequestFingerprint = "different-fingerprint"
 			if err := svc.RecordGatewayUsage(ctx, operationTestLegacyAuth(), conflict); !errors.Is(err, ErrUsageLedgerConflict) {
 				t.Fatalf("conflicting usage error=%v", err)
+			}
+			dimensionConflict := input
+			dimensionConflict.UsageDimensions = UsageDimensions{UsageDimensionOutputImages: {Quantity: 3, Unit: UsageUnitCount, Source: "provider", Confidence: UsageConfidenceReported}}
+			if err := svc.RecordGatewayUsage(ctx, operationTestLegacyAuth(), dimensionConflict); !errors.Is(err, ErrUsageLedgerConflict) {
+				t.Fatalf("conflicting usage dimensions error=%v", err)
 			}
 		})
 	}

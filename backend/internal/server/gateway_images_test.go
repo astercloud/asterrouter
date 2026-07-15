@@ -22,14 +22,16 @@ import (
 )
 
 type directImageAdapterStub struct {
-	selectCalls   atomic.Int64
-	dispatchCalls atomic.Int64
-	openCalls     atomic.Int64
-	supported     bool
-	result        controlplane.ProviderDispatchResult
-	dispatchErr   error
-	openErr       error
-	outputs       map[string][]byte
+	selectCalls     atomic.Int64
+	dispatchCalls   atomic.Int64
+	openCalls       atomic.Int64
+	reconcileCalls  atomic.Int64
+	supported       bool
+	result          controlplane.ProviderDispatchResult
+	reconcileResult controlplane.ProviderDispatchResult
+	dispatchErr     error
+	openErr         error
+	outputs         map[string][]byte
 }
 
 func (stub *directImageAdapterStub) SelectDirectAIAdapter(_ context.Context, _ controlplane.GatewayProvider, request gatewaycore.CanonicalRequest, _ string) (string, bool, error) {
@@ -43,6 +45,14 @@ func (stub *directImageAdapterStub) SelectDirectAIAdapter(_ context.Context, _ c
 func (stub *directImageAdapterStub) DispatchDirectAI(_ context.Context, _ controlplane.GatewayProvider, _ controlplane.AIOperation, _ controlplane.AIAttempt, _ gatewaycore.CanonicalRequest, _ controlplane.ProviderDispatchCommand) (controlplane.ProviderDispatchResult, error) {
 	stub.dispatchCalls.Add(1)
 	return stub.result, stub.dispatchErr
+}
+
+func (stub *directImageAdapterStub) ReconcileDirectAI(_ context.Context, _ controlplane.GatewayProvider, _ controlplane.AIOperation, _ controlplane.AIAttempt, _ controlplane.ProviderDispatchIntent, _ controlplane.ProviderTaskReference) (controlplane.ProviderDispatchResult, error) {
+	stub.reconcileCalls.Add(1)
+	if stub.reconcileResult.Outcome != "" {
+		return stub.reconcileResult, nil
+	}
+	return stub.result, nil
 }
 
 func (stub *directImageAdapterStub) OpenDirectAIOutput(_ context.Context, _ controlplane.GatewayProvider, _ controlplane.AIOperation, _ controlplane.AIAttempt, _ gatewaycore.CanonicalRequest, _ controlplane.ProviderDispatchResult, output controlplane.ProviderOutputDescriptor) (io.ReadCloser, error) {
@@ -73,6 +83,10 @@ type directImageHTTPFixture struct {
 }
 
 func newDirectImageHTTPFixture(t *testing.T, adapter *directImageAdapterStub, routes, concurrency int, withStore bool) directImageHTTPFixture {
+	return newDirectImageHTTPFixtureWithLimit(t, adapter, routes, concurrency, withStore, 0)
+}
+
+func newDirectImageHTTPFixtureWithLimit(t *testing.T, adapter *directImageAdapterStub, routes, concurrency int, withStore bool, monthlyImageLimit int) directImageHTTPFixture {
 	t.Helper()
 	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	if withStore {
@@ -108,7 +122,7 @@ func newDirectImageHTTPFixture(t *testing.T, adapter *directImageAdapterStub, ro
 		Scopes:            []string{controlplane.GatewayScopeInvoke, controlplane.GatewayScopeJobsRead, controlplane.GatewayScopeArtifactsRead},
 		AllowedModalities: []string{controlplane.GatewayModalityImage}, AllowedOperations: []string{controlplane.GatewayOperationImageGeneration},
 		LanePolicy: controlplane.GatewayLanePolicyDirectAndDurable, ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
-		ConcurrencyLimit: 4,
+		ConcurrencyLimit: 4, MonthlyImageLimit: monthlyImageLimit,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -158,6 +172,11 @@ func performImageGeneration(handler http.Handler, key, idempotencyKey, body stri
 func TestGatewayImageBlockingPersistsArtifactAndReplaysIdempotently(t *testing.T) {
 	payload := []byte("synthetic-image-content")
 	adapter := successfulDirectImageAdapter(payload)
+	procurementCost := int64(73)
+	adapter.result.Billing = controlplane.ProviderBillingObservation{
+		Status: controlplane.ProviderBillingStatusFinal, ProcurementCostMicros: &procurementCost,
+		Currency: "USD", Source: "provider_invoice", Confidence: controlplane.ProcurementCostConfidenceExact,
+	}
 	fixture := newDirectImageHTTPFixture(t, adapter, 1, 2, true)
 	body := `{"model":"public-image","prompt":"synthetic","delivery_mode":"inline"}`
 
@@ -184,6 +203,28 @@ func TestGatewayImageBlockingPersistsArtifactAndReplaysIdempotently(t *testing.T
 	conflict := performImageGeneration(fixture.handler, fixture.key, "image-blocking-idem", strings.Replace(body, "synthetic", "different", 1))
 	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "idempotency_conflict") || adapter.dispatched() != 1 {
 		t.Fatalf("conflict status=%d calls=%d body=%s", conflict.Code, adapter.dispatched(), conflict.Body.String())
+	}
+	usage, err := fixture.control.UsageReport(context.Background(), 10)
+	if err != nil || len(usage.Recent) != 1 || usage.TotalOutputImages != 1 || usage.Recent[0].UsageDimensions[controlplane.UsageDimensionOutputImages].Quantity != 1 || usage.Recent[0].UsageDimensions[controlplane.UsageDimensionOutputBytes].Quantity != int64(len(payload)) || usage.Recent[0].ProcurementCostMicros == nil || *usage.Recent[0].ProcurementCostMicros != procurementCost {
+		t.Fatalf("image usage=%+v err=%v", usage, err)
+	}
+}
+
+func TestGatewayImageQuotaRejectsDirectAndAsyncBeforeProviderOrJob(t *testing.T) {
+	for _, responseMode := range []string{"blocking", "async"} {
+		t.Run(responseMode, func(t *testing.T) {
+			adapter := successfulDirectImageAdapter([]byte("unused"), []byte("unused-2"))
+			fixture := newDirectImageHTTPFixtureWithLimit(t, adapter, 1, 2, true, 1)
+			body := `{"model":"public-image","prompt":"synthetic","n":2,"delivery_mode":"artifact","response_mode":"` + responseMode + `"}`
+			response := performImageGeneration(fixture.handler, fixture.key, "image-quota-"+responseMode, body)
+			if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), "image_quota_exceeded") || adapter.dispatched() != 0 {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, adapter.dispatched(), response.Body.String())
+			}
+			jobs, err := fixture.control.ListAIJobsAdmin(context.Background(), controlplane.AIJobQuery{Limit: 10})
+			if err != nil || len(jobs) != 0 {
+				t.Fatalf("quota rejection jobs=%+v err=%v", jobs, err)
+			}
+		})
 	}
 }
 
@@ -323,5 +364,103 @@ func TestGatewayImageAcceptedInvalidResponseDisputesBillingWithoutFallback(t *te
 	hold, found, err := fixture.control.BillingHoldForOperation(context.Background(), operationID)
 	if err != nil || !found || hold.Status != controlplane.BillingHoldStatusDisputed {
 		t.Fatalf("billing hold=%+v found=%t err=%v", hold, found, err)
+	}
+}
+
+func TestGatewayImageProviderTerminalFailureSettlesFinalBilling(t *testing.T) {
+	procurementCost := int64(91)
+	adapter := &directImageAdapterStub{
+		supported: true,
+		result: controlplane.ProviderDispatchResult{
+			Outcome: controlplane.ProviderDispatchOutcomeAccepted,
+			Task:    controlplane.ProviderTaskReference{ProviderTaskID: "accepted-failed", ProviderRequestID: "failed-request", Status: "failed"},
+			UsageDimensions: controlplane.UsageDimensions{controlplane.UsageDimensionOutputImages: {
+				Quantity: 1, Unit: controlplane.UsageUnitCount, Source: "provider", Confidence: controlplane.UsageConfidenceReported,
+			}},
+			Billing: controlplane.ProviderBillingObservation{
+				Status: controlplane.ProviderBillingStatusFinal, ProcurementCostMicros: &procurementCost,
+				Currency: "USD", Source: "provider_invoice", Confidence: controlplane.ProcurementCostConfidenceExact,
+			},
+		},
+	}
+	fixture := newDirectImageHTTPFixture(t, adapter, 2, 2, true)
+	response := performImageGeneration(fixture.handler, fixture.key, "image-provider-terminal-failure", `{"model":"public-image","prompt":"synthetic","delivery_mode":"artifact"}`)
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "provider_terminal_failure") || adapter.dispatched() != 1 || adapter.selected() != 1 {
+		t.Fatalf("status=%d select=%d dispatch=%d body=%s", response.Code, adapter.selected(), adapter.dispatched(), response.Body.String())
+	}
+	operationID := response.Header().Get("X-AsterRouter-Operation-ID")
+	hold, found, err := fixture.control.BillingHoldForOperation(context.Background(), operationID)
+	if err != nil || !found || hold.Status != controlplane.BillingHoldStatusSettled {
+		t.Fatalf("billing hold=%+v found=%t err=%v", hold, found, err)
+	}
+	usage, err := fixture.control.UsageReport(context.Background(), 10)
+	if err != nil || usage.TotalOutputImages != 1 {
+		t.Fatalf("terminal usage=%+v err=%v", usage, err)
+	}
+	foundFinal := false
+	for _, record := range usage.Recent {
+		if record.UsageSource == "provider_final" && record.UsageVersion == 2 && record.ProcurementCostMicros != nil && *record.ProcurementCostMicros == procurementCost {
+			foundFinal = true
+		}
+	}
+	if !foundFinal {
+		t.Fatalf("provider final usage missing: %+v", usage.Recent)
+	}
+}
+
+func TestGatewayImageUnknownSubmissionReconcilesFinalBilling(t *testing.T) {
+	procurementCost := int64(107)
+	adapter := &directImageAdapterStub{
+		supported: true,
+		result: controlplane.ProviderDispatchResult{
+			Outcome:        controlplane.ProviderDispatchOutcomeUnknown,
+			Task:           controlplane.ProviderTaskReference{ProviderTaskID: "unknown-task", ProviderRequestID: "unknown-request", Status: "unknown"},
+			ReconcileAfter: time.Now().UTC(),
+		},
+		reconcileResult: controlplane.ProviderDispatchResult{
+			Outcome: controlplane.ProviderDispatchOutcomeAccepted,
+			Task:    controlplane.ProviderTaskReference{ProviderTaskID: "unknown-task", ProviderRequestID: "unknown-request", Status: "failed"},
+			UsageDimensions: controlplane.UsageDimensions{controlplane.UsageDimensionOutputImages: {
+				Quantity: 1, Unit: controlplane.UsageUnitCount, Source: "provider", Confidence: controlplane.UsageConfidenceReported,
+			}},
+			Billing: controlplane.ProviderBillingObservation{
+				Status: controlplane.ProviderBillingStatusFinal, ProcurementCostMicros: &procurementCost,
+				Currency: "USD", Source: "provider_invoice", Confidence: controlplane.ProcurementCostConfidenceExact,
+			},
+		},
+	}
+	fixture := newDirectImageHTTPFixture(t, adapter, 1, 2, true)
+	response := performImageGeneration(fixture.handler, fixture.key, "image-unknown-reconcile", `{"model":"public-image","prompt":"synthetic","delivery_mode":"artifact"}`)
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "provider_status_unknown") || adapter.dispatched() != 1 {
+		t.Fatalf("initial status=%d dispatch=%d body=%s", response.Code, adapter.dispatched(), response.Body.String())
+	}
+	operationID := response.Header().Get("X-AsterRouter-Operation-ID")
+	hold, found, err := fixture.control.BillingHoldForOperation(context.Background(), operationID)
+	if err != nil || !found || hold.Status != controlplane.BillingHoldStatusDisputed {
+		t.Fatalf("initial hold=%+v found=%t err=%v", hold, found, err)
+	}
+	report, err := fixture.control.RunDirectAIReconcilerOnce(context.Background(), 10, adapter)
+	if err != nil || report.Reconciled != 1 || report.Completed != 1 || adapter.reconcileCalls.Load() != 1 {
+		t.Fatalf("reconcile report=%+v calls=%d err=%v", report, adapter.reconcileCalls.Load(), err)
+	}
+	hold, found, err = fixture.control.BillingHoldForOperation(context.Background(), operationID)
+	if err != nil || !found || hold.Status != controlplane.BillingHoldStatusSettled {
+		t.Fatalf("reconciled hold=%+v found=%t err=%v", hold, found, err)
+	}
+	usage, err := fixture.control.UsageReport(context.Background(), 10)
+	if err != nil || usage.TotalOutputImages != 1 {
+		t.Fatalf("reconciled usage=%+v err=%v", usage, err)
+	}
+	foundFinal := false
+	for _, record := range usage.Recent {
+		if record.OperationID == operationID && record.UsageSource == "provider_final" && record.UsageVersion == 2 && record.ProcurementCostMicros != nil && *record.ProcurementCostMicros == procurementCost {
+			foundFinal = true
+		}
+	}
+	if !foundFinal {
+		t.Fatalf("reconciled final usage missing: %+v", usage.Recent)
+	}
+	if replay, replayErr := fixture.control.RunDirectAIReconcilerOnce(context.Background(), 10, adapter); replayErr != nil || replay.Reconciled != 0 || adapter.reconcileCalls.Load() != 1 {
+		t.Fatalf("replay report=%+v calls=%d err=%v", replay, adapter.reconcileCalls.Load(), replayErr)
 	}
 }

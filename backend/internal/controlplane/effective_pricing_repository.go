@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -200,6 +201,7 @@ func (r *MemoryRepository) ListEffectivePricingDecisions(context.Context) ([]Eff
 	out := make([]EffectivePricingDecision, 0, len(r.effectivePricingDecisions))
 	for _, decision := range r.effectivePricingDecisions {
 		decision.ReasonCodes = append([]string(nil), decision.ReasonCodes...)
+		decision.LastEvaluationReasonCodes = append([]string(nil), decision.LastEvaluationReasonCodes...)
 		out = append(out, decision)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
@@ -210,8 +212,75 @@ func (r *MemoryRepository) SaveEffectivePricingDecision(_ context.Context, decis
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	decision.ReasonCodes = append([]string(nil), decision.ReasonCodes...)
+	decision.LastEvaluationReasonCodes = append([]string(nil), decision.LastEvaluationReasonCodes...)
 	r.effectivePricingDecisions[decision.ID] = decision
 	return nil
+}
+
+func (r *MemoryRepository) UpdateEffectivePricingDecision(_ context.Context, decision EffectivePricingDecision, expectedStatus string, expectedUpdatedAt time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, found := r.effectivePricingDecisions[decision.ID]
+	if !found || current.Status != expectedStatus || !current.UpdatedAt.Equal(expectedUpdatedAt) {
+		return false, nil
+	}
+	decision.ReasonCodes = append([]string(nil), decision.ReasonCodes...)
+	decision.LastEvaluationReasonCodes = append([]string(nil), decision.LastEvaluationReasonCodes...)
+	r.effectivePricingDecisions[decision.ID] = decision
+	return true, nil
+}
+
+func (r *MemoryRepository) ListEffectivePricingDecisionEvaluations(_ context.Context, decisionID string, limit int) ([]EffectivePricingDecisionEvaluation, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	decisionID = strings.TrimSpace(decisionID)
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	out := make([]EffectivePricingDecisionEvaluation, 0, min(limit, len(r.effectivePricingEvaluations)))
+	for _, evaluation := range r.effectivePricingEvaluations {
+		if decisionID != "" && evaluation.DecisionID != decisionID {
+			continue
+		}
+		evaluation.ReasonCodes = append([]string(nil), evaluation.ReasonCodes...)
+		out = append(out, evaluation)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].WindowEnd.After(out[j].WindowEnd) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) CommitEffectivePricingDecisionEvaluation(_ context.Context, commit EffectivePricingDecisionEvaluationCommit) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, found := r.effectivePricingDecisions[commit.Decision.ID]
+	if !found || current.Status != commit.ExpectedStatus || !current.UpdatedAt.Equal(commit.ExpectedUpdatedAt) {
+		return false, nil
+	}
+	for _, evaluation := range r.effectivePricingEvaluations {
+		if evaluation.DecisionID == commit.Evaluation.DecisionID && evaluation.WindowEnd.Equal(commit.Evaluation.WindowEnd) {
+			return false, nil
+		}
+	}
+	if commit.CurrentSnapshot != nil {
+		r.effectivePriceSnapshots[commit.CurrentSnapshot.ID] = *commit.CurrentSnapshot
+	}
+	if commit.CandidateSnapshot != nil {
+		r.effectivePriceSnapshots[commit.CandidateSnapshot.ID] = *commit.CandidateSnapshot
+	}
+	evaluation := commit.Evaluation
+	evaluation.ReasonCodes = append([]string(nil), evaluation.ReasonCodes...)
+	r.effectivePricingEvaluations[evaluation.ID] = evaluation
+	decision := commit.Decision
+	decision.ReasonCodes = append([]string(nil), decision.ReasonCodes...)
+	decision.LastEvaluationReasonCodes = append([]string(nil), decision.LastEvaluationReasonCodes...)
+	r.effectivePricingDecisions[decision.ID] = decision
+	if commit.Audit != nil {
+		r.auditLogs[commit.Audit.ID] = *commit.Audit
+	}
+	return true, nil
 }
 
 func (r *MemoryRepository) FindRoutingAffinityBinding(_ context.Context, scopeKey string, now time.Time) (RoutingAffinityBinding, bool, error) {
@@ -747,7 +816,8 @@ func (r *PostgresRepository) GetEffectivePricingPolicy(ctx context.Context) (Eff
 	       min_billing_consistency, min_cost_improvement, min_cache_hit_rate_improvement,
 	       min_affinity_improvement, max_cache_tiebreak_cost_regression, max_error_rate_regression,
        max_p95_latency_regression, canary_percent, supplier_affinity_ttl_seconds,
-       account_affinity_ttl_seconds, probe_enabled, probe_daily_token_budget,
+       account_affinity_ttl_seconds, automatic_actions_enabled, evaluation_interval_minutes,
+       promotion_window_count, degradation_window_count, probe_enabled, probe_daily_token_budget,
        probe_daily_cost_budget_micros, probe_cooldown_seconds, updated_by,
        created_at, updated_at
 FROM effective_pricing_policies WHERE id=$1`, defaultEffectivePricingPolicyID).Scan(
@@ -755,7 +825,8 @@ FROM effective_pricing_policies WHERE id=$1`, defaultEffectivePricingPolicyID).S
 		&policy.MinBillingConsistency, &policy.MinCostImprovement, &policy.MinCacheHitRateImprovement,
 		&policy.MinAffinityImprovement, &policy.MaxCacheTiebreakCostRegression, &policy.MaxErrorRateRegression,
 		&policy.MaxP95LatencyRegression, &policy.CanaryPercent, &policy.SupplierAffinityTTLSeconds,
-		&policy.AccountAffinityTTLSeconds, &policy.ProbeEnabled, &policy.ProbeDailyTokenBudget,
+		&policy.AccountAffinityTTLSeconds, &policy.AutomaticActionsEnabled, &policy.EvaluationIntervalMinutes,
+		&policy.PromotionWindowCount, &policy.DegradationWindowCount, &policy.ProbeEnabled, &policy.ProbeDailyTokenBudget,
 		&policy.ProbeDailyCostBudgetMicros, &policy.ProbeCooldownSeconds, &policy.UpdatedBy,
 		&policy.CreatedAt, &policy.UpdatedAt)
 	if err != nil {
@@ -774,10 +845,11 @@ INSERT INTO effective_pricing_policies(
 	  min_billing_consistency, min_cost_improvement, min_cache_hit_rate_improvement,
 	  min_affinity_improvement, max_cache_tiebreak_cost_regression, max_error_rate_regression,
   max_p95_latency_regression, canary_percent, supplier_affinity_ttl_seconds,
-  account_affinity_ttl_seconds, probe_enabled, probe_daily_token_budget,
+  account_affinity_ttl_seconds, automatic_actions_enabled, evaluation_interval_minutes,
+  promotion_window_count, degradation_window_count, probe_enabled, probe_daily_token_budget,
   probe_daily_cost_budget_micros, probe_cooldown_seconds, updated_by,
   created_at, updated_at)
-	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
 ON CONFLICT(id) DO UPDATE SET
   mode=EXCLUDED.mode, window_hours=EXCLUDED.window_hours,
   min_sample_count=EXCLUDED.min_sample_count, min_metrics_coverage=EXCLUDED.min_metrics_coverage,
@@ -791,6 +863,10 @@ ON CONFLICT(id) DO UPDATE SET
   canary_percent=EXCLUDED.canary_percent,
   supplier_affinity_ttl_seconds=EXCLUDED.supplier_affinity_ttl_seconds,
   account_affinity_ttl_seconds=EXCLUDED.account_affinity_ttl_seconds,
+	automatic_actions_enabled=EXCLUDED.automatic_actions_enabled,
+	evaluation_interval_minutes=EXCLUDED.evaluation_interval_minutes,
+	promotion_window_count=EXCLUDED.promotion_window_count,
+	degradation_window_count=EXCLUDED.degradation_window_count,
   probe_enabled=EXCLUDED.probe_enabled, probe_daily_token_budget=EXCLUDED.probe_daily_token_budget,
   probe_daily_cost_budget_micros=EXCLUDED.probe_daily_cost_budget_micros,
   probe_cooldown_seconds=EXCLUDED.probe_cooldown_seconds,
@@ -799,7 +875,8 @@ ON CONFLICT(id) DO UPDATE SET
 		policy.MinBillingConsistency, policy.MinCostImprovement, policy.MinCacheHitRateImprovement,
 		policy.MinAffinityImprovement, policy.MaxCacheTiebreakCostRegression, policy.MaxErrorRateRegression,
 		policy.MaxP95LatencyRegression, policy.CanaryPercent, policy.SupplierAffinityTTLSeconds,
-		policy.AccountAffinityTTLSeconds, policy.ProbeEnabled, policy.ProbeDailyTokenBudget,
+		policy.AccountAffinityTTLSeconds, policy.AutomaticActionsEnabled, policy.EvaluationIntervalMinutes,
+		policy.PromotionWindowCount, policy.DegradationWindowCount, policy.ProbeEnabled, policy.ProbeDailyTokenBudget,
 		policy.ProbeDailyCostBudgetMicros, policy.ProbeCooldownSeconds, policy.UpdatedBy,
 		policy.CreatedAt, policy.UpdatedAt)
 	return err
@@ -834,7 +911,11 @@ FROM effective_price_snapshots ORDER BY provider_account_id, upstream_model, cre
 }
 
 func (r *PostgresRepository) SaveEffectivePriceSnapshot(ctx context.Context, snapshot EffectivePriceSnapshot) error {
-	_, err := r.db.ExecContext(ctx, `
+	return saveEffectivePriceSnapshot(ctx, r.db, snapshot)
+}
+
+func saveEffectivePriceSnapshot(ctx context.Context, executor usageRecordExecutor, snapshot EffectivePriceSnapshot) error {
+	_, err := executor.ExecContext(ctx, `
 INSERT INTO effective_price_snapshots(
   id, provider_id, provider_account_id, upstream_model, protocol, currency,
   effective_cost_micros_per_1m, effective_multiplier, quoted_multiplier,
@@ -866,7 +947,10 @@ func (r *PostgresRepository) ListEffectivePricingDecisions(ctx context.Context) 
 SELECT id, model, protocol, current_provider_account_id, candidate_provider_account_id,
        current_snapshot_id, candidate_snapshot_id, current_cost_micros_per_1m,
        candidate_cost_micros_per_1m, cost_improvement, status, reason_codes,
-       canary_percent, sample_count, confidence, created_by, created_at, updated_at
+       canary_percent, sample_count, confidence, healthy_window_count, degraded_window_count,
+       last_evaluation_id, last_evaluation_verdict, last_evaluation_reason_codes,
+       last_evaluated_window_end, monitoring_started_at, last_healthy_at, last_automatic_action,
+       created_by, created_at, updated_at
 FROM effective_pricing_decisions ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -875,15 +959,19 @@ FROM effective_pricing_decisions ORDER BY updated_at DESC`)
 	out := []EffectivePricingDecision{}
 	for rows.Next() {
 		var decision EffectivePricingDecision
-		var reasonCodes string
+		var reasonCodes, lastEvaluationReasonCodes string
 		if err := rows.Scan(&decision.ID, &decision.Model, &decision.Protocol, &decision.CurrentProviderAccountID,
 			&decision.CandidateProviderAccountID, &decision.CurrentSnapshotID, &decision.CandidateSnapshotID,
 			&decision.CurrentCostMicrosPer1M, &decision.CandidateCostMicrosPer1M, &decision.CostImprovement,
 			&decision.Status, &reasonCodes, &decision.CanaryPercent, &decision.SampleCount,
-			&decision.Confidence, &decision.CreatedBy, &decision.CreatedAt, &decision.UpdatedAt); err != nil {
+			&decision.Confidence, &decision.HealthyWindowCount, &decision.DegradedWindowCount,
+			&decision.LastEvaluationID, &decision.LastEvaluationVerdict, &lastEvaluationReasonCodes,
+			&decision.LastEvaluatedWindowEnd, &decision.MonitoringStartedAt, &decision.LastHealthyAt,
+			&decision.LastAutomaticAction, &decision.CreatedBy, &decision.CreatedAt, &decision.UpdatedAt); err != nil {
 			return nil, err
 		}
 		decision.ReasonCodes = parseStringList(reasonCodes)
+		decision.LastEvaluationReasonCodes = parseStringList(lastEvaluationReasonCodes)
 		out = append(out, decision)
 	}
 	return out, rows.Err()
@@ -895,8 +983,11 @@ INSERT INTO effective_pricing_decisions(
   id, model, protocol, current_provider_account_id, candidate_provider_account_id,
   current_snapshot_id, candidate_snapshot_id, current_cost_micros_per_1m,
   candidate_cost_micros_per_1m, cost_improvement, status, reason_codes,
-  canary_percent, sample_count, confidence, created_by, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+  canary_percent, sample_count, confidence, healthy_window_count, degraded_window_count,
+  last_evaluation_id, last_evaluation_verdict, last_evaluation_reason_codes,
+  last_evaluated_window_end, monitoring_started_at, last_healthy_at, last_automatic_action,
+  created_by, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
 ON CONFLICT(id) DO UPDATE SET
   current_provider_account_id=EXCLUDED.current_provider_account_id,
   candidate_provider_account_id=EXCLUDED.candidate_provider_account_id,
@@ -907,13 +998,192 @@ ON CONFLICT(id) DO UPDATE SET
   cost_improvement=EXCLUDED.cost_improvement, status=EXCLUDED.status,
   reason_codes=EXCLUDED.reason_codes, canary_percent=EXCLUDED.canary_percent,
   sample_count=EXCLUDED.sample_count, confidence=EXCLUDED.confidence,
+	healthy_window_count=EXCLUDED.healthy_window_count,
+	degraded_window_count=EXCLUDED.degraded_window_count,
+	last_evaluation_id=EXCLUDED.last_evaluation_id,
+	last_evaluation_verdict=EXCLUDED.last_evaluation_verdict,
+	last_evaluation_reason_codes=EXCLUDED.last_evaluation_reason_codes,
+	last_evaluated_window_end=EXCLUDED.last_evaluated_window_end,
+	monitoring_started_at=EXCLUDED.monitoring_started_at,
+	last_healthy_at=EXCLUDED.last_healthy_at,
+	last_automatic_action=EXCLUDED.last_automatic_action,
   created_by=EXCLUDED.created_by, updated_at=EXCLUDED.updated_at`,
 		decision.ID, decision.Model, decision.Protocol, decision.CurrentProviderAccountID,
 		decision.CandidateProviderAccountID, decision.CurrentSnapshotID, decision.CandidateSnapshotID,
 		decision.CurrentCostMicrosPer1M, decision.CandidateCostMicrosPer1M, decision.CostImprovement,
 		decision.Status, marshalStringList(decision.ReasonCodes), decision.CanaryPercent,
-		decision.SampleCount, decision.Confidence, decision.CreatedBy, decision.CreatedAt, decision.UpdatedAt)
+		decision.SampleCount, decision.Confidence, decision.HealthyWindowCount, decision.DegradedWindowCount,
+		decision.LastEvaluationID, decision.LastEvaluationVerdict, marshalStringList(decision.LastEvaluationReasonCodes),
+		decision.LastEvaluatedWindowEnd, decision.MonitoringStartedAt, decision.LastHealthyAt, decision.LastAutomaticAction,
+		decision.CreatedBy, decision.CreatedAt, decision.UpdatedAt)
 	return err
+}
+
+func (r *PostgresRepository) UpdateEffectivePricingDecision(ctx context.Context, decision EffectivePricingDecision, expectedStatus string, expectedUpdatedAt time.Time) (bool, error) {
+	return updateEffectivePricingDecision(ctx, r.db, decision, expectedStatus, expectedUpdatedAt)
+}
+
+func updateEffectivePricingDecision(ctx context.Context, executor usageRecordExecutor, decision EffectivePricingDecision, expectedStatus string, expectedUpdatedAt time.Time) (bool, error) {
+	result, err := executor.ExecContext(ctx, `
+UPDATE effective_pricing_decisions SET
+  current_provider_account_id=$1, candidate_provider_account_id=$2,
+  current_snapshot_id=$3, candidate_snapshot_id=$4,
+  current_cost_micros_per_1m=$5, candidate_cost_micros_per_1m=$6,
+  cost_improvement=$7, status=$8, reason_codes=$9, canary_percent=$10,
+  sample_count=$11, confidence=$12, healthy_window_count=$13,
+  degraded_window_count=$14, last_evaluation_id=$15,
+  last_evaluation_verdict=$16, last_evaluation_reason_codes=$17,
+  last_evaluated_window_end=$18, monitoring_started_at=$19, last_healthy_at=$20,
+  last_automatic_action=$21, created_by=$22, updated_at=$23
+WHERE id=$24 AND status=$25 AND updated_at=$26`,
+		decision.CurrentProviderAccountID, decision.CandidateProviderAccountID,
+		decision.CurrentSnapshotID, decision.CandidateSnapshotID,
+		decision.CurrentCostMicrosPer1M, decision.CandidateCostMicrosPer1M,
+		decision.CostImprovement, decision.Status, marshalStringList(decision.ReasonCodes), decision.CanaryPercent,
+		decision.SampleCount, decision.Confidence, decision.HealthyWindowCount, decision.DegradedWindowCount,
+		decision.LastEvaluationID, decision.LastEvaluationVerdict, marshalStringList(decision.LastEvaluationReasonCodes),
+		decision.LastEvaluatedWindowEnd, decision.MonitoringStartedAt, decision.LastHealthyAt,
+		decision.LastAutomaticAction, decision.CreatedBy, decision.UpdatedAt,
+		decision.ID, expectedStatus, expectedUpdatedAt)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
+}
+
+func (r *PostgresRepository) ListEffectivePricingDecisionEvaluations(ctx context.Context, decisionID string, limit int) ([]EffectivePricingDecisionEvaluation, error) {
+	decisionID = strings.TrimSpace(decisionID)
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, decision_id, window_start, window_end, verdict, reason_codes,
+       current_snapshot_id, candidate_snapshot_id, current_request_count,
+       candidate_request_count, current_cost_micros_per_1m, candidate_cost_micros_per_1m,
+       cost_improvement, current_cache_token_hit_rate, candidate_cache_token_hit_rate,
+       current_cache_savings_rate, candidate_cache_savings_rate,
+       current_affinity_consistency_rate, candidate_affinity_consistency_rate,
+       current_error_rate, candidate_error_rate, current_p95_latency_ms,
+       candidate_p95_latency_ms, current_metrics_coverage, candidate_metrics_coverage,
+       current_billing_consistency_rate, candidate_billing_consistency_rate,
+       automatic_action, created_at
+FROM effective_pricing_decision_evaluations
+WHERE ($1 = '' OR decision_id = $1)
+ORDER BY window_end DESC
+LIMIT $2`, decisionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []EffectivePricingDecisionEvaluation{}
+	for rows.Next() {
+		var evaluation EffectivePricingDecisionEvaluation
+		var reasonCodes string
+		if err := rows.Scan(
+			&evaluation.ID, &evaluation.DecisionID, &evaluation.WindowStart, &evaluation.WindowEnd,
+			&evaluation.Verdict, &reasonCodes, &evaluation.CurrentSnapshotID, &evaluation.CandidateSnapshotID,
+			&evaluation.CurrentRequestCount, &evaluation.CandidateRequestCount,
+			&evaluation.CurrentCostMicrosPer1M, &evaluation.CandidateCostMicrosPer1M,
+			&evaluation.CostImprovement, &evaluation.CurrentCacheTokenHitRate,
+			&evaluation.CandidateCacheTokenHitRate, &evaluation.CurrentCacheSavingsRate,
+			&evaluation.CandidateCacheSavingsRate, &evaluation.CurrentAffinityConsistencyRate,
+			&evaluation.CandidateAffinityConsistencyRate, &evaluation.CurrentErrorRate,
+			&evaluation.CandidateErrorRate, &evaluation.CurrentP95LatencyMS,
+			&evaluation.CandidateP95LatencyMS, &evaluation.CurrentMetricsCoverage,
+			&evaluation.CandidateMetricsCoverage, &evaluation.CurrentBillingConsistencyRate,
+			&evaluation.CandidateBillingConsistencyRate, &evaluation.AutomaticAction,
+			&evaluation.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		evaluation.ReasonCodes = parseStringList(reasonCodes)
+		out = append(out, evaluation)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgresRepository) CommitEffectivePricingDecisionEvaluation(ctx context.Context, commit EffectivePricingDecisionEvaluationCommit) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentStatus string
+	var currentUpdatedAt time.Time
+	if err := tx.QueryRowContext(ctx, `
+SELECT status, updated_at FROM effective_pricing_decisions WHERE id=$1 FOR UPDATE`, commit.Decision.ID).Scan(&currentStatus, &currentUpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if currentStatus != commit.ExpectedStatus || !currentUpdatedAt.Equal(commit.ExpectedUpdatedAt) {
+		return false, nil
+	}
+	evaluation := commit.Evaluation
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO effective_pricing_decision_evaluations(
+  id, decision_id, window_start, window_end, verdict, reason_codes,
+  current_snapshot_id, candidate_snapshot_id, current_request_count,
+  candidate_request_count, current_cost_micros_per_1m, candidate_cost_micros_per_1m,
+  cost_improvement, current_cache_token_hit_rate, candidate_cache_token_hit_rate,
+  current_cache_savings_rate, candidate_cache_savings_rate,
+  current_affinity_consistency_rate, candidate_affinity_consistency_rate,
+  current_error_rate, candidate_error_rate, current_p95_latency_ms,
+  candidate_p95_latency_ms, current_metrics_coverage, candidate_metrics_coverage,
+  current_billing_consistency_rate, candidate_billing_consistency_rate,
+  automatic_action, created_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+ON CONFLICT(decision_id, window_end) DO NOTHING`,
+		evaluation.ID, evaluation.DecisionID, evaluation.WindowStart, evaluation.WindowEnd,
+		evaluation.Verdict, marshalStringList(evaluation.ReasonCodes), evaluation.CurrentSnapshotID,
+		evaluation.CandidateSnapshotID, evaluation.CurrentRequestCount, evaluation.CandidateRequestCount,
+		evaluation.CurrentCostMicrosPer1M, evaluation.CandidateCostMicrosPer1M,
+		evaluation.CostImprovement, evaluation.CurrentCacheTokenHitRate,
+		evaluation.CandidateCacheTokenHitRate, evaluation.CurrentCacheSavingsRate,
+		evaluation.CandidateCacheSavingsRate, evaluation.CurrentAffinityConsistencyRate,
+		evaluation.CandidateAffinityConsistencyRate, evaluation.CurrentErrorRate,
+		evaluation.CandidateErrorRate, evaluation.CurrentP95LatencyMS,
+		evaluation.CandidateP95LatencyMS, evaluation.CurrentMetricsCoverage,
+		evaluation.CandidateMetricsCoverage, evaluation.CurrentBillingConsistencyRate,
+		evaluation.CandidateBillingConsistencyRate, evaluation.AutomaticAction, evaluation.CreatedAt)
+	if err != nil {
+		return false, err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if inserted != 1 {
+		return false, nil
+	}
+	if commit.CurrentSnapshot != nil {
+		if err := saveEffectivePriceSnapshot(ctx, tx, *commit.CurrentSnapshot); err != nil {
+			return false, err
+		}
+	}
+	if commit.CandidateSnapshot != nil {
+		if err := saveEffectivePriceSnapshot(ctx, tx, *commit.CandidateSnapshot); err != nil {
+			return false, err
+		}
+	}
+	updated, err := updateEffectivePricingDecision(ctx, tx, commit.Decision, commit.ExpectedStatus, commit.ExpectedUpdatedAt)
+	if err != nil {
+		return false, err
+	}
+	if !updated {
+		return false, nil
+	}
+	if commit.Audit != nil {
+		if err := insertAuditLog(ctx, tx, *commit.Audit); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *PostgresRepository) FindRoutingAffinityBinding(ctx context.Context, scopeKey string, now time.Time) (RoutingAffinityBinding, bool, error) {

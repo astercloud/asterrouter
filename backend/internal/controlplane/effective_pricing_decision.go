@@ -51,40 +51,11 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 	if !current.CostAvailable || !candidate.CostAvailable || current.EffectiveCostMicrosPer1M <= 0 || candidate.EffectiveCostMicrosPer1M < 0 {
 		return EffectivePricingDecision{}, errors.New("current and candidate accounts require effective cost evidence")
 	}
-	improvement := float64(current.EffectiveCostMicrosPer1M-candidate.EffectiveCostMicrosPer1M) / float64(current.EffectiveCostMicrosPer1M)
-	blockingReasons := effectivePricingDecisionBlockingReasons(candidate.ReasonCodes)
-	blockingReasons = append(blockingReasons, effectivePricingQualityRegressionReasons(current, candidate, report.Policy)...)
-	decisionReasons := []string{}
+	assessment := assessEffectivePricingCandidate(current, candidate, report.Policy)
 	status := EffectivePricingDecisionHold
-	costThresholdMet := improvement >= report.Policy.MinCostImprovement
-	cacheHitImprovement := candidate.CacheTokenHitRate - current.CacheTokenHitRate
-	cacheSavingsImprovement := candidate.CacheSavingsRate - current.CacheSavingsRate
-	affinityImprovement := candidate.AffinityConsistencyRate - current.AffinityConsistencyRate
-	cacheEvidenceImproved := current.CacheEconomicsAvailable && candidate.CacheEconomicsAvailable && oneOf(candidate.CacheSupportStatus, CacheSupportObserved, CacheSupportBilledVerified) && cacheHitImprovement >= report.Policy.MinCacheHitRateImprovement && cacheSavingsImprovement > 0
-	affinityEvidenceImproved := oneOf(candidate.PoolAffinityGrade, PoolAffinityProbable, PoolAffinityVerified) && affinityImprovement >= report.Policy.MinAffinityImprovement
-	cacheTiebreakerMet := !costThresholdMet && improvement >= -report.Policy.MaxCacheTiebreakCostRegression && candidate.MetricsCoverage >= report.Policy.MinMetricsCoverage && (cacheEvidenceImproved || affinityEvidenceImproved)
-	if !cacheTiebreakerMet && !costThresholdMet {
-		blockingReasons = append(blockingReasons, "cost_improvement_below_threshold")
-		if !cacheEvidenceImproved && !affinityEvidenceImproved {
-			blockingReasons = append(blockingReasons, "cache_quality_improvement_below_threshold")
-			if !current.CacheEconomicsAvailable || !candidate.CacheEconomicsAvailable {
-				blockingReasons = append(blockingReasons, "cache_economics_evidence_missing")
-			}
-		}
-	}
-	if candidate.BillingConsistencyRate < report.Policy.MinBillingConsistency {
-		blockingReasons = append(blockingReasons, "billing_consistency_low")
-	}
-	if !oneOf(candidate.CostConfidence, ProcurementCostConfidenceExact, ProcurementCostConfidenceDerived) {
-		blockingReasons = append(blockingReasons, "automatic_switch_confidence_low")
-	}
-	if len(blockingReasons) == 0 {
+	if assessment.Eligible {
 		status = EffectivePricingDecisionRecommended
-		if cacheTiebreakerMet {
-			decisionReasons = append(decisionReasons, "cache_quality_tiebreaker")
-		}
 	}
-	reasons := append(decisionReasons, blockingReasons...)
 	now := s.nowUTC()
 	currentSnapshot := effectivePriceSnapshotFromReportRow(current, report, now)
 	candidateSnapshot := effectivePriceSnapshotFromReportRow(candidate, report, now)
@@ -99,7 +70,7 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 		CurrentProviderAccountID: request.CurrentProviderAccountID, CandidateProviderAccountID: request.CandidateProviderAccountID,
 		CurrentSnapshotID: currentSnapshot.ID, CandidateSnapshotID: candidateSnapshot.ID,
 		CurrentCostMicrosPer1M: current.EffectiveCostMicrosPer1M, CandidateCostMicrosPer1M: candidate.EffectiveCostMicrosPer1M,
-		CostImprovement: improvement, Status: status, ReasonCodes: cleanStringList(reasons), CanaryPercent: report.Policy.CanaryPercent,
+		CostImprovement: assessment.CostImprovement, Status: status, ReasonCodes: assessment.ReasonCodes, CanaryPercent: report.Policy.CanaryPercent,
 		SampleCount: candidate.RequestCount, Confidence: candidate.CostConfidence, CreatedBy: actor, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.repo.SaveEffectivePricingDecision(ctx, decision); err != nil {
@@ -109,6 +80,49 @@ func (s *Service) EvaluateEffectivePricingDecision(ctx context.Context, actor st
 		return EffectivePricingDecision{}, err
 	}
 	return decision, nil
+}
+
+type effectivePricingCandidateAssessment struct {
+	CostImprovement float64
+	ReasonCodes     []string
+	Eligible        bool
+}
+
+func assessEffectivePricingCandidate(current, candidate EffectivePricingReportRow, policy EffectivePricingPolicy) effectivePricingCandidateAssessment {
+	improvement := float64(current.EffectiveCostMicrosPer1M-candidate.EffectiveCostMicrosPer1M) / float64(current.EffectiveCostMicrosPer1M)
+	blockingReasons := effectivePricingDecisionBlockingReasons(candidate.ReasonCodes)
+	blockingReasons = append(blockingReasons, effectivePricingQualityRegressionReasons(current, candidate, policy)...)
+	decisionReasons := []string{}
+	costThresholdMet := improvement >= policy.MinCostImprovement
+	cacheHitImprovement := candidate.CacheTokenHitRate - current.CacheTokenHitRate
+	cacheSavingsImprovement := candidate.CacheSavingsRate - current.CacheSavingsRate
+	affinityImprovement := candidate.AffinityConsistencyRate - current.AffinityConsistencyRate
+	cacheEvidenceImproved := current.CacheEconomicsAvailable && candidate.CacheEconomicsAvailable && oneOf(candidate.CacheSupportStatus, CacheSupportObserved, CacheSupportBilledVerified) && cacheHitImprovement >= policy.MinCacheHitRateImprovement && cacheSavingsImprovement > 0
+	affinityEvidenceImproved := oneOf(candidate.PoolAffinityGrade, PoolAffinityProbable, PoolAffinityVerified) && affinityImprovement >= policy.MinAffinityImprovement
+	cacheTiebreakerMet := !costThresholdMet && improvement >= -policy.MaxCacheTiebreakCostRegression && candidate.MetricsCoverage >= policy.MinMetricsCoverage && (cacheEvidenceImproved || affinityEvidenceImproved)
+	if !cacheTiebreakerMet && !costThresholdMet {
+		blockingReasons = append(blockingReasons, "cost_improvement_below_threshold")
+		if !cacheEvidenceImproved && !affinityEvidenceImproved {
+			blockingReasons = append(blockingReasons, "cache_quality_improvement_below_threshold")
+			if !current.CacheEconomicsAvailable || !candidate.CacheEconomicsAvailable {
+				blockingReasons = append(blockingReasons, "cache_economics_evidence_missing")
+			}
+		}
+	}
+	if candidate.BillingConsistencyRate < policy.MinBillingConsistency {
+		blockingReasons = append(blockingReasons, "billing_consistency_low")
+	}
+	if !oneOf(candidate.CostConfidence, ProcurementCostConfidenceExact, ProcurementCostConfidenceDerived) {
+		blockingReasons = append(blockingReasons, "automatic_switch_confidence_low")
+	}
+	if len(blockingReasons) == 0 && cacheTiebreakerMet {
+		decisionReasons = append(decisionReasons, "cache_quality_tiebreaker")
+	}
+	return effectivePricingCandidateAssessment{
+		CostImprovement: improvement,
+		ReasonCodes:     cleanStringList(append(decisionReasons, blockingReasons...)),
+		Eligible:        len(blockingReasons) == 0,
+	}
 }
 
 func effectivePricingDecisionBlockingReasons(reasons []string) []string {
@@ -145,6 +159,8 @@ func (s *Service) ActOnEffectivePricingDecision(ctx context.Context, actor, id s
 	if err != nil {
 		return EffectivePricingDecision{}, err
 	}
+	expectedStatus := decision.Status
+	expectedUpdatedAt := decision.UpdatedAt
 	action := strings.TrimSpace(request.Action)
 	switch action {
 	case "approve_canary":
@@ -161,6 +177,16 @@ func (s *Service) ActOnEffectivePricingDecision(ctx context.Context, actor, id s
 			decision.CanaryPercent = request.CanaryPercent
 		}
 		decision.Status = EffectivePricingDecisionCanary
+		now := s.nowUTC()
+		decision.HealthyWindowCount = 0
+		decision.DegradedWindowCount = 0
+		decision.LastEvaluationID = ""
+		decision.LastEvaluationVerdict = ""
+		decision.LastEvaluationReasonCodes = nil
+		decision.LastEvaluatedWindowEnd = &now
+		decision.MonitoringStartedAt = &now
+		decision.LastHealthyAt = nil
+		decision.LastAutomaticAction = ""
 	case "activate":
 		if decision.Status != EffectivePricingDecisionCanary {
 			return EffectivePricingDecision{}, errors.New("only canary decisions can become active")
@@ -177,8 +203,12 @@ func (s *Service) ActOnEffectivePricingDecision(ctx context.Context, actor, id s
 		return EffectivePricingDecision{}, errors.New("invalid decision action")
 	}
 	decision.UpdatedAt = s.nowUTC()
-	if err := s.repo.SaveEffectivePricingDecision(ctx, decision); err != nil {
+	updated, err := s.repo.UpdateEffectivePricingDecision(ctx, decision, expectedStatus, expectedUpdatedAt)
+	if err != nil {
 		return EffectivePricingDecision{}, err
+	}
+	if !updated {
+		return EffectivePricingDecision{}, errors.New("effective pricing decision changed; reload before applying the action")
 	}
 	if err := s.audit(ctx, actor, action, "effective_pricing_decision", decision.ID, fmt.Sprintf("Effective pricing decision changed to %s", decision.Status)); err != nil {
 		return EffectivePricingDecision{}, err

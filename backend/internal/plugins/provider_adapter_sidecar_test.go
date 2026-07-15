@@ -44,7 +44,7 @@ func TestProviderAdapterSidecarCapabilityAndLifecycleContract(t *testing.T) {
 		case "/v1/provider-adapter/dispatch":
 			_, _ = response.Write([]byte(`{"outcome":"accepted","task":{"provider_task_id":"task-1","provider_request_id":"request-1","status":"running"}}`))
 		case "/v1/provider-adapter/reconcile":
-			_, _ = response.Write([]byte(`{"outcome":"accepted","task":{"provider_task_id":"task-1","provider_request_id":"request-1","status":"succeeded"},"outputs":[{"output_id":"final-image","role":"final","media_type":"image/png","expected_size_bytes":12,"provider_reference":"provider://task-1/final"}]}`))
+			_, _ = response.Write([]byte(`{"outcome":"accepted","task":{"provider_task_id":"task-1","provider_request_id":"request-1","status":"succeeded"},"progress":{"sequence":2,"percent":100,"stage":"completed"},"outputs":[{"output_id":"final-image","role":"final","media_type":"image/png","expected_size_bytes":12,"provider_reference":"provider://task-1/final"}]}`))
 		case "/v1/provider-adapter/output":
 			response.Header().Set("Content-Type", "image/png")
 			_, _ = response.Write([]byte("image-output"))
@@ -122,7 +122,7 @@ func TestProviderAdapterSidecarCapabilityAndLifecycleContract(t *testing.T) {
 		t.Fatalf("DispatchProviderTask() result=%+v err=%v", dispatched, err)
 	}
 	reconciled, err := service.ReconcileProviderTask(context.Background(), provider, job, attempt, intent, dispatched.Task)
-	if err != nil || reconciled.Task.Status != "succeeded" || len(reconciled.Outputs) != 1 {
+	if err != nil || reconciled.Task.Status != "succeeded" || reconciled.Progress == nil || reconciled.Progress.Sequence != 2 || reconciled.Progress.Percent == nil || *reconciled.Progress.Percent != 100 || len(reconciled.Outputs) != 1 {
 		t.Fatalf("ReconcileProviderTask() result=%+v err=%v", reconciled, err)
 	}
 	attempt.ProviderTaskID = reconciled.Task.ProviderTaskID
@@ -163,6 +163,7 @@ func TestReadSidecarManifestRejectsInvalidProviderAdapterCapabilities(t *testing
 	for _, manifest := range []string{
 		`{"id":"adapter","version":"1","runtime":"sidecar","provider_adapters":[{"provider_types":[],"modalities":["image"],"operations":["image_generation"]}]}`,
 		`{"id":"adapter","version":"1","runtime":"sidecar","provider_adapters":[{"provider_types":["*"],"modalities":["image"],"operations":["image_generation"]}]}`,
+		`{"id":"adapter","version":"1","runtime":"sidecar","provider_adapters":[{"provider_types":["media"],"modalities":["image"],"operations":["image_generation"],"artifact_policies":["*"]}]}`,
 	} {
 		path := filepath.Join(t.TempDir(), "plugin.json")
 		if err := os.WriteFile(path, []byte(manifest), 0600); err != nil {
@@ -171,5 +172,25 @@ func TestReadSidecarManifestRejectsInvalidProviderAdapterCapabilities(t *testing
 		if _, err := readSidecarManifest(path); err == nil {
 			t.Fatalf("readSidecarManifest() accepted %s", manifest)
 		}
+	}
+}
+
+func TestManifestSupportsProviderJobEnforcesDeclaredArtifactPolicies(t *testing.T) {
+	manifest := sidecarManifest{ProviderAdapters: []providerAdapterManifestCapability{{
+		ProviderTypes: []string{"test_media"}, Modalities: []string{"video"}, Operations: []string{"video_generation"},
+		ArtifactPolicies: []string{"temporary", "customer_sink"},
+	}}}
+	provider := controlplane.GatewayProvider{Type: "test_media"}
+	job := controlplane.AIJob{Modality: "video", Operation: "video_generation", ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary}
+	if !manifestSupportsProviderJob(manifest, provider, job) {
+		t.Fatal("temporary artifact policy should be supported")
+	}
+	job.ArtifactPolicy = controlplane.GatewayArtifactPolicyMetadataOnly
+	if manifestSupportsProviderJob(manifest, provider, job) {
+		t.Fatal("undeclared artifact policy should be rejected")
+	}
+	manifest.ProviderAdapters[0].ArtifactPolicies = nil
+	if !manifestSupportsProviderJob(manifest, provider, job) {
+		t.Fatal("legacy manifest without artifact policy declaration should remain compatible")
 	}
 }

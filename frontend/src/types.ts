@@ -681,6 +681,144 @@ export interface ProviderBillingLineRequest {
   usage_ended_at: string
 }
 
+export interface ProviderBillingSourceCapabilities {
+  usage_cost_lines: boolean
+  aggregate_usage: boolean
+  balance: boolean
+  incremental_sync: boolean
+  price_feed: boolean
+}
+
+export interface ProviderBalanceSnapshot {
+  kind: 'wallet_balance' | 'api_key_quota_remaining' | 'subscription_period_remaining'
+  amount_micros: number
+  unlimited: boolean
+  currency: string
+  observed_at: string
+}
+
+export interface ProviderBillingUsageAggregate {
+  scope: 'today' | 'total' | string
+  model?: string
+  request_count: number
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  list_cost_micros?: number
+  actual_cost_micros?: number
+}
+
+export interface ProviderBillingSourceInspection {
+  provider_id: string
+  provider_account_id: string
+  provider_name: string
+  provider_account_name: string
+  adapter_id: string
+  detection_status: string
+  contract_version: string
+  currency: string
+  capabilities: ProviderBillingSourceCapabilities
+  balance?: ProviderBalanceSnapshot
+  usage_aggregates: ProviderBillingUsageAggregate[]
+  discovered_lines: number
+  evidence_hash: string
+  warnings: string[]
+  observed_at: string
+}
+
+export interface ProviderBillingSource {
+  id: string
+  provider_id: string
+  provider_account_id: string
+  adapter_id: string
+  status: 'observe_only' | 'active' | 'disabled'
+  automatic_sync_enabled: boolean
+  sync_interval_seconds: number
+  capabilities: ProviderBillingSourceCapabilities
+  detection_status: string
+  contract_version: string
+  evidence_hash: string
+  warnings: string[]
+  next_sync_at?: string
+  last_sync_started_at?: string
+  last_sync_completed_at?: string
+  last_success_at?: string
+  consecutive_failures: number
+  last_error_code: string
+  version: number
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProviderBillingSourceRequest {
+  provider_account_id: string
+  adapter_id: string
+  status: ProviderBillingSource['status']
+  automatic_sync_enabled: boolean
+  sync_interval_seconds: number
+  version?: number
+}
+
+export interface ProviderBillingSyncRun {
+  id: string
+  source_id: string
+  provider_id: string
+  provider_account_id: string
+  trigger: 'manual' | 'scheduled'
+  triggered_by: string
+  adapter_id: string
+  status: 'running' | 'succeeded' | 'failed' | 'lease_expired'
+  capabilities: ProviderBillingSourceCapabilities
+  detection_status: string
+  contract_version: string
+  discovered_lines: number
+  imported_lines: number
+  skipped_lines: number
+  evidence_hash: string
+  warnings: string[]
+  error_code: string
+  started_at: string
+  finished_at?: string
+  created_at: string
+}
+
+export interface ProviderBalanceSnapshotRecord extends ProviderBalanceSnapshot {
+  id: string
+  source_id: string
+  sync_run_id: string
+  provider_account_id: string
+  evidence_hash: string
+  created_at: string
+}
+
+export interface ProviderUsageAggregateSnapshot extends ProviderBillingUsageAggregate {
+  id: string
+  source_id: string
+  sync_run_id: string
+  provider_account_id: string
+  currency: string
+  evidence_hash: string
+  observed_at: string
+  created_at: string
+}
+
+export interface ProviderBillingSourceEvidence {
+  source: ProviderBillingSource
+  runs: ProviderBillingSyncRun[]
+  balances: ProviderBalanceSnapshotRecord[]
+  aggregates: ProviderUsageAggregateSnapshot[]
+}
+
+export interface ProviderBillingSyncResult {
+  source: ProviderBillingSource
+  run: ProviderBillingSyncRun
+  balance?: ProviderBalanceSnapshotRecord
+  aggregates: ProviderUsageAggregateSnapshot[]
+}
+
 export interface ProviderCacheCapability {
   id: string
   provider_account_id: string
@@ -771,6 +909,10 @@ export interface EffectivePricingPolicy {
   canary_percent: number
   supplier_affinity_ttl_seconds: number
   account_affinity_ttl_seconds: number
+  automatic_actions_enabled: boolean
+  evaluation_interval_minutes: number
+  promotion_window_count: number
+  degradation_window_count: number
   probe_enabled: boolean
   probe_daily_token_budget: number
   probe_daily_cost_budget_micros: number
@@ -797,9 +939,50 @@ export interface EffectivePricingDecision {
   canary_percent: number
   sample_count: number
   confidence: string
+  healthy_window_count: number
+  degraded_window_count: number
+  last_evaluation_id: string
+  last_evaluation_verdict: string
+  last_evaluation_reason_codes: string[]
+  last_evaluated_window_end?: string
+  monitoring_started_at?: string
+  last_healthy_at?: string
+  last_automatic_action: string
   created_by: string
   created_at: string
   updated_at: string
+}
+
+export interface EffectivePricingDecisionEvaluation {
+  id: string
+  decision_id: string
+  window_start: string
+  window_end: string
+  verdict: string
+  reason_codes: string[]
+  current_snapshot_id: string
+  candidate_snapshot_id: string
+  current_request_count: number
+  candidate_request_count: number
+  current_cost_micros_per_1m: number
+  candidate_cost_micros_per_1m: number
+  cost_improvement: number
+  current_cache_token_hit_rate: number
+  candidate_cache_token_hit_rate: number
+  current_cache_savings_rate: number
+  candidate_cache_savings_rate: number
+  current_affinity_consistency_rate: number
+  candidate_affinity_consistency_rate: number
+  current_error_rate: number
+  candidate_error_rate: number
+  current_p95_latency_ms: number
+  candidate_p95_latency_ms: number
+  current_metrics_coverage: number
+  candidate_metrics_coverage: number
+  current_billing_consistency_rate: number
+  candidate_billing_consistency_rate: number
+  automatic_action: string
+  created_at: string
 }
 
 export interface EffectivePricingReportRow {
@@ -1564,6 +1747,7 @@ export interface UsageRecord {
   cache_write_5m_tokens?: number
   cache_write_1h_tokens?: number
   cache_fields_present: boolean
+  usage_dimensions: Record<string, UsageDimension>
   usage_normalization_status: string
   upstream_request_id: string
   procurement_cost_micros?: number
@@ -1574,6 +1758,15 @@ export interface UsageRecord {
   provider_billing_line_id: string
   cost_cents: number
   created_at: string
+}
+
+export interface UsageDimension {
+  quantity: number
+  unit: 'count' | 'millisecond' | 'character' | 'byte'
+  source: string
+  confidence: 'estimated' | 'observed' | 'reported' | 'reconciled'
+  price_snapshot_id?: string
+  attributes?: Record<string, string>
 }
 
 export interface OperatorCustomerGroup { id:string; name:string; description:string; status:string; created_at:string; updated_at:string }
@@ -1591,15 +1784,21 @@ export interface UsageModelSummary {
   requests: number
   errors: number
   tokens: number
+  output_images: number
+  video_milliseconds: number
+  audio_milliseconds: number
   cost_cents: number
   avg_latency_ms: number
 }
 
 export interface UsageReport {
- total_requests: number
- error_requests: number
- total_tokens: number
- total_cost_cents: number
+  total_requests: number
+  error_requests: number
+  total_tokens: number
+  total_output_images: number
+  total_video_milliseconds: number
+  total_audio_milliseconds: number
+  total_cost_cents: number
   avg_latency_ms: number
   by_model: UsageModelSummary[]
   recent: UsageRecord[]

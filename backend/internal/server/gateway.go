@@ -41,6 +41,7 @@ const (
 
 func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service, durableJobs DurableAIJobAdmission, directAI controlplane.DirectAIProviderAdapter) {
 	registerGatewayJobRoutes(r, control, durableJobs)
+	registerGatewayMediaJobRoutes(r, control, durableJobs)
 	registerGatewayImageRoutes(r, control, durableJobs, directAI)
 
 	r.GET("/v1/models", func(c *gin.Context) {

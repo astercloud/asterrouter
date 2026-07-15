@@ -18,6 +18,11 @@ type DirectAIProviderAdapter interface {
 	OpenDirectAIOutput(context.Context, GatewayProvider, AIOperation, AIAttempt, gatewaycore.CanonicalRequest, ProviderDispatchResult, ProviderOutputDescriptor) (io.ReadCloser, error)
 }
 
+type DirectAIProviderReconciler interface {
+	ReconcileDirectAI(context.Context, GatewayProvider, AIOperation, AIAttempt, ProviderDispatchIntent, ProviderTaskReference) (ProviderDispatchResult, error)
+	OpenDirectAIOutput(context.Context, GatewayProvider, AIOperation, AIAttempt, gatewaycore.CanonicalRequest, ProviderDispatchResult, ProviderOutputDescriptor) (io.ReadCloser, error)
+}
+
 func (s *Service) IngestDirectAIProviderOutputs(
 	ctx context.Context,
 	provider GatewayProvider,

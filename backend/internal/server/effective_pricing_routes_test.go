@@ -95,6 +95,108 @@ func TestEffectivePricingPolicyEndpointRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
+func TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/usage" || r.Header.Get("Authorization") != "Bearer account-billing-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"mode":"unrestricted","isValid":true,"unit":"USD","balance":9.25,"usage":{"total":{"requests":5,"input_tokens":100,"output_tokens":20,"cache_creation_tokens":30,"cache_read_tokens":40,"cost":1.5,"actual_cost":0.75}}}`))
+	}))
+	defer upstream.Close()
+
+	handler, control := newTestRuntime(t, config.Config{})
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name: "billing source", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
+		Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "provider-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := createGatewayTestAccount(t, control, provider, "model", "account-billing-secret", 10, 2)
+	body := fmt.Sprintf(`{"provider_account_id":%q,"adapter_id":"auto"}`, account.ID)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-billing-sources/inspect", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"adapter_id":"sub2api_compatible"`)) ||
+		!bytes.Contains(recorder.Body.Bytes(), []byte(`"kind":"wallet_balance"`)) ||
+		!bytes.Contains(recorder.Body.Bytes(), []byte(`"amount_micros":9250000`)) ||
+		!bytes.Contains(recorder.Body.Bytes(), []byte(`"discovered_lines":0`)) ||
+		!bytes.Contains(recorder.Body.Bytes(), []byte(`"usage_cost_lines":false`)) {
+		t.Fatalf("body=%s", recorder.Body.String())
+	}
+
+	configureBody := fmt.Sprintf(`{"provider_account_id":%q,"adapter_id":"sub2api_compatible","status":"observe_only","automatic_sync_enabled":true,"sync_interval_seconds":3600}`, account.ID)
+	configure := httptest.NewRequest(http.MethodPut, "/api/v1/admin/provider-billing-sources", bytes.NewBufferString(configureBody))
+	configure.Header.Set("Content-Type", "application/json")
+	configureRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(configureRecorder, configure)
+	if configureRecorder.Code != http.StatusOK {
+		t.Fatalf("configure status=%d body=%s", configureRecorder.Code, configureRecorder.Body.String())
+	}
+	var configured struct {
+		Data controlplane.ProviderBillingSource `json:"data"`
+	}
+	if err := json.Unmarshal(configureRecorder.Body.Bytes(), &configured); err != nil {
+		t.Fatal(err)
+	}
+	if configured.Data.ID == "" || configured.Data.Version != 1 || !configured.Data.AutomaticSyncEnabled {
+		t.Fatalf("configured source=%+v", configured.Data)
+	}
+
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-billing-sources", nil)
+	listRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(listRecorder, list)
+	if listRecorder.Code != http.StatusOK || !bytes.Contains(listRecorder.Body.Bytes(), []byte(configured.Data.ID)) {
+		t.Fatalf("list status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+
+	syncRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-billing-sources/"+configured.Data.ID+"/sync", nil)
+	syncRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(syncRecorder, syncRequest)
+	if syncRecorder.Code != http.StatusOK || !bytes.Contains(syncRecorder.Body.Bytes(), []byte(`"status":"succeeded"`)) {
+		t.Fatalf("sync status=%d body=%s", syncRecorder.Code, syncRecorder.Body.String())
+	}
+
+	evidence := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-billing-sources/"+configured.Data.ID+"/evidence?limit=20", nil)
+	evidenceRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(evidenceRecorder, evidence)
+	if evidenceRecorder.Code != http.StatusOK || !bytes.Contains(evidenceRecorder.Body.Bytes(), []byte(`"amount_micros":9250000`)) || !bytes.Contains(evidenceRecorder.Body.Bytes(), []byte(`"scope":"total"`)) {
+		t.Fatalf("evidence status=%d body=%s", evidenceRecorder.Code, evidenceRecorder.Body.String())
+	}
+
+	staleBody := fmt.Sprintf(`{"provider_account_id":%q,"adapter_id":"sub2api_compatible","status":"disabled","automatic_sync_enabled":false,"sync_interval_seconds":3600,"version":1}`, account.ID)
+	stale := httptest.NewRequest(http.MethodPut, "/api/v1/admin/provider-billing-sources", bytes.NewBufferString(staleBody))
+	stale.Header.Set("Content-Type", "application/json")
+	staleRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(staleRecorder, stale)
+	if staleRecorder.Code != http.StatusConflict {
+		t.Fatalf("stale status=%d body=%s", staleRecorder.Code, staleRecorder.Body.String())
+	}
+
+	badRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-billing-sources/inspect", bytes.NewBufferString(`{"provider_account_id":"missing"}`))
+	badRequest.Header.Set("Content-Type", "application/json")
+	badRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(badRecorder, badRequest)
+	if badRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("bad status=%d body=%s", badRecorder.Code, badRecorder.Body.String())
+	}
+}
+
+func TestEffectivePricingDecisionEvaluationsEndpointReturnsEmptyHistory(t *testing.T) {
+	handler := newTestHandler(t, config.Config{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/effective-pricing/decisions/decision-missing/evaluations?limit=20", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte(`"data":[]`)) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfirmation(t *testing.T) {
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -29,6 +29,7 @@ var (
 	_ controlplane.DurableAIJobAdapterSelector = (*Service)(nil)
 	_ controlplane.DurableAIJobOutputReader    = (*Service)(nil)
 	_ controlplane.DirectAIProviderAdapter     = (*Service)(nil)
+	_ controlplane.DirectAIProviderReconciler  = (*Service)(nil)
 )
 
 func (s *Service) SelectDirectAIAdapter(ctx context.Context, provider controlplane.GatewayProvider, request gatewaycore.CanonicalRequest, artifactPolicy string) (string, bool, error) {
@@ -60,6 +61,16 @@ func (s *Service) DispatchDirectAI(ctx context.Context, provider controlplane.Ga
 
 func (s *Service) OpenDirectAIOutput(_ context.Context, _ controlplane.GatewayProvider, _ controlplane.AIOperation, _ controlplane.AIAttempt, _ gatewaycore.CanonicalRequest, result controlplane.ProviderDispatchResult, output controlplane.ProviderOutputDescriptor) (io.ReadCloser, error) {
 	return s.openBuiltinOpenAIImageOutput(result.Task.ProviderTaskID, output)
+}
+
+func (s *Service) ReconcileDirectAI(ctx context.Context, provider controlplane.GatewayProvider, operation controlplane.AIOperation, attempt controlplane.AIAttempt, intent controlplane.ProviderDispatchIntent, task controlplane.ProviderTaskReference) (controlplane.ProviderDispatchResult, error) {
+	request := gatewaycore.CanonicalRequest{
+		ClientRequestID: operation.ClientRequestID, Fingerprint: operation.RequestFingerprint,
+		IdempotencyKey: operation.IdempotencyKey, Protocol: gatewaycore.Protocol(operation.Protocol),
+		Operation: operation.Operation, Modality: operation.Modality, Lane: gatewaycore.LaneDirect, Model: operation.Model,
+	}
+	job := directAIJobSnapshot(operation, request)
+	return s.ReconcileProviderTask(ctx, provider, job, attempt, intent, task)
 }
 
 func directAIJobSnapshot(operation controlplane.AIOperation, request gatewaycore.CanonicalRequest) controlplane.AIJob {
@@ -240,9 +251,15 @@ func manifestSupportsProviderJob(manifest sidecarManifest, provider controlplane
 	modality := strings.ToLower(strings.TrimSpace(job.Modality))
 	operation := strings.ToLower(strings.TrimSpace(job.Operation))
 	for _, capability := range manifest.ProviderAdapters {
-		if containsString(capability.ProviderTypes, providerType) && containsString(capability.Modalities, modality) && containsString(capability.Operations, operation) {
-			return true
+		if !containsString(capability.ProviderTypes, providerType) || !containsString(capability.Modalities, modality) || !containsString(capability.Operations, operation) {
+			continue
 		}
+		// Older manifests did not declare artifact policy support. Preserve
+		// their behavior; a non-empty declaration is an explicit allowlist.
+		if len(capability.ArtifactPolicies) > 0 && !containsString(capability.ArtifactPolicies, strings.ToLower(strings.TrimSpace(job.ArtifactPolicy))) {
+			continue
+		}
+		return true
 	}
 	return false
 }

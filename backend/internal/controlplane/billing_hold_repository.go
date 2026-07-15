@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 const billingHoldSelectColumns = `id, operation_id, profile_scope, tenant_id, credential_id, credential_source,
 integration_id, principal_type, principal_id, external_subject_reference, request_fingerprint, status, version,
-reserved_amount_cents, settled_amount_cents, currency, price_snapshot_id, estimate_source, reason,
+reserved_amount_cents, reserved_usage_dimensions, settled_amount_cents, currency, price_snapshot_id, estimate_source, reason,
 budget_period_start, expires_at, created_at, updated_at, settled_at, released_at`
 
 type billingHoldScanner interface {
@@ -23,13 +24,18 @@ func scanBillingHold(scanner billingHoldScanner) (BillingHold, error) {
 	var hold BillingHold
 	var settledAt sql.NullTime
 	var releasedAt sql.NullTime
+	var reservedUsageJSON []byte
 	err := scanner.Scan(
 		&hold.ID, &hold.OperationID, &hold.ProfileScope, &hold.TenantID, &hold.CredentialID, &hold.CredentialSource,
 		&hold.IntegrationID, &hold.PrincipalType, &hold.PrincipalID, &hold.ExternalSubjectReference,
-		&hold.RequestFingerprint, &hold.Status, &hold.Version, &hold.ReservedAmountCents, &hold.SettledAmountCents,
+		&hold.RequestFingerprint, &hold.Status, &hold.Version, &hold.ReservedAmountCents, &reservedUsageJSON, &hold.SettledAmountCents,
 		&hold.Currency, &hold.PriceSnapshotID, &hold.EstimateSource, &hold.Reason, &hold.BudgetPeriodStart,
 		&hold.ExpiresAt, &hold.CreatedAt, &hold.UpdatedAt, &settledAt, &releasedAt,
 	)
+	if err != nil {
+		return BillingHold{}, err
+	}
+	hold.ReservedUsageDimensions, err = ParseUsageDimensionsJSON(string(reservedUsageJSON))
 	if err != nil {
 		return BillingHold{}, err
 	}
@@ -121,27 +127,33 @@ profile_scope=$1 AND tenant_id=$2 AND credential_source=$3 AND credential_id=$4 
 }
 
 func insertBillingHold(ctx context.Context, executor usageRecordExecutor, hold BillingHold) error {
-	_, err := executor.ExecContext(ctx, `
+	reservedUsageJSON, err := UsageDimensionsJSON(hold.ReservedUsageDimensions)
+	if err != nil {
+		return err
+	}
+	_, err = executor.ExecContext(ctx, `
 INSERT INTO billing_holds(
   id, operation_id, profile_scope, tenant_id, credential_id, credential_source, integration_id, principal_type,
   principal_id, external_subject_reference, request_fingerprint, status, version, reserved_amount_cents,
-  settled_amount_cents, currency, price_snapshot_id, estimate_source, reason, budget_period_start, expires_at,
+  reserved_usage_dimensions, settled_amount_cents, currency, price_snapshot_id, estimate_source, reason, budget_period_start, expires_at,
   created_at, updated_at, settled_at, released_at
 )
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULL,NULL)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20,$21,$22,$23,$24,NULL,NULL)
 `, hold.ID, hold.OperationID, hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.CredentialSource,
 		hold.IntegrationID, hold.PrincipalType, hold.PrincipalID, hold.ExternalSubjectReference, hold.RequestFingerprint,
-		hold.Status, hold.Version, hold.ReservedAmountCents, hold.SettledAmountCents, hold.Currency, hold.PriceSnapshotID,
+		hold.Status, hold.Version, hold.ReservedAmountCents, reservedUsageJSON, hold.SettledAmountCents, hold.Currency, hold.PriceSnapshotID,
 		hold.EstimateSource, hold.Reason, hold.BudgetPeriodStart, hold.ExpiresAt, hold.CreatedAt, hold.UpdatedAt)
 	return err
 }
 
 func enforceMemoryBillingHoldBudget(r *MemoryRepository, admission BillingHoldAdmission) error {
-	if admission.MonthlyBudgetCents <= 0 {
+	if !billingHoldAdmissionHasLimits(admission) {
 		return nil
 	}
 	hold := admission.Hold
 	exposure := 0
+	settledUsage := UsageDimensionTotals{}
+	activeUsage := UsageDimensionTotals{}
 	periodEnd := hold.BudgetPeriodStart.AddDate(0, 1, 0)
 	for _, entry := range r.billingLedgerEntries {
 		if entry.EntryType != BillingLedgerEntryTypeUsage || entry.Status != BillingLedgerStatusApplied || entry.CreatedAt.Before(hold.BudgetPeriodStart) || !entry.CreatedAt.Before(periodEnd) {
@@ -152,15 +164,25 @@ func enforceMemoryBillingHoldBudget(r *MemoryRepository, admission BillingHoldAd
 			exposure += nonNegative(entry.AmountCents)
 		}
 	}
+	for _, record := range r.usageRecords {
+		if record.CreatedAt.Before(hold.BudgetPeriodStart) || !record.CreatedAt.Before(periodEnd) {
+			continue
+		}
+		operation, found := r.aiOperations[record.OperationID]
+		if found && sameBillingCredentialScope(operation.ProfileScope, operation.TenantID, operation.CredentialID, hold) {
+			settledUsage = addUsageDimensionTotals(settledUsage, UsageDimensionsTotals(record.UsageDimensions))
+		}
+	}
 	for _, current := range r.billingHolds {
 		if billingHoldCountsAgainstBudget(current.Status) && current.BudgetPeriodStart.Equal(hold.BudgetPeriodStart) && sameBillingCredentialScope(current.ProfileScope, current.TenantID, current.CredentialID, hold) {
 			exposure += nonNegative(current.ReservedAmountCents)
+			activeUsage = addUsageDimensionTotals(activeUsage, UsageDimensionsTotals(current.ReservedUsageDimensions))
 		}
 	}
-	if exposure+hold.ReservedAmountCents > admission.MonthlyBudgetCents {
+	if admission.MonthlyBudgetCents > 0 && exposure+hold.ReservedAmountCents > admission.MonthlyBudgetCents {
 		return ErrBillingHoldBudgetExceeded
 	}
-	return nil
+	return enforceUsageDimensionLimits(admission, addUsageDimensionTotals(settledUsage, activeUsage))
 }
 
 func sameBillingCredentialScope(profileScope, tenantID, credentialID string, hold BillingHold) bool {
@@ -168,7 +190,7 @@ func sameBillingCredentialScope(profileScope, tenantID, credentialID string, hol
 }
 
 func enforcePostgresBillingHoldBudget(ctx context.Context, tx *sql.Tx, admission BillingHoldAdmission) error {
-	if admission.MonthlyBudgetCents <= 0 {
+	if !billingHoldAdmissionHasLimits(admission) {
 		return nil
 	}
 	hold := admission.Hold
@@ -198,10 +220,77 @@ SELECT
 		hold.BudgetPeriodStart, periodEnd, BillingHoldStatusReserved, BillingHoldStatusCommitted, BillingHoldStatusDisputed).Scan(&settled, &active); err != nil {
 		return err
 	}
-	if settled+active+hold.ReservedAmountCents > admission.MonthlyBudgetCents {
+	if admission.MonthlyBudgetCents > 0 && settled+active+hold.ReservedAmountCents > admission.MonthlyBudgetCents {
 		return ErrBillingHoldBudgetExceeded
 	}
+	var settledImages, settledVideoMS, settledAudioMS int64
+	if err := tx.QueryRowContext(ctx, `
+SELECT
+  COALESCE(SUM(COALESCE((record.usage_dimensions->'output_images'->>'quantity')::BIGINT, 0)), 0),
+  COALESCE(SUM(COALESCE((record.usage_dimensions->'input_video_milliseconds'->>'quantity')::BIGINT, 0) + COALESCE((record.usage_dimensions->'output_video_milliseconds'->>'quantity')::BIGINT, 0)), 0),
+  COALESCE(SUM(COALESCE((record.usage_dimensions->'input_audio_milliseconds'->>'quantity')::BIGINT, 0) + COALESCE((record.usage_dimensions->'output_audio_milliseconds'->>'quantity')::BIGINT, 0)), 0)
+FROM usage_records record
+JOIN ai_operations operation ON operation.id=record.operation_id
+WHERE operation.profile_scope=$1 AND operation.tenant_id=$2 AND operation.credential_id=$3
+  AND record.created_at >= $4 AND record.created_at < $5
+`, hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.BudgetPeriodStart, periodEnd).Scan(&settledImages, &settledVideoMS, &settledAudioMS); err != nil {
+		return err
+	}
+	var activeImages, activeVideoMS, activeAudioMS int64
+	if err := tx.QueryRowContext(ctx, `
+SELECT
+  COALESCE(SUM(COALESCE((reserved_usage_dimensions->'output_images'->>'quantity')::BIGINT, 0)), 0),
+  COALESCE(SUM(COALESCE((reserved_usage_dimensions->'input_video_milliseconds'->>'quantity')::BIGINT, 0) + COALESCE((reserved_usage_dimensions->'output_video_milliseconds'->>'quantity')::BIGINT, 0)), 0),
+  COALESCE(SUM(COALESCE((reserved_usage_dimensions->'input_audio_milliseconds'->>'quantity')::BIGINT, 0) + COALESCE((reserved_usage_dimensions->'output_audio_milliseconds'->>'quantity')::BIGINT, 0)), 0)
+FROM billing_holds
+WHERE profile_scope=$1 AND tenant_id=$2 AND credential_id=$3 AND budget_period_start=$4
+  AND status IN ($5,$6,$7)
+`, hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.BudgetPeriodStart,
+		BillingHoldStatusReserved, BillingHoldStatusCommitted, BillingHoldStatusDisputed).Scan(&activeImages, &activeVideoMS, &activeAudioMS); err != nil {
+		return err
+	}
+	return enforceUsageDimensionLimits(admission, UsageDimensionTotals{
+		OutputImages:      saturatingUsageAdd(settledImages, activeImages),
+		VideoMilliseconds: saturatingUsageAdd(settledVideoMS, activeVideoMS),
+		AudioMilliseconds: saturatingUsageAdd(settledAudioMS, activeAudioMS),
+	})
+}
+
+func billingHoldAdmissionHasLimits(admission BillingHoldAdmission) bool {
+	return admission.MonthlyBudgetCents > 0 || admission.MonthlyImageLimit > 0 ||
+		admission.MonthlyVideoSecondsLimit > 0 || admission.MonthlyAudioSecondsLimit > 0
+}
+
+func enforceUsageDimensionLimits(admission BillingHoldAdmission, current UsageDimensionTotals) error {
+	requested := UsageDimensionsTotals(admission.Hold.ReservedUsageDimensions)
+	if admission.MonthlyImageLimit > 0 && saturatingUsageAdd(current.OutputImages, requested.OutputImages) > int64(admission.MonthlyImageLimit) {
+		return ErrBillingHoldImageQuotaExceeded
+	}
+	if admission.MonthlyVideoSecondsLimit > 0 && saturatingUsageAdd(current.VideoMilliseconds, requested.VideoMilliseconds) > usageSecondsLimitMilliseconds(admission.MonthlyVideoSecondsLimit) {
+		return ErrBillingHoldVideoQuotaExceeded
+	}
+	if admission.MonthlyAudioSecondsLimit > 0 && saturatingUsageAdd(current.AudioMilliseconds, requested.AudioMilliseconds) > usageSecondsLimitMilliseconds(admission.MonthlyAudioSecondsLimit) {
+		return ErrBillingHoldAudioQuotaExceeded
+	}
 	return nil
+}
+
+func addUsageDimensionTotals(left, right UsageDimensionTotals) UsageDimensionTotals {
+	return UsageDimensionTotals{
+		OutputImages:      saturatingUsageAdd(left.OutputImages, right.OutputImages),
+		VideoMilliseconds: saturatingUsageAdd(left.VideoMilliseconds, right.VideoMilliseconds),
+		AudioMilliseconds: saturatingUsageAdd(left.AudioMilliseconds, right.AudioMilliseconds),
+	}
+}
+
+func usageSecondsLimitMilliseconds(seconds int) int64 {
+	if seconds <= 0 {
+		return 0
+	}
+	if int64(seconds) > math.MaxInt64/1000 {
+		return math.MaxInt64
+	}
+	return int64(seconds) * 1000
 }
 
 func memoryBillingHoldForOperation(holds map[string]BillingHold, operationID string) (BillingHold, bool) {

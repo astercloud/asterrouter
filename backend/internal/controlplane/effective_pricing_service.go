@@ -423,6 +423,15 @@ func (s *Service) UpdateEffectivePricingPolicy(ctx context.Context, actor string
 	if request.MinAffinityImprovement == 0 {
 		request.MinAffinityImprovement = 0.10
 	}
+	if request.EvaluationIntervalMinutes == 0 {
+		request.EvaluationIntervalMinutes = 60
+	}
+	if request.PromotionWindowCount == 0 {
+		request.PromotionWindowCount = 3
+	}
+	if request.DegradationWindowCount == 0 {
+		request.DegradationWindowCount = 2
+	}
 	if !oneOf(request.Mode, EffectivePricingModeObserveOnly, EffectivePricingModeRecommend, EffectivePricingModeCanary, EffectivePricingModeBalanced, EffectivePricingModeCostFirst, EffectivePricingModeFixedRoute) {
 		return EffectivePricingPolicy{}, errors.New("invalid effective pricing mode")
 	}
@@ -436,6 +445,9 @@ func (s *Service) UpdateEffectivePricingPolicy(ctx context.Context, actor string
 	}
 	if request.SupplierAffinityTTLSeconds < 1 || request.AccountAffinityTTLSeconds < 1 || request.ProbeDailyTokenBudget < 0 || request.ProbeDailyCostBudgetMicros < 0 || request.ProbeCooldownSeconds < 0 {
 		return EffectivePricingPolicy{}, errors.New("invalid affinity or probe limits")
+	}
+	if request.EvaluationIntervalMinutes < 1 || request.EvaluationIntervalMinutes > 24*60 || request.PromotionWindowCount < 1 || request.PromotionWindowCount > 24 || request.DegradationWindowCount < 1 || request.DegradationWindowCount > 24 {
+		return EffectivePricingPolicy{}, errors.New("invalid effective pricing evaluation interval or consecutive window count")
 	}
 	now := s.nowUTC()
 	existing, found, err := s.repo.GetEffectivePricingPolicy(ctx)
@@ -454,7 +466,10 @@ func (s *Service) UpdateEffectivePricingPolicy(ctx context.Context, actor string
 		MaxCacheTiebreakCostRegression: request.MaxCacheTiebreakCostRegression,
 		MaxErrorRateRegression:         request.MaxErrorRateRegression, MaxP95LatencyRegression: request.MaxP95LatencyRegression,
 		CanaryPercent: request.CanaryPercent, SupplierAffinityTTLSeconds: request.SupplierAffinityTTLSeconds,
-		AccountAffinityTTLSeconds: request.AccountAffinityTTLSeconds, ProbeEnabled: request.ProbeEnabled,
+		AccountAffinityTTLSeconds: request.AccountAffinityTTLSeconds,
+		AutomaticActionsEnabled:   request.AutomaticActionsEnabled, EvaluationIntervalMinutes: request.EvaluationIntervalMinutes,
+		PromotionWindowCount: request.PromotionWindowCount, DegradationWindowCount: request.DegradationWindowCount,
+		ProbeEnabled:          request.ProbeEnabled,
 		ProbeDailyTokenBudget: request.ProbeDailyTokenBudget, ProbeDailyCostBudgetMicros: request.ProbeDailyCostBudgetMicros,
 		ProbeCooldownSeconds: request.ProbeCooldownSeconds, UpdatedBy: actor, CreatedAt: createdAt, UpdatedAt: now,
 	}
@@ -474,6 +489,7 @@ func defaultEffectivePricingPolicy(now time.Time) EffectivePricingPolicy {
 		MinCacheHitRateImprovement: 0.10, MinAffinityImprovement: 0.10, MaxCacheTiebreakCostRegression: 0.02,
 		MaxErrorRateRegression: 0.005, MaxP95LatencyRegression: 0.2, CanaryPercent: 5,
 		SupplierAffinityTTLSeconds: int(defaultSupplierAffinityTTL / time.Second), AccountAffinityTTLSeconds: int(defaultAccountAffinityTTL / time.Second),
+		EvaluationIntervalMinutes: 60, PromotionWindowCount: 3, DegradationWindowCount: 2,
 		ProbeDailyTokenBudget: 100_000, ProbeDailyCostBudgetMicros: 10_000_000, ProbeCooldownSeconds: 3600,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -493,6 +509,10 @@ func (s *Service) EffectivePricingReport(ctx context.Context, query EffectivePri
 	}
 	windowEnd := s.nowUTC()
 	windowStart := windowEnd.Add(-time.Duration(windowHours) * time.Hour)
+	return s.effectivePricingReportForWindow(ctx, query, policy, windowStart, windowEnd)
+}
+
+func (s *Service) effectivePricingReportForWindow(ctx context.Context, query EffectivePricingReportQuery, policy EffectivePricingPolicy, windowStart, windowEnd time.Time) (EffectivePricingReport, error) {
 	aggregates, err := s.repo.SummarizeEffectivePricingUsage(ctx, windowStart, windowEnd)
 	if err != nil {
 		return EffectivePricingReport{}, err

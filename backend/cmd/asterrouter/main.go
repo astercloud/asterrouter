@@ -209,6 +209,12 @@ func main() {
 	go controlService.RunArtifactLifecycleScheduler(monitorCtx, 30*time.Second, 100, func(err error) {
 		log.Printf("artifact lifecycle scheduler: %v", err)
 	})
+	go controlService.RunEffectivePricingDecisionMonitor(monitorCtx, time.Minute, func(err error) {
+		log.Printf("effective pricing decision monitor: %v", err)
+	})
+	go controlService.RunProviderBillingSyncScheduler(monitorCtx, time.Minute, func(err error) {
+		log.Printf("provider billing sync scheduler: %v", err)
+	})
 	pluginService := plugins.NewServiceWithOptions(pluginRepo, plugins.ServiceOptions{
 		SecretKey: cfg.SecretKey,
 		OfficialCatalog: plugins.OfficialCatalogConfig{

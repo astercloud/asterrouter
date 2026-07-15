@@ -25,9 +25,10 @@ type sidecarManifest struct {
 }
 
 type providerAdapterManifestCapability struct {
-	ProviderTypes []string `json:"provider_types"`
-	Modalities    []string `json:"modalities"`
-	Operations    []string `json:"operations"`
+	ProviderTypes    []string `json:"provider_types"`
+	Modalities       []string `json:"modalities"`
+	Operations       []string `json:"operations"`
+	ArtifactPolicies []string `json:"artifact_policies,omitempty"`
 }
 
 func inspectPackageRuntime(cachePath string) (string, bool, error) {
@@ -205,10 +206,11 @@ func readSidecarManifest(path string) (sidecarManifest, error) {
 		capability.ProviderTypes = cleanLowerStringList(capability.ProviderTypes)
 		capability.Modalities = cleanLowerStringList(capability.Modalities)
 		capability.Operations = cleanLowerStringList(capability.Operations)
+		capability.ArtifactPolicies = cleanLowerStringList(capability.ArtifactPolicies)
 		if len(capability.ProviderTypes) == 0 || len(capability.Modalities) == 0 || len(capability.Operations) == 0 {
 			return sidecarManifest{}, fmt.Errorf("plugin manifest contains an incomplete provider adapter capability")
 		}
-		for _, values := range [][]string{capability.ProviderTypes, capability.Modalities, capability.Operations} {
+		for _, values := range [][]string{capability.ProviderTypes, capability.Modalities, capability.Operations, capability.ArtifactPolicies} {
 			for _, value := range values {
 				if !validProviderAdapterCapabilityToken(value) {
 					return sidecarManifest{}, fmt.Errorf("plugin manifest contains an invalid provider adapter capability")

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 )
@@ -271,6 +272,14 @@ func CanonicalizeDurableJob(raw []byte, header http.Header) (CanonicalRequest, e
 	normalizedObject["model"] = payload.Model
 	normalizedObject["operation"] = payload.Operation
 	normalizedObject["modality"] = payload.Modality
+	input, ok := normalizedObject["input"].(map[string]any)
+	if !ok {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	outputCount, videoDurationMS, audioDurationMS, err := canonicalDurableMediaEstimate(payload.Operation, payload.Modality, input)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
 	canonicalPayload, err := json.Marshal(normalized)
 	if err != nil {
 		return CanonicalRequest{}, ErrInvalidCanonicalRequest
@@ -286,8 +295,155 @@ func CanonicalizeDurableJob(raw []byte, header http.Header) (CanonicalRequest, e
 		Lane:            LaneDurable,
 		Model:           payload.Model,
 		IdempotencyKey:  idempotencyKey,
+		OutputCount:     outputCount,
+		VideoDurationMS: videoDurationMS,
+		AudioDurationMS: audioDurationMS,
 		Payload:         canonicalPayload,
 	}, nil
+}
+
+// CanonicalizeOpenAIMediaJob adapts the public video/audio generation entry
+// points to the same durable job contract used by /v1/jobs. The provider
+// adapter still receives the canonical payload; the HTTP surface does not
+// create a second queue or billing path.
+func CanonicalizeOpenAIMediaJob(raw []byte, header http.Header, modality, operation string) (CanonicalRequest, error) {
+	modality = strings.ToLower(strings.TrimSpace(modality))
+	operation = strings.ToLower(strings.TrimSpace(operation))
+	if !oneOfCanonicalMedia(modality, operation) {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	var payload map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload == nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	model, _ := payload["model"].(string)
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return CanonicalRequest{}, fmt.Errorf("%w: model is required", ErrInvalidCanonicalRequest)
+	}
+	if value, exists := payload["stream"]; exists {
+		stream, ok := value.(bool)
+		if !ok || stream {
+			return CanonicalRequest{}, fmt.Errorf("%w: streaming media requests must use the job event endpoint", ErrInvalidCanonicalRequest)
+		}
+	}
+	if value, exists := payload["response_mode"]; exists {
+		responseMode, ok := value.(string)
+		if !ok || (strings.TrimSpace(responseMode) != "" && strings.ToLower(strings.TrimSpace(responseMode)) != "async") {
+			return CanonicalRequest{}, fmt.Errorf("%w: media generation entry points only support response_mode=async", ErrInvalidCanonicalRequest)
+		}
+	}
+	input, ok := payload["input"].(map[string]any)
+	if !ok {
+		input = make(map[string]any, len(payload))
+		for key, value := range payload {
+			switch key {
+			case "model", "stream", "response_mode", "delivery_mode":
+				continue
+			default:
+				input[key] = value
+			}
+		}
+	}
+	if len(input) == 0 {
+		return CanonicalRequest{}, fmt.Errorf("%w: media input is required", ErrInvalidCanonicalRequest)
+	}
+	outputCount, videoDurationMS, audioDurationMS, err := canonicalDurableMediaEstimate(operation, modality, input)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidCanonicalRequest)
+	}
+	canonicalPayload, err := json.Marshal(map[string]any{
+		"model": model, "operation": operation, "modality": modality, "input": input,
+	})
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(canonicalPayload)
+	return CanonicalRequest{
+		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
+		Protocol: ProtocolAsterJobs, Operation: operation, Modality: modality, Lane: LaneDurable,
+		Model: model, IdempotencyKey: idempotencyKey, OutputCount: outputCount,
+		VideoDurationMS: videoDurationMS, AudioDurationMS: audioDurationMS, Payload: canonicalPayload,
+	}, nil
+}
+
+func oneOfCanonicalMedia(modality, operation string) bool {
+	return (modality == "video" && operation == "video_generation") || (modality == "audio" && operation == "audio_generation")
+}
+
+func canonicalDurableMediaEstimate(operation, modality string, input map[string]any) (int, int64, int64, error) {
+	outputCount := 0
+	if modality == "image" && operation == "image_generation" {
+		outputCount = 1
+		countSeen := false
+		for _, key := range []string{"n", "count"} {
+			value, exists := input[key]
+			if !exists {
+				continue
+			}
+			number, ok := value.(float64)
+			if !ok || number != math.Trunc(number) || number < 1 || number > 100 {
+				return 0, 0, 0, fmt.Errorf("%w: image output count must be an integer from 1 to 100", ErrInvalidCanonicalRequest)
+			}
+			if countSeen && outputCount != int(number) {
+				return 0, 0, 0, fmt.Errorf("%w: conflicting image output counts", ErrInvalidCanonicalRequest)
+			}
+			outputCount = int(number)
+			countSeen = true
+		}
+	}
+	videoDurationMS := int64(0)
+	audioDurationMS := int64(0)
+	if modality == "video" {
+		value, err := canonicalDurationMilliseconds(input)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		videoDurationMS = value
+	}
+	if modality == "audio" {
+		value, err := canonicalDurationMilliseconds(input)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		audioDurationMS = value
+	}
+	return outputCount, videoDurationMS, audioDurationMS, nil
+}
+
+func canonicalDurationMilliseconds(input map[string]any) (int64, error) {
+	const maximumDurationMilliseconds = int64(7 * 24 * 60 * 60 * 1000)
+	var durationMS int64
+	for _, candidate := range []struct {
+		key        string
+		multiplier float64
+	}{{key: "duration_ms", multiplier: 1}, {key: "duration_seconds", multiplier: 1000}} {
+		value, exists := input[candidate.key]
+		if !exists {
+			continue
+		}
+		number, ok := value.(float64)
+		if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
+			return 0, fmt.Errorf("%w: media duration is invalid", ErrInvalidCanonicalRequest)
+		}
+		milliseconds := number * candidate.multiplier
+		if milliseconds != math.Trunc(milliseconds) || milliseconds < 1 || milliseconds > float64(maximumDurationMilliseconds) {
+			return 0, fmt.Errorf("%w: media duration is invalid", ErrInvalidCanonicalRequest)
+		}
+		if durationMS != 0 && durationMS != int64(milliseconds) {
+			return 0, fmt.Errorf("%w: conflicting media durations", ErrInvalidCanonicalRequest)
+		}
+		durationMS = int64(milliseconds)
+	}
+	return durationMS, nil
 }
 
 func canonicalRequestID(header http.Header) (string, error) {

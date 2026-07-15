@@ -48,7 +48,7 @@ func TestPlatformUsageSinkEnqueuesAndDeliversSignedUsageWithoutSensitiveContent(
 		t.Fatalf("CreatePlatformUsageSink() response=%+v", created)
 	}
 	auth := GatewayAuthContext{APIKey: APIKeyRecord{ID: "synthetic-subject", Fingerprint: "subject-fp", ProfileScope: ProfileScopePlatform, PlatformTenantID: identity.tenant.ID, GatewayPrincipalID: identity.principal.ID}, PlatformTenant: &identity.tenant, GatewayPrincipal: &identity.principal, ExternalAuthIntegration: &integration.Record, ExternalSubjectReference: "opaque-subject"}
-	if err := svc.RecordGatewayUsage(ctx, auth, GatewayUsageInput{Model: "model-a", Status: "forwarded", InputTokens: 12, OutputTokens: 8, CostCents: 3}); err != nil {
+	if err := svc.RecordGatewayUsage(ctx, auth, GatewayUsageInput{Model: "model-a", Status: "forwarded", InputTokens: 12, OutputTokens: 8, CostCents: 3, UsageDimensions: UsageDimensions{UsageDimensionOutputImages: {Quantity: 2, Unit: UsageUnitCount, Source: "core_artifact", Confidence: UsageConfidenceObserved}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.DeliverDuePlatformUsage(ctx, 10); err != nil {
@@ -65,9 +65,54 @@ func TestPlatformUsageSinkEnqueuesAndDeliversSignedUsageWithoutSensitiveContent(
 	if strings.Contains(receivedBody, integration.Secret) || strings.Contains(receivedBody, "prompt") || strings.Contains(receivedBody, "provider") {
 		t.Fatalf("delivery leaked sensitive content: %s", receivedBody)
 	}
+	var received platformUsageEventPayload
+	if err := json.Unmarshal([]byte(receivedBody), &received); err != nil || received.UsageDimensions[UsageDimensionOutputImages].Quantity != 2 {
+		t.Fatalf("received usage dimensions=%+v err=%v body=%s", received.UsageDimensions, err, receivedBody)
+	}
 	events, err := svc.ListPlatformUsageDeliveryEvents(ctx, PlatformUsageDeliveryQuery{SinkID: created.Record.ID})
 	if err != nil || len(events) != 1 || events[0].Status != PlatformUsageDeliveryStatusDelivered || events[0].DeliveredAt == nil {
 		t.Fatalf("delivered events=%+v err=%v", events, err)
+	}
+}
+
+func TestPlatformUsageSinkPreservesProviderTerminalFailureDimensions(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1", "usage-sink-terminal-secret")
+	svc.now = func() time.Time { return time.Date(2026, time.July, 14, 14, 0, 0, 0, time.UTC) }
+	identity := createExternalAuthIdentity(t, ctx, svc)
+	integration, err := svc.CreateExternalAuthIntegration(ctx, "operator", ExternalAuthIntegrationRequest{
+		TenantID: identity.tenant.ID, GatewayPrincipalID: identity.principal.ID, Name: "Terminal usage product",
+		KeyID: "terminal-usage-v1", Audience: "https://gateway.example/v1", ModelAllowlist: []string{"model-a"},
+		QPSLimit: 10, MonthlyTokenLimit: 1000, MaxTTLSeconds: 300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := svc.CreatePlatformUsageSink(ctx, "operator", PlatformUsageSinkRequest{
+		TenantID: identity.tenant.ID, ExternalAuthIntegrationID: integration.Record.ID,
+		Name: "Terminal billing callback", EndpointURL: "https://billing.example/terminal", MaxAttempts: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := GatewayAuthContext{
+		APIKey:         APIKeyRecord{ID: "terminal-subject", Fingerprint: "terminal-fp", ProfileScope: ProfileScopePlatform, PlatformTenantID: identity.tenant.ID, GatewayPrincipalID: identity.principal.ID},
+		PlatformTenant: &identity.tenant, GatewayPrincipal: &identity.principal,
+		ExternalAuthIntegration: &integration.Record, ExternalSubjectReference: "opaque-terminal-subject",
+	}
+	if err := svc.RecordGatewayUsage(ctx, auth, GatewayUsageInput{
+		Model: "model-a", UsageSource: "provider_final", Status: "upstream_error", ErrorType: "provider_failed",
+		UsageDimensions: UsageDimensions{UsageDimensionOutputImages: {Quantity: 2, Unit: UsageUnitCount, Source: "adapter", Confidence: UsageConfidenceReported}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := svc.ListPlatformUsageDeliveryEvents(ctx, PlatformUsageDeliveryQuery{SinkID: sink.Record.ID})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("terminal usage events=%+v err=%v", events, err)
+	}
+	var payload platformUsageEventPayload
+	if err := json.Unmarshal([]byte(events[0].PayloadJSON), &payload); err != nil || payload.Status != "upstream_error" || payload.UsageDimensions[UsageDimensionOutputImages].Quantity != 2 {
+		t.Fatalf("terminal usage payload=%+v err=%v raw=%s", payload, err, events[0].PayloadJSON)
 	}
 }
 
@@ -99,7 +144,7 @@ func TestPlatformUsageSinkLifecycleAndDurableEvents(t *testing.T) {
 		APIKey:         APIKeyRecord{ID: "synthetic-subject", Fingerprint: "subject-fp", ProfileScope: ProfileScopePlatform, PlatformTenantID: identity.tenant.ID, GatewayPrincipalID: identity.principal.ID, QPSLimit: 1, MonthlyTokenLimit: 1},
 		PlatformTenant: &identity.tenant, GatewayPrincipal: &identity.principal, ExternalAuthIntegration: &integration.Record, ExternalSubjectReference: "opaque-subject",
 	}
-	if err := svc.RecordGatewayUsage(ctx, auth, GatewayUsageInput{Model: "model-a", Status: "forwarded", InputTokens: 12, OutputTokens: 8, CostCents: 3}); err != nil {
+	if err := svc.RecordGatewayUsage(ctx, auth, GatewayUsageInput{Model: "model-a", Status: "forwarded", InputTokens: 12, OutputTokens: 8, CostCents: 3, UsageDimensions: UsageDimensions{UsageDimensionOutputAudioMilliseconds: {Quantity: 1500, Unit: UsageUnitMillisecond, Source: "provider", Confidence: UsageConfidenceReported}}}); err != nil {
 		t.Fatal(err)
 	}
 	events, err := svc.ListPlatformUsageDeliveryEvents(ctx, PlatformUsageDeliveryQuery{SinkID: sink.Record.ID})
@@ -107,7 +152,7 @@ func TestPlatformUsageSinkLifecycleAndDurableEvents(t *testing.T) {
 		t.Fatalf("usage events=%+v err=%v", events, err)
 	}
 	var payload platformUsageEventPayload
-	if err := json.Unmarshal([]byte(events[0].PayloadJSON), &payload); err != nil || payload.ExternalSubjectRef != "opaque-subject" || payload.TenantID != identity.tenant.ID || payload.IntegrationID != integration.Record.ID || payload.InputTokens != 12 || payload.OutputTokens != 8 || strings.Contains(events[0].PayloadJSON, integration.Secret) {
+	if err := json.Unmarshal([]byte(events[0].PayloadJSON), &payload); err != nil || payload.ExternalSubjectRef != "opaque-subject" || payload.TenantID != identity.tenant.ID || payload.IntegrationID != integration.Record.ID || payload.InputTokens != 12 || payload.OutputTokens != 8 || payload.UsageDimensions[UsageDimensionOutputAudioMilliseconds].Quantity != 1500 || strings.Contains(events[0].PayloadJSON, integration.Secret) {
 		t.Fatalf("usage payload=%s parsed=%+v err=%v", events[0].PayloadJSON, payload, err)
 	}
 

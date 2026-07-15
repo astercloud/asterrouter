@@ -80,6 +80,75 @@ func TestGatewayDurableJobLifecycleAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestGatewayMediaGenerationRoutesUseDurableJobContract(t *testing.T) {
+	handler, control := newTestRuntime(t, config.Config{})
+	for _, test := range []struct {
+		path      string
+		model     string
+		modality  string
+		operation string
+		body      string
+		idem      string
+	}{
+		{path: "/v1/videos/generations", model: "public-video", modality: controlplane.GatewayModalityVideo, operation: controlplane.GatewayOperationVideoGeneration, body: `{"model":"public-video","prompt":"synthetic","duration_seconds":2}`, idem: "video-route-idem"},
+		{path: "/v1/audio/generations", model: "public-audio", modality: controlplane.GatewayModalityAudio, operation: controlplane.GatewayOperationAudioGeneration, body: `{"model":"public-audio","prompt":"synthetic","duration_seconds":1}`, idem: "audio-route-idem"},
+	} {
+		t.Run(test.modality, func(t *testing.T) {
+			if _, err := control.CreateGatewayModel(context.Background(), "test", controlplane.GatewayModelRequest{
+				ModelID: test.model, Name: test.modality, Modality: test.modality, Status: controlplane.GatewayModelStatusActive,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			keyRequest := controlplane.APIKeyCreateRequest{
+				Name: "media route " + test.modality, ModelAllowlist: []string{test.model},
+				Scopes:            []string{controlplane.GatewayScopeInvoke, controlplane.GatewayScopeJobsRead, controlplane.GatewayScopeJobsCancel},
+				AllowedModalities: []string{test.modality}, AllowedOperations: []string{test.operation},
+				LanePolicy: controlplane.GatewayLanePolicyDurableOnly, ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
+			}
+			key, err := control.CreateAPIKey(context.Background(), "test", keyRequest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := performGatewayJobRequest(handler, http.MethodPost, test.path, key.Key, test.idem, test.body)
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			var job publicAIJobResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
+				t.Fatal(err)
+			}
+			if job.Capability.Modality != test.modality || job.Capability.Operation != test.operation || job.Status != controlplane.AIJobStatusQueued {
+				t.Fatalf("job=%+v", job)
+			}
+		})
+	}
+}
+
+func TestGatewayMediaGenerationRouteFailsClosedWithoutAdapter(t *testing.T) {
+	handler, control := newTestRuntimeWithDurableAdmission(t, config.Config{}, nil)
+	if _, err := control.CreateGatewayModel(context.Background(), "test", controlplane.GatewayModelRequest{
+		ModelID: "unavailable-video", Name: "Unavailable video", Modality: controlplane.GatewayModalityVideo, Status: controlplane.GatewayModelStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := control.CreateAPIKey(context.Background(), "test", controlplane.APIKeyCreateRequest{
+		Name: "unavailable video", ModelAllowlist: []string{"unavailable-video"}, Scopes: []string{controlplane.GatewayScopeInvoke},
+		AllowedModalities: []string{controlplane.GatewayModalityVideo}, AllowedOperations: []string{controlplane.GatewayOperationVideoGeneration},
+		LanePolicy: controlplane.GatewayLanePolicyDurableOnly, ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := performGatewayJobRequest(handler, http.MethodPost, "/v1/videos/generations", key.Key, "unavailable-video-idem", `{"model":"unavailable-video","prompt":"synthetic"}`)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "unsupported_capability") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	jobs, err := control.ClaimReadyAIJobs(context.Background(), "media-fail-closed", time.Minute, 1)
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("jobs=%+v err=%v", jobs, err)
+	}
+}
+
 func TestGatewayDurableJobQueueBackpressure(t *testing.T) {
 	handler, control := newTestRuntime(t, config.Config{})
 	if _, err := control.CreateGatewayModel(context.Background(), "test", controlplane.GatewayModelRequest{

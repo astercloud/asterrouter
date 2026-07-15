@@ -311,6 +311,29 @@ func (s *Service) AIJobEvents(ctx context.Context, jobID string) ([]AIJobEvent, 
 	return s.repo.ListAIJobEvents(ctx, strings.TrimSpace(jobID))
 }
 
+func (s *Service) RecordAIJobProgress(ctx context.Context, job AIJob, attempt AIAttempt, observation ProviderProgressObservation) (AIJobProgressEvent, bool, error) {
+	stage := strings.ToLower(strings.TrimSpace(observation.Stage))
+	event := AIJobProgressEvent{
+		ID: aiJobProgressEventID(attempt.ID, observation.Sequence), JobID: job.ID, AttemptID: attempt.ID,
+		ProviderTaskID: strings.TrimSpace(attempt.ProviderTaskID), ProviderSequence: observation.Sequence,
+		Percent: observation.Percent, Stage: stage, CreatedAt: s.nowUTC(),
+	}
+	return s.repo.AppendAIJobProgressEvent(ctx, event)
+}
+
+func (s *Service) AIJobProgressEvents(ctx context.Context, jobID string) ([]AIJobProgressEvent, error) {
+	return s.repo.ListAIJobProgressEvents(ctx, strings.TrimSpace(jobID))
+}
+
+func (s *Service) AIJobProgressEventsForAuth(ctx context.Context, auth gatewaycore.CanonicalAuthContext, jobID string) ([]AIJobProgressEvent, bool, error) {
+	job, found, err := s.repo.FindOwnedAIJob(ctx, strings.TrimSpace(jobID), aiJobOwnerFromAuth(auth))
+	if err != nil || !found {
+		return nil, found, err
+	}
+	events, err := s.repo.ListAIJobProgressEvents(ctx, job.ID)
+	return events, err == nil, err
+}
+
 func aiJobOwnerFromAuth(auth gatewaycore.CanonicalAuthContext) AIJobOwner {
 	return AIJobOwner{
 		ProfileScope: strings.TrimSpace(auth.ProfileScope), TenantID: strings.TrimSpace(auth.TenantID),

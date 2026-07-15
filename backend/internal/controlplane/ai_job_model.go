@@ -35,6 +35,7 @@ const (
 	AIJobEventUnknown         = "job.unknown"
 	AIJobEventExpired         = "job.expired"
 	AIJobEventLeaseReassigned = "job.lease.reassigned"
+	AIJobEventProgress        = "job.progress"
 	AIJobOutboxAggregate      = "ai_job"
 	AIJobDefaultTTL           = 24 * time.Hour
 	AIJobDefaultPollAfter     = 2

@@ -214,6 +214,113 @@ func TestDurableBillingHoldAdmissionAndQueuedCancellationAreAtomic(t *testing.T)
 	})
 }
 
+func TestBillingHoldMediaQuotaReservationAndSettlement(t *testing.T) {
+	forEachBillingHoldRepository(t, func(t *testing.T, repo Repository) {
+		ctx := context.Background()
+		base := time.Date(2026, time.July, 15, 11, 0, 0, 0, time.UTC)
+		svc := NewService(repo, "/v1", "media-quota-secret")
+		svc.now = func() time.Time { return base }
+		auth := billingHoldTestAuth("tenant-media", "credential-media", 0)
+		auth.Limits.MonthlyImageLimit = 2
+
+		requests := []gatewaycore.CanonicalRequest{billingHoldImageRequest("concurrent-a", 2), billingHoldImageRequest("concurrent-b", 2)}
+		var created atomic.Int32
+		var rejected atomic.Int32
+		var operationsMu sync.Mutex
+		operations := []AIOperation{}
+		var wait sync.WaitGroup
+		for _, request := range requests {
+			request := request
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				operation, wasCreated, err := svc.BeginCanonicalOperation(ctx, auth, request)
+				switch {
+				case err == nil && wasCreated:
+					created.Add(1)
+					operationsMu.Lock()
+					operations = append(operations, operation)
+					operationsMu.Unlock()
+				case errors.Is(err, ErrBillingHoldImageQuotaExceeded):
+					rejected.Add(1)
+				default:
+					t.Errorf("unexpected concurrent quota result: created=%t err=%v", wasCreated, err)
+				}
+			}()
+		}
+		wait.Wait()
+		if created.Load() != 1 || rejected.Load() != 1 || len(operations) != 1 {
+			t.Fatalf("created=%d rejected=%d operations=%d", created.Load(), rejected.Load(), len(operations))
+		}
+
+		operation := operations[0]
+		if err := svc.DisputeBillingHold(ctx, operation.ID, "provider_unknown"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := svc.BeginCanonicalOperation(ctx, auth, billingHoldImageRequest("disputed-still-counts", 1)); !errors.Is(err, ErrBillingHoldImageQuotaExceeded) {
+			t.Fatalf("disputed hold quota error=%v", err)
+		}
+		if err := svc.ReleaseBillingHold(ctx, operation.ID, "provider_proven_not_created"); err != nil {
+			t.Fatal(err)
+		}
+		releasedReplacement, createdReplacement, err := svc.BeginCanonicalOperation(ctx, auth, billingHoldImageRequest("released-retry", 2))
+		if err != nil || !createdReplacement {
+			t.Fatalf("released retry operation=%+v created=%t err=%v", releasedReplacement, createdReplacement, err)
+		}
+
+		usageAuth := GatewayAuthContext{APIKey: APIKeyRecord{ID: auth.CredentialID, Fingerprint: "media-fingerprint"}}
+		usage := GatewayUsageInput{
+			OperationID: releasedReplacement.ID, UsageVersion: 1, UsageSource: "provider_final",
+			RequestFingerprint: releasedReplacement.RequestFingerprint, Model: releasedReplacement.Model, Status: "forwarded",
+			UsageDimensions: UsageDimensions{UsageDimensionOutputImages: {Quantity: 1, Unit: UsageUnitCount, Source: "core_artifact", Confidence: UsageConfidenceObserved}},
+		}
+		if err := svc.RecordGatewayUsage(ctx, usageAuth, usage); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.RecordGatewayUsage(ctx, usageAuth, usage); err != nil {
+			t.Fatalf("usage replay: %v", err)
+		}
+		if _, created, err := svc.BeginCanonicalOperation(ctx, auth, billingHoldImageRequest("actual-usage-boundary", 1)); err != nil || !created {
+			t.Fatalf("actual usage boundary created=%t err=%v", created, err)
+		}
+		if _, _, err := svc.BeginCanonicalOperation(ctx, auth, billingHoldImageRequest("actual-usage-over", 1)); !errors.Is(err, ErrBillingHoldImageQuotaExceeded) {
+			t.Fatalf("actual usage overage error=%v", err)
+		}
+	})
+}
+
+func TestBillingHoldVideoAndAudioQuotaRequireBoundedDuration(t *testing.T) {
+	forEachBillingHoldRepository(t, func(t *testing.T, repo Repository) {
+		ctx := context.Background()
+		svc := NewService(repo, "/v1", "media-duration-secret")
+		svc.now = func() time.Time { return time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC) }
+
+		videoAuth := billingHoldTestAuth("tenant-video", "credential-video", 0)
+		videoAuth.Limits.MonthlyVideoSecondsLimit = 2
+		if _, _, err := svc.BeginCanonicalOperation(ctx, videoAuth, billingHoldMediaRequest("video-missing", "video", 0, 0)); !errors.Is(err, ErrBillingHoldUsageEstimate) {
+			t.Fatalf("missing video duration error=%v", err)
+		}
+		if _, created, err := svc.BeginCanonicalOperation(ctx, videoAuth, billingHoldMediaRequest("video-boundary", "video", 2000, 0)); err != nil || !created {
+			t.Fatalf("video boundary created=%t err=%v", created, err)
+		}
+		if _, _, err := svc.BeginCanonicalOperation(ctx, videoAuth, billingHoldMediaRequest("video-over", "video", 1, 0)); !errors.Is(err, ErrBillingHoldVideoQuotaExceeded) {
+			t.Fatalf("video overage error=%v", err)
+		}
+
+		audioAuth := billingHoldTestAuth("tenant-audio", "credential-audio", 0)
+		audioAuth.Limits.MonthlyAudioSecondsLimit = 1
+		if _, _, err := svc.BeginCanonicalOperation(ctx, audioAuth, billingHoldMediaRequest("audio-missing", "audio", 0, 0)); !errors.Is(err, ErrBillingHoldUsageEstimate) {
+			t.Fatalf("missing audio duration error=%v", err)
+		}
+		if _, created, err := svc.BeginCanonicalOperation(ctx, audioAuth, billingHoldMediaRequest("audio-boundary", "audio", 0, 1000)); err != nil || !created {
+			t.Fatalf("audio boundary created=%t err=%v", created, err)
+		}
+		if _, _, err := svc.BeginCanonicalOperation(ctx, audioAuth, billingHoldMediaRequest("audio-over", "audio", 0, 1)); !errors.Is(err, ErrBillingHoldAudioQuotaExceeded) {
+			t.Fatalf("audio overage error=%v", err)
+		}
+	})
+}
+
 func forEachBillingHoldRepository(t *testing.T, run func(*testing.T, Repository)) {
 	t.Helper()
 	tests := []struct {
@@ -270,5 +377,22 @@ func billingHoldTestRequest(identity string) gatewaycore.CanonicalRequest {
 		ClientRequestID: "request-" + identity, Fingerprint: "fingerprint-" + identity, IdempotencyKey: "idempotency-" + identity,
 		Protocol: gatewaycore.ProtocolOpenAIChat, Operation: GatewayOperationChatCompletion, Modality: GatewayModalityText,
 		Lane: gatewaycore.LaneDirect, Model: "model-a", Payload: []byte(`{"max_tokens":10}`),
+	}
+}
+
+func billingHoldImageRequest(identity string, count int) gatewaycore.CanonicalRequest {
+	return gatewaycore.CanonicalRequest{
+		ClientRequestID: "request-" + identity, Fingerprint: "fingerprint-" + identity, IdempotencyKey: "idempotency-" + identity,
+		Protocol: gatewaycore.ProtocolOpenAIImages, Operation: GatewayOperationImageGeneration, Modality: GatewayModalityImage,
+		Lane: gatewaycore.LaneDirect, Model: "image-model", OutputCount: count, Payload: []byte(`{"prompt":"synthetic"}`),
+	}
+}
+
+func billingHoldMediaRequest(identity, modality string, videoMS, audioMS int64) gatewaycore.CanonicalRequest {
+	return gatewaycore.CanonicalRequest{
+		ClientRequestID: "request-" + identity, Fingerprint: "fingerprint-" + identity, IdempotencyKey: "idempotency-" + identity,
+		Protocol: gatewaycore.ProtocolAsterJobs, Operation: modality + "_generation", Modality: modality,
+		Lane: gatewaycore.LaneDurable, Model: modality + "-model", VideoDurationMS: videoMS, AudioDurationMS: audioMS,
+		Payload: []byte(`{"input":{"prompt":"synthetic"}}`),
 	}
 }

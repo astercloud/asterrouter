@@ -487,6 +487,22 @@ func TestEffectivePricingQualityRegressionReasons(t *testing.T) {
 	}
 }
 
+func TestEffectivePricingPolicyRejectsInvalidAutomaticWindowSettings(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	_, err := svc.UpdateEffectivePricingPolicy(context.Background(), "tester", EffectivePricingPolicyRequest{
+		Mode: EffectivePricingModeBalanced, WindowHours: 24, MinSampleCount: 1,
+		MinMetricsCoverage: 0.8, MinBillingConsistency: 0.95, MinCostImprovement: 0.08,
+		MinCacheHitRateImprovement: 0.10, MinAffinityImprovement: 0.10,
+		MaxCacheTiebreakCostRegression: 0.02, MaxErrorRateRegression: 0.01,
+		MaxP95LatencyRegression: 0.2, CanaryPercent: 5, SupplierAffinityTTLSeconds: 3600,
+		AccountAffinityTTLSeconds: 1800, AutomaticActionsEnabled: true,
+		EvaluationIntervalMinutes: 1441, PromotionWindowCount: 3, DegradationWindowCount: 2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "evaluation interval") {
+		t.Fatalf("invalid automatic window settings err=%v", err)
+	}
+}
+
 func TestUpsertProviderCacheCapabilityRejectsReservedAffinityField(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)

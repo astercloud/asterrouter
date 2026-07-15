@@ -21,3 +21,25 @@ func TestWriteGatewayErrorReturnsBillingHoldContract(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteGatewayErrorReturnsMediaQuotaContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		err    error
+		status int
+		kind   string
+	}{
+		{err: controlplane.ErrBillingHoldImageQuotaExceeded, status: http.StatusTooManyRequests, kind: "image_quota_exceeded"},
+		{err: controlplane.ErrBillingHoldVideoQuotaExceeded, status: http.StatusTooManyRequests, kind: "video_quota_exceeded"},
+		{err: controlplane.ErrBillingHoldAudioQuotaExceeded, status: http.StatusTooManyRequests, kind: "audio_quota_exceeded"},
+		{err: controlplane.ErrBillingHoldUsageEstimate, status: http.StatusBadRequest, kind: "usage_estimate_required"},
+	}
+	for _, test := range tests {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		writeGatewayError(context, test.err)
+		if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), `"type":"`+test.kind+`"`) {
+			t.Fatalf("error=%v status=%d body=%s", test.err, recorder.Code, recorder.Body.String())
+		}
+	}
+}

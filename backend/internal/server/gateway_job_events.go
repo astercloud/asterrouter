@@ -40,6 +40,17 @@ type publicAIJobArtifactEvent struct {
 	CreatedAt time.Time              `json:"created_at"`
 }
 
+type publicAIJobProgressEvent struct {
+	ID        string    `json:"id"`
+	JobID     string    `json:"job_id"`
+	AttemptID string    `json:"attempt_id"`
+	Sequence  int64     `json:"sequence"`
+	Type      string    `json:"type"`
+	Percent   *int      `json:"percent,omitempty"`
+	Stage     string    `json:"stage,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 func registerGatewayJobEventRoute(r *gin.Engine, control *controlplane.Service) {
 	r.GET("/v1/jobs/:job_id/events", func(c *gin.Context) {
 		if control == nil {
@@ -101,11 +112,38 @@ func streamPublicAIJobEvents(c *gin.Context, control *controlplane.Service, cred
 	heartbeatTicker := time.NewTicker(aiJobEventHeartbeat)
 	defer heartbeatTicker.Stop()
 	emittedArtifacts := map[string]struct{}{}
+	emittedProgress := map[string]struct{}{}
 
 	for {
 		job, found, err := control.AIJobForAuth(c.Request.Context(), auth, jobID)
 		if err != nil || !found {
 			return
+		}
+		events, err := control.AIJobEvents(c.Request.Context(), jobID)
+		if err != nil {
+			return
+		}
+		for _, event := range events {
+			if event.Version <= cursor {
+				continue
+			}
+			if err := writePublicAIJobEvent(c, event); err != nil {
+				return
+			}
+			cursor = event.Version
+		}
+		progressEvents, found, err := control.AIJobProgressEventsForAuth(c.Request.Context(), auth, jobID)
+		if err != nil || !found {
+			return
+		}
+		for _, event := range progressEvents {
+			if _, emitted := emittedProgress[event.ID]; emitted {
+				continue
+			}
+			if err := writePublicAIJobProgressEvent(c, event); err != nil {
+				return
+			}
+			emittedProgress[event.ID] = struct{}{}
 		}
 		artifacts, found, err := control.ArtifactsForJobAndAuth(c.Request.Context(), auth, jobID)
 		if err != nil || !found {
@@ -122,19 +160,6 @@ func streamPublicAIJobEvents(c *gin.Context, control *controlplane.Service, cred
 				return
 			}
 			emittedArtifacts[artifact.ID] = struct{}{}
-		}
-		events, err := control.AIJobEvents(c.Request.Context(), jobID)
-		if err != nil {
-			return
-		}
-		for _, event := range events {
-			if event.Version <= cursor {
-				continue
-			}
-			if err := writePublicAIJobEvent(c, event); err != nil {
-				return
-			}
-			cursor = event.Version
 		}
 		if aiJobPublicTerminal(job.Status) && cursor >= job.StatusVersion {
 			return
@@ -160,6 +185,27 @@ func streamPublicAIJobEvents(c *gin.Context, control *controlplane.Service, cred
 		case <-pollTicker.C:
 		}
 	}
+}
+
+func writePublicAIJobProgressEvent(c *gin.Context, event controlplane.AIJobProgressEvent) error {
+	if event.ID == "" || event.JobID == "" || event.AttemptID == "" || event.ProviderSequence <= 0 || strings.ContainsAny(event.Stage, "\r\n") {
+		return errors.New("invalid ai job progress event")
+	}
+	const eventType = controlplane.AIJobEventProgress
+	payload, err := json.Marshal(publicAIJobProgressEvent{
+		ID: event.ID, JobID: event.JobID, AttemptID: event.AttemptID, Sequence: event.ProviderSequence,
+		Type: eventType, Percent: event.Percent, Stage: event.Stage, CreatedAt: event.CreatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	// Status events retain the numeric SSE cursor. Progress events carry a
+	// stable payload ID and are replayed at least once after reconnect.
+	if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, payload); err != nil {
+		return err
+	}
+	c.Writer.Flush()
+	return nil
 }
 
 func artifactAvailableForJobEvent(artifact controlplane.Artifact) bool {

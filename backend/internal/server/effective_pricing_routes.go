@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -98,6 +99,56 @@ func registerEffectivePricingAdminRoutes(admin *gin.RouterGroup, control *contro
 		}
 		httpx.OK(c, data)
 	})
+	admin.POST("/provider-billing-sources/inspect", func(c *gin.Context) {
+		var request controlplane.ProviderBillingSourceInspectionRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1552, "invalid provider billing source payload")
+			return
+		}
+		data, err := control.InspectProviderBillingSource(c.Request.Context(), actor(c), request)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1553, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.GET("/provider-billing-sources", func(c *gin.Context) {
+		data, err := control.ListProviderBillingSources(c.Request.Context())
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1580, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.PUT("/provider-billing-sources", func(c *gin.Context) {
+		var request controlplane.ProviderBillingSourceRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1581, "invalid provider billing source configuration payload")
+			return
+		}
+		data, err := control.UpsertProviderBillingSource(c.Request.Context(), actor(c), request)
+		if err != nil {
+			writeProviderBillingSourceError(c, err, 1582)
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.POST("/provider-billing-sources/:id/sync", func(c *gin.Context) {
+		data, err := control.SyncProviderBillingSource(c.Request.Context(), actor(c), c.Param("id"))
+		if err != nil {
+			writeProviderBillingSourceError(c, err, 1583)
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.GET("/provider-billing-sources/:id/evidence", func(c *gin.Context) {
+		data, err := control.ProviderBillingSourceEvidence(c.Request.Context(), c.Param("id"), queryInt(c, "limit"))
+		if err != nil {
+			writeProviderBillingSourceError(c, err, 1584)
+			return
+		}
+		httpx.OK(c, data)
+	})
 
 	admin.GET("/provider-cache-capabilities", func(c *gin.Context) {
 		data, err := control.ListProviderCacheCapabilities(c.Request.Context())
@@ -150,6 +201,14 @@ func registerEffectivePricingAdminRoutes(admin *gin.RouterGroup, control *contro
 		}
 		httpx.OK(c, data)
 	})
+	admin.GET("/effective-pricing/decisions/:id/evaluations", func(c *gin.Context) {
+		data, err := control.ListEffectivePricingDecisionEvaluations(c.Request.Context(), c.Param("id"), queryInt(c, "limit"))
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1551, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
 	admin.POST("/effective-pricing/decisions/evaluate", func(c *gin.Context) {
 		var request controlplane.EffectivePricingDecisionEvaluationRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
@@ -176,6 +235,19 @@ func registerEffectivePricingAdminRoutes(admin *gin.RouterGroup, control *contro
 		}
 		httpx.OK(c, data)
 	})
+}
+
+func writeProviderBillingSourceError(c *gin.Context, err error, code int) {
+	status := http.StatusBadRequest
+	switch {
+	case errors.Is(err, controlplane.ErrProviderBillingSourceNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, controlplane.ErrProviderBillingSourceConflict),
+		errors.Is(err, controlplane.ErrProviderBillingSourceBusy),
+		errors.Is(err, controlplane.ErrProviderBillingSourceDisabled):
+		status = http.StatusConflict
+	}
+	httpx.Error(c, status, code, err.Error())
 }
 
 func queryInt(c *gin.Context, key string) int {

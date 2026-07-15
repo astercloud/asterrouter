@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -271,12 +272,25 @@ func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter c
 	_ = control.TouchProviderAccountUsage(c.Request.Context(), execution.Provider.AccountID)
 	_ = control.RecordGatewayCall(c.Request.Context(), auth, request.Model, "forwarded", fmt.Sprintf("Generated %d image output(s) through provider %s", len(response.Data), execution.Provider.ID))
 	_ = control.CompleteAIAttempt(c.Request.Context(), execution.Attempt.ID, controlplane.AIAttemptStatusSucceeded, "")
-	if err := recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
+	usageDimensions := controlplane.UsageDimensions{
+		controlplane.UsageDimensionOutputImages: {
+			Quantity: int64(len(response.Data)), Unit: controlplane.UsageUnitCount,
+			Source: "core_artifact", Confidence: controlplane.UsageConfidenceObserved,
+		},
+	}
+	if outputBytes := finalArtifactBytes(artifacts); outputBytes > 0 {
+		usageDimensions[controlplane.UsageDimensionOutputBytes] = controlplane.UsageDimension{
+			Quantity: outputBytes, Unit: controlplane.UsageUnitByte,
+			Source: "core_artifact", Confidence: controlplane.UsageConfidenceObserved,
+		}
+	}
+	if err := control.RecordDirectAIProviderUsage(c.Request.Context(), operation, execution.Attempt, execution.Result, controlplane.GatewayUsageInput{
 		UsageSource: "gateway_final", Model: request.Model, UpstreamModel: execution.Provider.UpstreamModel,
 		Protocol: string(request.Protocol), ProviderID: execution.Provider.ID, ProviderAccountID: execution.Provider.AccountID,
 		Status: "forwarded", LatencyMS: time.Since(startedAt).Milliseconds(), UsageNormalizationStatus: "normalized_image_outputs",
-		UpstreamRequestID: execution.Result.Task.ProviderRequestID,
+		UsageDimensions: usageDimensions, UpstreamRequestID: execution.Result.Task.ProviderRequestID,
 	}); err != nil {
+		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "usage_ledger_error")
 		complete(controlplane.AIOperationStatusFailed, "usage_ledger_error")
 		writeGatewayError(c, err)
 		return
@@ -334,12 +348,28 @@ func attemptDirectImageCandidates(ctx context.Context, control *controlplane.Ser
 				return execution, err
 			}
 			if dispatchErr != nil {
-				permit.Release()
+				_ = permit.Retain(ctx, 10*time.Minute)
 				_ = control.DisputeBillingHold(ctx, operation.ID, "provider_response_ambiguous")
-				_ = control.CompleteAIAttempt(ctx, attempt.ID, controlplane.AIAttemptStatusFailed, "provider_response_ambiguous")
 				return execution, errors.Join(errDirectImageProviderInvalid, dispatchErr)
 			}
 			status := strings.ToLower(strings.TrimSpace(result.Task.Status))
+			if status == "failed" || status == "error" || status == "canceled" || status == "cancelled" {
+				terminalStatus := controlplane.AIJobStatusFailed
+				attemptStatus := controlplane.AIAttemptStatusFailed
+				if status == "canceled" || status == "cancelled" {
+					terminalStatus = controlplane.AIJobStatusCanceled
+					attemptStatus = controlplane.AIAttemptStatusCanceled
+				}
+				resolved, billingErr := control.FinalizeDirectAIProviderTerminalBilling(ctx, operation, updated, terminalStatus, result)
+				permit.Release()
+				if !resolved {
+					_ = control.DisputeBillingHold(ctx, operation.ID, "provider_billing_unresolved")
+				} else {
+					_ = control.CompleteAIAttempt(ctx, attempt.ID, attemptStatus, status)
+				}
+				execution.Attempts = append(execution.Attempts, gatewayRouteAttempt{AttemptID: attempt.ID, AccountID: provider.AccountID, ProviderID: provider.ID, RouteID: provider.RouteID, Model: provider.UpstreamModel, Outcome: "failed", Detail: status})
+				return execution, errors.Join(errDirectImageProviderFailed, billingErr)
+			}
 			if status != "succeeded" && status != "completed" || len(result.Outputs) == 0 {
 				permit.Release()
 				_ = control.DisputeBillingHold(ctx, operation.ID, "provider_response_invalid")
@@ -398,11 +428,14 @@ func handleDirectImageExecutionError(c *gin.Context, control *controlplane.Servi
 		errorType = "provider_response_invalid"
 		message = "image provider accepted the request but did not return a valid final result"
 		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_invalid")
+	case errors.Is(err, errDirectImageProviderFailed):
+		errorType = "provider_terminal_failure"
+		message = "image provider reported a terminal failure"
 	default:
 		_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "provider_request_failed")
 	}
 	_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
-		UsageSource: "gateway_observation", Model: request.Model, UpstreamModel: provider.UpstreamModel,
+		UsageVersion: 1, UsageSource: "gateway_observation", Model: request.Model, UpstreamModel: provider.UpstreamModel,
 		Protocol: string(request.Protocol), ProviderID: provider.ID, ProviderAccountID: provider.AccountID,
 		Status: "upstream_error", ErrorType: errorType, LatencyMS: time.Since(startedAt).Milliseconds(),
 	})
@@ -493,6 +526,20 @@ func countFinalArtifacts(artifacts []controlplane.Artifact) int {
 		}
 	}
 	return count
+}
+
+func finalArtifactBytes(artifacts []controlplane.Artifact) int64 {
+	var total int64
+	for _, artifact := range artifacts {
+		if artifact.Role != controlplane.ArtifactRoleFinal || (artifact.Status != controlplane.ArtifactStatusReady && artifact.Status != controlplane.ArtifactStatusDelivered) || artifact.SizeBytes <= 0 {
+			continue
+		}
+		if total > math.MaxInt64-artifact.SizeBytes {
+			return math.MaxInt64
+		}
+		total += artifact.SizeBytes
+	}
+	return total
 }
 
 func recordImageTrace(control *controlplane.Service, c *gin.Context, auth controlplane.GatewayAuthContext, request gatewaycore.CanonicalRequest, provider controlplane.GatewayProvider, status string, httpStatus int, errorType string, startedAt time.Time, summary, routeAttempts string) {

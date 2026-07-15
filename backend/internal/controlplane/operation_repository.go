@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 )
 
 const aiOperationSelectColumns = `id, profile_scope, tenant_id, credential_id, credential_source, integration_id,
@@ -282,6 +284,32 @@ func (r *MemoryRepository) ListAIAttemptsForReconciliation(_ context.Context, no
 	return result, nil
 }
 
+func (r *MemoryRepository) ListDirectAIAttemptsForReconciliation(_ context.Context, now time.Time, limit int) ([]AIAttempt, error) {
+	if limit <= 0 {
+		return []AIAttempt{}, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]AIAttempt, 0, limit)
+	for _, attempt := range r.aiAttempts {
+		if !aiAttemptDueForReconciliation(attempt, now) {
+			continue
+		}
+		operation, found := r.aiOperations[attempt.OperationID]
+		if !found || operation.Lane != string(gatewaycore.LaneDirect) {
+			continue
+		}
+		result = append(result, attempt)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return aiAttemptReconciliationTime(result[i]).Before(aiAttemptReconciliationTime(result[j]))
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
 func (r *MemoryRepository) ListDurableAIAttemptsForReconciliation(_ context.Context, now time.Time, limit int) ([]AIAttempt, error) {
 	if limit <= 0 {
 		return []AIAttempt{}, nil
@@ -323,6 +351,11 @@ func (r *MemoryRepository) CompleteAIAttempt(_ context.Context, id, status, erro
 }
 
 func (r *MemoryRepository) ApplyUsageLedger(_ context.Context, record UsageRecord, billing BillingLedgerEntry, outbox TransactionalOutboxEvent, events []PlatformUsageDeliveryEvent) (bool, error) {
+	usageDimensions, err := NormalizeUsageDimensions(record.UsageDimensions)
+	if err != nil {
+		return false, err
+	}
+	record.UsageDimensions = usageDimensions
 	if err := validateUsageLedgerApplication(record, billing); err != nil {
 		return false, err
 	}
@@ -341,6 +374,10 @@ func (r *MemoryRepository) ApplyUsageLedger(_ context.Context, record UsageRecor
 	for _, current := range r.billingLedgerEntries {
 		if current.OperationID == billing.OperationID && current.AttemptID == billing.AttemptID && current.UsageVersion == billing.UsageVersion {
 			if current.RequestFingerprint != billing.RequestFingerprint || current.AmountCents != billing.AmountCents || current.UsageRecordID != billing.UsageRecordID {
+				return false, ErrUsageLedgerConflict
+			}
+			existing, found := r.usageRecords[current.UsageRecordID]
+			if !found || !usageDimensionsEqual(existing.UsageDimensions, record.UsageDimensions) {
 				return false, ErrUsageLedgerConflict
 			}
 			return false, nil
@@ -785,6 +822,29 @@ ORDER BY COALESCE(reconcile_after, updated_at), updated_at LIMIT $6`, AIAttemptS
 	return result, rows.Err()
 }
 
+func (r *PostgresRepository) ListDirectAIAttemptsForReconciliation(ctx context.Context, now time.Time, limit int) ([]AIAttempt, error) {
+	if limit <= 0 {
+		return []AIAttempt{}, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT `+aiAttemptSelectColumns+` FROM ai_attempts
+WHERE status=$1 AND dispatch_state IN ($2,$3,$4) AND (reconcile_after IS NULL OR reconcile_after <= $5)
+AND EXISTS (SELECT 1 FROM ai_operations WHERE ai_operations.id=ai_attempts.operation_id AND ai_operations.lane=$6)
+ORDER BY COALESCE(reconcile_after, updated_at), updated_at LIMIT $7`, AIAttemptStatusRunning, AIAttemptDispatchSubmitted, AIAttemptDispatchAccepted, AIAttemptDispatchUnknown, now, string(gatewaycore.LaneDirect), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]AIAttempt, 0, limit)
+	for rows.Next() {
+		attempt, scanErr := scanAIAttempt(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, attempt)
+	}
+	return result, rows.Err()
+}
+
 func (r *PostgresRepository) ListDurableAIAttemptsForReconciliation(ctx context.Context, now time.Time, limit int) ([]AIAttempt, error) {
 	if limit <= 0 {
 		return []AIAttempt{}, nil
@@ -818,6 +878,11 @@ func (r *PostgresRepository) CompleteAIAttempt(ctx context.Context, id, status, 
 }
 
 func (r *PostgresRepository) ApplyUsageLedger(ctx context.Context, record UsageRecord, billing BillingLedgerEntry, outbox TransactionalOutboxEvent, events []PlatformUsageDeliveryEvent) (bool, error) {
+	usageDimensions, err := NormalizeUsageDimensions(record.UsageDimensions)
+	if err != nil {
+		return false, err
+	}
+	record.UsageDimensions = usageDimensions
 	if err := validateUsageLedgerApplication(record, billing); err != nil {
 		return false, err
 	}
@@ -858,6 +923,17 @@ ON CONFLICT(operation_id, attempt_id, usage_version) DO NOTHING
 			return false, err
 		}
 		if current.RequestFingerprint != billing.RequestFingerprint || current.AmountCents != billing.AmountCents || current.UsageRecordID != billing.UsageRecordID {
+			return false, ErrUsageLedgerConflict
+		}
+		var existingUsageJSON []byte
+		if err := tx.QueryRowContext(ctx, `SELECT usage_dimensions FROM usage_records WHERE id=$1`, current.UsageRecordID).Scan(&existingUsageJSON); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, ErrUsageLedgerConflict
+			}
+			return false, err
+		}
+		existingDimensions, err := ParseUsageDimensionsJSON(string(existingUsageJSON))
+		if err != nil || !usageDimensionsEqual(existingDimensions, record.UsageDimensions) {
 			return false, ErrUsageLedgerConflict
 		}
 		return false, nil

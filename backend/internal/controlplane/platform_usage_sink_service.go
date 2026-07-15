@@ -25,17 +25,18 @@ const (
 var ErrPlatformUsageDeliveryNotFound = errors.New("platform usage delivery event not found")
 
 type platformUsageEventPayload struct {
-	EventID            string    `json:"event_id"`
-	IntegrationID      string    `json:"integration_id"`
-	TenantID           string    `json:"tenant_id"`
-	ExternalSubjectRef string    `json:"external_subject_ref"`
-	UsageRecordID      string    `json:"usage_record_id"`
-	Model              string    `json:"model"`
-	InputTokens        int       `json:"input_tokens"`
-	OutputTokens       int       `json:"output_tokens"`
-	CostCents          int       `json:"cost_cents"`
-	Status             string    `json:"status"`
-	OccurredAt         time.Time `json:"occurred_at"`
+	EventID            string          `json:"event_id"`
+	IntegrationID      string          `json:"integration_id"`
+	TenantID           string          `json:"tenant_id"`
+	ExternalSubjectRef string          `json:"external_subject_ref"`
+	UsageRecordID      string          `json:"usage_record_id"`
+	Model              string          `json:"model"`
+	InputTokens        int             `json:"input_tokens"`
+	OutputTokens       int             `json:"output_tokens"`
+	UsageDimensions    UsageDimensions `json:"usage_dimensions"`
+	CostCents          int             `json:"cost_cents"`
+	Status             string          `json:"status"`
+	OccurredAt         time.Time       `json:"occurred_at"`
 }
 
 func (s *Service) ListPlatformUsageSinks(ctx context.Context) ([]PlatformUsageSink, error) {
@@ -315,7 +316,7 @@ func (s *Service) platformUsageDeliveryEventsForRecord(ctx context.Context, reco
 			continue
 		}
 		eventID := "usage_evt_" + hashAPIKey(sink.ID + "\x00" + record.ID)[:24]
-		payload, err := json.Marshal(platformUsageEventPayload{EventID: eventID, IntegrationID: record.ExternalAuthIntegrationID, TenantID: record.PlatformTenantID, ExternalSubjectRef: record.ExternalSubjectReference, UsageRecordID: record.ID, Model: record.Model, InputTokens: record.InputTokens, OutputTokens: record.OutputTokens, CostCents: record.CostCents, Status: record.Status, OccurredAt: record.CreatedAt})
+		payload, err := json.Marshal(platformUsageEventPayload{EventID: eventID, IntegrationID: record.ExternalAuthIntegrationID, TenantID: record.PlatformTenantID, ExternalSubjectRef: record.ExternalSubjectReference, UsageRecordID: record.ID, Model: record.Model, InputTokens: record.InputTokens, OutputTokens: record.OutputTokens, UsageDimensions: record.UsageDimensions, CostCents: record.CostCents, Status: record.Status, OccurredAt: record.CreatedAt})
 		if err != nil {
 			return nil, err
 		}

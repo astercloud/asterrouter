@@ -37,6 +37,14 @@ func writeGatewayError(c *gin.Context, err error) {
 		openAIError(c, http.StatusPaymentRequired, "budget_hold_failed", "request cost reservation exceeds the available monthly budget")
 	case errors.Is(err, controlplane.ErrBillingHoldEstimateUnavailable):
 		openAIError(c, http.StatusPaymentRequired, "budget_hold_failed", "request cost cannot be reserved without an applicable price")
+	case errors.Is(err, controlplane.ErrBillingHoldImageQuotaExceeded):
+		openAIError(c, http.StatusTooManyRequests, "image_quota_exceeded", "gateway credential monthly image quota exceeded")
+	case errors.Is(err, controlplane.ErrBillingHoldVideoQuotaExceeded):
+		openAIError(c, http.StatusTooManyRequests, "video_quota_exceeded", "gateway credential monthly video quota exceeded")
+	case errors.Is(err, controlplane.ErrBillingHoldAudioQuotaExceeded):
+		openAIError(c, http.StatusTooManyRequests, "audio_quota_exceeded", "gateway credential monthly audio quota exceeded")
+	case errors.Is(err, controlplane.ErrBillingHoldUsageEstimate):
+		openAIError(c, http.StatusBadRequest, "usage_estimate_required", "request must include a bounded media usage estimate")
 	case errors.Is(err, controlplane.ErrBillingHoldStateConflict):
 		openAIError(c, http.StatusConflict, "billing_hold_conflict", "request cost reservation state changed concurrently")
 	case errors.Is(err, controlplane.ErrArtifactStateConflict):

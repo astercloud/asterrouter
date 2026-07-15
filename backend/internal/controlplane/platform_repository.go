@@ -135,6 +135,11 @@ func (r *MemoryRepository) QueryPlatformUsageDeliveryEvents(_ context.Context, q
 }
 
 func (r *MemoryRepository) SaveUsageRecordAndEnqueuePlatformUsage(_ context.Context, record UsageRecord, events []PlatformUsageDeliveryEvent) error {
+	usageDimensions, err := NormalizeUsageDimensions(record.UsageDimensions)
+	if err != nil {
+		return err
+	}
+	record.UsageDimensions = usageDimensions
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.usageRecords[record.ID]; exists {

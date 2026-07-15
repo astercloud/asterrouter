@@ -248,7 +248,12 @@ func (runtime *DurableAIJobRuntime) runReconciler(ctx context.Context, reportErr
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_, err := runtime.service.RunDurableAIJobReconcilerOnce(ctx, runtime.config.BatchSize, runtime.adapter)
+			_, durableErr := runtime.service.RunDurableAIJobReconcilerOnce(ctx, runtime.config.BatchSize, runtime.adapter)
+			var directErr error
+			if directAdapter, ok := runtime.adapter.(DirectAIProviderReconciler); ok {
+				_, directErr = runtime.service.RunDirectAIReconcilerOnce(ctx, runtime.config.BatchSize, directAdapter)
+			}
+			err := errors.Join(durableErr, directErr)
 			runtime.recordComponentRun("reconciler", err)
 			reportError("reconciler", err)
 		}

@@ -19,30 +19,41 @@ import {
   createProcurementPrice,
   createProviderBillingLine,
   evaluateEffectivePricingDecision,
+  getEffectivePricingDecisionEvaluations,
   getEffectivePricingDecisions,
   getEffectivePricingReport,
   getProviderAccounts,
+  getProviderBillingSourceEvidence,
+  getProviderBillingSources,
   getProviderCacheCapabilities,
   getProviderCacheProbeRuns,
+  inspectProviderBillingSource,
   runProviderCacheProbe,
+  syncProviderBillingSource,
+  updateProviderBillingSource,
   updateProviderCacheCapability,
   updateEffectivePricingPolicy
 } from '@/api/control'
 import type {
   CacheProbeRequest,
   EffectivePricingDecision,
+  EffectivePricingDecisionEvaluation,
   EffectivePricingPolicyRequest,
   EffectivePricingReport,
   EffectivePricingReportRow,
   ProcurementPriceRequest,
   ProviderAccount,
   ProviderBillingLineRequest,
+  ProviderBillingSource,
+  ProviderBillingSourceEvidence,
+  ProviderBillingSourceInspection,
+  ProviderBillingSourceRequest,
   ProviderCacheCapability,
   ProviderCacheCapabilityRequest,
   ProviderCacheProbeRun
 } from '@/types'
 
-type PricingTab = 'pricing' | 'cache' | 'switches' | 'probes'
+type PricingTab = 'pricing' | 'cache' | 'switches' | 'probes' | 'sources'
 type DialogKind = 'price' | 'billing' | 'policy' | 'decision' | 'probe' | 'capability' | null
 
 const { t } = useI18n()
@@ -56,7 +67,16 @@ const capabilities = ref<ProviderCacheCapability[]>([])
 const probes = ref<ProviderCacheProbeRun[]>([])
 const decisions = ref<EffectivePricingDecision[]>([])
 const accounts = ref<ProviderAccount[]>([])
+const billingSources = ref<ProviderBillingSource[]>([])
+const billingSourceInspection = ref<ProviderBillingSourceInspection | null>(null)
+const billingSourceEvidence = ref<ProviderBillingSourceEvidence | null>(null)
+const billingSourceAccountID = ref('')
+const inspectingBillingSource = ref(false)
+const savingBillingSource = ref(false)
+const syncingBillingSource = ref(false)
 const selectedRow = ref<EffectivePricingReportRow | null>(null)
+const selectedDecision = ref<EffectivePricingDecision | null>(null)
+const decisionEvaluations = ref<EffectivePricingDecisionEvaluation[]>([])
 const dialog = ref<DialogKind>(null)
 const probeBudgetConfirmed = ref(false)
 const modelFilter = ref('')
@@ -67,7 +87,8 @@ const tabs: Array<{ id: PricingTab; icon: typeof BadgeDollarSign }> = [
   { id: 'pricing', icon: BadgeDollarSign },
   { id: 'cache', icon: Activity },
   { id: 'switches', icon: Route },
-  { id: 'probes', icon: FlaskConical }
+  { id: 'probes', icon: FlaskConical },
+  { id: 'sources', icon: FileCheck2 }
 ]
 
 const priceForm = reactive<ProcurementPriceRequest>({
@@ -89,7 +110,8 @@ const policyForm = reactive<EffectivePricingPolicyRequest>({
   min_billing_consistency: 0.95, min_cost_improvement: 0.08, max_error_rate_regression: 0.005,
   min_cache_hit_rate_improvement: 0.1, min_affinity_improvement: 0.1, max_cache_tiebreak_cost_regression: 0.02,
   max_p95_latency_regression: 0.2, canary_percent: 5, supplier_affinity_ttl_seconds: 86400,
-  account_affinity_ttl_seconds: 1800, probe_enabled: false, probe_daily_token_budget: 100000,
+  account_affinity_ttl_seconds: 1800, automatic_actions_enabled: false, evaluation_interval_minutes: 60,
+  promotion_window_count: 3, degradation_window_count: 2, probe_enabled: false, probe_daily_token_budget: 100000,
   probe_daily_cost_budget_micros: 10000000, probe_cooldown_seconds: 3600
 })
 const decisionForm = reactive({
@@ -104,6 +126,9 @@ const capabilityForm = reactive<ProviderCacheCapabilityRequest>({
   provider_account_id: '', upstream_model: '', protocol: 'openai_chat_completions',
   support_status: 'claimed', pool_affinity_grade: 'unknown', affinity_transport: 'none',
   affinity_field: '', cache_control_mode: 'passthrough_if_present', usage_schema: 'auto'
+})
+const billingSourceForm = reactive<Omit<ProviderBillingSourceRequest, 'provider_account_id' | 'adapter_id' | 'version'>>({
+  status: 'observe_only', automatic_sync_enabled: false, sync_interval_seconds: 3600
 })
 
 const rows = computed(() => report.value?.rows || [])
@@ -121,6 +146,8 @@ const metrics = computed(() => {
 })
 const capabilityRows = computed(() => rows.value.map((row) => ({ row, capability: capabilityFor(row) })))
 const accountOptions = computed(() => accounts.value.filter((account) => account.status === 'active'))
+const selectedBillingSource = computed(() => billingSources.value.find((source) => source.provider_account_id === billingSourceAccountID.value))
+const billingSourceFormValid = computed(() => Number.isInteger(billingSourceForm.sync_interval_seconds) && billingSourceForm.sync_interval_seconds >= 60 && billingSourceForm.sync_interval_seconds <= 86400)
 const decisionUpstreamModelOptions = computed(() => [...new Set(rows.value.map((row) => row.upstream_model))])
 const decisionProtocolOptions = computed(() => [...new Set(rows.value
   .filter((row) => row.upstream_model === decisionForm.upstream_model)
@@ -151,9 +178,9 @@ function formatPriceRatio(value: number, uncached: number, available: boolean): 
 }
 function formatDate(value?: string): string { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '-' }
 function statusClass(value: string): string {
-  if (['exact', 'derived', 'matched', 'preferred', 'active', 'billed_verified', 'succeeded', 'verified'].includes(value)) return 'status-success'
-  if (['degraded', 'fragmented', 'rolled_back', 'failed', 'reduce_weight'].includes(value)) return 'status-danger'
-  if (['estimated', 'pending', 'canary', 'recommended', 'observe', 'ambiguous'].includes(value)) return 'status-warning'
+  if (['exact', 'derived', 'matched', 'preferred', 'active', 'billed_verified', 'succeeded', 'verified', 'healthy', 'schema_match'].includes(value)) return 'status-success'
+  if (['degraded', 'fragmented', 'rolled_back', 'failed', 'lease_expired', 'reduce_weight'].includes(value)) return 'status-danger'
+  if (['estimated', 'pending', 'canary', 'recommended', 'observe', 'observe_only', 'ambiguous', 'inconclusive'].includes(value)) return 'status-warning'
   return ''
 }
 function accountName(id: string): string { return accounts.value.find((account) => account.id === id)?.name || id || '-' }
@@ -161,6 +188,31 @@ function reportRowForDecision(decision: EffectivePricingDecision, accountID: str
   return rows.value.find((row) => row.provider_account_id === accountID && row.upstream_model === decision.upstream_model && row.protocol === decision.protocol)
 }
 function formatLatency(value?: number): string { return value && value > 0 ? `${formatNumber(value)} ms` : '-' }
+function capabilityLabel(enabled: boolean): string { return t(enabled ? 'effectivePricing.available' : 'effectivePricing.unavailable') }
+function billingWarningLabel(code: string): string {
+  const labels: Record<string, string> = {
+    adapter_schema_match_does_not_prove_vendor_identity: t('effectivePricing.adapterIdentityWarning'),
+    usage_cost_lines_unavailable: t('effectivePricing.lineItemsUnavailableWarning'),
+    aggregate_totals_are_not_billing_lines: t('effectivePricing.aggregateNotLinesWarning'),
+    remaining_is_quota_not_wallet_balance: t('effectivePricing.quotaNotBalanceWarning'),
+    remaining_may_be_subscription_period_limit: t('effectivePricing.subscriptionLimitWarning'),
+    subscription_remaining_unlimited: t('effectivePricing.subscriptionUnlimitedWarning'),
+    account_key_reported_invalid: t('effectivePricing.accountKeyInvalidWarning')
+  }
+  return labels[code] || code
+}
+function balanceKindLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    wallet_balance: t('effectivePricing.walletBalance'),
+    api_key_quota_remaining: t('effectivePricing.keyQuotaRemaining'),
+    subscription_period_remaining: t('effectivePricing.subscriptionRemaining')
+  }
+  return labels[kind] || kind
+}
+function aggregateScopeLabel(aggregate: { scope: string; model?: string }): string {
+  if (aggregate.scope === 'model_30d' && aggregate.model) return `${aggregate.model} · ${t('effectivePricing.last30Days')}`
+  return t(`effectivePricing.aggregateScopes.${aggregate.scope}`)
+}
 
 function comparableDecisionRows(upstreamModel: string, protocol: string): EffectivePricingReportRow[] {
   const seen = new Set<string>()
@@ -208,15 +260,21 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [nextReport, nextCapabilities, nextProbes, nextDecisions, nextAccounts] = await Promise.all([
+    const [nextReport, nextCapabilities, nextProbes, nextDecisions, nextAccounts, nextBillingSources] = await Promise.all([
       getEffectivePricingReport({ model: modelFilter.value.trim() || undefined, protocol: protocolFilter.value || undefined, window_hours: windowHours.value }),
-      getProviderCacheCapabilities(), getProviderCacheProbeRuns(100), getEffectivePricingDecisions(), getProviderAccounts()
+      getProviderCacheCapabilities(), getProviderCacheProbeRuns(100), getEffectivePricingDecisions(), getProviderAccounts(), getProviderBillingSources()
     ])
     report.value = nextReport
     capabilities.value = nextCapabilities
     probes.value = nextProbes
     decisions.value = nextDecisions
     accounts.value = nextAccounts
+    billingSources.value = nextBillingSources
+    if (!nextAccounts.some((account) => account.id === billingSourceAccountID.value)) {
+      billingSourceAccountID.value = nextAccounts.find((account) => account.status === 'active')?.id || ''
+      billingSourceInspection.value = null
+    }
+    await applyBillingSourceSelection()
     Object.assign(policyForm, nextReport.policy)
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
@@ -323,6 +381,106 @@ async function decisionAction(decision: EffectivePricingDecision, action: string
   }
 }
 
+async function openDecisionEvaluationHistory(decision: EffectivePricingDecision) {
+  error.value = ''
+  selectedDecision.value = decision
+  decisionEvaluations.value = []
+  try {
+    decisionEvaluations.value = await getEffectivePricingDecisionEvaluations(decision.id, 100)
+  } catch (err) {
+    selectedDecision.value = null
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  }
+}
+
+async function inspectBillingSource() {
+  if (!billingSourceAccountID.value) return
+  inspectingBillingSource.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    billingSourceInspection.value = await inspectProviderBillingSource(billingSourceAccountID.value)
+    message.value = t('effectivePricing.sourceInspected')
+  } catch (err) {
+    billingSourceInspection.value = null
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    inspectingBillingSource.value = false
+  }
+}
+
+async function applyBillingSourceSelection() {
+  const source = selectedBillingSource.value
+  Object.assign(billingSourceForm, {
+    status: source?.status || 'observe_only',
+    automatic_sync_enabled: source?.automatic_sync_enabled || false,
+    sync_interval_seconds: source?.sync_interval_seconds || 3600
+  })
+  if (!source) {
+    billingSourceEvidence.value = null
+    return
+  }
+  billingSourceEvidence.value = await getProviderBillingSourceEvidence(source.id, 100)
+}
+
+async function billingSourceAccountChanged() {
+  billingSourceInspection.value = null
+  error.value = ''
+  try {
+    await applyBillingSourceSelection()
+  } catch (err) {
+    billingSourceEvidence.value = null
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  }
+}
+
+async function saveBillingSource() {
+  if (!billingSourceAccountID.value) return
+  savingBillingSource.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    const current = selectedBillingSource.value
+    const stored = await updateProviderBillingSource({
+      provider_account_id: billingSourceAccountID.value,
+      adapter_id: billingSourceInspection.value?.adapter_id || current?.adapter_id || 'sub2api_compatible',
+      status: billingSourceForm.status,
+      automatic_sync_enabled: billingSourceForm.automatic_sync_enabled,
+      sync_interval_seconds: billingSourceForm.sync_interval_seconds,
+      version: current?.version
+    })
+    const index = billingSources.value.findIndex((source) => source.id === stored.id)
+    if (index >= 0) billingSources.value.splice(index, 1, stored)
+    else billingSources.value.push(stored)
+    billingSourceEvidence.value = await getProviderBillingSourceEvidence(stored.id, 100)
+    message.value = t('effectivePricing.sourceSaved')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    savingBillingSource.value = false
+  }
+}
+
+async function syncBillingSourceNow() {
+  const source = selectedBillingSource.value
+  if (!source) return
+  syncingBillingSource.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    const result = await syncProviderBillingSource(source.id)
+    const index = billingSources.value.findIndex((item) => item.id === result.source.id)
+    if (index >= 0) billingSources.value.splice(index, 1, result.source)
+    billingSourceEvidence.value = await getProviderBillingSourceEvidence(source.id, 100)
+    if (result.run.status === 'succeeded') message.value = t('effectivePricing.sourceSynced')
+    else error.value = t('effectivePricing.sourceSyncFailed')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    syncingBillingSource.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -383,15 +541,60 @@ onMounted(load)
             <div><small>{{ t('effectivePricing.current') }}</small><strong>{{ accountName(decision.current_provider_account_id) }}</strong><span>{{ formatMoneyMicros(decision.current_cost_micros_per_1m) }}</span><span>{{ t('effectivePricing.cacheHit') }} {{ formatOptionalPercent(reportRowForDecision(decision, decision.current_provider_account_id)?.cache_token_hit_rate) }}</span><span>{{ t('effectivePricing.cacheSavings') }} {{ formatCacheSavings(reportRowForDecision(decision, decision.current_provider_account_id)) }}</span><span>{{ t('effectivePricing.errorRate') }} {{ formatOptionalPercent(reportRowForDecision(decision, decision.current_provider_account_id)?.error_rate) }}</span><span>P95 {{ formatLatency(reportRowForDecision(decision, decision.current_provider_account_id)?.p95_latency_ms) }}</span></div>
             <div><small>{{ t('effectivePricing.candidate') }}</small><strong>{{ accountName(decision.candidate_provider_account_id) }}</strong><span>{{ formatMoneyMicros(decision.candidate_cost_micros_per_1m) }}</span><span>{{ t('effectivePricing.cacheHit') }} {{ formatOptionalPercent(reportRowForDecision(decision, decision.candidate_provider_account_id)?.cache_token_hit_rate) }}</span><span>{{ t('effectivePricing.cacheSavings') }} {{ formatCacheSavings(reportRowForDecision(decision, decision.candidate_provider_account_id)) }}</span><span>{{ t('effectivePricing.errorRate') }} {{ formatOptionalPercent(reportRowForDecision(decision, decision.candidate_provider_account_id)?.error_rate) }}</span><span>P95 {{ formatLatency(reportRowForDecision(decision, decision.candidate_provider_account_id)?.p95_latency_ms) }}</span></div>
           </div>
+          <div class="decision-monitoring">
+            <span><small>{{ t('effectivePricing.lastVerdict') }}</small><strong class="pill" :class="statusClass(decision.last_evaluation_verdict)">{{ decision.last_evaluation_verdict || '-' }}</strong></span>
+            <span><small>{{ t('effectivePricing.healthyWindows') }}</small><strong>{{ decision.healthy_window_count }} / {{ report?.policy.promotion_window_count || 0 }}</strong></span>
+            <span><small>{{ t('effectivePricing.degradedWindows') }}</small><strong>{{ decision.degraded_window_count }} / {{ report?.policy.degradation_window_count || 0 }}</strong></span>
+            <span><small>{{ t('effectivePricing.lastWindow') }}</small><strong>{{ formatDate(decision.last_evaluated_window_end) }}</strong></span>
+          </div>
+          <p v-if="decision.last_evaluation_reason_codes?.length" class="decision-reasons">{{ decision.last_evaluation_reason_codes.join(' · ') }}</p>
           <p v-if="decision.reason_codes.length" class="decision-reasons">{{ decision.reason_codes.join(' · ') }}</p>
-          <footer class="row-actions"><button v-if="decision.status === 'recommended'" class="button" type="button" @click="decisionAction(decision, 'approve_canary')">{{ t('effectivePricing.startCanary') }}</button><button v-if="decision.status === 'canary'" class="button" type="button" @click="decisionAction(decision, 'activate')">{{ t('effectivePricing.activate') }}</button><button v-if="['canary','active','degraded'].includes(decision.status)" class="button secondary" type="button" @click="decisionAction(decision, 'rollback')">{{ t('effectivePricing.rollback') }}</button></footer>
+          <footer class="row-actions"><button class="button ghost" type="button" @click="openDecisionEvaluationHistory(decision)"><Activity :size="15" />{{ t('effectivePricing.windowEvidence') }}</button><button v-if="decision.status === 'recommended'" class="button" type="button" @click="decisionAction(decision, 'approve_canary')">{{ t('effectivePricing.startCanary') }}</button><button v-if="decision.status === 'canary'" class="button" type="button" @click="decisionAction(decision, 'activate')">{{ t('effectivePricing.activate') }}</button><button v-if="['canary','active','degraded'].includes(decision.status)" class="button secondary" type="button" @click="decisionAction(decision, 'rollback')">{{ t('effectivePricing.rollback') }}</button></footer>
         </article>
         <div v-if="!decisions.length" class="panel empty-cell">{{ t('effectivePricing.noDecisions') }}</div>
       </section>
     </template>
 
-    <template v-else>
+    <template v-else-if="activeTab === 'probes'">
       <section class="panel effective-panel"><header class="panel-header split-header"><div><h2>{{ t('effectivePricing.probeRecords') }}</h2><p>{{ t('effectivePricing.probeHelp') }}</p></div><button class="button secondary" type="button" :disabled="!report?.policy.probe_enabled || !accountOptions.length" :title="report?.policy.probe_enabled ? '' : t('effectivePricing.probeBudgetRequired')" @click="openProbeDialog()"><FlaskConical :size="16" />{{ t('effectivePricing.runProbe') }}</button></header><div class="panel-body probe-list"><article v-for="probe in probes" :key="probe.id" class="probe-row"><div><strong>{{ accountName(probe.provider_account_id) }}</strong><span>{{ probe.upstream_model }} · {{ probe.probe_series_id }}</span><span v-if="probe.failure_reason">{{ probe.failure_reason }}</span></div><div><small>{{ t('effectivePricing.reuseRead') }}</small><strong>{{ formatNumber(probe.reuse_cache_read_tokens) }}</strong></div><div><small>TTFT</small><strong>{{ probe.reuse_ttft_ms }} ms</strong></div><div><small>{{ t('usage.cost') }}</small><strong>{{ formatMoneyMicros(probe.estimated_cost_micros) }}</strong></div><span class="pill" :class="statusClass(probe.status)">{{ probe.status }}</span><time>{{ formatDate(probe.started_at) }}</time></article><div v-if="!probes.length" class="empty-cell">{{ t('effectivePricing.noProbes') }}</div></div></section>
+    </template>
+
+    <template v-else>
+      <section class="panel effective-panel billing-source-panel">
+        <header class="panel-header split-header"><div><h2>{{ t('effectivePricing.billingSources') }}</h2><p>{{ t('effectivePricing.billingSourcesHelp') }}</p></div></header>
+        <div class="panel-body billing-source-body">
+          <div class="billing-source-controls">
+            <label><span>{{ t('admin.providerAccounts') }}</span><select v-model="billingSourceAccountID" @change="billingSourceAccountChanged"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></label>
+            <button class="button" type="button" :disabled="!billingSourceAccountID || inspectingBillingSource" @click="inspectBillingSource"><RefreshCw :size="16" />{{ inspectingBillingSource ? t('common.loading') : t('effectivePricing.inspectSource') }}</button>
+          </div>
+          <div v-if="billingSourceInspection || selectedBillingSource" class="billing-source-config">
+            <label><span>{{ t('effectivePricing.sourceStatus') }}</span><select v-model="billingSourceForm.status"><option value="observe_only">observe_only</option><option value="active">active</option><option value="disabled">disabled</option></select></label>
+            <label><span>{{ t('effectivePricing.syncInterval') }}</span><input v-model.number="billingSourceForm.sync_interval_seconds" type="number" min="60" max="86400" step="60" /></label>
+            <label class="source-auto-sync"><input v-model="billingSourceForm.automatic_sync_enabled" type="checkbox" />{{ t('effectivePricing.automaticSync') }}</label>
+            <div class="row-actions"><button class="button secondary" type="button" :disabled="savingBillingSource || !billingSourceFormValid || (!billingSourceInspection && !selectedBillingSource)" @click="saveBillingSource"><Save :size="16" />{{ savingBillingSource ? t('common.saving') : t('common.save') }}</button><button class="button" type="button" :disabled="!selectedBillingSource || syncingBillingSource || billingSourceForm.status === 'disabled'" @click="syncBillingSourceNow"><RefreshCw :size="16" />{{ syncingBillingSource ? t('common.loading') : t('effectivePricing.syncNow') }}</button></div>
+          </div>
+          <div v-if="billingSourceInspection" class="billing-source-result">
+            <div class="source-result-head"><div><span class="pill" :class="statusClass(billingSourceInspection.detection_status)">{{ billingSourceInspection.detection_status }}</span><h3>{{ billingSourceInspection.provider_name }} / {{ billingSourceInspection.provider_account_name }}</h3><p>{{ billingSourceInspection.adapter_id }} · {{ billingSourceInspection.contract_version }} · {{ formatDate(billingSourceInspection.observed_at) }}</p></div><code>{{ billingSourceInspection.evidence_hash.slice(0, 16) }}</code></div>
+            <dl class="source-capabilities">
+              <div><dt>{{ t('effectivePricing.usageCostLines') }}</dt><dd :class="billingSourceInspection.capabilities.usage_cost_lines ? 'capability-yes' : 'capability-no'">{{ capabilityLabel(billingSourceInspection.capabilities.usage_cost_lines) }}</dd></div>
+              <div><dt>{{ t('effectivePricing.aggregateUsage') }}</dt><dd :class="billingSourceInspection.capabilities.aggregate_usage ? 'capability-yes' : 'capability-no'">{{ capabilityLabel(billingSourceInspection.capabilities.aggregate_usage) }}</dd></div>
+              <div><dt>{{ t('effectivePricing.balanceCapability') }}</dt><dd :class="billingSourceInspection.capabilities.balance ? 'capability-yes' : 'capability-no'">{{ capabilityLabel(billingSourceInspection.capabilities.balance) }}</dd></div>
+              <div><dt>{{ t('effectivePricing.incrementalSync') }}</dt><dd :class="billingSourceInspection.capabilities.incremental_sync ? 'capability-yes' : 'capability-no'">{{ capabilityLabel(billingSourceInspection.capabilities.incremental_sync) }}</dd></div>
+              <div><dt>{{ t('effectivePricing.priceFeed') }}</dt><dd :class="billingSourceInspection.capabilities.price_feed ? 'capability-yes' : 'capability-no'">{{ capabilityLabel(billingSourceInspection.capabilities.price_feed) }}</dd></div>
+            </dl>
+            <div v-if="billingSourceInspection.balance" class="source-balance"><span>{{ balanceKindLabel(billingSourceInspection.balance.kind) }}</span><strong>{{ billingSourceInspection.balance.unlimited ? t('effectivePricing.unlimited') : formatMoneyMicros(billingSourceInspection.balance.amount_micros, billingSourceInspection.balance.currency) }}</strong><small>{{ formatDate(billingSourceInspection.balance.observed_at) }}</small></div>
+            <div v-if="billingSourceInspection.usage_aggregates.length" class="table-scroll"><table class="data-table source-aggregate-table"><thead><tr><th>{{ t('effectivePricing.aggregateScope') }}</th><th>{{ t('usage.requests') }}</th><th>{{ t('usage.inputTokens') }}</th><th>{{ t('usage.outputTokens') }}</th><th>{{ t('effectivePricing.cacheReadTokens') }}</th><th>{{ t('effectivePricing.listCost') }}</th><th>{{ t('effectivePricing.actualCost') }}</th></tr></thead><tbody><tr v-for="aggregate in billingSourceInspection.usage_aggregates" :key="`${aggregate.scope}:${aggregate.model || ''}`"><td :data-label="t('effectivePricing.aggregateScope')">{{ aggregateScopeLabel(aggregate) }}</td><td :data-label="t('usage.requests')">{{ formatNumber(aggregate.request_count) }}</td><td :data-label="t('usage.inputTokens')">{{ formatNumber(aggregate.input_tokens) }}</td><td :data-label="t('usage.outputTokens')">{{ formatNumber(aggregate.output_tokens) }}</td><td :data-label="t('effectivePricing.cacheReadTokens')">{{ formatNumber(aggregate.cache_read_tokens) }}</td><td :data-label="t('effectivePricing.listCost')">{{ formatMoneyMicros(aggregate.list_cost_micros || 0, billingSourceInspection.currency, aggregate.list_cost_micros !== undefined) }}</td><td :data-label="t('effectivePricing.actualCost')">{{ formatMoneyMicros(aggregate.actual_cost_micros || 0, billingSourceInspection.currency, aggregate.actual_cost_micros !== undefined) }}</td></tr></tbody></table></div>
+            <ul class="source-warnings"><li v-for="warning in billingSourceInspection.warnings" :key="warning">{{ billingWarningLabel(warning) }}</li></ul>
+          </div>
+          <div v-if="billingSourceEvidence" class="billing-source-evidence">
+            <div class="source-state-summary"><span><small>{{ t('effectivePricing.sourceStatus') }}</small><strong class="pill" :class="statusClass(billingSourceEvidence.source.status)">{{ billingSourceEvidence.source.status }}</strong></span><span><small>{{ t('effectivePricing.lastSuccess') }}</small><strong>{{ formatDate(billingSourceEvidence.source.last_success_at) }}</strong></span><span><small>{{ t('effectivePricing.nextSync') }}</small><strong>{{ formatDate(billingSourceEvidence.source.next_sync_at) }}</strong></span><span><small>{{ t('effectivePricing.consecutiveFailures') }}</small><strong>{{ billingSourceEvidence.source.consecutive_failures }}</strong></span></div>
+            <section class="source-history-section"><h3>{{ t('effectivePricing.syncHistory') }}</h3><div class="table-scroll"><table class="data-table source-history-table"><thead><tr><th>{{ t('effectivePricing.sourceStatus') }}</th><th>{{ t('effectivePricing.syncTrigger') }}</th><th>{{ t('effectivePricing.adapter') }}</th><th>{{ t('effectivePricing.errorCode') }}</th><th>{{ t('effectivePricing.startedAt') }}</th><th>{{ t('effectivePricing.finishedAt') }}</th></tr></thead><tbody><tr v-for="run in billingSourceEvidence.runs" :key="run.id"><td :data-label="t('effectivePricing.sourceStatus')"><span class="pill" :class="statusClass(run.status)">{{ run.status }}</span></td><td :data-label="t('effectivePricing.syncTrigger')">{{ run.trigger }}</td><td :data-label="t('effectivePricing.adapter')">{{ run.adapter_id }}</td><td :data-label="t('effectivePricing.errorCode')">{{ run.error_code || '-' }}</td><td :data-label="t('effectivePricing.startedAt')">{{ formatDate(run.started_at) }}</td><td :data-label="t('effectivePricing.finishedAt')">{{ formatDate(run.finished_at) }}</td></tr><tr v-if="!billingSourceEvidence.runs.length"><td colspan="6" class="empty-cell">{{ t('effectivePricing.noSyncHistory') }}</td></tr></tbody></table></div></section>
+            <section v-if="billingSourceEvidence.balances.length" class="source-history-section"><h3>{{ t('effectivePricing.balanceHistory') }}</h3><div class="table-scroll"><table class="data-table source-history-table"><thead><tr><th>{{ t('effectivePricing.balanceCapability') }}</th><th>{{ t('usage.cost') }}</th><th>{{ t('effectivePricing.observedAt') }}</th><th>{{ t('effectivePricing.evidenceHash') }}</th></tr></thead><tbody><tr v-for="balance in billingSourceEvidence.balances" :key="balance.id"><td :data-label="t('effectivePricing.balanceCapability')">{{ balanceKindLabel(balance.kind) }}</td><td :data-label="t('usage.cost')"><strong>{{ balance.unlimited ? t('effectivePricing.unlimited') : formatMoneyMicros(balance.amount_micros, balance.currency) }}</strong></td><td :data-label="t('effectivePricing.observedAt')">{{ formatDate(balance.observed_at) }}</td><td :data-label="t('effectivePricing.evidenceHash')"><code>{{ balance.evidence_hash.slice(0, 16) }}</code></td></tr></tbody></table></div></section>
+            <section v-if="billingSourceEvidence.aggregates.length" class="source-history-section"><h3>{{ t('effectivePricing.aggregateHistory') }}</h3><div class="table-scroll"><table class="data-table source-aggregate-table"><thead><tr><th>{{ t('effectivePricing.aggregateScope') }}</th><th>{{ t('usage.requests') }}</th><th>{{ t('effectivePricing.cacheReadTokens') }}</th><th>{{ t('effectivePricing.listCost') }}</th><th>{{ t('effectivePricing.actualCost') }}</th><th>{{ t('effectivePricing.observedAt') }}</th></tr></thead><tbody><tr v-for="aggregate in billingSourceEvidence.aggregates" :key="aggregate.id"><td :data-label="t('effectivePricing.aggregateScope')">{{ aggregateScopeLabel(aggregate) }}</td><td :data-label="t('usage.requests')">{{ formatNumber(aggregate.request_count) }}</td><td :data-label="t('effectivePricing.cacheReadTokens')">{{ formatNumber(aggregate.cache_read_tokens) }}</td><td :data-label="t('effectivePricing.listCost')">{{ formatMoneyMicros(aggregate.list_cost_micros || 0, aggregate.currency, aggregate.list_cost_micros !== undefined) }}</td><td :data-label="t('effectivePricing.actualCost')">{{ formatMoneyMicros(aggregate.actual_cost_micros || 0, aggregate.currency, aggregate.actual_cost_micros !== undefined) }}</td><td :data-label="t('effectivePricing.observedAt')">{{ formatDate(aggregate.observed_at) }}</td></tr></tbody></table></div></section>
+          </div>
+          <div v-if="!billingSourceInspection && !billingSourceEvidence" class="empty-cell">{{ t('effectivePricing.noSourceInspection') }}</div>
+        </div>
+      </section>
     </template>
 
     <div v-if="selectedRow" class="drawer-backdrop" @click.self="selectedRow = null">
@@ -405,10 +608,49 @@ onMounted(load)
       </aside>
     </div>
 
+    <div v-if="selectedDecision" class="drawer-backdrop" @click.self="selectedDecision = null">
+      <aside class="evidence-drawer" role="dialog" aria-modal="true">
+        <header><div><h2>{{ t('effectivePricing.windowEvidence') }}</h2><p>{{ selectedDecision.model }} · {{ selectedDecision.id }}</p></div><button class="icon-button" type="button" :aria-label="t('common.close')" @click="selectedDecision = null"><X :size="18" /></button></header>
+        <div class="evidence-body evaluation-history">
+          <div v-for="evaluation in decisionEvaluations" :key="evaluation.id" class="evaluation-row">
+            <div><span class="pill" :class="statusClass(evaluation.verdict)">{{ evaluation.verdict }}</span><strong>{{ formatDate(evaluation.window_end) }}</strong><small>{{ formatDate(evaluation.window_start) }} → {{ formatDate(evaluation.window_end) }}</small></div>
+            <div><small>{{ t('effectivePricing.costImprovement') }}</small><strong>{{ formatPercent(evaluation.cost_improvement) }}</strong></div>
+            <div><small>{{ t('effectivePricing.cacheHit') }}</small><strong>{{ formatPercent(evaluation.current_cache_token_hit_rate) }} → {{ formatPercent(evaluation.candidate_cache_token_hit_rate) }}</strong></div>
+            <div><small>{{ t('effectivePricing.errorRate') }}</small><strong>{{ formatPercent(evaluation.current_error_rate) }} → {{ formatPercent(evaluation.candidate_error_rate) }}</strong></div>
+            <p>{{ evaluation.reason_codes.join(' · ') || '-' }}</p>
+            <strong v-if="evaluation.automatic_action" class="automatic-action">{{ t('effectivePricing.automaticAction') }}: {{ evaluation.automatic_action }}</strong>
+          </div>
+          <div v-if="!decisionEvaluations.length" class="empty-cell">{{ t('effectivePricing.noWindowEvidence') }}</div>
+        </div>
+      </aside>
+    </div>
+
     <div v-if="dialog" class="modal-backdrop"><form class="modal-card effective-dialog" role="dialog" aria-modal="true" aria-labelledby="effective-dialog-title" aria-describedby="effective-dialog-description" @submit.prevent="saveDialog"><header class="modal-header"><div><h2 id="effective-dialog-title">{{ t(`effectivePricing.dialogs.${dialog}`) }}</h2><p id="effective-dialog-description">{{ t(`effectivePricing.dialogHelp.${dialog}`) }}</p></div><button class="icon-button" type="button" :aria-label="t('common.close')" @click="dialog = null"><X :size="18" /></button></header><div class="modal-body form-grid">
 	      <template v-if="dialog === 'price'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="priceForm.provider_account_id" required @change="accountChanged(priceForm)"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><input v-model="priceForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="priceForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.currency') }}</label><input v-model="priceForm.currency" maxlength="3" required /></div><div class="field"><label>{{ t('effectivePricing.uncachedPrice') }}</label><input v-model.number="priceForm.uncached_input_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheReadPrice') }}</label><input v-model.number="priceForm.cache_read_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheWrite5mPrice') }}</label><input v-model.number="priceForm.cache_write_5m_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheWrite1hPrice') }}</label><input v-model.number="priceForm.cache_write_1h_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.outputPrice') }}</label><input v-model.number="priceForm.output_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.requestPrice') }}</label><input v-model.number="priceForm.request_micros" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.quoted') }}</label><input v-model.number="priceForm.quoted_multiplier" type="number" min="0" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.rechargeMultiplier') }}</label><input v-model.number="priceForm.recharge_multiplier" type="number" min="0" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.referenceInput') }}</label><input v-model.number="priceForm.reference_input_micros_per_1m_tokens" type="number" min="0" /></div><div class="field"><label>{{ t('effectivePricing.referenceOutput') }}</label><input v-model.number="priceForm.reference_output_micros_per_1m_tokens" type="number" min="0" /></div><div class="field"><label>{{ t('effectivePricing.confidence') }}</label><select v-model="priceForm.confidence"><option value="exact">exact</option><option value="derived">derived</option><option value="estimated">estimated</option></select></div><div class="field"><label>{{ t('effectivePricing.sourceReference') }}</label><input v-model="priceForm.source_reference" /></div></template>
       <template v-else-if="dialog === 'billing'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="billingForm.provider_account_id" required @change="accountChanged(billingForm)"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><input v-model="billingForm.upstream_model" /></div><div class="field"><label>{{ t('effectivePricing.externalLine') }}</label><input v-model="billingForm.external_line_id" required /></div><div class="field"><label>{{ t('effectivePricing.upstreamRequest') }}</label><input v-model="billingForm.external_request_id" /></div><div class="field"><label>{{ t('effectivePricing.amountMicros') }}</label><input v-model.number="billingForm.amount_micros" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.confidence') }}</label><select v-model="billingForm.confidence"><option value="exact">exact</option><option value="derived">derived</option><option value="unallocated">unallocated</option><option value="unknown">unknown</option></select></div></template>
-      <template v-else-if="dialog === 'policy'"><div class="field"><label>{{ t('effectivePricing.mode') }}</label><select v-model="policyForm.mode"><option value="observe_only">observe_only</option><option value="recommend">recommend</option><option value="canary">canary</option><option value="balanced">balanced</option><option value="cost_first">cost_first</option><option value="fixed_route">fixed_route</option></select></div><div class="field"><label>{{ t('effectivePricing.minSamples') }}</label><input v-model.number="policyForm.min_sample_count" type="number" min="1" /></div><div class="field"><label>{{ t('effectivePricing.minMetricsCoverage') }}</label><input v-model.number="policyForm.min_metrics_coverage" type="number" min="0" max="1" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.minBillingConsistency') }}</label><input v-model.number="policyForm.min_billing_consistency" type="number" min="0" max="1" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.minCostImprovement') }}</label><input v-model.number="policyForm.min_cost_improvement" type="number" min="0" max="1" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.minCacheImprovement') }}</label><input v-model.number="policyForm.min_cache_hit_rate_improvement" type="number" min="0.01" max="1" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.minAffinityImprovement') }}</label><input v-model.number="policyForm.min_affinity_improvement" type="number" min="0.01" max="1" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.maxCacheCostRegression') }}</label><input v-model.number="policyForm.max_cache_tiebreak_cost_regression" type="number" min="0" max="1" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.maxErrorRegression') }}</label><input v-model.number="policyForm.max_error_rate_regression" type="number" min="0" max="1" step="0.001" /></div><div class="field"><label>{{ t('effectivePricing.maxP95Regression') }}</label><input v-model.number="policyForm.max_p95_latency_regression" type="number" min="0" max="1" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.supplierTTL') }}</label><input v-model.number="policyForm.supplier_affinity_ttl_seconds" type="number" min="1" /></div><div class="field"><label>{{ t('effectivePricing.accountTTL') }}</label><input v-model.number="policyForm.account_affinity_ttl_seconds" type="number" min="1" /></div><div class="field"><label>{{ t('effectivePricing.canaryPercent') }}</label><input v-model.number="policyForm.canary_percent" type="number" min="1" max="100" /></div><div class="field"><label>{{ t('effectivePricing.probeDailyTokens') }}</label><input v-model.number="policyForm.probe_daily_token_budget" type="number" min="0" /></div><div class="field"><label>{{ t('effectivePricing.probeDailyCost') }}</label><input v-model.number="policyForm.probe_daily_cost_budget_micros" type="number" min="0" /></div><div class="field"><label>{{ t('effectivePricing.probeCooldown') }}</label><input v-model.number="policyForm.probe_cooldown_seconds" type="number" min="0" /></div><label class="checkbox-row"><input v-model="policyForm.probe_enabled" type="checkbox" />{{ t('effectivePricing.enableProbes') }}</label></template>
+	      <template v-else-if="dialog === 'policy'">
+	        <div class="field"><label>{{ t('effectivePricing.mode') }}</label><select v-model="policyForm.mode"><option value="observe_only">observe_only</option><option value="recommend">recommend</option><option value="canary">canary</option><option value="balanced">balanced</option><option value="cost_first">cost_first</option><option value="fixed_route">fixed_route</option></select></div>
+	        <div class="field"><label>{{ t('effectivePricing.minSamples') }}</label><input v-model.number="policyForm.min_sample_count" type="number" min="1" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.minMetricsCoverage') }}</label><input v-model.number="policyForm.min_metrics_coverage" type="number" min="0" max="1" step="0.01" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.minBillingConsistency') }}</label><input v-model.number="policyForm.min_billing_consistency" type="number" min="0" max="1" step="0.01" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.minCostImprovement') }}</label><input v-model.number="policyForm.min_cost_improvement" type="number" min="0" max="1" step="0.01" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.minCacheImprovement') }}</label><input v-model.number="policyForm.min_cache_hit_rate_improvement" type="number" min="0.01" max="1" step="0.01" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.minAffinityImprovement') }}</label><input v-model.number="policyForm.min_affinity_improvement" type="number" min="0.01" max="1" step="0.01" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.maxCacheCostRegression') }}</label><input v-model.number="policyForm.max_cache_tiebreak_cost_regression" type="number" min="0" max="1" step="0.01" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.maxErrorRegression') }}</label><input v-model.number="policyForm.max_error_rate_regression" type="number" min="0" max="1" step="0.001" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.maxP95Regression') }}</label><input v-model.number="policyForm.max_p95_latency_regression" type="number" min="0" max="1" step="0.01" /></div>
+	        <div class="field"><label for="effective-evaluation-interval">{{ t('effectivePricing.evaluationInterval') }}</label><input id="effective-evaluation-interval" v-model.number="policyForm.evaluation_interval_minutes" type="number" min="1" max="1440" /></div>
+	        <div class="field"><label for="effective-promotion-windows">{{ t('effectivePricing.promotionWindows') }}</label><input id="effective-promotion-windows" v-model.number="policyForm.promotion_window_count" type="number" min="1" max="24" /></div>
+	        <div class="field"><label for="effective-degradation-windows">{{ t('effectivePricing.degradationWindows') }}</label><input id="effective-degradation-windows" v-model.number="policyForm.degradation_window_count" type="number" min="1" max="24" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.supplierTTL') }}</label><input v-model.number="policyForm.supplier_affinity_ttl_seconds" type="number" min="1" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.accountTTL') }}</label><input v-model.number="policyForm.account_affinity_ttl_seconds" type="number" min="1" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.canaryPercent') }}</label><input v-model.number="policyForm.canary_percent" type="number" min="1" max="100" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.probeDailyTokens') }}</label><input v-model.number="policyForm.probe_daily_token_budget" type="number" min="0" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.probeDailyCost') }}</label><input v-model.number="policyForm.probe_daily_cost_budget_micros" type="number" min="0" /></div>
+	        <div class="field"><label>{{ t('effectivePricing.probeCooldown') }}</label><input v-model.number="policyForm.probe_cooldown_seconds" type="number" min="0" /></div>
+	        <label class="checkbox-row"><input v-model="policyForm.automatic_actions_enabled" type="checkbox" />{{ t('effectivePricing.enableAutomaticActions') }}</label>
+	        <label class="checkbox-row"><input v-model="policyForm.probe_enabled" type="checkbox" />{{ t('effectivePricing.enableProbes') }}</label>
+	      </template>
 	      <template v-else-if="dialog === 'probe'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="probeForm.provider_account_id" required><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><input v-model="probeForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="probeForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.probePrefixTokens') }}</label><input v-model.number="probeForm.prefix_tokens" type="number" min="256" max="32768" required /></div><div class="field"><label>{{ t('effectivePricing.probeMaxCost') }}</label><input v-model.number="probeForm.max_cost_micros" type="number" min="1" required /></div><label class="checkbox-row probe-confirmation"><input v-model="probeBudgetConfirmed" type="checkbox" />{{ t('effectivePricing.probeConfirm') }}</label></template>
 	      <template v-else-if="dialog === 'capability'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="capabilityForm.provider_account_id" required><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><input v-model="capabilityForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="capabilityForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.supportStatus') }}</label><select v-model="capabilityForm.support_status" :disabled="!['unknown','claimed','accepted'].includes(capabilityForm.support_status)"><option v-if="!['unknown','claimed','accepted'].includes(capabilityForm.support_status)" :value="capabilityForm.support_status">{{ capabilityForm.support_status }}</option><option value="unknown">unknown</option><option value="claimed">claimed</option><option value="accepted">accepted</option></select></div><div class="field"><label>{{ t('effectivePricing.poolAffinityGrade') }}</label><input v-model="capabilityForm.pool_affinity_grade" disabled /></div><div class="field"><label>{{ t('effectivePricing.affinityTransport') }}</label><select v-model="capabilityForm.affinity_transport" @change="capabilityTransportChanged"><option value="none">none</option><option value="header">header</option><option value="body">body</option></select></div><div class="field"><label>{{ t('effectivePricing.affinityField') }}</label><input v-model="capabilityForm.affinity_field" :disabled="capabilityForm.affinity_transport === 'none'" :required="capabilityForm.affinity_transport !== 'none'" /></div><div class="field"><label>{{ t('effectivePricing.cacheControlMode') }}</label><select v-model="capabilityForm.cache_control_mode"><option value="passthrough_if_present">passthrough_if_present</option><option value="prompt_cache_key">prompt_cache_key</option></select></div><div class="field"><label>{{ t('effectivePricing.usageSchema') }}</label><input v-model="capabilityForm.usage_schema" /></div></template>
 	      <template v-else>
@@ -428,6 +670,38 @@ onMounted(load)
 .effective-tabs { display: flex; gap: 3px; padding: 3px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .effective-tabs button { display: inline-flex; min-height: 40px; align-items: center; gap: 7px; padding: 0 15px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; font-weight: 700; }
 .effective-tabs button.active { border-bottom-color: var(--primary-600); color: var(--primary-700); }
+.billing-source-body { display: grid; gap: 18px; padding: 18px !important; }
+.billing-source-controls { display: flex; align-items: end; gap: 12px; }
+.billing-source-controls label { display: grid; flex: 1 1 340px; max-width: 560px; gap: 6px; color: var(--text-muted); font-size: 12px; font-weight: 700; }
+.billing-source-controls select { width: 100%; min-height: 40px; }
+.billing-source-config { display: grid; grid-template-columns: minmax(170px,.8fr) minmax(170px,.8fr) minmax(180px,1fr) auto; align-items: end; gap: 12px; padding: 14px; border: 1px solid var(--border); background: var(--surface-subtle); }
+.billing-source-config > label:not(.source-auto-sync) { display: grid; gap: 6px; color: var(--text-muted); font-size: 12px; font-weight: 700; }
+.billing-source-config select, .billing-source-config input[type="number"] { min-height: 38px; width: 100%; }
+.source-auto-sync { display: flex; min-height: 38px; align-items: center; gap: 8px; color: var(--text); font-size: 12px; font-weight: 700; }
+.billing-source-result { display: grid; gap: 16px; border-top: 1px solid var(--border); padding-top: 18px; }
+.source-result-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.source-result-head h3 { margin: 7px 0 2px; font-size: 16px; }
+.source-result-head p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.source-result-head code { color: var(--text-muted); font-size: 12px; }
+.source-capabilities { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0; border: 1px solid var(--border); }
+.source-capabilities > div { min-width: 0; padding: 12px; border-right: 1px solid var(--border); }
+.source-capabilities > div:last-child { border-right: 0; }
+.source-capabilities dt { color: var(--text-muted); font-size: 11px; }
+.source-capabilities dd { margin: 6px 0 0; font-weight: 800; }
+.capability-yes { color: var(--success); }
+.capability-no { color: var(--text-muted); }
+.source-balance { display: grid; grid-template-columns: minmax(160px, 1fr) auto auto; align-items: baseline; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.source-balance span, .source-balance small { color: var(--text-muted); }
+.source-balance strong { font-size: 22px; }
+.source-warnings { display: grid; gap: 7px; margin: 0; padding: 12px 12px 12px 30px; border-left: 3px solid var(--warning); background: var(--surface-subtle); color: var(--text-muted); font-size: 12px; }
+.billing-source-evidence { display: grid; gap: 18px; border-top: 1px solid var(--border); padding-top: 18px; }
+.source-state-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 1px; border: 1px solid var(--border); background: var(--border); }
+.source-state-summary > span { display: grid; min-width: 0; gap: 5px; padding: 12px; background: var(--surface); }
+.source-state-summary small { color: var(--text-muted); font-size: 11px; }
+.source-state-summary strong { overflow-wrap: anywhere; font-size: 12px; }
+.source-history-section { min-width: 0; }
+.source-history-section h3 { margin: 0 0 10px; font-size: 14px; }
+.source-history-table code { color: var(--text-muted); font-size: 11px; }
 .effective-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 14px; border: 1px solid var(--border); background: var(--surface); }
 .effective-filters label { display: grid; min-width: 170px; gap: 5px; color: var(--text-muted); font-size: 11px; font-weight: 700; }
 .effective-filters input, .effective-filters select { min-height: 38px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
@@ -453,6 +727,10 @@ onMounted(load)
 .decision-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0; }
 .decision-compare > div { display: grid; gap: 3px; padding: 12px; border: 1px solid var(--border); background: var(--surface-subtle); }
 .decision-compare small, .decision-compare span { color: var(--text-muted); font-size: 11px; }
+.decision-monitoring { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.decision-monitoring > span { display: grid; align-content: start; gap: 4px; min-width: 0; }
+.decision-monitoring small { color: var(--text-muted); font-size: 11px; }
+.decision-monitoring strong { overflow-wrap: anywhere; font-size: 12px; }
 .decision-reasons { padding: 10px; border-left: 3px solid var(--warning); background: var(--warning-bg); }
 .decision-card footer { justify-content: flex-end; margin-top: 14px; }
 .drawer-backdrop { position: fixed; inset: 0; z-index: 80; background: rgb(15 23 42 / 35%); }
@@ -467,6 +745,14 @@ onMounted(load)
 .evidence-section { padding: 18px 0; }
 .evidence-section h3 { margin: 0 0 10px; font-size: 13px; }
 .evidence-section p { overflow-wrap: anywhere; }
+.evaluation-history { padding: 8px 0; }
+.evaluation-row { display: grid; grid-template-columns: minmax(160px,1.4fr) repeat(3,minmax(90px,1fr)); gap: 10px; align-items: start; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.evaluation-row > div { display: grid; gap: 4px; min-width: 0; }
+.evaluation-row > div:first-child { grid-template-columns: auto 1fr; align-items: center; }
+.evaluation-row > div:first-child small { grid-column: 1 / -1; }
+.evaluation-row small, .evaluation-row p { color: var(--text-muted); font-size: 11px; }
+.evaluation-row p, .evaluation-row .automatic-action { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
+.automatic-action { color: var(--success); font-size: 12px; }
 .evidence-drawer footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .effective-dialog { width: min(720px,calc(100vw - 28px)); }
 .probe-confirmation { grid-column: 1 / -1; line-height: 1.45; }
@@ -474,6 +760,16 @@ onMounted(load)
 @media (max-width: 720px) {
   .effective-tabs { overflow-x: auto; }
   .effective-tabs button { flex: 0 0 auto; padding: 0 11px; }
+  .billing-source-controls { align-items: stretch; flex-direction: column; }
+  .billing-source-controls label { flex-basis: auto; max-width: none; }
+  .billing-source-config { grid-template-columns: 1fr; align-items: stretch; }
+  .billing-source-config .row-actions { justify-content: stretch; }
+  .billing-source-config .row-actions .button { flex: 1 1 0; }
+  .source-result-head { align-items: stretch; flex-direction: column; }
+  .source-capabilities { grid-template-columns: 1fr 1fr; }
+  .source-capabilities > div { border-bottom: 1px solid var(--border); }
+  .source-balance { grid-template-columns: 1fr; gap: 4px; }
+  .source-state-summary { grid-template-columns: 1fr 1fr; }
   .effective-filters { display: grid; grid-template-columns: 1fr 1fr; }
   .effective-filters label:first-child { grid-column: 1 / -1; }
   .effective-filters > .pill { margin-left: 0; }
@@ -487,9 +783,18 @@ onMounted(load)
   .ep-table td::before { content: attr(data-label); color: var(--text-muted); font-size: 11px; font-weight: 700; }
   .ep-table td[colspan] { display: block; }
   .ep-table td[colspan]::before { display: none; }
+  .source-aggregate-table, .source-history-table { min-width: 0; }
+  .source-aggregate-table, .source-aggregate-table tbody, .source-aggregate-table tr, .source-aggregate-table td, .source-history-table, .source-history-table tbody, .source-history-table tr, .source-history-table td { display: block; width: 100%; }
+  .source-aggregate-table thead, .source-history-table thead { display: none; }
+  .source-aggregate-table tr, .source-history-table tr { padding: 10px 0; }
+  .source-aggregate-table td, .source-history-table td { display: grid; grid-template-columns: minmax(125px, .65fr) minmax(0, 1fr); gap: 9px; padding: 7px 0; border: 0; white-space: normal; }
+  .source-aggregate-table td::before, .source-history-table td::before { content: attr(data-label); color: var(--text-muted); font-size: 11px; font-weight: 700; }
   .cache-row, .probe-row { grid-template-columns: 1fr 1fr; }
   .cache-row > div:first-child, .probe-row > div:first-child { grid-column: 1 / -1; }
   .switch-head { display: grid; }
+  .decision-monitoring { grid-template-columns: 1fr 1fr; }
+  .evaluation-row { grid-template-columns: 1fr 1fr; }
+  .evaluation-row > div:first-child { grid-column: 1 / -1; }
   .evidence-drawer { width: 100%; padding: 16px; }
   .evidence-grid { grid-template-columns: 1fr; }
 }

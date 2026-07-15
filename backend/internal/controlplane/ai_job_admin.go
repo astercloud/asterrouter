@@ -77,10 +77,11 @@ type AIAttemptAdminRecord struct {
 }
 
 type AIJobAdminDetail struct {
-	Job       AIJobAdminRecord       `json:"job"`
-	Attempts  []AIAttemptAdminRecord `json:"attempts"`
-	Events    []AIJobEvent           `json:"events"`
-	Artifacts []ArtifactAdminRecord  `json:"artifacts"`
+	Job            AIJobAdminRecord       `json:"job"`
+	Attempts       []AIAttemptAdminRecord `json:"attempts"`
+	Events         []AIJobEvent           `json:"events"`
+	ProgressEvents []AIJobProgressEvent   `json:"progress_events"`
+	Artifacts      []ArtifactAdminRecord  `json:"artifacts"`
 }
 
 type AIJobAdminActionResult struct {
@@ -141,13 +142,17 @@ func (s *Service) AIJobAdmin(ctx context.Context, id string) (AIJobAdminDetail, 
 	if err != nil {
 		return AIJobAdminDetail{}, err
 	}
+	progressEvents, err := s.repo.ListAIJobProgressEvents(ctx, job.ID)
+	if err != nil {
+		return AIJobAdminDetail{}, err
+	}
 	artifacts, err := s.repo.QueryArtifacts(ctx, ArtifactQuery{JobID: job.ID, Limit: 100})
 	if err != nil {
 		return AIJobAdminDetail{}, err
 	}
 	detail := AIJobAdminDetail{
 		Job: aiJobAdminRecord(job), Attempts: make([]AIAttemptAdminRecord, 0, len(attempts)),
-		Events: events, Artifacts: make([]ArtifactAdminRecord, 0, len(artifacts)),
+		Events: events, ProgressEvents: progressEvents, Artifacts: make([]ArtifactAdminRecord, 0, len(artifacts)),
 	}
 	for _, attempt := range attempts {
 		detail.Attempts = append(detail.Attempts, aiAttemptAdminRecord(attempt))

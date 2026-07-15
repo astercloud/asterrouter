@@ -322,9 +322,9 @@ func TestUsageReportQueryAggregatesBeyondCurrentPage(t *testing.T) {
 		t.Fatalf("AuthorizeGatewayModel(): %v", err)
 	}
 	inputs := []GatewayUsageInput{
-		{Model: "model-a", ProviderID: "provider-a", ProviderAccountID: "account-a", Status: "forwarded", InputTokens: 1, OutputTokens: 1, CostCents: 100, LatencyMS: 10},
-		{Model: "model-b", ProviderID: "provider-b", ProviderAccountID: "account-b", Status: "error", ErrorType: "policy_error", InputTokens: 2, OutputTokens: 2, CostCents: 200, LatencyMS: 20},
-		{Model: "model-b", ProviderID: "provider-b", ProviderAccountID: "account-c", Status: "forwarded", InputTokens: 3, OutputTokens: 3, CostCents: 300, LatencyMS: 30},
+		{Model: "model-a", ProviderID: "provider-a", ProviderAccountID: "account-a", Status: "forwarded", InputTokens: 1, OutputTokens: 1, CostCents: 100, LatencyMS: 10, UsageDimensions: UsageDimensions{UsageDimensionOutputImages: {Quantity: 1, Unit: UsageUnitCount, Source: "core", Confidence: UsageConfidenceObserved}}},
+		{Model: "model-b", ProviderID: "provider-b", ProviderAccountID: "account-b", Status: "error", ErrorType: "policy_error", InputTokens: 2, OutputTokens: 2, CostCents: 200, LatencyMS: 20, UsageDimensions: UsageDimensions{UsageDimensionOutputVideoMilliseconds: {Quantity: 1500, Unit: UsageUnitMillisecond, Source: "provider", Confidence: UsageConfidenceReported}}},
+		{Model: "model-b", ProviderID: "provider-b", ProviderAccountID: "account-c", Status: "forwarded", InputTokens: 3, OutputTokens: 3, CostCents: 300, LatencyMS: 30, UsageDimensions: UsageDimensions{UsageDimensionOutputAudioMilliseconds: {Quantity: 2500, Unit: UsageUnitMillisecond, Source: "provider", Confidence: UsageConfidenceReported}}},
 	}
 	for _, input := range inputs {
 		if err := svc.RecordGatewayUsage(context.Background(), auth, input); err != nil {
@@ -339,14 +339,14 @@ func TestUsageReportQueryAggregatesBeyondCurrentPage(t *testing.T) {
 	if len(report.Recent) != 1 {
 		t.Fatalf("recent should remain paginated, got %d", len(report.Recent))
 	}
-	if report.TotalRequests != 3 || report.ErrorRequests != 1 || report.TotalTokens != 12 || report.TotalCostCents != 600 || report.AvgLatencyMS != 20 {
+	if report.TotalRequests != 3 || report.ErrorRequests != 1 || report.TotalTokens != 12 || report.TotalOutputImages != 1 || report.TotalVideoDuration != 1500 || report.TotalAudioDuration != 2500 || report.TotalCostCents != 600 || report.AvgLatencyMS != 20 {
 		t.Fatalf("aggregate does not include all records: %+v", report)
 	}
 	byModel := map[string]UsageModelSummary{}
 	for _, item := range report.ByModel {
 		byModel[item.Model] = item
 	}
-	if byModel["model-b"].Requests != 2 || byModel["model-b"].Errors != 1 || byModel["model-b"].Tokens != 10 {
+	if byModel["model-b"].Requests != 2 || byModel["model-b"].Errors != 1 || byModel["model-b"].Tokens != 10 || byModel["model-b"].VideoMilliseconds != 1500 || byModel["model-b"].AudioMilliseconds != 2500 {
 		t.Fatalf("model aggregate does not include all matching records: %+v", report.ByModel)
 	}
 

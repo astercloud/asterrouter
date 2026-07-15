@@ -53,6 +53,8 @@ type CanonicalRequest struct {
 	PreviewMode     string          `json:"preview_mode,omitempty"`
 	DeliveryMode    string          `json:"delivery_mode,omitempty"`
 	OutputCount     int             `json:"output_count,omitempty"`
+	VideoDurationMS int64           `json:"video_duration_ms,omitempty"`
+	AudioDurationMS int64           `json:"audio_duration_ms,omitempty"`
 	SourceIP        string          `json:"-"`
 	Payload         json.RawMessage `json:"-"`
 }

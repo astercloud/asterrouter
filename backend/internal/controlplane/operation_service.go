@@ -331,6 +331,10 @@ func (s *Service) AIAttemptsForReconciliation(ctx context.Context, limit int) ([
 	return s.repo.ListAIAttemptsForReconciliation(ctx, s.nowUTC(), limit)
 }
 
+func (s *Service) DirectAIAttemptsForReconciliation(ctx context.Context, limit int) ([]AIAttempt, error) {
+	return s.repo.ListDirectAIAttemptsForReconciliation(ctx, s.nowUTC(), limit)
+}
+
 func (s *Service) DurableAIAttemptsForReconciliation(ctx context.Context, limit int) ([]AIAttempt, error) {
 	return s.repo.ListDurableAIAttemptsForReconciliation(ctx, s.nowUTC(), limit)
 }
@@ -382,15 +386,16 @@ func usageLedgerRecords(record UsageRecord) (BillingLedgerEntry, TransactionalOu
 		Status: BillingLedgerStatusApplied, CreatedAt: record.CreatedAt,
 	}
 	payload, err := json.Marshal(struct {
-		UsageRecordID string `json:"usage_record_id"`
-		OperationID   string `json:"operation_id"`
-		AttemptID     string `json:"attempt_id"`
-		UsageVersion  int    `json:"usage_version"`
-		InputTokens   int    `json:"input_tokens"`
-		OutputTokens  int    `json:"output_tokens"`
-		CostCents     int    `json:"cost_cents"`
-		Status        string `json:"status"`
-	}{record.ID, record.OperationID, record.AttemptID, record.UsageVersion, record.InputTokens, record.OutputTokens, record.CostCents, record.Status})
+		UsageRecordID   string          `json:"usage_record_id"`
+		OperationID     string          `json:"operation_id"`
+		AttemptID       string          `json:"attempt_id"`
+		UsageVersion    int             `json:"usage_version"`
+		InputTokens     int             `json:"input_tokens"`
+		OutputTokens    int             `json:"output_tokens"`
+		UsageDimensions UsageDimensions `json:"usage_dimensions"`
+		CostCents       int             `json:"cost_cents"`
+		Status          string          `json:"status"`
+	}{record.ID, record.OperationID, record.AttemptID, record.UsageVersion, record.InputTokens, record.OutputTokens, record.UsageDimensions, record.CostCents, record.Status})
 	if err != nil {
 		return BillingLedgerEntry{}, TransactionalOutboxEvent{}, fmt.Errorf("marshal usage outbox payload: %w", err)
 	}

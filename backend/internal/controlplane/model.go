@@ -30,10 +30,14 @@ const (
 	GatewayOperationListModels      = "list_models"
 	GatewayOperationChatCompletion  = "chat_completion"
 	GatewayOperationImageGeneration = "image_generation"
+	GatewayOperationVideoGeneration = "video_generation"
+	GatewayOperationAudioGeneration = "audio_generation"
 
 	GatewayModalityMetadata = "metadata"
 	GatewayModalityText     = "text"
 	GatewayModalityImage    = "image"
+	GatewayModalityVideo    = "video"
+	GatewayModalityAudio    = "audio"
 
 	GatewayLanePolicyDirectOnly       = "direct_only"
 	GatewayLanePolicyDurableOnly      = "durable_only"
@@ -612,77 +616,87 @@ type Dashboard struct {
 }
 
 type UsageRecord struct {
-	ID                        string    `json:"id"`
-	OperationID               string    `json:"operation_id"`
-	AttemptID                 string    `json:"attempt_id"`
-	UsageVersion              int       `json:"usage_version"`
-	UsageSource               string    `json:"usage_source"`
-	RequestFingerprint        string    `json:"request_fingerprint"`
-	APIKeyID                  string    `json:"api_key_id"`
-	CustomerID                string    `json:"customer_id"`
-	ProfileScope              string    `json:"profile_scope"`
-	PlatformTenantID          string    `json:"platform_tenant_id"`
-	PlatformTenantName        string    `json:"platform_tenant_name"`
-	GatewayPrincipalID        string    `json:"gateway_principal_id"`
-	GatewayPrincipalName      string    `json:"gateway_principal_name"`
-	ExternalAuthIntegrationID string    `json:"external_auth_integration_id"`
-	ExternalSubjectReference  string    `json:"external_subject_reference"`
-	APIFingerprint            string    `json:"api_fingerprint"`
-	Model                     string    `json:"model"`
-	UpstreamModel             string    `json:"upstream_model"`
-	Protocol                  string    `json:"protocol"`
-	ProviderID                string    `json:"provider_id"`
-	ProviderAccountID         string    `json:"provider_account_id"`
-	Status                    string    `json:"status"`
-	ErrorType                 string    `json:"error_type"`
-	LatencyMS                 int64     `json:"latency_ms"`
-	TTFTMS                    *int64    `json:"ttft_ms,omitempty"`
-	InputTokens               int       `json:"input_tokens"`
-	OutputTokens              int       `json:"output_tokens"`
-	TotalInputTokens          *int      `json:"total_input_tokens,omitempty"`
-	UncachedInputTokens       *int      `json:"uncached_input_tokens,omitempty"`
-	CacheReadTokens           *int      `json:"cache_read_tokens,omitempty"`
-	CacheWrite5mTokens        *int      `json:"cache_write_5m_tokens,omitempty"`
-	CacheWrite1hTokens        *int      `json:"cache_write_1h_tokens,omitempty"`
-	CacheFieldsPresent        bool      `json:"cache_fields_present"`
-	UsageNormalizationStatus  string    `json:"usage_normalization_status"`
-	UpstreamRequestID         string    `json:"upstream_request_id"`
-	ProcurementCostMicros     *int64    `json:"procurement_cost_micros,omitempty"`
-	ProcurementCostCurrency   string    `json:"procurement_cost_currency"`
-	ProcurementCostSource     string    `json:"procurement_cost_source"`
-	ProcurementCostConfidence string    `json:"procurement_cost_confidence"`
-	ProcurementPriceID        string    `json:"procurement_price_id"`
-	ProviderBillingLineID     string    `json:"provider_billing_line_id"`
-	CostCents                 int       `json:"cost_cents"`
-	CreatedAt                 time.Time `json:"created_at"`
+	ID                        string          `json:"id"`
+	OperationID               string          `json:"operation_id"`
+	AttemptID                 string          `json:"attempt_id"`
+	UsageVersion              int             `json:"usage_version"`
+	UsageSource               string          `json:"usage_source"`
+	RequestFingerprint        string          `json:"request_fingerprint"`
+	APIKeyID                  string          `json:"api_key_id"`
+	CustomerID                string          `json:"customer_id"`
+	ProfileScope              string          `json:"profile_scope"`
+	PlatformTenantID          string          `json:"platform_tenant_id"`
+	PlatformTenantName        string          `json:"platform_tenant_name"`
+	GatewayPrincipalID        string          `json:"gateway_principal_id"`
+	GatewayPrincipalName      string          `json:"gateway_principal_name"`
+	ExternalAuthIntegrationID string          `json:"external_auth_integration_id"`
+	ExternalSubjectReference  string          `json:"external_subject_reference"`
+	APIFingerprint            string          `json:"api_fingerprint"`
+	Model                     string          `json:"model"`
+	UpstreamModel             string          `json:"upstream_model"`
+	Protocol                  string          `json:"protocol"`
+	ProviderID                string          `json:"provider_id"`
+	ProviderAccountID         string          `json:"provider_account_id"`
+	Status                    string          `json:"status"`
+	ErrorType                 string          `json:"error_type"`
+	LatencyMS                 int64           `json:"latency_ms"`
+	TTFTMS                    *int64          `json:"ttft_ms,omitempty"`
+	InputTokens               int             `json:"input_tokens"`
+	OutputTokens              int             `json:"output_tokens"`
+	TotalInputTokens          *int            `json:"total_input_tokens,omitempty"`
+	UncachedInputTokens       *int            `json:"uncached_input_tokens,omitempty"`
+	CacheReadTokens           *int            `json:"cache_read_tokens,omitempty"`
+	CacheWrite5mTokens        *int            `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens        *int            `json:"cache_write_1h_tokens,omitempty"`
+	CacheFieldsPresent        bool            `json:"cache_fields_present"`
+	UsageDimensions           UsageDimensions `json:"usage_dimensions"`
+	UsageNormalizationStatus  string          `json:"usage_normalization_status"`
+	UpstreamRequestID         string          `json:"upstream_request_id"`
+	ProcurementCostMicros     *int64          `json:"procurement_cost_micros,omitempty"`
+	ProcurementCostCurrency   string          `json:"procurement_cost_currency"`
+	ProcurementCostSource     string          `json:"procurement_cost_source"`
+	ProcurementCostConfidence string          `json:"procurement_cost_confidence"`
+	ProcurementPriceID        string          `json:"procurement_price_id"`
+	ProviderBillingLineID     string          `json:"provider_billing_line_id"`
+	CostCents                 int             `json:"cost_cents"`
+	CreatedAt                 time.Time       `json:"created_at"`
 }
 
 type UsageModelSummary struct {
-	Model      string `json:"model"`
-	Requests   int    `json:"requests"`
-	Errors     int    `json:"errors"`
-	Tokens     int    `json:"tokens"`
-	CostCents  int    `json:"cost_cents"`
-	AvgLatency int64  `json:"avg_latency_ms"`
+	Model             string `json:"model"`
+	Requests          int    `json:"requests"`
+	Errors            int    `json:"errors"`
+	Tokens            int    `json:"tokens"`
+	OutputImages      int64  `json:"output_images"`
+	VideoMilliseconds int64  `json:"video_milliseconds"`
+	AudioMilliseconds int64  `json:"audio_milliseconds"`
+	CostCents         int    `json:"cost_cents"`
+	AvgLatency        int64  `json:"avg_latency_ms"`
 }
 
 type UsageReport struct {
-	TotalRequests  int                 `json:"total_requests"`
-	ErrorRequests  int                 `json:"error_requests"`
-	TotalTokens    int                 `json:"total_tokens"`
-	TotalCostCents int                 `json:"total_cost_cents"`
-	AvgLatencyMS   int64               `json:"avg_latency_ms"`
-	ByModel        []UsageModelSummary `json:"by_model"`
-	Recent         []UsageRecord       `json:"recent"`
+	TotalRequests      int                 `json:"total_requests"`
+	ErrorRequests      int                 `json:"error_requests"`
+	TotalTokens        int                 `json:"total_tokens"`
+	TotalOutputImages  int64               `json:"total_output_images"`
+	TotalVideoDuration int64               `json:"total_video_milliseconds"`
+	TotalAudioDuration int64               `json:"total_audio_milliseconds"`
+	TotalCostCents     int                 `json:"total_cost_cents"`
+	AvgLatencyMS       int64               `json:"avg_latency_ms"`
+	ByModel            []UsageModelSummary `json:"by_model"`
+	Recent             []UsageRecord       `json:"recent"`
 }
 
 type UsageAggregate struct {
-	TotalRequests  int
-	ErrorRequests  int
-	TotalTokens    int
-	TotalCostCents int
-	AvgLatencyMS   int64
-	ByModel        []UsageModelSummary
+	TotalRequests      int
+	ErrorRequests      int
+	TotalTokens        int
+	TotalOutputImages  int64
+	TotalVideoDuration int64
+	TotalAudioDuration int64
+	TotalCostCents     int
+	AvgLatencyMS       int64
+	ByModel            []UsageModelSummary
 }
 
 type CostAllocationRollup struct {

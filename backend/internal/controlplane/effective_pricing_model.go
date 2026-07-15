@@ -50,6 +50,10 @@ const (
 	EffectivePricingDecisionDegraded          = "degraded"
 	EffectivePricingDecisionEmergencyFailover = "emergency_failover"
 
+	EffectivePricingEvaluationHealthy      = "healthy"
+	EffectivePricingEvaluationDegraded     = "degraded"
+	EffectivePricingEvaluationInconclusive = "inconclusive"
+
 	CacheProbeStatusRunning   = "running"
 	CacheProbeStatusSucceeded = "succeeded"
 	CacheProbeStatusFailed    = "failed"
@@ -278,6 +282,10 @@ type EffectivePricingPolicy struct {
 	CanaryPercent                  int       `json:"canary_percent"`
 	SupplierAffinityTTLSeconds     int       `json:"supplier_affinity_ttl_seconds"`
 	AccountAffinityTTLSeconds      int       `json:"account_affinity_ttl_seconds"`
+	AutomaticActionsEnabled        bool      `json:"automatic_actions_enabled"`
+	EvaluationIntervalMinutes      int       `json:"evaluation_interval_minutes"`
+	PromotionWindowCount           int       `json:"promotion_window_count"`
+	DegradationWindowCount         int       `json:"degradation_window_count"`
 	ProbeEnabled                   bool      `json:"probe_enabled"`
 	ProbeDailyTokenBudget          int64     `json:"probe_daily_token_budget"`
 	ProbeDailyCostBudgetMicros     int64     `json:"probe_daily_cost_budget_micros"`
@@ -302,6 +310,10 @@ type EffectivePricingPolicyRequest struct {
 	CanaryPercent                  int     `json:"canary_percent"`
 	SupplierAffinityTTLSeconds     int     `json:"supplier_affinity_ttl_seconds"`
 	AccountAffinityTTLSeconds      int     `json:"account_affinity_ttl_seconds"`
+	AutomaticActionsEnabled        bool    `json:"automatic_actions_enabled"`
+	EvaluationIntervalMinutes      int     `json:"evaluation_interval_minutes"`
+	PromotionWindowCount           int     `json:"promotion_window_count"`
+	DegradationWindowCount         int     `json:"degradation_window_count"`
 	ProbeEnabled                   bool    `json:"probe_enabled"`
 	ProbeDailyTokenBudget          int64   `json:"probe_daily_token_budget"`
 	ProbeDailyCostBudgetMicros     int64   `json:"probe_daily_cost_budget_micros"`
@@ -331,25 +343,76 @@ type EffectivePriceSnapshot struct {
 }
 
 type EffectivePricingDecision struct {
-	ID                         string    `json:"id"`
-	Model                      string    `json:"model"`
-	UpstreamModel              string    `json:"upstream_model"`
-	Protocol                   string    `json:"protocol"`
-	CurrentProviderAccountID   string    `json:"current_provider_account_id"`
-	CandidateProviderAccountID string    `json:"candidate_provider_account_id"`
-	CurrentSnapshotID          string    `json:"current_snapshot_id"`
-	CandidateSnapshotID        string    `json:"candidate_snapshot_id"`
-	CurrentCostMicrosPer1M     int64     `json:"current_cost_micros_per_1m"`
-	CandidateCostMicrosPer1M   int64     `json:"candidate_cost_micros_per_1m"`
-	CostImprovement            float64   `json:"cost_improvement"`
-	Status                     string    `json:"status"`
-	ReasonCodes                []string  `json:"reason_codes"`
-	CanaryPercent              int       `json:"canary_percent"`
-	SampleCount                int64     `json:"sample_count"`
-	Confidence                 string    `json:"confidence"`
-	CreatedBy                  string    `json:"created_by"`
-	CreatedAt                  time.Time `json:"created_at"`
-	UpdatedAt                  time.Time `json:"updated_at"`
+	ID                         string     `json:"id"`
+	Model                      string     `json:"model"`
+	UpstreamModel              string     `json:"upstream_model"`
+	Protocol                   string     `json:"protocol"`
+	CurrentProviderAccountID   string     `json:"current_provider_account_id"`
+	CandidateProviderAccountID string     `json:"candidate_provider_account_id"`
+	CurrentSnapshotID          string     `json:"current_snapshot_id"`
+	CandidateSnapshotID        string     `json:"candidate_snapshot_id"`
+	CurrentCostMicrosPer1M     int64      `json:"current_cost_micros_per_1m"`
+	CandidateCostMicrosPer1M   int64      `json:"candidate_cost_micros_per_1m"`
+	CostImprovement            float64    `json:"cost_improvement"`
+	Status                     string     `json:"status"`
+	ReasonCodes                []string   `json:"reason_codes"`
+	CanaryPercent              int        `json:"canary_percent"`
+	SampleCount                int64      `json:"sample_count"`
+	Confidence                 string     `json:"confidence"`
+	HealthyWindowCount         int        `json:"healthy_window_count"`
+	DegradedWindowCount        int        `json:"degraded_window_count"`
+	LastEvaluationID           string     `json:"last_evaluation_id"`
+	LastEvaluationVerdict      string     `json:"last_evaluation_verdict"`
+	LastEvaluationReasonCodes  []string   `json:"last_evaluation_reason_codes"`
+	LastEvaluatedWindowEnd     *time.Time `json:"last_evaluated_window_end,omitempty"`
+	MonitoringStartedAt        *time.Time `json:"monitoring_started_at,omitempty"`
+	LastHealthyAt              *time.Time `json:"last_healthy_at,omitempty"`
+	LastAutomaticAction        string     `json:"last_automatic_action"`
+	CreatedBy                  string     `json:"created_by"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	UpdatedAt                  time.Time  `json:"updated_at"`
+}
+
+type EffectivePricingDecisionEvaluation struct {
+	ID                               string    `json:"id"`
+	DecisionID                       string    `json:"decision_id"`
+	WindowStart                      time.Time `json:"window_start"`
+	WindowEnd                        time.Time `json:"window_end"`
+	Verdict                          string    `json:"verdict"`
+	ReasonCodes                      []string  `json:"reason_codes"`
+	CurrentSnapshotID                string    `json:"current_snapshot_id"`
+	CandidateSnapshotID              string    `json:"candidate_snapshot_id"`
+	CurrentRequestCount              int64     `json:"current_request_count"`
+	CandidateRequestCount            int64     `json:"candidate_request_count"`
+	CurrentCostMicrosPer1M           int64     `json:"current_cost_micros_per_1m"`
+	CandidateCostMicrosPer1M         int64     `json:"candidate_cost_micros_per_1m"`
+	CostImprovement                  float64   `json:"cost_improvement"`
+	CurrentCacheTokenHitRate         float64   `json:"current_cache_token_hit_rate"`
+	CandidateCacheTokenHitRate       float64   `json:"candidate_cache_token_hit_rate"`
+	CurrentCacheSavingsRate          float64   `json:"current_cache_savings_rate"`
+	CandidateCacheSavingsRate        float64   `json:"candidate_cache_savings_rate"`
+	CurrentAffinityConsistencyRate   float64   `json:"current_affinity_consistency_rate"`
+	CandidateAffinityConsistencyRate float64   `json:"candidate_affinity_consistency_rate"`
+	CurrentErrorRate                 float64   `json:"current_error_rate"`
+	CandidateErrorRate               float64   `json:"candidate_error_rate"`
+	CurrentP95LatencyMS              int64     `json:"current_p95_latency_ms"`
+	CandidateP95LatencyMS            int64     `json:"candidate_p95_latency_ms"`
+	CurrentMetricsCoverage           float64   `json:"current_metrics_coverage"`
+	CandidateMetricsCoverage         float64   `json:"candidate_metrics_coverage"`
+	CurrentBillingConsistencyRate    float64   `json:"current_billing_consistency_rate"`
+	CandidateBillingConsistencyRate  float64   `json:"candidate_billing_consistency_rate"`
+	AutomaticAction                  string    `json:"automatic_action"`
+	CreatedAt                        time.Time `json:"created_at"`
+}
+
+type EffectivePricingDecisionEvaluationCommit struct {
+	Evaluation        EffectivePricingDecisionEvaluation
+	Decision          EffectivePricingDecision
+	ExpectedStatus    string
+	ExpectedUpdatedAt time.Time
+	CurrentSnapshot   *EffectivePriceSnapshot
+	CandidateSnapshot *EffectivePriceSnapshot
+	Audit             *AuditLog
 }
 
 type EffectivePricingDecisionActionRequest struct {

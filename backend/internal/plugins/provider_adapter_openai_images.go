@@ -116,7 +116,15 @@ func (s *Service) dispatchBuiltinOpenAIImage(ctx context.Context, provider contr
 		Task: controlplane.ProviderTaskReference{
 			ProviderTaskID: taskID, ProviderRequestID: strings.TrimSpace(response.Header.Get("X-Request-ID")), Status: "succeeded",
 		},
-		Outputs: outputs, ReconcileAfter: time.Now().UTC(),
+		Outputs: outputs,
+		UsageDimensions: controlplane.UsageDimensions{
+			controlplane.UsageDimensionOutputImages: {
+				Quantity: int64(len(outputs)), Unit: controlplane.UsageUnitCount,
+				Source: "provider_adapter", Confidence: controlplane.UsageConfidenceObserved,
+			},
+		},
+		Billing:        controlplane.ProviderBillingObservation{Status: controlplane.ProviderBillingStatusFinal},
+		ReconcileAfter: time.Now().UTC(),
 	}
 	if err := s.cacheOpenAIImageTask(result, outputData); err != nil {
 		return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown}, err

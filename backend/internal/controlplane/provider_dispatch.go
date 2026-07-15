@@ -15,6 +15,10 @@ const (
 	ProviderDispatchOutcomeAccepted         = "accepted"
 	ProviderDispatchOutcomeUnknown          = "unknown"
 	ProviderDispatchOutcomeProvenNotCreated = "proven_not_created"
+	ProviderBillingStatusUnknown            = "unknown"
+	ProviderBillingStatusPending            = "pending"
+	ProviderBillingStatusFinal              = "final"
+	ProviderBillingStatusNotCharged         = "not_charged"
 	providerDispatchDefaultReconcileDelay   = time.Minute
 )
 
@@ -24,10 +28,25 @@ type ProviderDispatchCommand struct {
 }
 
 type ProviderDispatchResult struct {
-	Outcome        string                     `json:"outcome"`
-	Task           ProviderTaskReference      `json:"task"`
-	Outputs        []ProviderOutputDescriptor `json:"outputs,omitempty"`
-	ReconcileAfter time.Time                  `json:"reconcile_after,omitempty"`
+	Outcome         string                       `json:"outcome"`
+	Task            ProviderTaskReference        `json:"task"`
+	Progress        *ProviderProgressObservation `json:"progress,omitempty"`
+	Outputs         []ProviderOutputDescriptor   `json:"outputs,omitempty"`
+	UsageDimensions UsageDimensions              `json:"usage_dimensions,omitempty"`
+	Billing         ProviderBillingObservation   `json:"billing,omitempty"`
+	ReconcileAfter  time.Time                    `json:"reconcile_after,omitempty"`
+}
+
+// ProviderBillingObservation contains provider-side billing facts only. Core
+// remains responsible for customer pricing, quota enforcement, and ledgers.
+type ProviderBillingObservation struct {
+	Status                string `json:"status,omitempty"`
+	ProcurementCostMicros *int64 `json:"procurement_cost_micros,omitempty"`
+	Currency              string `json:"currency,omitempty"`
+	Source                string `json:"source,omitempty"`
+	Confidence            string `json:"confidence,omitempty"`
+	PriceID               string `json:"price_id,omitempty"`
+	ProviderBillingLineID string `json:"provider_billing_line_id,omitempty"`
 }
 
 type ProviderDispatchExecutor interface {

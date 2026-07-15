@@ -72,6 +72,8 @@ type Service struct {
 	externalAuthJWKSCache          map[string]externalAuthJWKSCacheEntry
 	platformUsageHTTPClient        *http.Client
 	providerCacheProbeHTTPClient   *http.Client
+	providerBillingHTTPClient      *http.Client
+	providerBillingAdapters        *ProviderBillingAdapterRegistry
 	slotMu                         sync.Mutex
 	accountSlots                   map[string]int
 	scheduler                      *gatewayScheduler
@@ -105,7 +107,9 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 		return errors.New("platform usage sink redirects are not allowed")
 	}}, providerCacheProbeHTTPClient: &http.Client{Timeout: providerProbeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider cache probe redirects are not allowed")
-	}}, accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: NewMemoryProviderCapacityStore(), artifactStores: map[string]ArtifactStore{}, artifactSinks: map[string]ArtifactSink{}, artifactProxies: map[string]ArtifactProxy{}}
+	}}, providerBillingHTTPClient: &http.Client{Timeout: providerBillingRequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return errors.New("provider billing redirects are not allowed")
+	}}, providerBillingAdapters: NewProviderBillingAdapterRegistry(), accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: NewMemoryProviderCapacityStore(), artifactStores: map[string]ArtifactStore{}, artifactSinks: map[string]ArtifactSink{}, artifactProxies: map[string]ArtifactProxy{}}
 }
 
 func (s *Service) nowUTC() time.Time {
@@ -1292,37 +1296,39 @@ func (s *Service) RecordGatewayCall(ctx context.Context, auth GatewayAuthContext
 }
 
 type GatewayUsageInput struct {
-	OperationID               string
-	AttemptID                 string
-	UsageVersion              int
-	UsageSource               string
-	RequestFingerprint        string
-	Model                     string
-	UpstreamModel             string
-	Protocol                  string
-	ProviderID                string
-	ProviderAccountID         string
-	Status                    string
-	ErrorType                 string
-	LatencyMS                 int64
-	TTFTMS                    *int64
-	InputTokens               int
-	OutputTokens              int
-	TotalInputTokens          *int
-	UncachedInputTokens       *int
-	CacheReadTokens           *int
-	CacheWrite5mTokens        *int
-	CacheWrite1hTokens        *int
-	CacheFieldsPresent        bool
-	UsageNormalizationStatus  string
-	UpstreamRequestID         string
-	ProcurementCostMicros     *int64
-	ProcurementCostCurrency   string
-	ProcurementCostSource     string
-	ProcurementCostConfidence string
-	ProcurementPriceID        string
-	ProviderBillingLineID     string
-	CostCents                 int
+	OperationID                 string
+	AttemptID                   string
+	UsageVersion                int
+	UsageSource                 string
+	RequestFingerprint          string
+	Model                       string
+	UpstreamModel               string
+	Protocol                    string
+	ProviderID                  string
+	ProviderAccountID           string
+	Status                      string
+	ErrorType                   string
+	LatencyMS                   int64
+	TTFTMS                      *int64
+	InputTokens                 int
+	OutputTokens                int
+	TotalInputTokens            *int
+	UncachedInputTokens         *int
+	CacheReadTokens             *int
+	CacheWrite5mTokens          *int
+	CacheWrite1hTokens          *int
+	CacheFieldsPresent          bool
+	UsageDimensions             UsageDimensions
+	UsageNormalizationStatus    string
+	UpstreamRequestID           string
+	ProcurementCostMicros       *int64
+	ProcurementCostCurrency     string
+	ProcurementCostSource       string
+	ProcurementCostConfidence   string
+	ProcurementPriceID          string
+	ProviderBillingLineID       string
+	SkipProcurementCostEstimate bool
+	CostCents                   int
 }
 
 type GatewayTraceInput struct {
@@ -1368,7 +1374,7 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 	procurementCostSource := strings.TrimSpace(in.ProcurementCostSource)
 	procurementCostConfidence := strings.TrimSpace(in.ProcurementCostConfidence)
 	procurementPriceID := strings.TrimSpace(in.ProcurementPriceID)
-	if procurementCostMicros == nil {
+	if procurementCostMicros == nil && !in.SkipProcurementCostEstimate {
 		if estimate, ok, estimateErr := s.estimateGatewayProcurementCost(ctx, in, s.nowUTC()); estimateErr != nil {
 			return estimateErr
 		} else if ok {
@@ -1388,6 +1394,10 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 	usageNormalizationStatus := strings.TrimSpace(in.UsageNormalizationStatus)
 	if usageNormalizationStatus == "" {
 		usageNormalizationStatus = "unknown"
+	}
+	usageDimensions, err := NormalizeUsageDimensions(in.UsageDimensions)
+	if err != nil {
+		return err
 	}
 	record := UsageRecord{
 		ID:                        "usage_" + randomID(12),
@@ -1416,6 +1426,7 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 		CacheWrite5mTokens:        nonNegativeIntPointer(in.CacheWrite5mTokens),
 		CacheWrite1hTokens:        nonNegativeIntPointer(in.CacheWrite1hTokens),
 		CacheFieldsPresent:        in.CacheFieldsPresent,
+		UsageDimensions:           usageDimensions,
 		UsageNormalizationStatus:  usageNormalizationStatus,
 		UpstreamRequestID:         strings.TrimSpace(in.UpstreamRequestID),
 		ProcurementCostMicros:     procurementCostMicros,
@@ -1626,13 +1637,10 @@ func (s *Service) UsageReportQuery(ctx context.Context, query UsageQuery) (Usage
 		return UsageReport{}, err
 	}
 	return UsageReport{
-		TotalRequests:  aggregate.TotalRequests,
-		ErrorRequests:  aggregate.ErrorRequests,
-		TotalTokens:    aggregate.TotalTokens,
-		TotalCostCents: aggregate.TotalCostCents,
-		AvgLatencyMS:   aggregate.AvgLatencyMS,
-		ByModel:        aggregate.ByModel,
-		Recent:         records,
+		TotalRequests: aggregate.TotalRequests, ErrorRequests: aggregate.ErrorRequests, TotalTokens: aggregate.TotalTokens,
+		TotalOutputImages: aggregate.TotalOutputImages, TotalVideoDuration: aggregate.TotalVideoDuration,
+		TotalAudioDuration: aggregate.TotalAudioDuration, TotalCostCents: aggregate.TotalCostCents,
+		AvgLatencyMS: aggregate.AvgLatencyMS, ByModel: aggregate.ByModel, Recent: records,
 	}, nil
 }
 
@@ -1647,6 +1655,10 @@ func usageAggregateFromRecords(records []UsageRecord) UsageAggregate {
 		}
 		tokens := record.InputTokens + record.OutputTokens
 		aggregate.TotalTokens += tokens
+		dimensions := UsageDimensionsTotals(record.UsageDimensions)
+		aggregate.TotalOutputImages = saturatingUsageAdd(aggregate.TotalOutputImages, dimensions.OutputImages)
+		aggregate.TotalVideoDuration = saturatingUsageAdd(aggregate.TotalVideoDuration, dimensions.VideoMilliseconds)
+		aggregate.TotalAudioDuration = saturatingUsageAdd(aggregate.TotalAudioDuration, dimensions.AudioMilliseconds)
 		aggregate.TotalCostCents += record.CostCents
 		latencyTotal += record.LatencyMS
 		acc := byModel[record.Model]
@@ -1659,6 +1671,9 @@ func usageAggregateFromRecords(records []UsageRecord) UsageAggregate {
 			acc.errors++
 		}
 		acc.tokens += tokens
+		acc.outputImages = saturatingUsageAdd(acc.outputImages, dimensions.OutputImages)
+		acc.videoMilliseconds = saturatingUsageAdd(acc.videoMilliseconds, dimensions.VideoMilliseconds)
+		acc.audioMilliseconds = saturatingUsageAdd(acc.audioMilliseconds, dimensions.AudioMilliseconds)
 		acc.costCents += record.CostCents
 		acc.latencyTotal += record.LatencyMS
 	}
@@ -1670,12 +1685,15 @@ func usageAggregateFromRecords(records []UsageRecord) UsageAggregate {
 }
 
 type usageAccumulator struct {
-	model        string
-	requests     int
-	errors       int
-	tokens       int
-	costCents    int
-	latencyTotal int64
+	model             string
+	requests          int
+	errors            int
+	tokens            int
+	outputImages      int64
+	videoMilliseconds int64
+	audioMilliseconds int64
+	costCents         int
+	latencyTotal      int64
 }
 
 func (s *Service) RecordSystemEvent(ctx context.Context, actor string, action string, resourceID string, summary string) error {
@@ -2576,12 +2594,15 @@ func usageSummaries(values map[string]*usageAccumulator) []UsageModelSummary {
 			avgLatency = value.latencyTotal / int64(value.requests)
 		}
 		out = append(out, UsageModelSummary{
-			Model:      value.model,
-			Requests:   value.requests,
-			Errors:     value.errors,
-			Tokens:     value.tokens,
-			CostCents:  value.costCents,
-			AvgLatency: avgLatency,
+			Model:             value.model,
+			Requests:          value.requests,
+			Errors:            value.errors,
+			Tokens:            value.tokens,
+			OutputImages:      value.outputImages,
+			VideoMilliseconds: value.videoMilliseconds,
+			AudioMilliseconds: value.audioMilliseconds,
+			CostCents:         value.costCents,
+			AvgLatency:        avgLatency,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

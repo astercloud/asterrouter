@@ -114,6 +114,62 @@ func TestGatewayJobEventSSEPublishesAvailableArtifactWithoutChangingCursor(t *te
 	}
 }
 
+func TestGatewayJobEventSSEReplaysDurableProgressWithoutChangingStatusCursor(t *testing.T) {
+	handler, control, owner, publicJob := gatewayJobEventTestRuntime(t)
+	ctx := context.Background()
+	claimed, err := control.ClaimReadyAIJobs(ctx, "progress-sse-worker", time.Minute, 1)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != publicJob.ID {
+		t.Fatalf("claimed=%+v err=%v", claimed, err)
+	}
+	job := claimed[0]
+	attempt, err := control.BeginAIAttempt(ctx, job.OperationID, 1, controlplane.GatewayProvider{
+		ID: "progress-provider", AccountID: "progress-account", AdapterID: "progress-adapter",
+		RouteID: "progress-route", UpstreamModel: "progress-upstream",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, _, err := control.PrepareAIAttemptDispatch(ctx, attempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitted, changed, err := control.MarkAIAttemptDispatchSubmitted(ctx, prepared.ID, prepared.DispatchVersion, time.Now().UTC().Add(time.Minute))
+	if err != nil || !changed {
+		t.Fatalf("submitted=%+v changed=%t err=%v", submitted, changed, err)
+	}
+	bound, changed, err := control.BindAIAttemptProviderTask(ctx, submitted.ID, submitted.DispatchVersion, controlplane.ProviderTaskReference{
+		ProviderTaskID: "progress-provider-task", Status: "running",
+	}, time.Now().UTC().Add(time.Minute))
+	if err != nil || !changed {
+		t.Fatalf("bound=%+v changed=%t err=%v", bound, changed, err)
+	}
+	percent := 35
+	progress, created, err := control.RecordAIJobProgress(ctx, job, bound, controlplane.ProviderProgressObservation{Sequence: 7, Percent: &percent, Stage: "rendering"})
+	if err != nil || !created {
+		t.Fatalf("progress=%+v created=%t err=%v", progress, created, err)
+	}
+	running, err := control.TransitionAIJob(ctx, job.ID, job.StatusVersion, job.FenceToken, controlplane.AIJobStatusRunning, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.TransitionAIJob(ctx, running.ID, running.StatusVersion, running.FenceToken, controlplane.AIJobStatusSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	stream := performGatewayJobEventRequest(handler, job.ID, owner.Key, "3")
+	body := stream.Body.String()
+	if stream.Code != http.StatusOK || !strings.Contains(body, "event: job.progress") || !strings.Contains(body, progress.ID) || !strings.Contains(body, `"percent":35`) || !strings.Contains(body, `"stage":"rendering"`) {
+		t.Fatalf("progress stream status=%d body=%s", stream.Code, body)
+	}
+	if strings.Contains(body, "progress-provider-task") || strings.Contains(body, "id: "+progress.ID) || !strings.Contains(body, "id: 4\nevent: job.completed") {
+		t.Fatalf("progress stream leaked provider state or changed cursor: %s", body)
+	}
+	replayed := performGatewayJobEventRequest(handler, job.ID, owner.Key, "3")
+	if replayed.Code != http.StatusOK || !strings.Contains(replayed.Body.String(), progress.ID) {
+		t.Fatalf("replayed progress status=%d body=%s", replayed.Code, replayed.Body.String())
+	}
+}
+
 func TestArtifactAvailableEventWaitsForCustomerSinkDelivery(t *testing.T) {
 	artifact := controlplane.Artifact{ID: "artifact-customer", Policy: controlplane.GatewayArtifactPolicyCustomerSink, Status: controlplane.ArtifactStatusReady}
 	if artifactAvailableForJobEvent(artifact) {

@@ -28,6 +28,7 @@ import type {
   DepartmentRequest,
   Dashboard,
   EffectivePricingDecision,
+  EffectivePricingDecisionEvaluation,
   EffectivePricingDecisionEvaluationRequest,
   EffectivePricingPolicy,
   EffectivePricingPolicyRequest,
@@ -57,6 +58,11 @@ import type {
   ProviderAccountRequest,
   ProviderBillingLine,
   ProviderBillingLineRequest,
+  ProviderBillingSource,
+  ProviderBillingSourceEvidence,
+  ProviderBillingSourceInspection,
+  ProviderBillingSourceRequest,
+  ProviderBillingSyncResult,
   ProviderCacheCapability,
   ProviderCacheCapabilityRequest,
   ProviderCacheProbeRun,
@@ -366,6 +372,34 @@ export async function createProviderBillingLine(payload: ProviderBillingLineRequ
   return response.data
 }
 
+export async function inspectProviderBillingSource(providerAccountID: string, adapterID = 'auto'): Promise<ProviderBillingSourceInspection> {
+  const response = await apiClient.post<ProviderBillingSourceInspection>('/admin/provider-billing-sources/inspect', {
+    provider_account_id: providerAccountID,
+    adapter_id: adapterID
+  })
+  return response.data
+}
+
+export async function getProviderBillingSources(): Promise<ProviderBillingSource[]> {
+  const response = await apiClient.get<ProviderBillingSource[] | null>('/admin/provider-billing-sources')
+  return listOrEmpty(response.data)
+}
+
+export async function updateProviderBillingSource(payload: ProviderBillingSourceRequest): Promise<ProviderBillingSource> {
+  const response = await apiClient.put<ProviderBillingSource>('/admin/provider-billing-sources', payload)
+  return response.data
+}
+
+export async function syncProviderBillingSource(id: string): Promise<ProviderBillingSyncResult> {
+  const response = await apiClient.post<ProviderBillingSyncResult>(`/admin/provider-billing-sources/${id}/sync`)
+  return response.data
+}
+
+export async function getProviderBillingSourceEvidence(id: string, limit = 100): Promise<ProviderBillingSourceEvidence> {
+  const response = await apiClient.get<ProviderBillingSourceEvidence>(`/admin/provider-billing-sources/${id}/evidence`, { params: { limit } })
+  return response.data
+}
+
 export async function getProviderCacheCapabilities(): Promise<ProviderCacheCapability[]> {
   const response = await apiClient.get<ProviderCacheCapability[] | null>('/admin/provider-cache-capabilities')
   return listOrEmpty(response.data)
@@ -388,6 +422,11 @@ export async function runProviderCacheProbe(payload: CacheProbeRequest): Promise
 
 export async function getEffectivePricingDecisions(): Promise<EffectivePricingDecision[]> {
   const response = await apiClient.get<EffectivePricingDecision[] | null>('/admin/effective-pricing/decisions')
+  return listOrEmpty(response.data)
+}
+
+export async function getEffectivePricingDecisionEvaluations(id: string, limit = 100): Promise<EffectivePricingDecisionEvaluation[]> {
+  const response = await apiClient.get<EffectivePricingDecisionEvaluation[] | null>(`/admin/effective-pricing/decisions/${id}/evaluations`, { params: { limit } })
   return listOrEmpty(response.data)
 }
 

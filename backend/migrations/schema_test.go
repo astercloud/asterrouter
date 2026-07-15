@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 	"github.com/astercloud/asterrouter/backend/internal/operator"
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	"github.com/astercloud/asterrouter/backend/internal/server"
@@ -119,6 +120,137 @@ VALUES('attempt-old-1','operation-old',1,'account-old','running',NOW(),NOW()),
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE ai_attempts SET provider_task_id='task-shared' WHERE id='attempt-old-2'`); err == nil {
 		t.Fatal("provider task uniqueness constraint accepted duplicate task binding")
+	}
+}
+
+func TestUsageDimensionsMigrationIsIdempotent(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	initializeRuntimeSchema(t, schema.URL)
+	db := testutil.OpenPostgres(t, schema.URL)
+	body, err := migrationFiles.ReadFile("060_usage_dimensions.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		if _, err := db.ExecContext(context.Background(), string(body)); err != nil {
+			t.Fatalf("apply 060 run %d: %v", run+1, err)
+		}
+	}
+	columns := schemaColumns(t, db, schema.Name)
+	if !strings.HasPrefix(columns["usage_records.usage_dimensions"], "jsonb|jsonb|NO|") || !strings.HasPrefix(columns["billing_holds.reserved_usage_dimensions"], "jsonb|jsonb|NO|") {
+		t.Fatalf("usage dimension columns=%+v", columns)
+	}
+}
+
+func TestProviderBillingSourcesMigrationIsIdempotentAndEnforcesConstraints(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	initializeRuntimeSchema(t, schema.URL)
+	db := testutil.OpenPostgres(t, schema.URL)
+	body, err := migrationFiles.ReadFile("062_provider_billing_sources.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		if _, err := db.ExecContext(context.Background(), string(body)); err != nil {
+			t.Fatalf("apply 062 run %d: %v", run+1, err)
+		}
+	}
+
+	ctx := context.Background()
+	now := time.Date(2026, time.July, 16, 2, 0, 0, 0, time.UTC)
+	repo, err := controlplane.NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	if err := repo.SaveProvider(ctx, controlplane.ProviderConnection{ID: "migration-billing-provider", Name: "Migration billing provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: controlplane.ProviderStatusActive, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveProviderAccount(ctx, controlplane.ProviderAccount{ID: "migration-billing-account", ProviderID: "migration-billing-provider", Name: "Migration billing account", Platform: "openai_compatible", AuthType: "api_key", Status: controlplane.AccountStatusActive, SecretConfigured: true, SecretCiphertext: "ciphertext", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO provider_billing_sources(id,provider_id,provider_account_id,adapter_id,status,sync_interval_seconds,created_at,updated_at) VALUES('migration-billing-source','migration-billing-provider','migration-billing-account','sub2api_compatible','observe_only',3600,$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	for name, statement := range map[string]string{
+		"invalid source status":   `UPDATE provider_billing_sources SET status='invalid' WHERE id='migration-billing-source'`,
+		"invalid source interval": `UPDATE provider_billing_sources SET sync_interval_seconds=59 WHERE id='migration-billing-source'`,
+		"duplicate account":       `INSERT INTO provider_billing_sources(id,provider_id,provider_account_id,adapter_id,status,sync_interval_seconds,created_at,updated_at) VALUES('migration-billing-source-duplicate','migration-billing-provider','migration-billing-account','sub2api_compatible','observe_only',3600,NOW(),NOW())`,
+		"invalid run status":      `INSERT INTO provider_billing_sync_runs(id,source_id,provider_id,provider_account_id,trigger,adapter_id,status,started_at,created_at) VALUES('migration-billing-run-invalid','migration-billing-source','migration-billing-provider','migration-billing-account','manual','sub2api_compatible','invalid',NOW(),NOW())`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err == nil {
+			t.Fatalf("%s constraint accepted invalid data", name)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO provider_billing_sync_runs(id,source_id,provider_id,provider_account_id,trigger,adapter_id,status,started_at,created_at) VALUES('migration-billing-run','migration-billing-source','migration-billing-provider','migration-billing-account','manual','sub2api_compatible','running',$1,$1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO provider_usage_aggregate_snapshots(id,source_id,sync_run_id,provider_account_id,scope,request_count,currency,observed_at,created_at) VALUES('migration-aggregate-invalid','migration-billing-source','migration-billing-run','migration-billing-account','total',-1,'USD',$1,$1)`, now); err == nil {
+		t.Fatal("aggregate non-negative constraint accepted invalid data")
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO provider_balance_snapshots(id,source_id,sync_run_id,provider_account_id,kind,amount_micros,currency,observed_at,created_at) VALUES('migration-balance-invalid','migration-billing-source','migration-billing-run','migration-billing-account','wallet_balance',1,'usd',$1,$1)`, now); err == nil {
+		t.Fatal("balance currency constraint accepted invalid data")
+	}
+}
+
+func TestAIJobProgressMigrationIsIdempotentAndEnforcesConstraints(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	initializeRuntimeSchema(t, schema.URL)
+	db := testutil.OpenPostgres(t, schema.URL)
+	body, err := migrationFiles.ReadFile("063_ai_job_progress_events.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		if _, err := db.ExecContext(context.Background(), string(body)); err != nil {
+			t.Fatalf("apply 063 run %d: %v", run+1, err)
+		}
+	}
+
+	ctx := context.Background()
+	repo, err := controlplane.NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	svc := controlplane.NewService(repo, "/v1", "progress-migration-secret")
+	if _, err := svc.CreateGatewayModel(ctx, "migration", controlplane.GatewayModelRequest{
+		ModelID: "progress-migration-model", Name: "Progress migration", Modality: controlplane.GatewayModalityVideo, Status: controlplane.GatewayModelStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	job, created, err := svc.BeginDurableAIJob(ctx, gatewaycore.CanonicalAuthContext{
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "progress-migration-key", ProfileScope: controlplane.ProfileScopePlatform,
+		TenantID: "progress-migration-tenant", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "progress-migration-principal",
+		ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
+	}, gatewaycore.CanonicalRequest{
+		ClientRequestID: "progress-migration-request", Fingerprint: "progress-migration-fingerprint", IdempotencyKey: "progress-migration-idem",
+		Protocol: gatewaycore.ProtocolAsterJobs, Operation: controlplane.GatewayOperationVideoGeneration, Modality: controlplane.GatewayModalityVideo,
+		Lane: gatewaycore.LaneDurable, Model: "progress-migration-model", Payload: []byte(`{"input":{"prompt":"synthetic"}}`),
+	})
+	if err != nil || !created {
+		t.Fatalf("job=%+v created=%t err=%v", job, created, err)
+	}
+	attempt, err := svc.BeginAIAttempt(ctx, job.OperationID, 1, controlplane.GatewayProvider{ID: "progress-provider", AccountID: "progress-account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, statement := range map[string]string{
+		"invalid sequence": `INSERT INTO ai_job_progress_events(id,job_id,attempt_id,provider_task_id,provider_sequence,percent,stage,created_at) VALUES('progress-invalid-sequence',$1,$2,'task',0,10,'rendering',NOW())`,
+		"invalid percent":  `INSERT INTO ai_job_progress_events(id,job_id,attempt_id,provider_task_id,provider_sequence,percent,stage,created_at) VALUES('progress-invalid-percent',$1,$2,'task',1,101,'rendering',NOW())`,
+		"unsafe stage":     `INSERT INTO ai_job_progress_events(id,job_id,attempt_id,provider_task_id,provider_sequence,percent,stage,created_at) VALUES('progress-invalid-stage',$1,$2,'task',1,10,'unsafe stage',NOW())`,
+		"empty fact":       `INSERT INTO ai_job_progress_events(id,job_id,attempt_id,provider_task_id,provider_sequence,percent,stage,created_at) VALUES('progress-empty',$1,$2,'task',1,NULL,'',NOW())`,
+	} {
+		if _, err := db.ExecContext(ctx, statement, job.ID, attempt.ID); err == nil {
+			t.Fatalf("%s constraint accepted invalid progress", name)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO ai_job_progress_events(id,job_id,attempt_id,provider_task_id,provider_sequence,percent,stage,created_at) VALUES('progress-valid',$1,$2,'task',1,10,'rendering',NOW())`, job.ID, attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO ai_job_progress_events(id,job_id,attempt_id,provider_task_id,provider_sequence,percent,stage,created_at) VALUES('progress-duplicate',$1,$2,'task',1,20,'rendering',NOW())`, job.ID, attempt.ID); err == nil {
+		t.Fatal("progress sequence uniqueness accepted a duplicate")
 	}
 }
 
