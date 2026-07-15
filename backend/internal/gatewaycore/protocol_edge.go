@@ -120,6 +120,127 @@ func CanonicalizeOpenAIChat(raw []byte, header http.Header) (CanonicalRequest, e
 	}, nil
 }
 
+// CanonicalizeOpenAIResponses keeps the Responses request on the same Direct
+// execution contract as Chat Completions while preserving the provider-native
+// payload and response format.
+func CanonicalizeOpenAIResponses(raw []byte, header http.Header) (CanonicalRequest, error) {
+	var payload map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload == nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	model, _ := payload["model"].(string)
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return CanonicalRequest{}, fmt.Errorf("%w: model is required", ErrInvalidCanonicalRequest)
+	}
+	stream := false
+	if value, exists := payload["stream"]; exists {
+		var ok bool
+		stream, ok = value.(bool)
+		if !ok {
+			return CanonicalRequest{}, fmt.Errorf("%w: stream must be a boolean", ErrInvalidCanonicalRequest)
+		}
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidCanonicalRequest)
+	}
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(normalized)
+	return CanonicalRequest{
+		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
+		Protocol: ProtocolOpenAIResponses, Operation: "chat_completion", Modality: "text", Lane: LaneDirect,
+		Model: model, Stream: stream, IdempotencyKey: idempotencyKey, Payload: append(json.RawMessage(nil), raw...),
+	}, nil
+}
+
+// CanonicalizeAnthropicMessages adapts the Anthropic Messages request to the
+// shared Direct pipeline without converting the provider-native body.
+func CanonicalizeAnthropicMessages(raw []byte, header http.Header) (CanonicalRequest, error) {
+	var rawPayload map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &rawPayload) != nil || rawPayload == nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	var payload struct {
+		Model    string            `json:"model"`
+		Messages []json.RawMessage `json:"messages"`
+		Stream   bool              `json:"stream"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	payload.Model = strings.TrimSpace(payload.Model)
+	if payload.Model == "" || len(payload.Messages) == 0 {
+		return CanonicalRequest{}, fmt.Errorf("%w: model and messages are required", ErrInvalidCanonicalRequest)
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidCanonicalRequest)
+	}
+	normalized, err := json.Marshal(rawPayload)
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(normalized)
+	return CanonicalRequest{
+		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
+		Protocol: ProtocolAnthropicMessages, Operation: "chat_completion", Modality: "text", Lane: LaneDirect,
+		Model: payload.Model, Stream: payload.Stream, MessageCount: len(payload.Messages), IdempotencyKey: idempotencyKey, Payload: append(json.RawMessage(nil), raw...),
+	}, nil
+}
+
+// CanonicalizeGeminiGenerate adapts both generateContent and
+// streamGenerateContent paths. Gemini carries the model in the URL, so the
+// canonical payload records it while the upstream body remains provider-native.
+func CanonicalizeGeminiGenerate(raw []byte, header http.Header, model string, stream bool) (CanonicalRequest, error) {
+	var payload map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload == nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return CanonicalRequest{}, fmt.Errorf("%w: model is required", ErrInvalidCanonicalRequest)
+	}
+	contents, ok := payload["contents"].([]any)
+	if !ok || len(contents) == 0 {
+		return CanonicalRequest{}, fmt.Errorf("%w: contents are required", ErrInvalidCanonicalRequest)
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidCanonicalRequest)
+	}
+	normalized, err := json.Marshal(struct {
+		Model    string         `json:"model"`
+		Contents []any          `json:"contents"`
+		Payload  map[string]any `json:"payload"`
+		Stream   bool           `json:"stream"`
+	}{Model: model, Contents: contents, Payload: payload, Stream: stream})
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(normalized)
+	return CanonicalRequest{
+		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
+		Protocol: ProtocolGeminiGenerate, Operation: "chat_completion", Modality: "text", Lane: LaneDirect,
+		Model: model, Stream: stream, IdempotencyKey: idempotencyKey, Payload: append(json.RawMessage(nil), raw...),
+	}, nil
+}
+
 func CanonicalizeOpenAIModels(header http.Header) (CanonicalRequest, error) {
 	requestID, err := canonicalRequestID(header)
 	if err != nil {
@@ -407,6 +528,16 @@ func CanonicalizeOpenAIMediaJob(raw []byte, header http.Header, modality, operat
 	if responseMode == "async" && stream {
 		return CanonicalRequest{}, fmt.Errorf("%w: response_mode=async cannot use stream=true", ErrInvalidCanonicalRequest)
 	}
+	previewMode := strings.ToLower(strings.TrimSpace(stringValue(payload["preview_mode"])))
+	if previewMode == "" {
+		previewMode = "none"
+	}
+	if previewMode != "none" && previewMode != "preferred" && previewMode != "required" {
+		return CanonicalRequest{}, fmt.Errorf("%w: invalid preview_mode", ErrInvalidCanonicalRequest)
+	}
+	if previewMode == "required" && responseMode != "stream" {
+		return CanonicalRequest{}, fmt.Errorf("%w: required previews need response_mode=stream", ErrInvalidCanonicalRequest)
+	}
 	deliveryMode := strings.ToLower(strings.TrimSpace(stringValue(payload["delivery_mode"])))
 	if deliveryMode == "" {
 		deliveryMode = "inline"
@@ -449,7 +580,7 @@ func CanonicalizeOpenAIMediaJob(raw []byte, header http.Header, modality, operat
 	}
 	canonicalPayload, err := json.Marshal(map[string]any{
 		"model": model, "operation": operation, "modality": modality, "input": input,
-		"response_mode": responseMode, "delivery_mode": deliveryMode,
+		"response_mode": responseMode, "preview_mode": previewMode, "delivery_mode": deliveryMode,
 	})
 	if err != nil {
 		return CanonicalRequest{}, ErrInvalidCanonicalRequest
@@ -462,7 +593,7 @@ func CanonicalizeOpenAIMediaJob(raw []byte, header http.Header, modality, operat
 	return CanonicalRequest{
 		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
 		Protocol: ProtocolOpenAIMedia, Operation: operation, Modality: modality, Lane: lane,
-		Model: model, Stream: responseMode == "stream", ResponseMode: responseMode, DeliveryMode: deliveryMode,
+		Model: model, Stream: responseMode == "stream", ResponseMode: responseMode, PreviewMode: previewMode, DeliveryMode: deliveryMode,
 		IdempotencyKey: idempotencyKey, OutputCount: outputCount,
 		VideoDurationMS: videoDurationMS, AudioDurationMS: audioDurationMS, Payload: canonicalPayload,
 	}, nil

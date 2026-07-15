@@ -77,6 +77,15 @@ func (c *gatewaySSEUsageCollector) Completed() bool {
 	return c.completed
 }
 
+func (c *gatewaySSEUsageCollector) Flush() {
+	if len(c.pending) == 0 {
+		return
+	}
+	pending := append([]byte(nil), c.pending...)
+	c.pending = nil
+	c.Write(append(pending, '\n'))
+}
+
 func gatewaySSETerminalEvent(event string) bool {
 	switch strings.ToLower(strings.TrimSpace(event)) {
 	case "message_stop", "response.completed", "response.complete", "done", "completion":
@@ -91,6 +100,9 @@ func gatewaySSEPayloadTerminal(payload string) bool {
 		Choices []struct {
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
+		Candidates []struct {
+			FinishReason *string `json:"finishReason"`
+		} `json:"candidates"`
 		Type string `json:"type"`
 	}
 	if json.Unmarshal([]byte(payload), &envelope) != nil {
@@ -101,6 +113,11 @@ func gatewaySSEPayloadTerminal(payload string) bool {
 	}
 	for _, choice := range envelope.Choices {
 		if choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "" {
+			return true
+		}
+	}
+	for _, candidate := range envelope.Candidates {
+		if candidate.FinishReason != nil && strings.TrimSpace(*candidate.FinishReason) != "" {
 			return true
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 )
 
 func TestProviderAdapterSidecarCapabilityAndLifecycleContract(t *testing.T) {
@@ -240,5 +241,148 @@ func TestManifestProviderJobSupportExplainsMostSpecificMismatch(t *testing.T) {
 				t.Fatalf("supported=%t reason=%q want=%q", supported, reason, test.reason)
 			}
 		})
+	}
+}
+
+func TestManifestDirectProviderJobRequiresPreviewCapabilityWhenRequested(t *testing.T) {
+	provider := controlplane.GatewayProvider{Type: "self_hosted"}
+	job := controlplane.AIJob{Modality: "video", Operation: "video_generation", ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary}
+	request := gatewaycore.CanonicalRequest{PreviewMode: "required"}
+	manifest := sidecarManifest{ProviderAdapters: []providerAdapterManifestCapability{{
+		ProviderTypes: []string{"self_hosted"}, Modalities: []string{"video"}, Operations: []string{"video_generation"},
+		ArtifactPolicies: []string{controlplane.GatewayArtifactPolicyTemporary},
+	}}}
+	if manifestSupportsDirectProviderJob(manifest, provider, job, request) {
+		t.Fatal("required previews must reject adapters without supports_previews")
+	}
+	manifest.ProviderAdapters[0].SupportsPreviews = true
+	if !manifestSupportsDirectProviderJob(manifest, provider, job, request) {
+		t.Fatal("required previews should select an adapter that declares supports_previews")
+	}
+}
+
+func TestProviderAdapterSidecarDurableVideoWorkerContract(t *testing.T) {
+	const (
+		pluginID = "com.asterrouter.test.video-worker"
+		version  = "1.0.0"
+		token    = "video-worker-runtime-token"
+	)
+	videoOutput := []byte("synthetic-video-output")
+	var requestsMu sync.Mutex
+	requestPaths := make([]string, 0, 3)
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer "+token || request.Header.Get("Content-Type") != "application/json" {
+			http.Error(response, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		requestsMu.Lock()
+		requestPaths = append(requestPaths, request.URL.Path)
+		requestsMu.Unlock()
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/provider-adapter/dispatch":
+			_, _ = response.Write([]byte(`{"outcome":"accepted","task":{"provider_task_id":"video-task-1","provider_request_id":"video-request-1","status":"running"},"reconcile_after":"2020-01-01T00:00:00Z"}`))
+		case "/v1/provider-adapter/reconcile":
+			_, _ = response.Write([]byte(`{"outcome":"accepted","task":{"provider_task_id":"video-task-1","provider_request_id":"video-request-1","status":"succeeded"},"progress":{"sequence":1,"percent":100,"stage":"completed"},"outputs":[{"output_id":"final-video","role":"final","media_type":"video/mp4","provider_reference":"provider://video-task-1/final"}],"usage_dimensions":{"output_video_milliseconds":{"quantity":1500,"unit":"millisecond","source":"provider","confidence":"reported"}},"billing":{"status":"final"},"reconcile_after":"2020-01-01T00:00:00Z"}`))
+		case "/v1/provider-adapter/output":
+			response.Header().Set("Content-Type", "video/mp4")
+			_, _ = response.Write(videoOutput)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer upstream.Close()
+
+	ctx := context.Background()
+	pluginRepo := NewMemoryRepository()
+	now := time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC)
+	if err := pluginRepo.SavePlugin(ctx, Plugin{ID: pluginID, PluginID: pluginID, Name: "Video worker", Type: "sidecar", Status: StatusEnabled, Tier: TierFreeCore, EntitlementStatus: EntitlementFree, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pluginRepo.SavePackageInstallation(ctx, packageInstallationRecord{PluginID: pluginID, PackageID: "pkg-video-worker", Version: version, Status: PackageInstallInstalled, InstalledAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	activeRoot := t.TempDir()
+	service := NewServiceWithOptions(pluginRepo, ServiceOptions{PluginActiveDir: activeRoot, ProviderAdapterHTTPClient: upstream.Client()})
+	activeDir, err := service.activePackageDir(pluginID, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(activeDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal(sidecarManifest{
+		ID: pluginID, Version: version, Runtime: "sidecar",
+		ProviderAdapters: []providerAdapterManifestCapability{{
+			ProviderTypes: []string{"self_hosted"}, Modalities: []string{"video"}, Operations: []string{"video_generation"},
+			ArtifactPolicies: []string{controlplane.GatewayArtifactPolicyTemporary},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activeDir, "plugin.json"), manifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	service.sidecars[pluginID] = &sidecarProcess{PluginID: pluginID, Version: version, Endpoint: upstream.URL, Token: token, Command: &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}, done: done}
+	service.supervisors[pluginID] = &sidecarSupervisor{wake: make(chan struct{}, 1)}
+	t.Cleanup(func() { close(done) })
+
+	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1", "video-worker-secret")
+	if err := control.SetArtifactStore(controlplane.NewMemoryArtifactStore()); err != nil {
+		t.Fatal(err)
+	}
+	provider, err := control.CreateProvider(ctx, "test", controlplane.ProviderRequest{Name: "Video provider", Type: "self_hosted", BaseURL: "https://provider.invalid/v1", Status: controlplane.ProviderStatusActive, Models: []string{"video-upstream"}, APIKey: "provider-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := control.CreateProviderAccount(ctx, "test", controlplane.ProviderAccountRequest{ProviderID: provider.ID, Name: "Video account", Platform: "self_hosted", AuthType: "api_key", Status: controlplane.AccountStatusActive, Models: []string{"video-upstream"}, Secret: "provider-secret", Concurrency: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := control.CreateGatewayModel(ctx, "test", controlplane.GatewayModelRequest{ModelID: "public-video", Name: "Public video", Modality: controlplane.GatewayModalityVideo, DefaultRouteGroup: controlplane.DefaultModelRouteGroup, Status: controlplane.GatewayModelStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.CreateModelRoute(ctx, "test", controlplane.ModelRouteRequest{GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: account.ID, UpstreamModel: "video-upstream", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive}); err != nil {
+		t.Fatal(err)
+	}
+	auth := gatewaycore.CanonicalAuthContext{CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "video-key", ProfileScope: controlplane.ProfileScopePlatform, TenantID: "video-tenant", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "video-principal", ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary}
+	request := gatewaycore.CanonicalRequest{ID: "video-request", ClientRequestID: "video-client", Fingerprint: "video-fingerprint", IdempotencyKey: "video-idempotency", Protocol: gatewaycore.ProtocolAsterJobs, Lane: gatewaycore.LaneDurable, Model: "public-video", Modality: controlplane.GatewayModalityVideo, Operation: controlplane.GatewayOperationVideoGeneration, VideoDurationMS: 1500, Payload: []byte(`{"model":"public-video","operation":"video_generation","modality":"video","input":{"prompt":"synthetic"}}`)}
+	job, created, err := control.BeginDurableAIJob(ctx, auth, request)
+	if err != nil || !created {
+		t.Fatalf("BeginDurableAIJob() job=%+v created=%t err=%v", job, created, err)
+	}
+
+	workerReport, err := control.RunDurableAIJobWorkerOnce(ctx, "video-worker", time.Minute, 1, service)
+	if err != nil || workerReport.Accepted != 1 || workerReport.Errors != 0 {
+		t.Fatalf("worker report=%+v err=%v", workerReport, err)
+	}
+	reconcilerReport, err := control.RunDurableAIJobReconcilerOnce(ctx, 1, service)
+	if err != nil || reconcilerReport.Completed != 1 || reconcilerReport.Errors != 0 {
+		t.Fatalf("reconciler report=%+v err=%v", reconcilerReport, err)
+	}
+	finished, found, err := control.AIJobForAuth(ctx, auth, job.ID)
+	if err != nil || !found || finished.Status != controlplane.AIJobStatusSucceeded {
+		t.Fatalf("finished job=%+v found=%t err=%v", finished, found, err)
+	}
+	artifacts, _, err := control.ArtifactsForJobAndAuth(ctx, auth, job.ID)
+	if err != nil || !found || len(artifacts) != 1 || artifacts[0].Status != controlplane.ArtifactStatusReady || artifacts[0].MediaType != "video/mp4" || artifacts[0].SizeBytes != int64(len(videoOutput)) {
+		t.Fatalf("artifacts=%+v found=%t err=%v", artifacts, found, err)
+	}
+	usage, err := control.UsageReport(ctx, 10)
+	if err != nil || len(usage.Recent) != 1 || usage.Recent[0].UsageDimensions[controlplane.UsageDimensionOutputVideoMilliseconds].Quantity != 1500 || usage.Recent[0].UsageDimensions[controlplane.UsageDimensionOutputBytes].Quantity != int64(len(videoOutput)) {
+		t.Fatalf("usage=%+v err=%v", usage, err)
+	}
+	hold, found, err := control.BillingHoldForOperation(ctx, job.OperationID)
+	if err != nil || !found || hold.Status != controlplane.BillingHoldStatusSettled {
+		t.Fatalf("billing hold=%+v found=%t err=%v", hold, found, err)
+	}
+	requestsMu.Lock()
+	paths := append([]string(nil), requestPaths...)
+	requestsMu.Unlock()
+	if strings.Join(paths, ",") != "/v1/provider-adapter/dispatch,/v1/provider-adapter/reconcile,/v1/provider-adapter/output" {
+		t.Fatalf("sidecar request paths=%v", paths)
 	}
 }

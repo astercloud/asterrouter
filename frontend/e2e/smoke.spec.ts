@@ -90,7 +90,7 @@ test('@smoke @surface-smoke settings can switch between all product modes', asyn
   const originalProfiles = expectedDemoMode ? allProfiles : [originalProfile]
 
   await page.goto('/admin/settings')
-  await page.getByRole('button', { name: 'Gateway services' }).click()
+  await page.getByRole('tab', { name: 'Deployment & gateway' }).click()
   await expect(page.getByText(expectedDemoMode ? 'Switch demo experience' : 'Switch deployment profile')).toBeVisible()
   await expect(page.locator('button[data-profile]')).toHaveCount(4)
   if (process.env.CI) {
@@ -107,12 +107,13 @@ test('@smoke @surface-smoke settings can switch between all product modes', asyn
     await expect.poll(() => page.evaluate(
       () => (window as Window & { __asterProfileSwitchPage?: string }).__asterProfileSwitchPage
     )).toBeUndefined()
-    await expect(page.locator('aside a[href="/console/overview"]')).toHaveCount(targetProfile === 'personal' ? 1 : 0)
-    await expect(page.locator('aside a[href="/operator/overview"]')).toHaveCount(0)
-    await expect(page.locator('aside a[href="/admin/dashboard"]')).toHaveCount(targetProfile === 'enterprise' ? 1 : 0)
-    await expect(page.locator('aside a[href="/platform/overview"]')).toHaveCount(targetProfile === 'platform' ? 1 : 0)
+    const sidebarNavigation = page.locator('aside nav.sidebar-nav')
+    await expect(sidebarNavigation.locator('a[href="/console/overview"]')).toHaveCount(targetProfile === 'personal' ? 1 : 0)
+    await expect(sidebarNavigation.locator('a[href="/operator/overview"]')).toHaveCount(0)
+    await expect(sidebarNavigation.locator('a[href="/admin/dashboard"]')).toHaveCount(targetProfile === 'enterprise' ? 1 : 0)
+    await expect(sidebarNavigation.locator('a[href="/platform/overview"]')).toHaveCount(targetProfile === 'platform' ? 1 : 0)
     await page.getByRole('button', { name: 'Account menu' }).click()
-    await expect(page.locator('.account-dropdown button')).toHaveCount(2)
+    await expect(page.locator('.account-dropdown button')).toHaveCount(targetProfile === 'enterprise' ? 3 : 2)
     const settings = await page.request.get('/api/v1/settings/public')
     await expect(settings.json()).resolves.toMatchObject({ data: { default_profile: targetProfile, enabled_profiles: switchedProfiles } })
   } finally {

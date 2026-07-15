@@ -15,9 +15,8 @@ import (
 
 // registerGatewayMediaJobRoutes exposes protocol-friendly video/audio entry
 // points. Async is the default and reuses the durable Job admission, queue,
-// artifact and billing pipeline. Direct modes are recognized by the canonical
-// contract, but fail closed here until a media-capable direct adapter is wired
-// in; they must never create a Job.
+// artifact and billing pipeline. Blocking and stream modes use the direct
+// media lane when a selected adapter supports them; they never create a Job.
 func registerGatewayMediaJobRoutes(r *gin.Engine, control *controlplane.Service, durableJobs DurableAIJobAdmission, directAI controlplane.DirectAIProviderAdapter) {
 	for _, route := range []struct {
 		path      string
@@ -67,11 +66,11 @@ func registerGatewayMediaJobRoutes(r *gin.Engine, control *controlplane.Service,
 			}
 			if request.Lane == gatewaycore.LaneDirect {
 				if directAI != nil {
-					if err := validateImageDeliveryContract(request, auth); err != nil {
+					if err := validateMediaDeliveryContract(request, auth); err != nil {
 						writeGatewayError(c, err)
 						return
 					}
-					executeDirectImage(c, control, directAI, legacyAuth, auth, request)
+					executeDirectMedia(c, control, directAI, legacyAuth, auth, request)
 					return
 				}
 				recordGatewayTrace(control, c, legacyAuth, controlplane.GatewayTraceInput{

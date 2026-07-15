@@ -115,6 +115,7 @@ func (s *Service) CreateArtifactFromReader(ctx context.Context, input ArtifactCr
 // the artifact remains owner-scoped and auditable from the first byte.
 func (s *Service) CreatePendingArtifact(ctx context.Context, input ArtifactCreateInput) (Artifact, error) {
 	input.Pending = true
+	input.StoreDriver = ArtifactStoreDriverNone
 	operation, found, err := s.repo.FindAIOperation(ctx, strings.TrimSpace(input.OperationID))
 	if err != nil {
 		return Artifact{}, err
@@ -167,42 +168,61 @@ func (s *Service) ValidateInputArtifactsForAuth(ctx context.Context, auth gatewa
 	if len(request.Payload) == 0 {
 		return nil
 	}
-	var envelope struct {
-		Input map[string]json.RawMessage `json:"input"`
-	}
-	if err := json.Unmarshal(request.Payload, &envelope); err != nil {
+	var document any
+	if err := json.Unmarshal(request.Payload, &document); err != nil {
 		return gatewaycore.ErrInvalidCanonicalRequest
 	}
 	ids := make([]string, 0, 4)
-	appendID := func(raw json.RawMessage) error {
+	appendID := func(value any) error {
 		var id string
-		if err := json.Unmarshal(raw, &id); err != nil || strings.TrimSpace(id) == "" {
+		var ok bool
+		id, ok = value.(string)
+		if !ok || strings.TrimSpace(id) == "" {
 			return gatewaycore.ErrInvalidCanonicalRequest
 		}
 		ids = append(ids, strings.TrimSpace(id))
-		return nil
-	}
-	for _, key := range []string{"artifact_id", "input_artifact_id"} {
-		if raw, exists := envelope.Input[key]; exists {
-			if err := appendID(raw); err != nil {
-				return err
-			}
-		}
-	}
-	for _, key := range []string{"artifact_ids", "input_artifact_ids"} {
-		raw, exists := envelope.Input[key]
-		if !exists {
-			continue
-		}
-		var values []json.RawMessage
-		if err := json.Unmarshal(raw, &values); err != nil || len(values) > 32 {
+		if len(ids) > 32 {
 			return gatewaycore.ErrInvalidCanonicalRequest
 		}
-		for _, value := range values {
-			if err := appendID(value); err != nil {
-				return err
+		return nil
+	}
+	var walk func(any) error
+	walk = func(value any) error {
+		switch node := value.(type) {
+		case []any:
+			for _, item := range node {
+				if err := walk(item); err != nil {
+					return err
+				}
+			}
+		case map[string]any:
+			for key, item := range node {
+				switch key {
+				case "artifact_id", "input_artifact_id":
+					if err := appendID(item); err != nil {
+						return err
+					}
+				case "artifact_ids", "input_artifact_ids":
+					values, ok := item.([]any)
+					if !ok || len(values) > 32 {
+						return gatewaycore.ErrInvalidCanonicalRequest
+					}
+					for _, candidate := range values {
+						if err := appendID(candidate); err != nil {
+							return err
+						}
+					}
+				default:
+					if err := walk(item); err != nil {
+						return err
+					}
+				}
 			}
 		}
+		return nil
+	}
+	if err := walk(document); err != nil {
+		return err
 	}
 	owner := ArtifactOwner(aiJobOwnerFromAuth(auth))
 	for _, id := range ids {

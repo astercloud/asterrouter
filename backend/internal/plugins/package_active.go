@@ -29,6 +29,7 @@ type providerAdapterManifestCapability struct {
 	Modalities           []string `json:"modalities"`
 	Operations           []string `json:"operations"`
 	ArtifactPolicies     []string `json:"artifact_policies,omitempty"`
+	SupportsPreviews     bool     `json:"supports_previews,omitempty"`
 	SupportsCancellation bool     `json:"supports_cancellation,omitempty"`
 	SupportsCallbacks    bool     `json:"supports_callbacks,omitempty"`
 }

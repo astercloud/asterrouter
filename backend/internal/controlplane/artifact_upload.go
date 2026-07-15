@@ -165,6 +165,11 @@ func (s *Service) CompleteArtifactUpload(ctx context.Context, auth gatewaycore.C
 	}
 	readers := make([]io.Reader, 0, len(ordered))
 	closers := make([]io.Closer, 0, len(ordered))
+	defer func() {
+		for _, closer := range closers {
+			_ = closer.Close()
+		}
+	}()
 	position := int64(0)
 	for _, chunk := range ordered {
 		if chunk.state.Offset != position || chunk.state.Size != chunk.artifact.SizeBytes {
@@ -193,15 +198,21 @@ func (s *Service) CompleteArtifactUpload(ctx context.Context, auth gatewaycore.C
 	hasher := sha256.New()
 	counter := &artifactByteCounter{}
 	written, putErr := store.Put(ctx, targetKey, io.TeeReader(io.MultiReader(readers...), io.MultiWriter(hasher, counter)), state.ExpectedSize, state.MediaType)
-	for _, closer := range closers {
-		_ = closer.Close()
-	}
 	actualSHA := hex.EncodeToString(hasher.Sum(nil))
 	if putErr != nil || written != state.ExpectedSize || counter.total != state.ExpectedSize || actualSHA != state.ExpectedSHA256 {
 		_ = store.Delete(ctx, targetKey)
-		if putErr != nil {
+		if putErr != nil && !errors.Is(putErr, ErrArtifactIntegrity) {
 			return Artifact{}, putErr
 		}
+		// A complete byte stream with a different total digest cannot be fixed
+		// by appending another chunk; retain the audit record as failed.
+		_, _, _ = s.repo.TransitionArtifact(ctx, ArtifactTransitionInput{
+			ArtifactID: session.ID, ExpectedVersion: expectedVersion, ToStatus: ArtifactStatusFailed,
+			Reason: "integrity_failed", Content: &ArtifactContentUpdate{
+				MediaType: state.MediaType, SizeBytes: counter.total, SHA256: actualSHA,
+				StoreDriver: ArtifactStoreDriverNone, ExternalReference: session.ExternalReference,
+			},
+		}, s.nowUTC())
 		return Artifact{}, ErrArtifactIntegrity
 	}
 	state.Completed = true

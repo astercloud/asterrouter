@@ -37,6 +37,26 @@ func TestExtractCredentialUsesOneProtocolApprovedTransport(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeNativeTextProtocolsPreservesProviderPayload(t *testing.T) {
+	header := http.Header{"X-Request-ID": []string{"native-protocol"}, "Idempotency-Key": []string{"native-idem"}}
+
+	responsesRaw := []byte(`{"model":"responses-model","input":"hello","metadata":{"opaque":"kept"},"stream":true}`)
+	responses, err := CanonicalizeOpenAIResponses(responsesRaw, header)
+	if err != nil || responses.Protocol != ProtocolOpenAIResponses || !responses.Stream || string(responses.Payload) != string(responsesRaw) || responses.Operation != "chat_completion" {
+		t.Fatalf("responses=%+v err=%v", responses, err)
+	}
+	anthropicRaw := []byte(`{"model":"claude-model","max_tokens":64,"system":"keep","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	anthropic, err := CanonicalizeAnthropicMessages(anthropicRaw, header)
+	if err != nil || anthropic.Protocol != ProtocolAnthropicMessages || anthropic.MessageCount != 1 || !anthropic.Stream || string(anthropic.Payload) != string(anthropicRaw) {
+		t.Fatalf("anthropic=%+v err=%v", anthropic, err)
+	}
+	geminiRaw := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"generationConfig":{"maxOutputTokens":64}}`)
+	gemini, err := CanonicalizeGeminiGenerate(geminiRaw, header, "gemini-model", true)
+	if err != nil || gemini.Protocol != ProtocolGeminiGenerate || !gemini.Stream || gemini.Model != "gemini-model" || string(gemini.Payload) != string(geminiRaw) {
+		t.Fatalf("gemini=%+v err=%v", gemini, err)
+	}
+}
+
 func TestExtractCredentialFailsClosed(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -297,6 +317,26 @@ func TestCanonicalizeOpenAIMediaJobSupportsExplicitInteractionModes(t *testing.T
 	}
 	if _, err := CanonicalizeOpenAIMediaJob([]byte(`{"model":"video-model","prompt":"synthetic"}`), header, "image", "video_generation"); !errors.Is(err, ErrInvalidCanonicalRequest) {
 		t.Fatalf("wrong modality error=%v", err)
+	}
+}
+
+func TestCanonicalizeOpenAIMediaJobPreservesPreviewContract(t *testing.T) {
+	header := http.Header{"Idempotency-Key": []string{"media-preview-idem"}}
+	request, err := CanonicalizeOpenAIMediaJob([]byte(`{"model":"video-model","prompt":"synthetic","response_mode":"stream","stream":true,"preview_mode":"preferred","delivery_mode":"artifact"}`), header, "video", "video_generation")
+	if err != nil {
+		t.Fatalf("CanonicalizeOpenAIMediaJob(): %v", err)
+	}
+	if request.PreviewMode != "preferred" || !strings.Contains(string(request.Payload), `"preview_mode":"preferred"`) {
+		t.Fatalf("preview contract was not preserved: request=%+v payload=%s", request, request.Payload)
+	}
+	for _, body := range []string{
+		`{"model":"video-model","prompt":"synthetic","response_mode":"blocking","preview_mode":"required"}`,
+		`{"model":"video-model","prompt":"synthetic","response_mode":"async","preview_mode":"required"}`,
+		`{"model":"video-model","prompt":"synthetic","preview_mode":"invalid"}`,
+	} {
+		if _, err := CanonicalizeOpenAIMediaJob([]byte(body), header, "video", "video_generation"); !errors.Is(err, ErrInvalidCanonicalRequest) {
+			t.Fatalf("body=%s error=%v, want invalid canonical request", body, err)
+		}
 	}
 }
 

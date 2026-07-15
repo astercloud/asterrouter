@@ -19,7 +19,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const directImageInlineLimit = 64 << 20
+const directMediaInlineLimit = 64 << 20
+
+// directImageInlineLimit is retained as an alias for image-specific tests and
+// downstream code compiled in this package. The execution path is modality
+// agnostic; all media types share the same delivery limit.
+const directImageInlineLimit = directMediaInlineLimit
 
 var (
 	errDirectImageAdapterUnavailable  = errors.New("no direct image provider adapter is available")
@@ -29,13 +34,13 @@ var (
 	errDirectImageProviderInvalid     = errors.New("direct image provider returned an invalid accepted response")
 )
 
-type directImageResponse struct {
+type directMediaResponse struct {
 	Created     int64                     `json:"created"`
 	OperationID string                    `json:"operation_id"`
-	Data        []directImageResponseItem `json:"data"`
+	Data        []directMediaResponseItem `json:"data"`
 }
 
-type directImageResponseItem struct {
+type directMediaResponseItem struct {
 	Index      int    `json:"index"`
 	B64JSON    string `json:"b64_json,omitempty"`
 	ArtifactID string `json:"artifact_id"`
@@ -44,13 +49,20 @@ type directImageResponseItem struct {
 	Status     string `json:"status"`
 }
 
-type directImageExecution struct {
+type directMediaExecution struct {
 	Provider controlplane.GatewayProvider
 	Attempt  controlplane.AIAttempt
 	Result   controlplane.ProviderDispatchResult
 	Release  func()
 	Attempts []gatewayRouteAttempt
 }
+
+// Compatibility aliases keep the existing image contract stable while the
+// implementation is shared by image, video and audio direct requests.
+type directImageResponse = directMediaResponse
+type directImageResponseItem = directMediaResponseItem
+type directImageExecution = directMediaExecution
+type directImageDispatchExecutor = directMediaDispatchExecutor
 
 func registerGatewayImageRoutes(r *gin.Engine, control *controlplane.Service, durableJobs DurableAIJobAdmission, adapter controlplane.DirectAIProviderAdapter) {
 	r.POST("/v1/images/generations", func(c *gin.Context) {
@@ -82,7 +94,7 @@ func registerGatewayImageRoutes(r *gin.Engine, control *controlplane.Service, du
 			writeGatewayError(c, err)
 			return
 		}
-		if err := validateImageDeliveryContract(request, canonicalAuth); err != nil {
+		if err := validateMediaDeliveryContract(request, canonicalAuth); err != nil {
 			writeGatewayError(c, err)
 			return
 		}
@@ -90,7 +102,7 @@ func registerGatewayImageRoutes(r *gin.Engine, control *controlplane.Service, du
 			acceptImageDurableJob(c, control, durableJobs, auth, canonicalAuth, request, startedAt)
 			return
 		}
-		executeDirectImage(c, control, adapter, auth, canonicalAuth, request)
+		executeDirectMedia(c, control, adapter, auth, canonicalAuth, request)
 	})
 }
 
@@ -112,7 +124,7 @@ func parseCanonicalImageGenerationRequest(c *gin.Context) (gatewaycore.Canonical
 	return request, nil
 }
 
-func validateImageDeliveryContract(request gatewaycore.CanonicalRequest, auth gatewaycore.CanonicalAuthContext) error {
+func validateMediaDeliveryContract(request gatewaycore.CanonicalRequest, auth gatewaycore.CanonicalAuthContext) error {
 	policy := strings.TrimSpace(auth.ArtifactPolicy)
 	switch request.DeliveryMode {
 	case "inline", "artifact":
@@ -127,6 +139,12 @@ func validateImageDeliveryContract(request gatewaycore.CanonicalRequest, auth ga
 		return gatewaycore.ErrInvalidCanonicalRequest
 	}
 	return nil
+}
+
+// validateImageDeliveryContract is kept for callers that still use the
+// original image route helper. Media validation is identical across modes.
+func validateImageDeliveryContract(request gatewaycore.CanonicalRequest, auth gatewaycore.CanonicalAuthContext) error {
+	return validateMediaDeliveryContract(request, auth)
 }
 
 func acceptImageDurableJob(c *gin.Context, control *controlplane.Service, durableJobs DurableAIJobAdmission, legacyAuth controlplane.GatewayAuthContext, auth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest, startedAt time.Time) {
@@ -159,7 +177,7 @@ func acceptImageDurableJob(c *gin.Context, control *controlplane.Service, durabl
 	c.JSON(status, newPublicAIJobResponse(job))
 }
 
-func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter controlplane.DirectAIProviderAdapter, auth controlplane.GatewayAuthContext, canonicalAuth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest) {
+func executeDirectMedia(c *gin.Context, control *controlplane.Service, adapter controlplane.DirectAIProviderAdapter, auth controlplane.GatewayAuthContext, canonicalAuth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest) {
 	startedAt := time.Now()
 	plan, err := control.PlanCanonicalGatewayRequest(c.Request.Context(), canonicalAuth, request)
 	if err != nil {
@@ -188,13 +206,25 @@ func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter c
 			writeGatewayError(c, controlplane.ErrGatewayIdempotencyReplay)
 			return
 		}
-		response, responseErr := buildDirectImageResponse(c.Request.Context(), control, canonicalAuth, request, operation, artifacts)
+		response, responseErr := buildDirectMediaResponse(c.Request.Context(), control, canonicalAuth, request, operation, artifacts)
 		if responseErr != nil {
 			writeGatewayError(c, responseErr)
 			return
 		}
+		var previews []directMediaResponseItem
+		var previewErr error
+		if request.Stream && request.PreviewMode != "none" {
+			previews, previewErr = buildDirectMediaPreviewItems(c.Request.Context(), control, canonicalAuth, request, artifacts)
+		}
+		if previewErr != nil || request.PreviewMode == "required" && len(previews) == 0 {
+			if previewErr == nil {
+				previewErr = controlplane.ErrProviderOutputsRequired
+			}
+			writeGatewayError(c, previewErr)
+			return
+		}
 		c.Header("Idempotent-Replayed", "true")
-		writeDirectImageResponse(c, request, response)
+		writeDirectMediaResponseWithPreviews(c, request, response, previews)
 		return
 	}
 	completed := false
@@ -237,13 +267,13 @@ func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter c
 	cohortKey := control.GatewayEffectivePricingCohortKey(affinity)
 	candidates := control.PreferGatewayCandidatesWithAffinity(c.Request.Context(), affinity,
 		control.OrderGatewayCandidatesByEffectivePricing(c.Request.Context(), request.Model, string(request.Protocol), cohortKey, plan.Candidates))
-	execution, err := attemptDirectImageCandidates(c.Request.Context(), control, adapter, operation, request, candidates)
+	execution, err := attemptDirectMediaCandidates(c.Request.Context(), control, adapter, operation, request, candidates)
 	routeAttempts := marshalRouteEvidence(plan.Exclusions, execution.Attempts)
 	if execution.Attempt.ID != "" {
 		c.Set(gatewayAttemptContextKey, execution.Attempt.ID)
 	}
 	if err != nil {
-		handleDirectImageExecutionError(c, control, auth, request, operation, execution.Provider, err, routeAttempts, startedAt, complete)
+		handleDirectMediaExecutionError(c, control, auth, request, operation, execution.Provider, err, routeAttempts, startedAt, complete)
 		return
 	}
 	defer execution.Release()
@@ -255,11 +285,11 @@ func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter c
 		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_output_unavailable")
 		_ = control.CompleteAIAttempt(c.Request.Context(), execution.Attempt.ID, controlplane.AIAttemptStatusFailed, "artifact_delivery_error")
 		complete(controlplane.AIOperationStatusFailed, "artifact_delivery_error")
-		recordImageTrace(control, c, auth, request, execution.Provider, "upstream_error", http.StatusBadGateway, "artifact_delivery_error", startedAt, "provider image output delivery failed", routeAttempts)
-		writeDirectImageArtifactError(c, err)
+		recordMediaTrace(control, c, auth, request, execution.Provider, "upstream_error", http.StatusBadGateway, "artifact_delivery_error", startedAt, fmt.Sprintf("provider %s output delivery failed", request.Modality), routeAttempts)
+		writeDirectMediaArtifactError(c, err)
 		return
 	}
-	response, err := buildDirectImageResponse(c.Request.Context(), control, canonicalAuth, request, operation, artifacts)
+	response, err := buildDirectMediaResponse(c.Request.Context(), control, canonicalAuth, request, operation, artifacts)
 	if err != nil {
 		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "image_response_unavailable")
 		_ = control.CompleteAIAttempt(c.Request.Context(), execution.Attempt.ID, controlplane.AIAttemptStatusFailed, "response_build_error")
@@ -267,9 +297,25 @@ func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter c
 		writeGatewayError(c, err)
 		return
 	}
+	var previews []directMediaResponseItem
+	var previewErr error
+	if request.Stream && request.PreviewMode != "none" {
+		previews, previewErr = buildDirectMediaPreviewItems(c.Request.Context(), control, canonicalAuth, request, artifacts)
+	}
+	if previewErr != nil || request.PreviewMode == "required" && len(previews) == 0 {
+		if previewErr == nil {
+			previewErr = controlplane.ErrProviderOutputsRequired
+		}
+		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_preview_unavailable")
+		_ = control.CompleteAIAttempt(c.Request.Context(), execution.Attempt.ID, controlplane.AIAttemptStatusFailed, "preview_delivery_error")
+		complete(controlplane.AIOperationStatusFailed, "preview_delivery_error")
+		recordMediaTrace(control, c, auth, request, execution.Provider, "upstream_error", http.StatusBadGateway, "preview_delivery_error", startedAt, fmt.Sprintf("provider %s preview delivery failed", request.Modality), routeAttempts)
+		writeDirectMediaArtifactError(c, previewErr)
+		return
+	}
 	_ = control.RecordProviderAccountSuccess(c.Request.Context(), execution.Provider.AccountID)
 	_ = control.TouchProviderAccountUsage(c.Request.Context(), execution.Provider.AccountID)
-	_ = control.RecordGatewayCall(c.Request.Context(), auth, request.Model, "forwarded", fmt.Sprintf("Generated %d image output(s) through provider %s", len(response.Data), execution.Provider.ID))
+	_ = control.RecordGatewayCall(c.Request.Context(), auth, request.Model, "forwarded", fmt.Sprintf("Generated %d %s output(s) through provider %s", len(response.Data), request.Modality, execution.Provider.ID))
 	_ = control.CompleteAIAttempt(c.Request.Context(), execution.Attempt.ID, controlplane.AIAttemptStatusSucceeded, "")
 	usageDimensions := directMediaUsageDimensions(request, len(response.Data), finalArtifactBytes(artifacts))
 	if err := control.RecordDirectAIProviderUsage(c.Request.Context(), operation, execution.Attempt, execution.Result, controlplane.GatewayUsageInput{
@@ -284,12 +330,16 @@ func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter c
 		return
 	}
 	complete(controlplane.AIOperationStatusSucceeded, "")
-	recordImageTrace(control, c, auth, request, execution.Provider, "forwarded", http.StatusOK, "", startedAt, fmt.Sprintf("%s=%d", request.Modality, len(response.Data)), routeAttempts)
-	writeDirectImageResponse(c, request, response)
+	recordMediaTrace(control, c, auth, request, execution.Provider, "forwarded", http.StatusOK, "", startedAt, fmt.Sprintf("%s=%d", request.Modality, len(response.Data)), routeAttempts)
+	writeDirectMediaResponseWithPreviews(c, request, response, previews)
 }
 
-func attemptDirectImageCandidates(ctx context.Context, control *controlplane.Service, adapter controlplane.DirectAIProviderAdapter, operation controlplane.AIOperation, request gatewaycore.CanonicalRequest, candidates []controlplane.GatewayProvider) (directImageExecution, error) {
-	execution := directImageExecution{Attempts: []gatewayRouteAttempt{}}
+func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter controlplane.DirectAIProviderAdapter, auth controlplane.GatewayAuthContext, canonicalAuth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest) {
+	executeDirectMedia(c, control, adapter, auth, canonicalAuth, request)
+}
+
+func attemptDirectMediaCandidates(ctx context.Context, control *controlplane.Service, adapter controlplane.DirectAIProviderAdapter, operation controlplane.AIOperation, request gatewaycore.CanonicalRequest, candidates []controlplane.GatewayProvider) (directMediaExecution, error) {
+	execution := directMediaExecution{Attempts: []gatewayRouteAttempt{}}
 	if adapter == nil {
 		return execution, errDirectImageAdapterUnavailable
 	}
@@ -321,7 +371,7 @@ func attemptDirectImageCandidates(ctx context.Context, control *controlplane.Ser
 			execution.Attempts = append(execution.Attempts, gatewayRouteAttempt{AttemptID: attempt.ID, AccountID: provider.AccountID, ProviderID: provider.ID, RouteID: provider.RouteID, Model: provider.UpstreamModel, Outcome: "skipped", Detail: reason})
 			continue
 		}
-		executor := directImageDispatchExecutor{adapter: adapter, provider: provider, operation: operation, attempt: attempt, request: request}
+		executor := directMediaDispatchExecutor{adapter: adapter, provider: provider, operation: operation, attempt: attempt, request: request}
 		updated, result, dispatchErr := control.ExecuteAIAttemptDispatch(ctx, attempt.ID, request.Payload, executor)
 		execution.Provider, execution.Attempt, execution.Result = provider, updated, result
 		switch updated.DispatchState {
@@ -383,7 +433,11 @@ func attemptDirectImageCandidates(ctx context.Context, control *controlplane.Ser
 	return execution, errDirectImageProviderFailed
 }
 
-type directImageDispatchExecutor struct {
+func attemptDirectImageCandidates(ctx context.Context, control *controlplane.Service, adapter controlplane.DirectAIProviderAdapter, operation controlplane.AIOperation, request gatewaycore.CanonicalRequest, candidates []controlplane.GatewayProvider) (directImageExecution, error) {
+	return attemptDirectMediaCandidates(ctx, control, adapter, operation, request, candidates)
+}
+
+type directMediaDispatchExecutor struct {
 	adapter   controlplane.DirectAIProviderAdapter
 	provider  controlplane.GatewayProvider
 	operation controlplane.AIOperation
@@ -391,34 +445,34 @@ type directImageDispatchExecutor struct {
 	request   gatewaycore.CanonicalRequest
 }
 
-func (executor directImageDispatchExecutor) DispatchProviderTask(ctx context.Context, command controlplane.ProviderDispatchCommand) (controlplane.ProviderDispatchResult, error) {
+func (executor directMediaDispatchExecutor) DispatchProviderTask(ctx context.Context, command controlplane.ProviderDispatchCommand) (controlplane.ProviderDispatchResult, error) {
 	return executor.adapter.DispatchDirectAI(ctx, executor.provider, executor.operation, executor.attempt, executor.request, command)
 }
 
-func handleDirectImageExecutionError(c *gin.Context, control *controlplane.Service, auth controlplane.GatewayAuthContext, request gatewaycore.CanonicalRequest, operation controlplane.AIOperation, provider controlplane.GatewayProvider, err error, routeAttempts string, startedAt time.Time, complete func(string, string)) {
+func handleDirectMediaExecutionError(c *gin.Context, control *controlplane.Service, auth controlplane.GatewayAuthContext, request gatewaycore.CanonicalRequest, operation controlplane.AIOperation, provider controlplane.GatewayProvider, err error, routeAttempts string, startedAt time.Time, complete func(string, string)) {
 	statusCode := http.StatusBadGateway
 	errorType := "upstream_error"
-	message := "image provider request failed"
+	message := fmt.Sprintf("%s provider request failed", request.Modality)
 	switch {
 	case errors.Is(err, errDirectImageAdapterUnavailable):
 		statusCode, errorType = http.StatusServiceUnavailable, "unsupported_capability"
-		message = "no executable provider adapter is available for this image request"
+		message = fmt.Sprintf("no executable provider adapter is available for this %s request", request.Modality)
 		_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "direct_adapter_unavailable")
 	case errors.Is(err, errDirectImageCapacityUnavailable):
 		statusCode, errorType = http.StatusTooManyRequests, "direct_capacity_unavailable"
-		message = "image provider capacity is temporarily unavailable"
+		message = fmt.Sprintf("%s provider capacity is temporarily unavailable", request.Modality)
 		c.Header("Retry-After", "2")
 		_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "provider_capacity_unavailable")
 	case errors.Is(err, errDirectImageProviderUnknown):
 		errorType = "provider_status_unknown"
-		message = "image provider submission status is unknown; retry with the same idempotency key only"
+		message = fmt.Sprintf("%s provider submission status is unknown; retry with the same idempotency key only", request.Modality)
 	case errors.Is(err, errDirectImageProviderInvalid):
 		errorType = "provider_response_invalid"
-		message = "image provider accepted the request but did not return a valid final result"
+		message = fmt.Sprintf("%s provider accepted the request but did not return a valid final result", request.Modality)
 		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_invalid")
 	case errors.Is(err, errDirectImageProviderFailed):
 		errorType = "provider_terminal_failure"
-		message = "image provider reported a terminal failure"
+		message = fmt.Sprintf("%s provider reported a terminal failure", request.Modality)
 	default:
 		_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "provider_request_failed")
 	}
@@ -428,11 +482,15 @@ func handleDirectImageExecutionError(c *gin.Context, control *controlplane.Servi
 		Status: "upstream_error", ErrorType: errorType, LatencyMS: time.Since(startedAt).Milliseconds(),
 	})
 	complete(controlplane.AIOperationStatusFailed, errorType)
-	recordImageTrace(control, c, auth, request, provider, "upstream_error", statusCode, errorType, startedAt, message, routeAttempts)
+	recordMediaTrace(control, c, auth, request, provider, "upstream_error", statusCode, errorType, startedAt, message, routeAttempts)
 	openAIError(c, statusCode, errorType, message)
 }
 
-func writeDirectImageArtifactError(c *gin.Context, err error) {
+func handleDirectImageExecutionError(c *gin.Context, control *controlplane.Service, auth controlplane.GatewayAuthContext, request gatewaycore.CanonicalRequest, operation controlplane.AIOperation, provider controlplane.GatewayProvider, err error, routeAttempts string, startedAt time.Time, complete func(string, string)) {
+	handleDirectMediaExecutionError(c, control, auth, request, operation, provider, err, routeAttempts, startedAt, complete)
+}
+
+func writeDirectMediaArtifactError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, controlplane.ErrArtifactStateConflict),
 		errors.Is(err, controlplane.ErrArtifactTooLarge),
@@ -443,11 +501,15 @@ func writeDirectImageArtifactError(c *gin.Context, err error) {
 		errors.Is(err, controlplane.ErrArtifactSinkRequired):
 		writeGatewayError(c, err)
 	default:
-		openAIError(c, http.StatusBadGateway, "artifact_delivery_error", "provider image output could not be delivered")
+		openAIError(c, http.StatusBadGateway, "artifact_delivery_error", "provider media output could not be delivered")
 	}
 }
 
-func buildDirectImageResponse(ctx context.Context, control *controlplane.Service, auth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest, operation controlplane.AIOperation, artifacts []controlplane.Artifact) (directImageResponse, error) {
+func writeDirectImageArtifactError(c *gin.Context, err error) {
+	writeDirectMediaArtifactError(c, err)
+}
+
+func buildDirectMediaResponse(ctx context.Context, control *controlplane.Service, auth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest, operation controlplane.AIOperation, artifacts []controlplane.Artifact) (directMediaResponse, error) {
 	finals := make([]controlplane.Artifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
 		if artifact.Role == controlplane.ArtifactRoleFinal && (artifact.Status == controlplane.ArtifactStatusReady || artifact.Status == controlplane.ArtifactStatusDelivered) {
@@ -456,30 +518,30 @@ func buildDirectImageResponse(ctx context.Context, control *controlplane.Service
 	}
 	sort.SliceStable(finals, func(i, j int) bool { return finals[i].ID < finals[j].ID })
 	if len(finals) == 0 {
-		return directImageResponse{}, controlplane.ErrProviderOutputsRequired
+		return directMediaResponse{}, controlplane.ErrProviderOutputsRequired
 	}
-	response := directImageResponse{Created: operation.CreatedAt.Unix(), OperationID: operation.ID, Data: make([]directImageResponseItem, 0, len(finals))}
+	response := directMediaResponse{Created: operation.CreatedAt.Unix(), OperationID: operation.ID, Data: make([]directMediaResponseItem, 0, len(finals))}
 	var inlineBytes int64
 	for index, artifact := range finals {
-		item := directImageResponseItem{Index: index, ArtifactID: artifact.ID, MediaType: artifact.MediaType, Status: artifact.Status}
+		item := directMediaResponseItem{Index: index, ArtifactID: artifact.ID, MediaType: artifact.MediaType, Status: artifact.Status}
 		switch request.DeliveryMode {
 		case "inline":
 			_, opened, found, err := control.OpenArtifactForAuth(ctx, auth, artifact.ID, nil)
 			if err != nil || !found || opened.Body == nil {
-				return directImageResponse{}, errors.Join(controlplane.ErrArtifactUnavailable, err)
+				return directMediaResponse{}, errors.Join(controlplane.ErrArtifactUnavailable, err)
 			}
-			data, readErr := io.ReadAll(io.LimitReader(opened.Body, directImageInlineLimit-inlineBytes+1))
+			data, readErr := io.ReadAll(io.LimitReader(opened.Body, directMediaInlineLimit-inlineBytes+1))
 			closeErr := opened.Body.Close()
 			inlineBytes += int64(len(data))
-			if readErr != nil || closeErr != nil || inlineBytes > directImageInlineLimit {
-				return directImageResponse{}, errors.Join(controlplane.ErrArtifactTooLarge, readErr, closeErr)
+			if readErr != nil || closeErr != nil || inlineBytes > directMediaInlineLimit {
+				return directMediaResponse{}, errors.Join(controlplane.ErrArtifactTooLarge, readErr, closeErr)
 			}
 			item.B64JSON = base64.StdEncoding.EncodeToString(data)
 		case "artifact":
 			item.URL = "/v1/artifacts/" + artifact.ID + "/content"
 		case "customer_sink":
 			if artifact.Status != controlplane.ArtifactStatusDelivered {
-				return directImageResponse{}, controlplane.ErrArtifactUnavailable
+				return directMediaResponse{}, controlplane.ErrArtifactUnavailable
 			}
 		}
 		response.Data = append(response.Data, item)
@@ -487,7 +549,55 @@ func buildDirectImageResponse(ctx context.Context, control *controlplane.Service
 	return response, nil
 }
 
-func writeDirectImageResponse(c *gin.Context, request gatewaycore.CanonicalRequest, response directImageResponse) {
+func buildDirectMediaPreviewItems(ctx context.Context, control *controlplane.Service, auth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest, artifacts []controlplane.Artifact) ([]directMediaResponseItem, error) {
+	previews := make([]controlplane.Artifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		if artifact.Role == controlplane.ArtifactRolePreview && (artifact.Status == controlplane.ArtifactStatusReady || artifact.Status == controlplane.ArtifactStatusDelivered) {
+			if request.DeliveryMode == "customer_sink" && artifact.Status != controlplane.ArtifactStatusDelivered {
+				continue
+			}
+			previews = append(previews, artifact)
+		}
+	}
+	sort.SliceStable(previews, func(i, j int) bool { return previews[i].ID < previews[j].ID })
+	items := make([]directMediaResponseItem, 0, len(previews))
+	var inlineBytes int64
+	for index, artifact := range previews {
+		item := directMediaResponseItem{Index: index, ArtifactID: artifact.ID, MediaType: artifact.MediaType, Status: artifact.Status}
+		switch request.DeliveryMode {
+		case "inline":
+			_, opened, found, err := control.OpenArtifactForAuth(ctx, auth, artifact.ID, nil)
+			if err != nil || !found || opened.Body == nil {
+				return nil, errors.Join(controlplane.ErrArtifactUnavailable, err)
+			}
+			data, readErr := io.ReadAll(io.LimitReader(opened.Body, directMediaInlineLimit-inlineBytes+1))
+			closeErr := opened.Body.Close()
+			inlineBytes += int64(len(data))
+			if readErr != nil || closeErr != nil || inlineBytes > directMediaInlineLimit {
+				return nil, errors.Join(controlplane.ErrArtifactTooLarge, readErr, closeErr)
+			}
+			item.B64JSON = base64.StdEncoding.EncodeToString(data)
+		case "artifact":
+			item.URL = "/v1/artifacts/" + artifact.ID + "/content"
+		case "customer_sink":
+			if artifact.Status != controlplane.ArtifactStatusDelivered {
+				return nil, controlplane.ErrArtifactUnavailable
+			}
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func buildDirectImageResponse(ctx context.Context, control *controlplane.Service, auth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest, operation controlplane.AIOperation, artifacts []controlplane.Artifact) (directImageResponse, error) {
+	return buildDirectMediaResponse(ctx, control, auth, request, operation, artifacts)
+}
+
+func writeDirectMediaResponse(c *gin.Context, request gatewaycore.CanonicalRequest, response directMediaResponse) {
+	writeDirectMediaResponseWithPreviews(c, request, response, nil)
+}
+
+func writeDirectMediaResponseWithPreviews(c *gin.Context, request gatewaycore.CanonicalRequest, response directMediaResponse, previews []directMediaResponseItem) {
 	if request.ResponseMode != "stream" {
 		c.JSON(http.StatusOK, response)
 		return
@@ -499,6 +609,16 @@ func writeDirectImageResponse(c *gin.Context, request gatewaycore.CanonicalReque
 	eventPrefix := strings.TrimSpace(request.Modality)
 	if eventPrefix == "" {
 		eventPrefix = "media"
+	}
+	for _, item := range previews {
+		eventPayload := gin.H{"type": eventPrefix + ".preview", "operation_id": response.OperationID}
+		if request.Modality == controlplane.GatewayModalityImage {
+			eventPayload["image"] = item
+		} else {
+			eventPayload["media"] = item
+		}
+		payload, _ := json.Marshal(eventPayload)
+		_, _ = fmt.Fprintf(c.Writer, "id: preview-%d\nevent: %s.preview\ndata: %s\n\n", item.Index+1, eventPrefix, payload)
 	}
 	for _, item := range response.Data {
 		eventPayload := gin.H{"type": eventPrefix + ".final", "operation_id": response.OperationID}
@@ -525,6 +645,10 @@ func writeDirectImageResponse(c *gin.Context, request gatewaycore.CanonicalReque
 	c.Writer.Flush()
 }
 
+func writeDirectImageResponse(c *gin.Context, request gatewaycore.CanonicalRequest, response directImageResponse) {
+	writeDirectMediaResponse(c, request, response)
+}
+
 func countFinalArtifacts(artifacts []controlplane.Artifact) int {
 	count := 0
 	for _, artifact := range artifacts {
@@ -549,7 +673,7 @@ func finalArtifactBytes(artifacts []controlplane.Artifact) int64 {
 	return total
 }
 
-func recordImageTrace(control *controlplane.Service, c *gin.Context, auth controlplane.GatewayAuthContext, request gatewaycore.CanonicalRequest, provider controlplane.GatewayProvider, status string, httpStatus int, errorType string, startedAt time.Time, summary, routeAttempts string) {
+func recordMediaTrace(control *controlplane.Service, c *gin.Context, auth controlplane.GatewayAuthContext, request gatewaycore.CanonicalRequest, provider controlplane.GatewayProvider, status string, httpStatus int, errorType string, startedAt time.Time, summary, routeAttempts string) {
 	recordGatewayTrace(control, c, auth, controlplane.GatewayTraceInput{
 		Model: request.Model, Stream: request.Stream, ProviderID: provider.ID, ProviderAccountID: provider.AccountID,
 		GatewayModelID: provider.GatewayModelID, RouteID: provider.RouteID, RouteGroup: provider.RouteGroup,
@@ -558,6 +682,10 @@ func recordImageTrace(control *controlplane.Service, c *gin.Context, auth contro
 		RequestSummary:  fmt.Sprintf("%s.generate response_mode=%s preview_mode=%s delivery_mode=%s n=%d", request.Modality, request.ResponseMode, request.PreviewMode, request.DeliveryMode, request.OutputCount),
 		ResponseSummary: summary, RouteAttempts: routeAttempts,
 	})
+}
+
+func recordImageTrace(control *controlplane.Service, c *gin.Context, auth controlplane.GatewayAuthContext, request gatewaycore.CanonicalRequest, provider controlplane.GatewayProvider, status string, httpStatus int, errorType string, startedAt time.Time, summary, routeAttempts string) {
+	recordMediaTrace(control, c, auth, request, provider, status, httpStatus, errorType, startedAt, summary, routeAttempts)
 }
 
 func directMediaUsageDimensions(request gatewaycore.CanonicalRequest, outputCount int, outputBytes int64) controlplane.UsageDimensions {

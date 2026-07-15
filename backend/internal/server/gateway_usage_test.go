@@ -114,6 +114,7 @@ func TestGatewaySSEUsageCollectorMergesGeminiFinalUsage(t *testing.T) {
 func TestGatewaySSEUsageCollectorRecognizesProtocolTerminalEvents(t *testing.T) {
 	tests := []string{
 		"data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n",
+		"data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n",
 		"event: message_stop\ndata: {}\n\n",
 		"data: {\"type\":\"response.completed\"}\n\n",
 	}
@@ -123,6 +124,18 @@ func TestGatewaySSEUsageCollectorRecognizesProtocolTerminalEvents(t *testing.T) 
 		if !collector.Completed() {
 			t.Fatalf("terminal payload was not recognized: %q", payload)
 		}
+	}
+}
+
+func TestGatewaySSEUsageCollectorFlushesTerminalLineWithoutTrailingNewline(t *testing.T) {
+	collector := gatewaySSEUsageCollector{}
+	collector.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.completed\"}"))
+	if collector.Completed() {
+		t.Fatal("collector completed before EOF flush")
+	}
+	collector.Flush()
+	if !collector.Completed() {
+		t.Fatal("collector did not recognize terminal event after EOF flush")
 	}
 }
 

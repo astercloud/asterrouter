@@ -36,7 +36,7 @@ var (
 )
 
 func (s *Service) SelectDirectAIAdapter(ctx context.Context, provider controlplane.GatewayProvider, request gatewaycore.CanonicalRequest, artifactPolicy string) (string, bool, error) {
-	if s == nil || request.PreviewMode == "required" {
+	if s == nil {
 		return "", false, nil
 	}
 	plugins, err := s.repo.ListPlugins(ctx)
@@ -45,7 +45,7 @@ func (s *Service) SelectDirectAIAdapter(ctx context.Context, provider controlpla
 	}
 	job := directAIJobSnapshot(controlplane.AIOperation{ArtifactPolicy: artifactPolicy}, request)
 	if request.Protocol == gatewaycore.ProtocolOpenAIImages && request.Modality == "image" && request.Operation == "image_generation" {
-		if !supportsBuiltinOpenAIImageAdapter(provider, job) {
+		if request.PreviewMode == "required" || !supportsBuiltinOpenAIImageAdapter(provider, job) {
 			return "", false, nil
 		}
 		for _, plugin := range plugins {
@@ -63,11 +63,25 @@ func (s *Service) SelectDirectAIAdapter(ctx context.Context, provider controlpla
 			continue
 		}
 		manifest, available := s.providerAdapterManifest(ctx, plugin.ID)
-		if available && manifestSupportsProviderJob(manifest, provider, job) {
+		if available && manifestSupportsDirectProviderJob(manifest, provider, job, request) {
 			return plugin.ID, true, nil
 		}
 	}
 	return "", false, nil
+}
+
+func manifestSupportsDirectProviderJob(manifest sidecarManifest, provider controlplane.GatewayProvider, job controlplane.AIJob, request gatewaycore.CanonicalRequest) bool {
+	for _, capability := range manifest.ProviderAdapters {
+		candidateManifest := sidecarManifest{ProviderAdapters: []providerAdapterManifestCapability{capability}}
+		if !manifestSupportsProviderJob(candidateManifest, provider, job) {
+			continue
+		}
+		if request.PreviewMode == "required" && !capability.SupportsPreviews {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (s *Service) DispatchDirectAI(ctx context.Context, provider controlplane.GatewayProvider, operation controlplane.AIOperation, attempt controlplane.AIAttempt, request gatewaycore.CanonicalRequest, command controlplane.ProviderDispatchCommand) (controlplane.ProviderDispatchResult, error) {

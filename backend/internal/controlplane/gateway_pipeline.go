@@ -204,6 +204,8 @@ func gatewayModelSupportsCanonicalRequest(model GatewayModel, request gatewaycor
 	switch request.Protocol {
 	case gatewaycore.ProtocolOpenAIChat:
 		return model.Modality == "chat" || model.Modality == "multimodal"
+	case gatewaycore.ProtocolOpenAIResponses, gatewaycore.ProtocolAnthropicMessages, gatewaycore.ProtocolGeminiGenerate:
+		return model.Modality == "chat" || model.Modality == "multimodal"
 	case gatewaycore.ProtocolOpenAIImages:
 		return model.Modality == GatewayModalityImage || model.Modality == "multimodal"
 	case gatewaycore.ProtocolOpenAIMedia:

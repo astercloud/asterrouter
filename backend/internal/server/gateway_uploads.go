@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -129,12 +130,25 @@ func registerGatewayUploadRoutes(r *gin.Engine, control *controlplane.Service) {
 		}
 		if !created {
 			artifacts, queryErr := control.DirectArtifactsForAuth(c.Request.Context(), auth, operation.ID)
-			if queryErr != nil || len(artifacts) == 0 {
+			if queryErr != nil {
+				writeGatewayError(c, queryErr)
+				return
+			}
+			var session controlplane.Artifact
+			foundSession := false
+			for _, candidate := range artifacts {
+				if candidate.Role == controlplane.ArtifactRoleInput {
+					session = candidate
+					foundSession = true
+					break
+				}
+			}
+			if !foundSession {
 				openAIError(c, http.StatusConflict, "upload_replay_unavailable", "the original upload result is not available")
 				return
 			}
 			c.Header("Idempotent-Replayed", "true")
-			c.JSON(http.StatusOK, newPublicUploadResponse(artifacts[0]))
+			c.JSON(http.StatusOK, newPublicUploadResponse(session))
 			return
 		}
 		if err := control.MarkAIOperationRunning(c.Request.Context(), operation.ID); err != nil {
@@ -244,6 +258,20 @@ func registerGatewayUploadRoutes(r *gin.Engine, control *controlplane.Service) {
 			return
 		}
 		if offset != state.Offset {
+			if chunks, listErr := control.ListArtifactUploadChunksForAuth(c.Request.Context(), auth, session.ID); listErr == nil {
+				for _, chunk := range chunks {
+					var chunkState struct {
+						Offset int64  `json:"offset"`
+						Size   int64  `json:"size"`
+						SHA256 string `json:"sha256"`
+					}
+					if json.Unmarshal([]byte(chunk.ExternalReference), &chunkState) == nil && chunkState.Offset == offset && chunkState.Size == c.Request.ContentLength && strings.EqualFold(chunkState.SHA256, strings.TrimSpace(c.GetHeader("X-Checksum-SHA256"))) {
+						c.Header("Upload-Offset", strconv.FormatInt(state.Offset, 10))
+						c.JSON(http.StatusOK, newPublicUploadResponse(session))
+						return
+					}
+				}
+			}
 			c.Header("Upload-Offset", strconv.FormatInt(state.Offset, 10))
 			openAIError(c, http.StatusConflict, "upload_offset_conflict", "Upload-Offset does not match the current session offset")
 			return
@@ -346,6 +374,12 @@ func registerGatewayUploadRoutes(r *gin.Engine, control *controlplane.Service) {
 		}
 		artifact, err := control.CompleteArtifactUpload(c.Request.Context(), auth, session.ID, session.StatusVersion)
 		if err != nil {
+			if errors.Is(err, controlplane.ErrArtifactIntegrity) ||
+				errors.Is(err, controlplane.ErrArtifactUploadOffset) ||
+				errors.Is(err, controlplane.ErrArtifactUploadInvalid) {
+				_ = control.ReleaseBillingHold(c.Request.Context(), session.OperationID, "upload_completion_failed")
+				_ = control.CompleteAIOperation(c.Request.Context(), session.OperationID, controlplane.AIOperationStatusFailed, "upload_completion_failed")
+			}
 			writeGatewayError(c, err)
 			return
 		}

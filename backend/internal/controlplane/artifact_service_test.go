@@ -202,6 +202,37 @@ func TestDirectArtifactUsesFrozenOperationPolicy(t *testing.T) {
 	}
 }
 
+func TestValidateInputArtifactsScansNestedProtocolInput(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	if err := svc.SetArtifactStore(NewMemoryArtifactStore()); err != nil {
+		t.Fatal(err)
+	}
+	auth := operationTestAuth()
+	auth.ArtifactPolicy = GatewayArtifactPolicyTemporary
+	operation, _, err := svc.BeginCanonicalOperation(context.Background(), auth, operationTestRequest("nested-artifact-operation", "nested-artifact-fingerprint"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := svc.CreateArtifactFromReader(context.Background(), ArtifactCreateInput{
+		OperationID: operation.ID, Role: ArtifactRoleInput, Policy: GatewayArtifactPolicyTemporary,
+		MediaType: "image/png", StoreDriver: ArtifactStoreDriverMemory, ExpectedSizeBytes: 4, MaxBytes: 16,
+	}, bytes.NewReader([]byte("data")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := operationTestRequest("nested-artifact-request", "nested-artifact-request-fingerprint")
+	request.Payload = []byte(`{"model":"model-a","input":[{"type":"input_image","content":{"artifact_id":"` + artifact.ID + `"}}]}`)
+	if err := svc.ValidateInputArtifactsForAuth(context.Background(), auth, request); err != nil {
+		t.Fatalf("owner nested artifact validation error=%v", err)
+	}
+	other := auth
+	other.PrincipalID = "other-principal"
+	if err := svc.ValidateInputArtifactsForAuth(context.Background(), other, request); !errors.Is(err, ErrArtifactNotFound) {
+		t.Fatalf("cross-owner nested artifact error=%v", err)
+	}
+}
+
 type flakyDeleteArtifactStore struct {
 	*MemoryArtifactStore
 	mu       sync.Mutex

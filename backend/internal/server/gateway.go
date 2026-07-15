@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -43,6 +44,7 @@ const (
 func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service, durableJobs DurableAIJobAdmission, directAI controlplane.DirectAIProviderAdapter) {
 	registerGatewayJobRoutes(r, control, durableJobs)
 	registerGatewayUploadRoutes(r, control)
+	registerGatewayProtocolRoutes(r, control)
 	registerGatewayMediaJobRoutes(r, control, durableJobs, directAI)
 	registerGatewayImageRoutes(r, control, durableJobs, directAI)
 
@@ -481,6 +483,10 @@ func isProviderAccountFailureStatus(statusCode int) bool {
 // the response body has been fully consumed (streamed or read). Losing
 // candidates' leases are released internally and must not be released again.
 func attemptGatewayCandidates(c *gin.Context, control *controlplane.Service, operationID string, affinityInput controlplane.GatewayAffinityInput, candidates []controlplane.GatewayProvider, rawBody []byte, stream bool) (resp *http.Response, provider controlplane.GatewayProvider, release func(), attempts []gatewayRouteAttempt, transportErr error) {
+	return attemptGatewayCandidatesForProtocol(c, control, operationID, gatewaycore.ProtocolOpenAIChat, affinityInput, candidates, rawBody, stream)
+}
+
+func attemptGatewayCandidatesForProtocol(c *gin.Context, control *controlplane.Service, operationID string, protocol gatewaycore.Protocol, affinityInput controlplane.GatewayAffinityInput, candidates []controlplane.GatewayProvider, rawBody []byte, stream bool) (resp *http.Response, provider controlplane.GatewayProvider, release func(), attempts []gatewayRouteAttempt, transportErr error) {
 	estimatedTokens := estimateGatewayRequestTokens(rawBody)
 	for i, candidate := range candidates {
 		attempt, err := control.BeginAIAttempt(c.Request.Context(), operationID, i+1, candidate)
@@ -509,7 +515,7 @@ func attemptGatewayCandidates(c *gin.Context, control *controlplane.Service, ope
 		} else if affinityApplied {
 			candidate.SelectionReason = appendGatewaySelectionReason(candidate.SelectionReason, "verified upstream cache affinity injected")
 		}
-		candidateResp, err := forwardChatCompletion(c, candidate, rawBody, stream, upstreamAffinity)
+		candidateResp, err := forwardGatewayProtocolRequest(c, candidate, protocol, rawBody, stream, upstreamAffinity)
 		if err != nil {
 			permit.Release()
 			if candidate.AccountID != "" {
@@ -613,16 +619,28 @@ func estimateGatewayRequestTokens(rawBody []byte) int {
 }
 
 func forwardChatCompletion(c *gin.Context, provider controlplane.GatewayProvider, rawBody []byte, stream bool, affinity controlplane.GatewayUpstreamAffinity) (*http.Response, error) {
-	upstreamBody, err := rewriteGatewayRequest(rawBody, provider.UpstreamModel, affinity)
+	return forwardGatewayProtocolRequest(c, provider, gatewaycore.ProtocolOpenAIChat, rawBody, stream, affinity)
+}
+
+func forwardGatewayProtocolRequest(c *gin.Context, provider controlplane.GatewayProvider, protocol gatewaycore.Protocol, rawBody []byte, stream bool, affinity controlplane.GatewayUpstreamAffinity) (*http.Response, error) {
+	upstreamModel := provider.UpstreamModel
+	var upstreamBody []byte
+	var err error
+	if protocol == gatewaycore.ProtocolGeminiGenerate {
+		// Gemini carries the routed model in the URL rather than the JSON body.
+		upstreamBody, err = rewriteGatewayRequestWithOptionalModel(rawBody, "", affinity)
+	} else {
+		upstreamBody, err = rewriteGatewayRequest(rawBody, upstreamModel, affinity)
+	}
 	if err != nil {
 		return nil, err
 	}
-	endpoint := strings.TrimRight(provider.BaseURL, "/") + "/chat/completions"
+	endpoint := gatewayProviderEndpoint(provider, protocol, stream)
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, endpoint, bytes.NewReader(upstreamBody))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	setGatewayProviderCredential(req, provider, protocol)
 	req.Header.Set("Content-Type", "application/json")
 	if affinity.HeaderName != "" && affinity.Value != "" {
 		req.Header.Set(affinity.HeaderName, affinity.Value)
@@ -635,6 +653,40 @@ func forwardChatCompletion(c *gin.Context, provider controlplane.GatewayProvider
 	return gatewayHTTPClient(stream).Do(req)
 }
 
+func gatewayProviderEndpoint(provider controlplane.GatewayProvider, protocol gatewaycore.Protocol, stream bool) string {
+	baseURL := strings.TrimRight(provider.BaseURL, "/")
+	switch protocol {
+	case gatewaycore.ProtocolOpenAIResponses:
+		return baseURL + "/responses"
+	case gatewaycore.ProtocolAnthropicMessages:
+		return baseURL + "/messages"
+	case gatewaycore.ProtocolGeminiGenerate:
+		operation := "generateContent"
+		if stream {
+			operation = "streamGenerateContent"
+		}
+		endpoint := baseURL + "/models/" + url.PathEscape(strings.TrimSpace(provider.UpstreamModel)) + ":" + operation
+		if stream {
+			endpoint += "?alt=sse"
+		}
+		return endpoint
+	default:
+		return baseURL + "/chat/completions"
+	}
+}
+
+func setGatewayProviderCredential(req *http.Request, provider controlplane.GatewayProvider, protocol gatewaycore.Protocol) {
+	switch protocol {
+	case gatewaycore.ProtocolAnthropicMessages:
+		req.Header.Set("x-api-key", provider.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	case gatewaycore.ProtocolGeminiGenerate:
+		req.Header.Set("x-goog-api-key", provider.APIKey)
+	default:
+		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	}
+}
+
 func rewriteGatewayModel(rawBody []byte, upstreamModel string) ([]byte, error) {
 	return rewriteGatewayRequest(rawBody, upstreamModel, controlplane.GatewayUpstreamAffinity{})
 }
@@ -644,11 +696,18 @@ func rewriteGatewayRequest(rawBody []byte, upstreamModel string, affinity contro
 	if upstreamModel == "" {
 		return nil, errors.New("model route upstream_model is empty")
 	}
+	return rewriteGatewayRequestWithOptionalModel(rawBody, upstreamModel, affinity)
+}
+
+func rewriteGatewayRequestWithOptionalModel(rawBody []byte, upstreamModel string, affinity controlplane.GatewayUpstreamAffinity) ([]byte, error) {
+	upstreamModel = strings.TrimSpace(upstreamModel)
 	var payload map[string]any
 	if err := json.Unmarshal(rawBody, &payload); err != nil {
 		return nil, err
 	}
-	payload["model"] = upstreamModel
+	if upstreamModel != "" {
+		payload["model"] = upstreamModel
+	}
 	if affinity.BodyField != "" && affinity.Value != "" {
 		payload[affinity.BodyField] = affinity.Value
 	}
@@ -827,6 +886,7 @@ func streamUpstreamResponse(c *gin.Context, resp *http.Response, startedAt time.
 			c.Writer.Flush()
 		}
 		if readErr == io.EOF {
+			collector.Flush()
 			if !collector.Completed() {
 				return collector.Observation(), ttftMS, errGatewaySSEIncomplete
 			}

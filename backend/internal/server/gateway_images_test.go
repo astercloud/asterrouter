@@ -250,6 +250,42 @@ func TestGatewayImageStreamEmitsFinalUsageAndDoneOnly(t *testing.T) {
 	}
 }
 
+func TestGatewayImageStreamEmitsProviderPreviewBeforeFinal(t *testing.T) {
+	adapter := successfulDirectImageAdapter([]byte("final-image"))
+	preview := []byte("preview-image")
+	digest := sha256.Sum256(preview)
+	adapter.outputs["preview-a"] = append([]byte(nil), preview...)
+	adapter.result.Outputs = append([]controlplane.ProviderOutputDescriptor{{
+		OutputID: "preview-a", Role: controlplane.ArtifactRolePreview, MediaType: "image/png",
+		ExpectedSizeBytes: int64(len(preview)), ExpectedSHA256: hex.EncodeToString(digest[:]), ProviderReference: "stub://preview-a",
+	}}, adapter.result.Outputs...)
+	fixture := newDirectImageHTTPFixture(t, adapter, 1, 2, true)
+	response := performImageGeneration(fixture.handler, fixture.key, "image-preview-preferred", `{"model":"public-image","prompt":"synthetic","response_mode":"stream","preview_mode":"preferred","delivery_mode":"artifact"}`)
+	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	body := response.Body.String()
+	previewIndex := strings.Index(body, "event: image.preview")
+	finalIndex := strings.Index(body, "event: image.final")
+	if previewIndex < 0 || finalIndex < 0 || previewIndex > finalIndex || strings.Count(body, `"artifact_id"`) < 2 {
+		t.Fatalf("preview/final stream ordering or payload is invalid: %s", body)
+	}
+	if !strings.Contains(body, "event: usage.finalized") || !strings.Contains(body, "event: done") {
+		t.Fatalf("stream terminal events missing: %s", body)
+	}
+	noPreviewAdapter := successfulDirectImageAdapter([]byte("final-image"))
+	noPreviewAdapter.outputs["preview-a"] = append([]byte(nil), preview...)
+	noPreviewAdapter.result.Outputs = append([]controlplane.ProviderOutputDescriptor{{
+		OutputID: "preview-a", Role: controlplane.ArtifactRolePreview, MediaType: "image/png",
+		ExpectedSizeBytes: int64(len(preview)), ExpectedSHA256: hex.EncodeToString(digest[:]), ProviderReference: "stub://preview-a",
+	}}, noPreviewAdapter.result.Outputs...)
+	noPreviewFixture := newDirectImageHTTPFixture(t, noPreviewAdapter, 1, 2, true)
+	withoutPreview := performImageGeneration(noPreviewFixture.handler, noPreviewFixture.key, "image-preview-none", `{"model":"public-image","prompt":"synthetic","response_mode":"stream","delivery_mode":"artifact"}`)
+	if withoutPreview.Code != http.StatusOK || strings.Contains(withoutPreview.Body.String(), "event: image.preview") {
+		t.Fatalf("preview event was emitted without preview_mode: status=%d body=%s", withoutPreview.Code, withoutPreview.Body.String())
+	}
+}
+
 func TestGatewayMediaDirectStreamUsesCoreArtifactAndUsagePipeline(t *testing.T) {
 	adapter := successfulDirectImageAdapter([]byte("synthetic-video"))
 	fixture := newDirectImageHTTPFixture(t, adapter, 0, 2, true)
@@ -296,6 +332,56 @@ func TestGatewayMediaDirectStreamUsesCoreArtifactAndUsagePipeline(t *testing.T) 
 	usage, err := fixture.control.UsageReport(context.Background(), 10)
 	if err != nil || len(usage.Recent) != 1 || usage.Recent[0].UsageDimensions[controlplane.UsageDimensionOutputVideoMilliseconds].Quantity != 1500 {
 		t.Fatalf("usage=%+v err=%v", usage, err)
+	}
+}
+
+func TestGatewayAudioDirectBlockingUsesSharedMediaExecution(t *testing.T) {
+	adapter := successfulDirectImageAdapter([]byte("synthetic-audio"))
+	fixture := newDirectImageHTTPFixture(t, adapter, 0, 2, true)
+	model, err := fixture.control.CreateGatewayModel(context.Background(), "public-audio-direct", controlplane.GatewayModelRequest{
+		ModelID: "public-audio-direct", Name: "Public audio direct", Modality: controlplane.GatewayModalityAudio,
+		DefaultRouteGroup: "default", Status: controlplane.GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := fixture.control.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
+		Name: "Audio provider", Type: "openai_compatible", BaseURL: "https://provider.invalid/v1",
+		Status: controlplane.ProviderStatusActive, Models: []string{"provider-audio"}, APIKey: "provider-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := createGatewayTestAccount(t, fixture.control, provider, "provider-audio", "provider-secret", 10, 2)
+	if _, err := fixture.control.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
+		GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID,
+		UpstreamModel: "provider-audio", Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := fixture.control.CreateAPIKey(context.Background(), "test", controlplane.APIKeyCreateRequest{
+		Name: "audio caller", ModelAllowlist: []string{"public-audio-direct"},
+		Scopes:            []string{controlplane.GatewayScopeInvoke, controlplane.GatewayScopeJobsRead, controlplane.GatewayScopeArtifactsRead},
+		AllowedModalities: []string{controlplane.GatewayModalityAudio}, AllowedOperations: []string{controlplane.GatewayOperationAudioGeneration},
+		LanePolicy: controlplane.GatewayLanePolicyDirectOnly, ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := performGatewayJobRequest(fixture.handler, http.MethodPost, "/v1/audio/generations", key.Key, "audio-direct-blocking", `{"model":"public-audio-direct","prompt":"synthetic","duration_seconds":1.25,"response_mode":"blocking","delivery_mode":"inline"}`)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "b64_json") || !strings.Contains(response.Body.String(), "artifact_id") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	jobs, err := fixture.control.ListAIJobsAdmin(context.Background(), controlplane.AIJobQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("direct audio request created durable jobs: %+v", jobs)
+	}
+	usage, err := fixture.control.UsageReport(context.Background(), 10)
+	if err != nil || len(usage.Recent) != 1 || usage.Recent[0].UsageDimensions[controlplane.UsageDimensionOutputAudioMilliseconds].Quantity != 1250 {
+		t.Fatalf("audio usage=%+v err=%v", usage, err)
 	}
 }
 
