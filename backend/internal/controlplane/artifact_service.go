@@ -46,6 +46,12 @@ func (s *Service) primaryArtifactStoreDriver() (string, bool) {
 	return driver, driver != "" && found
 }
 
+// PrimaryArtifactStoreDriver exposes the configured content backend to public
+// upload admission without exposing the underlying store or credentials.
+func (s *Service) PrimaryArtifactStoreDriver() (string, bool) {
+	return s.primaryArtifactStoreDriver()
+}
+
 func (s *Service) CreateArtifactFromReader(ctx context.Context, input ArtifactCreateInput, body io.Reader) (Artifact, error) {
 	operation, found, err := s.repo.FindAIOperation(ctx, strings.TrimSpace(input.OperationID))
 	if err != nil {

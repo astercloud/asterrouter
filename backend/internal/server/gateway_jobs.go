@@ -328,7 +328,7 @@ func newPublicAIJobResponse(job controlplane.AIJob) publicAIJobResponse {
 		Capability:     publicAIJobCapability{Modality: job.Modality, Operation: job.Operation, Model: job.Model},
 		ArtifactPolicy: job.ArtifactPolicy, ArtifactSinkID: job.ArtifactSinkID, ErrorType: job.ErrorType, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 		CompletedAt: job.CompletedAt, ExpiresAt: job.ExpiresAt,
-		Links: map[string]string{"self": "/v1/jobs/" + job.ID, "events": "/v1/jobs/" + job.ID + "/events", "artifacts": "/v1/jobs/" + job.ID + "/artifacts"},
+		Links: map[string]string{"self": "/v1/jobs/" + job.ID, "events": "/v1/jobs/" + job.ID + "/events", "artifacts": "/v1/jobs/" + job.ID + "/artifacts", "actions": "/v1/jobs/" + job.ID + "/actions"},
 	}
 }
 

@@ -26,6 +26,7 @@ const (
 	GatewayScopeJobsCancel      = "jobs:cancel"
 	GatewayScopeJobsActions     = "jobs:actions"
 	GatewayScopeArtifactsRead   = "artifacts:read"
+	GatewayScopeArtifactsWrite  = "artifacts:write"
 	GatewayScopeArtifactsDelete = "artifacts:delete"
 
 	GatewayOperationListModels      = "list_models"
