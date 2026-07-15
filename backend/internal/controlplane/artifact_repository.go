@@ -158,13 +158,13 @@ func (r *PostgresRepository) QueryArtifacts(ctx context.Context, query ArtifactQ
 	  AND ($8='' OR profile_scope=$8) AND ($9='' OR tenant_id=$9)
 	  AND ($10='' OR id ILIKE '%'||$10||'%' OR operation_id ILIKE '%'||$10||'%' OR COALESCE(job_id,'') ILIKE '%'||$10||'%' OR COALESCE(attempt_id,'') ILIKE '%'||$10||'%')
 	  AND ($11='' OR operation_id=$11) AND ($12='' OR job_id=$12) AND ($13='' OR attempt_id=$13)
-	  AND ($14='' OR role=$14) AND ($15='' OR policy=$15) AND ($16='' OR status=$16)
-	  AND ($17::timestamptz IS NULL OR retain_until <= $17)
-	ORDER BY created_at DESC, id DESC LIMIT $18 OFFSET $19`,
+	  AND ($14='' OR source_artifact_id=$14) AND ($15='' OR role=$15) AND ($16='' OR policy=$16) AND ($17='' OR status=$17)
+	  AND ($18::timestamptz IS NULL OR retain_until <= $18)
+	ORDER BY created_at DESC, id DESC LIMIT $19 OFFSET $20`,
 		ownerScoped, strings.TrimSpace(owner.ProfileScope), strings.TrimSpace(owner.TenantID), strings.TrimSpace(owner.IntegrationID),
 		strings.TrimSpace(owner.PrincipalType), strings.TrimSpace(owner.PrincipalID), strings.TrimSpace(owner.ExternalSubjectReference),
 		strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID), strings.TrimSpace(query.Search), strings.TrimSpace(query.OperationID),
-		strings.TrimSpace(query.JobID), strings.TrimSpace(query.AttemptID), strings.TrimSpace(query.Role), strings.TrimSpace(query.Policy),
+		strings.TrimSpace(query.JobID), strings.TrimSpace(query.AttemptID), strings.TrimSpace(query.SourceArtifactID), strings.TrimSpace(query.Role), strings.TrimSpace(query.Policy),
 		strings.TrimSpace(query.Status), query.RetainBefore, limit, nonNegative(query.Offset))
 	if err != nil {
 		return nil, err
@@ -192,12 +192,12 @@ func (r *PostgresRepository) SummarizeArtifacts(ctx context.Context, query Artif
 	  AND ($8='' OR profile_scope=$8) AND ($9='' OR tenant_id=$9)
 	  AND ($10='' OR id ILIKE '%'||$10||'%' OR operation_id ILIKE '%'||$10||'%' OR COALESCE(job_id,'') ILIKE '%'||$10||'%' OR COALESCE(attempt_id,'') ILIKE '%'||$10||'%')
 	  AND ($11='' OR operation_id=$11) AND ($12='' OR job_id=$12) AND ($13='' OR attempt_id=$13)
-	  AND ($14='' OR role=$14) AND ($15='' OR policy=$15) AND ($16='' OR status=$16)
-	  AND ($17::timestamptz IS NULL OR retain_until <= $17)
+	  AND ($14='' OR source_artifact_id=$14) AND ($15='' OR role=$15) AND ($16='' OR policy=$16) AND ($17='' OR status=$17)
+	  AND ($18::timestamptz IS NULL OR retain_until <= $18)
 	GROUP BY status`, ownerScoped, strings.TrimSpace(owner.ProfileScope), strings.TrimSpace(owner.TenantID), strings.TrimSpace(owner.IntegrationID),
 		strings.TrimSpace(owner.PrincipalType), strings.TrimSpace(owner.PrincipalID), strings.TrimSpace(owner.ExternalSubjectReference),
 		strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID), strings.TrimSpace(query.Search), strings.TrimSpace(query.OperationID),
-		strings.TrimSpace(query.JobID), strings.TrimSpace(query.AttemptID), strings.TrimSpace(query.Role), strings.TrimSpace(query.Policy),
+		strings.TrimSpace(query.JobID), strings.TrimSpace(query.AttemptID), strings.TrimSpace(query.SourceArtifactID), strings.TrimSpace(query.Role), strings.TrimSpace(query.Policy),
 		strings.TrimSpace(query.Status), query.RetainBefore)
 	if err != nil {
 		return ArtifactSummary{}, err
@@ -368,6 +368,7 @@ func artifactMatchesQuery(artifact Artifact, query ArtifactQuery) bool {
 	return (strings.TrimSpace(query.OperationID) == "" || artifact.OperationID == strings.TrimSpace(query.OperationID)) &&
 		(strings.TrimSpace(query.JobID) == "" || artifact.JobID == strings.TrimSpace(query.JobID)) &&
 		(strings.TrimSpace(query.AttemptID) == "" || artifact.AttemptID == strings.TrimSpace(query.AttemptID)) &&
+		(strings.TrimSpace(query.SourceArtifactID) == "" || artifact.SourceArtifactID == strings.TrimSpace(query.SourceArtifactID)) &&
 		(strings.TrimSpace(query.Role) == "" || artifact.Role == strings.TrimSpace(query.Role)) &&
 		(strings.TrimSpace(query.Policy) == "" || artifact.Policy == strings.TrimSpace(query.Policy)) &&
 		(strings.TrimSpace(query.Status) == "" || artifact.Status == strings.TrimSpace(query.Status))

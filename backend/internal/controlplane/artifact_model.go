@@ -100,6 +100,7 @@ type ArtifactQuery struct {
 	OperationID  string
 	JobID        string
 	AttemptID    string
+	SourceArtifactID string
 	Role         string
 	Policy       string
 	Status       string
