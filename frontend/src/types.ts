@@ -220,7 +220,6 @@ export interface ProviderRequest {
   type: string
   base_url: string
   status: string
-  models: string[]
   priority: number
   api_key: string
 }
@@ -461,6 +460,7 @@ export interface ProviderAccount {
   load_factor?: number
   rate_multiplier: number
   models: string[]
+  auto_enable_new_models: boolean
   group_ids: string[]
   secret_configured: boolean
   secret_hint: string
@@ -495,6 +495,7 @@ export interface ProviderAccountRequest {
   load_factor?: number | null
   rate_multiplier: number
   models: string[]
+  auto_enable_new_models: boolean
   group_ids: string[]
   secret: string
   expires_at: string
@@ -512,6 +513,51 @@ export interface ProviderAccountHealthCheck {
   message: string
   models: string[]
   checked_at: string
+}
+
+export type ProviderAccountModelSource = 'discovered' | 'manual'
+export type ProviderAccountModelAvailability = 'available' | 'missing' | 'unverified'
+export type ProviderAccountModelChange = 'added' | 'missing' | 'unchanged'
+
+export interface ProviderAccountModel {
+  provider_account_id: string
+  model_id: string
+  source: ProviderAccountModelSource
+  enabled: boolean
+  availability: ProviderAccountModelAvailability
+  change?: ProviderAccountModelChange
+  route_count: number
+  first_seen_at: string
+  last_seen_at?: string
+  updated_at: string
+}
+
+export interface ProviderAccountModelInventory {
+  account_id: string
+  auto_enable_new_models: boolean
+  last_discovered_at?: string
+  models: ProviderAccountModel[]
+}
+
+export interface ProviderAccountModelDiscovery {
+  account_id: string
+  discovered_at: string
+  models: ProviderAccountModel[]
+  added_models: string[]
+  missing_models: string[]
+  unchanged_models: string[]
+  affected_route_ids: string[]
+}
+
+export interface ProviderAccountModelSyncRequest {
+  enabled_models: string[]
+  auto_enable_new_models: boolean
+}
+
+export interface ProviderAccountModelSyncResult {
+  account: ProviderAccount
+  inventory: ProviderAccountModelInventory
+  discovery: ProviderAccountModelDiscovery
 }
 
 export interface GatewayModel {
@@ -561,6 +607,14 @@ export interface ModelRouteRequest {
   priority: number
   weight: number
   status: string
+}
+
+export interface ModelRouteBulkCreateRequest {
+  routes: ModelRouteRequest[]
+}
+
+export interface ModelRouteBulkCreateResult {
+  routes: ModelRoute[]
 }
 
 export interface GatewaySimulationCandidate {

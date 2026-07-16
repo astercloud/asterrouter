@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Activity, BadgeDollarSign, BellRing, Boxes, FileClock, Gauge, KeyRound, Link2, Plug, Route, Send, Server, Settings, ShieldCheck, UsersRound } from '@lucide/vue'
+import { Activity, Archive, BadgeDollarSign, BellRing, Boxes, FileClock, Gauge, KeyRound, Link2, ListChecks, Plug, Route, Send, Server, Settings, ShieldCheck, UsersRound } from '@lucide/vue'
 import SurfaceShell from '@/components/SurfaceShell.vue'
 
 const navGroups = [
@@ -39,6 +39,8 @@ const navGroups = [
       { to: '/platform/usage', label: 'admin.usage', icon: Activity },
       { to: '/platform/traces', label: 'admin.traces', icon: Activity },
       { to: '/platform/alerts', label: 'admin.alerts', icon: BellRing },
+      { to: '/platform/artifacts', label: 'admin.artifacts', icon: Archive },
+      { to: '/platform/ai-jobs', label: 'admin.aiJobs', icon: ListChecks },
       { to: '/platform/audit', label: 'admin.audit', icon: FileClock }
     ]
   },

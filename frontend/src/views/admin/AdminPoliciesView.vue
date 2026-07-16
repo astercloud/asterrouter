@@ -2,8 +2,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Edit3, Plus, RefreshCw, Save, Search, ShieldCheck, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { createGovernancePolicy, getGovernancePolicies, updateGovernancePolicy } from '@/api/control'
-import type { GovernancePolicy, GovernancePolicyRequest } from '@/types'
+import GatewayModelPicker from '@/components/model/GatewayModelPicker.vue'
+import { createGovernancePolicy, getGatewayModels, getGovernancePolicies, updateGovernancePolicy } from '@/api/control'
+import type { GatewayModel, GovernancePolicy, GovernancePolicyRequest } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -16,8 +17,7 @@ const scopeFilter = ref('')
 const modalOpen = ref(false)
 const editing = ref<GovernancePolicy | null>(null)
 const policies = ref<GovernancePolicy[]>([])
-const allowlistText = ref('')
-const denylistText = ref('')
+const gatewayModels = ref<GatewayModel[]>([])
 
 const form = reactive<GovernancePolicyRequest>({
   name: '',
@@ -57,10 +57,6 @@ const summary = computed(() => ({
   scoped: policies.value.filter((item) => item.scope_type !== 'global').length
 }))
 
-function splitLines(value: string): string[] {
-  return value.split(/\n|,/).map((item) => item.trim()).filter(Boolean)
-}
-
 function resetForm() {
   Object.assign(form, {
     name: '',
@@ -80,8 +76,6 @@ function resetForm() {
     web_access_allowed: false,
     status: 'active'
   })
-  allowlistText.value = ''
-  denylistText.value = ''
 }
 
 function openCreate() {
@@ -110,8 +104,6 @@ function openEdit(policy: GovernancePolicy) {
     web_access_allowed: policy.web_access_allowed,
     status: policy.status
   })
-  allowlistText.value = policy.model_allowlist.join('\n')
-  denylistText.value = policy.model_denylist.join('\n')
   modalOpen.value = true
 }
 
@@ -138,7 +130,9 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    policies.value = await getGovernancePolicies()
+    const [policyList, modelList] = await Promise.all([getGovernancePolicies(), getGatewayModels()])
+    policies.value = policyList
+    gatewayModels.value = modelList
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -154,8 +148,8 @@ async function save() {
     const payload: GovernancePolicyRequest = {
       ...form,
       scope_id: form.scope_type === 'global' ? '' : form.scope_id.trim(),
-      model_allowlist: splitLines(allowlistText.value),
-      model_denylist: splitLines(denylistText.value)
+      model_allowlist: [...form.model_allowlist],
+      model_denylist: [...form.model_denylist]
     }
     if (editing.value) {
       await updateGovernancePolicy(editing.value.id, payload)
@@ -343,14 +337,14 @@ onMounted(load)
               <option value="redacted">redacted</option>
             </select>
           </label>
-          <label class="form-span-2">
+          <div class="field form-span-2">
             <span>{{ t('policies.allowlist') }}</span>
-            <textarea v-model="allowlistText" rows="3" />
-          </label>
-          <label class="form-span-2">
+            <GatewayModelPicker v-model="form.model_allowlist" :models="gatewayModels" :disabled="saving" :aria-label="t('policies.allowlist')" />
+          </div>
+          <div class="field form-span-2">
             <span>{{ t('policies.denylist') }}</span>
-            <textarea v-model="denylistText" rows="3" />
-          </label>
+            <GatewayModelPicker v-model="form.model_denylist" :models="gatewayModels" :disabled="saving" :aria-label="t('policies.denylist')" />
+          </div>
           <label class="checkbox-label">
             <input v-model="form.tool_call_allowed" type="checkbox" />
             <span>{{ t('policies.toolCallAllowed') }}</span>

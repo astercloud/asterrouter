@@ -89,6 +89,31 @@ describe('API module contracts', () => {
   it('uses the platform control-plane dashboard endpoint', async () => {
     await platform.getPlatformDashboard()
     expect(client.get).toHaveBeenLastCalledWith('/platform/dashboard')
+    const operationsQuery = { limit: 10, status: 'queued' }
+    await platform.getPlatformAIJobs(operationsQuery)
+    expect(client.get).toHaveBeenLastCalledWith('/platform/ai-jobs', { params: operationsQuery })
+    await platform.getPlatformAIJobSummary(operationsQuery)
+    expect(client.get).toHaveBeenLastCalledWith('/platform/ai-jobs/summary', { params: operationsQuery })
+    await platform.getPlatformAIJobRuntime()
+    expect(client.get).toHaveBeenLastCalledWith('/platform/ai-jobs/runtime')
+    await platform.getPlatformAIJob('job / 1')
+    expect(client.get).toHaveBeenLastCalledWith('/platform/ai-jobs/job%20%2F%201')
+    await platform.cancelPlatformAIJob('job / 1')
+    expect(client.post).toHaveBeenLastCalledWith('/platform/ai-jobs/job%20%2F%201/cancel')
+    await platform.schedulePlatformAIJobAttemptReconciliation('job / 1', 'attempt / 1')
+    expect(client.post).toHaveBeenLastCalledWith('/platform/ai-jobs/job%20%2F%201/attempts/attempt%20%2F%201/reconcile')
+
+    const artifactQuery = { limit: 10, status: 'ready' }
+    await platform.getPlatformArtifacts(artifactQuery)
+    expect(client.get).toHaveBeenLastCalledWith('/platform/artifacts', { params: artifactQuery })
+    await platform.getPlatformArtifactSummary(artifactQuery)
+    expect(client.get).toHaveBeenLastCalledWith('/platform/artifacts/summary', { params: artifactQuery })
+    await platform.getPlatformArtifact('artifact / 1')
+    expect(client.get).toHaveBeenLastCalledWith('/platform/artifacts/artifact%20%2F%201')
+    await platform.getPlatformArtifactRuntimes()
+    expect(client.get).toHaveBeenLastCalledWith('/platform/artifact-runtimes')
+    await platform.retryPlatformArtifactDelivery('artifact / 1')
+    expect(client.post).toHaveBeenLastCalledWith('/platform/artifacts/artifact%20%2F%201/retry-delivery')
 
     await platform.getPlatformAPIKeys()
     expect(client.get).toHaveBeenLastCalledWith('/platform/api-keys')
@@ -139,7 +164,10 @@ describe('API module contracts', () => {
       platform.getPlatformTenants,
       platform.getGatewayPrincipals,
       platform.getExternalAuthIntegrations,
-      platform.getPlatformUsageSinks
+      platform.getPlatformUsageSinks,
+      platform.getPlatformAIJobs,
+      platform.getPlatformArtifacts,
+      platform.getPlatformArtifactRuntimes
     ]) {
       client.get.mockResolvedValueOnce({ data: null })
       expect(await load()).toEqual([])

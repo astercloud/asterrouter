@@ -42,7 +42,17 @@ func TestCredentialCapacityStoreContract(t *testing.T) {
 			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), blocked); err != nil || acquired || reason != "concurrency_exhausted" {
 				t.Fatalf("blocked concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
 			}
-			if err := store.ReleaseCredentialCapacity(context.Background(), lease); err != nil {
+			extended, found, err := store.ExtendCredentialCapacity(context.Background(), lease, now.Add(30*time.Second), now.Add(2*time.Minute))
+			if err != nil || !found || !extended.ExpiresAt.Equal(now.Add(2*time.Minute)) {
+				t.Fatalf("extend concurrency lease=%+v found=%t err=%v", extended, found, err)
+			}
+			stillBlocked := blocked
+			stillBlocked.Now = now.Add(90 * time.Second)
+			stillBlocked.LeaseUntil = stillBlocked.Now.Add(time.Minute)
+			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), stillBlocked); err != nil || acquired || reason != "concurrency_exhausted" {
+				t.Fatalf("extended concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
+			}
+			if err := store.ReleaseCredentialCapacity(context.Background(), extended); err != nil {
 				t.Fatalf("ReleaseCredentialCapacity(): %v", err)
 			}
 			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), blocked); err != nil || !acquired || reason != "" {
@@ -107,7 +117,44 @@ func TestCredentialCapacityStoreContract(t *testing.T) {
 			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), expired); err != nil || !acquired || reason != "" {
 				t.Fatalf("expired reacquire reason=%q acquired=%t err=%v", reason, acquired, err)
 			}
+			if _, found, err := store.ExtendCredentialCapacity(context.Background(), CredentialCapacityLease{
+				ID: "lease-expired-1", ProfileScope: expired.ProfileScope, TenantID: expired.TenantID, CredentialID: expired.CredentialID,
+			}, expired.Now, expired.Now.Add(time.Minute)); err != nil || found {
+				t.Fatalf("expired extension found=%t err=%v", found, err)
+			}
 		})
+	}
+}
+
+func TestGatewayCredentialPermitReportsLostHeartbeatLease(t *testing.T) {
+	var released atomic.Int32
+	store := &credentialCapacityStoreStub{
+		extend: func(context.Context, CredentialCapacityLease, time.Time, time.Time) (CredentialCapacityLease, bool, error) {
+			return CredentialCapacityLease{}, false, nil
+		},
+		release: func(context.Context, CredentialCapacityLease) error {
+			released.Add(1)
+			return nil
+		},
+	}
+	permit := &GatewayCredentialPermit{state: &gatewayCredentialPermitState{
+		store: store,
+		lease: CredentialCapacityLease{ID: "lease-heartbeat", ProfileScope: "platform", TenantID: "tenant", CredentialID: "credential", ExpiresAt: time.Now().Add(time.Minute)},
+		lost:  make(chan error, 1),
+	}}
+	permit.state.startHeartbeat(time.Now, 6*time.Millisecond)
+	select {
+	case err := <-permit.Lost():
+		if err == nil || err.Error() != "gateway credential capacity lease was lost" {
+			t.Fatalf("lost error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("credential heartbeat did not report the lost lease")
+	}
+	permit.Release()
+	permit.Release()
+	if released.Load() != 1 {
+		t.Fatalf("release calls=%d, want 1", released.Load())
 	}
 }
 
@@ -188,4 +235,21 @@ func capacityRequest(credentialID, leaseID string, now time.Time) CredentialCapa
 		LeaseID: leaseID, ProfileScope: "platform", TenantID: "tenant-capacity", CredentialID: credentialID,
 		Now: now, LeaseUntil: now.Add(time.Minute),
 	}
+}
+
+type credentialCapacityStoreStub struct {
+	extend  func(context.Context, CredentialCapacityLease, time.Time, time.Time) (CredentialCapacityLease, bool, error)
+	release func(context.Context, CredentialCapacityLease) error
+}
+
+func (*credentialCapacityStoreStub) AcquireCredentialCapacity(context.Context, CredentialCapacityRequest) (CredentialCapacityLease, string, bool, error) {
+	return CredentialCapacityLease{}, "", false, nil
+}
+
+func (store *credentialCapacityStoreStub) ExtendCredentialCapacity(ctx context.Context, lease CredentialCapacityLease, now, leaseUntil time.Time) (CredentialCapacityLease, bool, error) {
+	return store.extend(ctx, lease, now, leaseUntil)
+}
+
+func (store *credentialCapacityStoreStub) ReleaseCredentialCapacity(ctx context.Context, lease CredentialCapacityLease) error {
+	return store.release(ctx, lease)
 }

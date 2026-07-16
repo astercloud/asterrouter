@@ -70,7 +70,8 @@ func TestRetryArtifactDeliverySchedulesReconciliationAndAudits(t *testing.T) {
 	}
 	foundAudit := false
 	for _, log := range logs {
-		if log.Action == "retry_delivery" && log.ResourceType == "artifact" && log.ResourceID == artifacts[0].ID && log.Actor == "admin@example.test" {
+		if log.Action == "retry_delivery" && log.ResourceType == "artifact" && log.ResourceID == artifacts[0].ID && log.Actor == "admin@example.test" &&
+			log.ProfileScope == ProfileScopePlatform && log.PlatformTenantID == artifacts[0].TenantID {
 			foundAudit = true
 		}
 	}

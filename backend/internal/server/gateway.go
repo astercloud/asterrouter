@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"time"
@@ -45,6 +48,8 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service, durable
 	registerGatewayJobRoutes(r, control, durableJobs)
 	registerGatewayUploadRoutes(r, control)
 	registerGatewayProtocolRoutes(r, control)
+	registerGatewayRealtimeRoute(r, control)
+	registerGatewayAudioRoutes(r, control)
 	registerGatewayMediaJobRoutes(r, control, durableJobs, directAI)
 	registerGatewayImageRoutes(r, control, durableJobs, directAI)
 
@@ -487,7 +492,12 @@ func attemptGatewayCandidates(c *gin.Context, control *controlplane.Service, ope
 }
 
 func attemptGatewayCandidatesForProtocol(c *gin.Context, control *controlplane.Service, operationID string, protocol gatewaycore.Protocol, affinityInput controlplane.GatewayAffinityInput, candidates []controlplane.GatewayProvider, rawBody []byte, stream bool) (resp *http.Response, provider controlplane.GatewayProvider, release func(), attempts []gatewayRouteAttempt, transportErr error) {
-	estimatedTokens := estimateGatewayRequestTokens(rawBody)
+	request := gatewaycore.CanonicalRequest{Protocol: protocol, Stream: stream, Payload: append([]byte(nil), rawBody...), TransportContentType: "application/json"}
+	return attemptGatewayCandidatesForCanonicalRequest(c, control, operationID, affinityInput, candidates, request)
+}
+
+func attemptGatewayCandidatesForCanonicalRequest(c *gin.Context, control *controlplane.Service, operationID string, affinityInput controlplane.GatewayAffinityInput, candidates []controlplane.GatewayProvider, request gatewaycore.CanonicalRequest) (resp *http.Response, provider controlplane.GatewayProvider, release func(), attempts []gatewayRouteAttempt, transportErr error) {
+	estimatedTokens := estimateGatewayRequestTokens(request.Payload)
 	for i, candidate := range candidates {
 		attempt, err := control.BeginAIAttempt(c.Request.Context(), operationID, i+1, candidate)
 		if err != nil {
@@ -515,7 +525,7 @@ func attemptGatewayCandidatesForProtocol(c *gin.Context, control *controlplane.S
 		} else if affinityApplied {
 			candidate.SelectionReason = appendGatewaySelectionReason(candidate.SelectionReason, "verified upstream cache affinity injected")
 		}
-		candidateResp, err := forwardGatewayProtocolRequest(c, candidate, protocol, rawBody, stream, upstreamAffinity)
+		candidateResp, err := forwardGatewayCanonicalRequest(c, candidate, request, upstreamAffinity)
 		if err != nil {
 			permit.Release()
 			if candidate.AccountID != "" {
@@ -623,34 +633,52 @@ func forwardChatCompletion(c *gin.Context, provider controlplane.GatewayProvider
 }
 
 func forwardGatewayProtocolRequest(c *gin.Context, provider controlplane.GatewayProvider, protocol gatewaycore.Protocol, rawBody []byte, stream bool, affinity controlplane.GatewayUpstreamAffinity) (*http.Response, error) {
+	return forwardGatewayCanonicalRequest(c, provider, gatewaycore.CanonicalRequest{
+		Protocol: protocol, Stream: stream, Payload: append([]byte(nil), rawBody...), TransportContentType: "application/json",
+	}, affinity)
+}
+
+func forwardGatewayCanonicalRequest(c *gin.Context, provider controlplane.GatewayProvider, request gatewaycore.CanonicalRequest, affinity controlplane.GatewayUpstreamAffinity) (*http.Response, error) {
 	upstreamModel := provider.UpstreamModel
+	transportBody := request.Payload
+	if len(request.TransportBody) > 0 {
+		transportBody = request.TransportBody
+	}
+	contentType := strings.TrimSpace(request.TransportContentType)
+	if contentType == "" {
+		contentType = "application/json"
+	}
 	var upstreamBody []byte
 	var err error
-	if protocol == gatewaycore.ProtocolGeminiGenerate {
+	if request.Protocol == gatewaycore.ProtocolOpenAIAudioTranscriptions || request.Protocol == gatewaycore.ProtocolOpenAIAudioTranslations {
+		upstreamBody, contentType, err = rewriteGatewayMultipartModel(transportBody, contentType, upstreamModel)
+	} else if request.Protocol == gatewaycore.ProtocolGeminiGenerate {
 		// Gemini carries the routed model in the URL rather than the JSON body.
-		upstreamBody, err = rewriteGatewayRequestWithOptionalModel(rawBody, "", affinity)
+		upstreamBody, err = rewriteGatewayRequestWithOptionalModel(transportBody, "", affinity)
 	} else {
-		upstreamBody, err = rewriteGatewayRequest(rawBody, upstreamModel, affinity)
+		upstreamBody, err = rewriteGatewayRequest(transportBody, upstreamModel, affinity)
 	}
 	if err != nil {
 		return nil, err
 	}
-	endpoint := gatewayProviderEndpoint(provider, protocol, stream)
+	endpoint := gatewayProviderEndpoint(provider, request.Protocol, request.Stream)
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, endpoint, bytes.NewReader(upstreamBody))
 	if err != nil {
 		return nil, err
 	}
-	setGatewayProviderCredential(req, provider, protocol)
-	req.Header.Set("Content-Type", "application/json")
+	setGatewayProviderCredential(req, provider, request.Protocol)
+	req.Header.Set("Content-Type", contentType)
 	if affinity.HeaderName != "" && affinity.Value != "" {
 		req.Header.Set(affinity.HeaderName, affinity.Value)
 	}
-	if stream {
+	if request.Stream {
 		req.Header.Set("Accept", "text/event-stream")
+	} else if request.Protocol == gatewaycore.ProtocolOpenAIAudioSpeech || request.Protocol == gatewaycore.ProtocolOpenAIAudioTranscriptions || request.Protocol == gatewaycore.ProtocolOpenAIAudioTranslations {
+		req.Header.Set("Accept", "*/*")
 	} else {
 		req.Header.Set("Accept", "application/json")
 	}
-	return gatewayHTTPClient(stream).Do(req)
+	return gatewayHTTPClient(request.Stream).Do(req)
 }
 
 func gatewayProviderEndpoint(provider controlplane.GatewayProvider, protocol gatewaycore.Protocol, stream bool) string {
@@ -670,6 +698,12 @@ func gatewayProviderEndpoint(provider controlplane.GatewayProvider, protocol gat
 			endpoint += "?alt=sse"
 		}
 		return endpoint
+	case gatewaycore.ProtocolOpenAIAudioTranscriptions:
+		return baseURL + "/audio/transcriptions"
+	case gatewaycore.ProtocolOpenAIAudioTranslations:
+		return baseURL + "/audio/translations"
+	case gatewaycore.ProtocolOpenAIAudioSpeech:
+		return baseURL + "/audio/speech"
 	default:
 		return baseURL + "/chat/completions"
 	}
@@ -717,6 +751,58 @@ func rewriteGatewayRequestWithOptionalModel(rawBody []byte, upstreamModel string
 	return json.Marshal(payload)
 }
 
+func rewriteGatewayMultipartModel(rawBody []byte, contentType, upstreamModel string) ([]byte, string, error) {
+	upstreamModel = strings.TrimSpace(upstreamModel)
+	mediaType, parameters, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.EqualFold(mediaType, "multipart/form-data") || strings.TrimSpace(parameters["boundary"]) == "" || upstreamModel == "" {
+		return nil, "", errors.New("invalid multipart gateway request")
+	}
+	reader := multipart.NewReader(bytes.NewReader(rawBody), parameters["boundary"])
+	var output bytes.Buffer
+	writer := multipart.NewWriter(&output)
+	modelFound := false
+	for {
+		part, nextErr := reader.NextPart()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return nil, "", nextErr
+		}
+		if part.FormName() == "response_mode" && part.FileName() == "" {
+			_, _ = io.Copy(io.Discard, part)
+			_ = part.Close()
+			continue
+		}
+		headers := make(textproto.MIMEHeader, len(part.Header))
+		for key, values := range part.Header {
+			headers[key] = append([]string(nil), values...)
+		}
+		outputPart, createErr := writer.CreatePart(headers)
+		if createErr != nil {
+			_ = part.Close()
+			return nil, "", createErr
+		}
+		if part.FormName() == "model" && part.FileName() == "" {
+			modelFound = true
+			_, err = io.WriteString(outputPart, upstreamModel)
+		} else {
+			_, err = io.Copy(outputPart, part)
+		}
+		_ = part.Close()
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if !modelFound {
+		return nil, "", errors.New("multipart gateway request is missing model")
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return output.Bytes(), writer.FormDataContentType(), nil
+}
+
 func gatewayRouteSummary(model string, provider controlplane.GatewayProvider) string {
 	summary := fmt.Sprintf("Forwarded chat completion request for model %s to provider %s", model, provider.ID)
 	if provider.AccountID != "" {
@@ -750,7 +836,7 @@ func gatewayTraceInput(req gatewaycore.CanonicalRequest, provider controlplane.G
 		LatencyMS:         latencyMS,
 		InputTokens:       inputTokens,
 		OutputTokens:      outputTokens,
-		RequestSummary:    fmt.Sprintf("chat.completions stream=%t messages=%d", req.Stream, req.MessageCount),
+		RequestSummary:    gatewayProtocolRequestSummary(req),
 		ResponseSummary:   responseSummary,
 		RouteAttempts:     routeAttempts,
 	}
@@ -799,11 +885,18 @@ var gatewayHTTPClient = func(stream bool) *http.Client {
 }
 
 func readUpstreamResponse(resp *http.Response, startedAt time.Time) (string, []byte, *int64, error) {
+	return readUpstreamResponseLimit(resp, startedAt, gatewayUpstreamBodyLimit)
+}
+
+func readUpstreamResponseLimit(resp *http.Response, startedAt time.Time, limit int64) (string, []byte, *int64, error) {
+	if limit <= 0 {
+		limit = gatewayUpstreamBodyLimit
+	}
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/json"
 	}
-	reader := io.LimitReader(resp.Body, gatewayUpstreamBodyLimit+1)
+	reader := io.LimitReader(resp.Body, limit+1)
 	var body bytes.Buffer
 	buffer := make([]byte, 32*1024)
 	var ttftMS *int64
@@ -823,7 +916,7 @@ func readUpstreamResponse(resp *http.Response, startedAt time.Time) (string, []b
 			return "", nil, ttftMS, readErr
 		}
 	}
-	if body.Len() > gatewayUpstreamBodyLimit {
+	if int64(body.Len()) > limit {
 		return "", nil, ttftMS, errUpstreamResponseTooLarge
 	}
 	return contentType, body.Bytes(), ttftMS, nil

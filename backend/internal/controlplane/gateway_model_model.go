@@ -61,6 +61,14 @@ type ModelRouteRequest struct {
 	Status            string `json:"status"`
 }
 
+type ModelRouteBulkCreateRequest struct {
+	Routes []ModelRouteRequest `json:"routes"`
+}
+
+type ModelRouteBulkCreateResult struct {
+	Routes []ModelRoute `json:"routes"`
+}
+
 type ResolvedGatewayModel struct {
 	GatewayModel GatewayModel `json:"gateway_model"`
 	RequestedID  string       `json:"requested_id"`

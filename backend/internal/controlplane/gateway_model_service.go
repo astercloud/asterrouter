@@ -94,6 +94,45 @@ func (s *Service) CreateModelRoute(ctx context.Context, actor string, req ModelR
 	return route, nil
 }
 
+func (s *Service) BulkCreateModelRoutes(ctx context.Context, actor string, req ModelRouteBulkCreateRequest) (ModelRouteBulkCreateResult, error) {
+	if len(req.Routes) == 0 {
+		return ModelRouteBulkCreateResult{}, errors.New("routes must not be empty")
+	}
+	if len(req.Routes) > 500 {
+		return ModelRouteBulkCreateResult{}, errors.New("routes must contain at most 500 entries")
+	}
+	existing, err := s.repo.ListModelRoutes(ctx)
+	if err != nil {
+		return ModelRouteBulkCreateResult{}, err
+	}
+	keys := make(map[string]struct{}, len(existing)+len(req.Routes))
+	for _, route := range existing {
+		keys[modelRouteUniqueKey(route)] = struct{}{}
+	}
+	now := time.Now().UTC()
+	routes := make([]ModelRoute, 0, len(req.Routes))
+	for index, routeRequest := range req.Routes {
+		route, err := s.modelRouteFromRequest(ctx, routeRequest, now)
+		if err != nil {
+			return ModelRouteBulkCreateResult{}, fmt.Errorf("routes[%d]: %w", index, err)
+		}
+		key := modelRouteUniqueKey(route)
+		if _, exists := keys[key]; exists {
+			return ModelRouteBulkCreateResult{}, fmt.Errorf("routes[%d]: model route already exists", index)
+		}
+		keys[key] = struct{}{}
+		route.ID = "mroute_" + randomID(10)
+		routes = append(routes, route)
+	}
+	if err := s.repo.SaveModelRoutes(ctx, routes); err != nil {
+		return ModelRouteBulkCreateResult{}, err
+	}
+	if err := s.audit(ctx, actor, "create", "model_route_batch", routes[0].ID, fmt.Sprintf("Created %d model routes", len(routes))); err != nil {
+		return ModelRouteBulkCreateResult{}, err
+	}
+	return ModelRouteBulkCreateResult{Routes: routes}, nil
+}
+
 func (s *Service) UpdateModelRoute(ctx context.Context, actor string, id string, req ModelRouteRequest) (ModelRoute, error) {
 	existing, err := s.modelRouteByID(ctx, id)
 	if err != nil {
@@ -217,7 +256,8 @@ func (s *Service) modelRouteFromRequest(ctx context.Context, req ModelRouteReque
 	providerAccountID := strings.TrimSpace(req.ProviderAccountID)
 	upstreamModel := strings.TrimSpace(req.UpstreamModel)
 	status := strings.TrimSpace(req.Status)
-	if _, err := s.gatewayModelByID(ctx, gatewayModelID); err != nil {
+	gatewayModel, err := s.gatewayModelByID(ctx, gatewayModelID)
+	if err != nil {
 		return ModelRoute{}, err
 	}
 	account, err := s.providerAccountByID(ctx, providerAccountID)
@@ -251,6 +291,9 @@ func (s *Service) modelRouteFromRequest(ctx context.Context, req ModelRouteReque
 	}
 	if !oneOf(status, ModelRouteStatusActive, ModelRouteStatusDisabled) {
 		return ModelRoute{}, errors.New("status must be active or disabled")
+	}
+	if status == ModelRouteStatusActive && gatewayModel.Status != GatewayModelStatusActive {
+		return ModelRoute{}, errors.New("active model routes require an active gateway model")
 	}
 	return ModelRoute{
 		GatewayModelID:    gatewayModelID,
@@ -326,6 +369,10 @@ func (s *Service) ensureModelRouteUnique(ctx context.Context, candidate ModelRou
 		}
 	}
 	return nil
+}
+
+func modelRouteUniqueKey(route ModelRoute) string {
+	return route.GatewayModelID + "\x00" + route.RouteGroup + "\x00" + route.ProviderAccountID + "\x00" + route.UpstreamModel
 }
 
 type rankedModelRouteCandidate struct {

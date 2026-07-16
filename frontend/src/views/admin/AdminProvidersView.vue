@@ -12,7 +12,6 @@ import {
   Save,
   Search,
   Sparkles,
-  Trash2,
   X,
   Zap
 } from '@lucide/vue'
@@ -32,7 +31,6 @@ const statusFilter = ref('')
 const modalOpen = ref(false)
 const editing = ref<ProviderConnection | null>(null)
 const platform = ref<ProviderPlatform>('openai')
-const customModel = ref('')
 const healthChecks = ref<Record<string, ProviderHealthCheck>>({})
 
 type ProviderPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok'
@@ -42,41 +40,36 @@ const PLATFORM_CONFIG = {
     label: 'Anthropic',
     icon: Sparkles,
     type: 'anthropic',
-    baseUrl: 'https://api.anthropic.com',
-    apiKeyPlaceholder: 'sk-ant-api03-...',
-    models: ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5']
+    baseUrl: 'https://api.anthropic.com/v1',
+    apiKeyPlaceholder: 'sk-ant-api03-...'
   },
   openai: {
     label: 'OpenAI',
     icon: Zap,
     type: 'openai_compatible',
     baseUrl: 'https://api.openai.com/v1',
-    apiKeyPlaceholder: 'sk-proj-...',
-    models: ['gpt-5.2', 'gpt-5.1', 'gpt-4o', 'o3']
+    apiKeyPlaceholder: 'sk-proj-...'
   },
   gemini: {
     label: 'Gemini',
     icon: Sparkles,
     type: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com',
-    apiKeyPlaceholder: 'AIza...',
-    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    apiKeyPlaceholder: 'AIza...'
   },
   antigravity: {
     label: 'Antigravity',
     icon: Cloud,
     type: 'openai_compatible',
     baseUrl: 'https://cloudcode-pa.googleapis.com',
-    apiKeyPlaceholder: 'sk-...',
-    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'claude-sonnet-4-5']
+    apiKeyPlaceholder: 'sk-...'
   },
   grok: {
     label: 'Grok',
     icon: Bot,
     type: 'openai_compatible',
     baseUrl: 'https://api.x.ai/v1',
-    apiKeyPlaceholder: 'xai-...',
-    models: ['grok-4', 'grok-4-fast-reasoning', 'grok-3']
+    apiKeyPlaceholder: 'xai-...'
   }
 } as const
 
@@ -90,7 +83,6 @@ const form = reactive<ProviderRequest>({
   type: 'openai_compatible',
   base_url: '',
   status: 'active',
-  models: [],
   priority: 100,
   api_key: ''
 })
@@ -119,12 +111,10 @@ function resetForm() {
     type: 'openai_compatible',
     base_url: PLATFORM_CONFIG.openai.baseUrl,
     status: 'active',
-    models: [],
     priority: 100,
     api_key: ''
   })
   platform.value = 'openai'
-  customModel.value = ''
 }
 
 function openCreate() {
@@ -141,11 +131,9 @@ function openEdit(provider: ProviderConnection) {
     type: provider.type,
     base_url: provider.base_url,
     status: provider.status,
-    models: [...provider.models],
     priority: provider.priority,
     api_key: ''
   })
-  customModel.value = ''
   modalOpen.value = true
 }
 
@@ -163,23 +151,6 @@ function selectPlatform(nextPlatform: ProviderPlatform) {
   const config = PLATFORM_CONFIG[nextPlatform]
   form.type = config.type
   form.base_url = config.baseUrl
-}
-
-function toggleModel(model: string) {
-  form.models = form.models.includes(model)
-    ? form.models.filter((item) => item !== model)
-    : [...form.models, model]
-}
-
-function fillRecommendedModels() {
-  form.models = Array.from(new Set([...form.models, ...currentPlatform.value.models]))
-}
-
-function addCustomModel() {
-  const model = customModel.value.trim()
-  if (!model || form.models.includes(model)) return
-  form.models = [...form.models, model]
-  customModel.value = ''
 }
 
 function updateEnabled(event: Event) {
@@ -210,7 +181,7 @@ async function save() {
   error.value = ''
   message.value = ''
   try {
-    const payload = { ...form, models: [...form.models] }
+    const payload = { ...form }
     if (editing.value) {
       await updateProvider(editing.value.id, payload)
       message.value = t('providers.updated')
@@ -442,77 +413,6 @@ onMounted(load)
                   :placeholder="editing ? t('providers.keepSecret') : currentPlatform.apiKeyPlaceholder"
                 />
                 <span class="hint">{{ t('providers.apiKeyHint', { platform: currentPlatform.label }) }}</span>
-              </div>
-            </section>
-
-            <section class="provider-form-section provider-model-section">
-              <div class="provider-section-heading">
-                <div>
-                  <h3>{{ t('providers.modelRestrictions') }}</h3>
-                  <p>{{ t('providers.modelRestrictionHint') }}</p>
-                </div>
-                <span class="provider-mode-badge"><Check :size="14" />{{ t('providers.modelWhitelist') }}</span>
-              </div>
-
-              <div class="provider-model-picker">
-                <div v-if="form.models.length" class="provider-model-grid">
-                  <span v-for="model in form.models" :key="model" class="provider-model-chip">
-                    <Bot :size="15" />
-                    <span>{{ model }}</span>
-                    <button type="button" :aria-label="t('providers.removeModel', { model })" @click="toggleModel(model)">
-                      <X :size="14" />
-                    </button>
-                  </span>
-                </div>
-                <p v-else class="provider-model-empty">{{ t('providers.supportsAllModels') }}</p>
-                <div class="provider-model-count">
-                  <span>{{ t('providers.modelCount', { count: form.models.length }) }}</span>
-                  <span>{{ t('providers.modelWhitelist') }}</span>
-                </div>
-              </div>
-
-              <div class="provider-model-actions">
-                <button type="button" class="provider-action-button recommended" @click="fillRecommendedModels">
-                  <Sparkles :size="15" />
-                  {{ t('providers.fillRelatedModels') }}
-                </button>
-                <button type="button" class="provider-action-button danger" :disabled="!form.models.length" @click="form.models = []">
-                  <Trash2 :size="15" />
-                  {{ t('providers.clearAllModels') }}
-                </button>
-              </div>
-
-              <div class="provider-recommended-models">
-                <span>{{ t('providers.recommendedModels') }}</span>
-                <div>
-                  <button
-                    v-for="model in currentPlatform.models"
-                    :key="model"
-                    type="button"
-                    :class="{ selected: form.models.includes(model) }"
-                    @click="toggleModel(model)"
-                  >
-                    <Check v-if="form.models.includes(model)" :size="13" />
-                    <Plus v-else :size="13" />
-                    {{ model }}
-                  </button>
-                </div>
-              </div>
-
-              <div class="field provider-custom-model">
-                <label for="provider-custom-model">{{ t('providers.customModelName') }}</label>
-                <div>
-                  <input
-                    id="provider-custom-model"
-                    v-model="customModel"
-                    :placeholder="t('providers.customModelPlaceholder')"
-                    @keydown.enter.prevent="addCustomModel"
-                  />
-                  <button class="button secondary" type="button" :disabled="!customModel.trim()" @click="addCustomModel">
-                    <Plus :size="16" />
-                    {{ t('providers.addModel') }}
-                  </button>
-                </div>
               </div>
             </section>
 

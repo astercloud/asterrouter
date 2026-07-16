@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"database/sql"
 	"sort"
 )
 
@@ -62,6 +63,15 @@ func (r *MemoryRepository) SaveModelRoute(_ context.Context, route ModelRoute) e
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.modelRoutes[route.ID] = route
+	return nil
+}
+
+func (r *MemoryRepository) SaveModelRoutes(_ context.Context, routes []ModelRoute) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, route := range routes {
+		r.modelRoutes[route.ID] = route
+	}
 	return nil
 }
 
@@ -151,7 +161,15 @@ ORDER BY gateway_model_id ASC, route_group ASC, priority ASC, id ASC
 }
 
 func (r *PostgresRepository) SaveModelRoute(ctx context.Context, route ModelRoute) error {
-	_, err := r.db.ExecContext(ctx, `
+	return saveModelRoute(ctx, r.db, route)
+}
+
+type modelRouteExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func saveModelRoute(ctx context.Context, executor modelRouteExecutor, route ModelRoute) error {
+	_, err := executor.ExecContext(ctx, `
 INSERT INTO model_routes(id, gateway_model_id, route_group, provider_account_id, upstream_model, priority, weight, status, created_at, updated_at)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 ON CONFLICT(id) DO UPDATE SET
@@ -165,6 +183,20 @@ ON CONFLICT(id) DO UPDATE SET
   updated_at = EXCLUDED.updated_at
 `, route.ID, route.GatewayModelID, route.RouteGroup, route.ProviderAccountID, route.UpstreamModel, route.Priority, route.Weight, route.Status, route.CreatedAt, route.UpdatedAt)
 	return err
+}
+
+func (r *PostgresRepository) SaveModelRoutes(ctx context.Context, routes []ModelRoute) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, route := range routes {
+		if err := saveModelRoute(ctx, tx, route); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (r *PostgresRepository) DeleteModelRoute(ctx context.Context, id string) error {

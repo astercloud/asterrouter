@@ -87,8 +87,14 @@ func (s *Service) newBillingHoldAdmission(ctx context.Context, operation AIOpera
 	if auth.Limits.MonthlyVideoSecondsLimit > 0 && request.Modality == "video" && request.VideoDurationMS <= 0 {
 		return BillingHoldAdmission{}, ErrBillingHoldUsageEstimate
 	}
-	if auth.Limits.MonthlyAudioSecondsLimit > 0 && request.Modality == "audio" && request.AudioDurationMS <= 0 {
-		return BillingHoldAdmission{}, ErrBillingHoldUsageEstimate
+	if auth.Limits.MonthlyAudioSecondsLimit > 0 && request.Modality == "audio" {
+		durationMS := request.AudioDurationMS
+		if request.Operation == GatewayOperationAudioTranscription || request.Operation == GatewayOperationAudioTranslation {
+			durationMS = request.InputAudioDurationMS
+		}
+		if durationMS <= 0 {
+			return BillingHoldAdmission{}, ErrBillingHoldUsageEstimate
+		}
 	}
 	now := operation.CreatedAt.UTC()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -125,6 +131,9 @@ func usageReservationForCanonicalRequest(request gatewaycore.CanonicalRequest) (
 			reserved[UsageDimensionOutputVideoMilliseconds] = UsageDimension{Quantity: request.VideoDurationMS, Unit: UsageUnitMillisecond, Source: "request", Confidence: UsageConfidenceEstimated}
 		}
 	case "audio":
+		if request.InputAudioDurationMS > 0 {
+			reserved[UsageDimensionInputAudioMilliseconds] = UsageDimension{Quantity: request.InputAudioDurationMS, Unit: UsageUnitMillisecond, Source: "request", Confidence: UsageConfidenceEstimated}
+		}
 		if request.AudioDurationMS > 0 {
 			reserved[UsageDimensionOutputAudioMilliseconds] = UsageDimension{Quantity: request.AudioDurationMS, Unit: UsageUnitMillisecond, Source: "request", Confidence: UsageConfidenceEstimated}
 		}

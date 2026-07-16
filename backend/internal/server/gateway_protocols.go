@@ -124,6 +124,10 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		writeGatewayError(c, err)
 		return
 	}
+	if request.Stream && gatewayAudioProtocol(request.Protocol) && canonicalAuth.ArtifactPolicy != controlplane.GatewayArtifactPolicyProxyOnly {
+		openAIError(c, http.StatusBadRequest, "unsupported_artifact_policy", "streaming audio currently requires artifact_policy=proxy_only")
+		return
+	}
 	plan, err := control.PlanCanonicalGatewayRequest(c.Request.Context(), canonicalAuth, request)
 	if err != nil {
 		_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{Model: request.Model, Protocol: string(request.Protocol), Status: "error", ErrorType: "provider_selection_error", LatencyMS: time.Since(startedAt).Milliseconds()})
@@ -167,6 +171,16 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 			_ = control.CompleteAIOperation(c.Request.Context(), operation.ID, controlplane.AIOperationStatusFailed, "request_aborted")
 		}
 	}()
+	if request.InputArtifact != nil {
+		artifact, artifactErr := persistGatewayInputArtifact(c.Request.Context(), control, operation, request)
+		if artifactErr != nil {
+			_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "input_artifact_failed")
+			_ = complete(controlplane.AIOperationStatusFailed, "input_artifact_failed")
+			writeGatewayError(c, artifactErr)
+			return
+		}
+		c.Header("X-AsterRouter-Input-Artifact-ID", artifact.ID)
+	}
 	if err := control.MarkAIOperationRunning(c.Request.Context(), operation.ID); err != nil {
 		_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "operation_start_failed")
 		_ = complete(controlplane.AIOperationStatusFailed, "operation_transition_error")
@@ -192,7 +206,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 	affinity := controlplane.GatewayAffinityInput{TenantID: canonicalAuth.TenantID, PrincipalID: canonicalAuth.PrincipalID, CredentialID: canonicalAuth.CredentialID, Model: request.Model, Protocol: string(request.Protocol), RouteGroup: plan.RouteGroup, StickyKey: request.StickyKey, PolicyVersion: canonicalAuth.PolicyVersion}
 	cohortKey := control.GatewayEffectivePricingCohortKey(affinity)
 	candidates := control.PreferGatewayCandidatesWithAffinity(c.Request.Context(), affinity, control.OrderGatewayCandidatesByEffectivePricing(c.Request.Context(), request.Model, string(request.Protocol), cohortKey, plan.Candidates))
-	resp, provider, release, attempts, attemptErr := attemptGatewayCandidatesForProtocol(c, control, operation.ID, request.Protocol, affinity, candidates, request.Payload, request.Stream)
+	resp, provider, release, attempts, attemptErr := attemptGatewayCandidatesForCanonicalRequest(c, control, operation.ID, affinity, candidates, request)
 	routeAttempts := marshalRouteEvidence(plan.Exclusions, attempts)
 	if provider.AttemptID != "" {
 		c.Set(gatewayAttemptContextKey, provider.AttemptID)
@@ -220,7 +234,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
 		_ = control.BindGatewayCandidateAffinity(c.Request.Context(), affinity, provider)
 	}
-	summary := gatewayRouteSummary(request.Model, provider)
+	summary := gatewayProtocolRouteSummary(request, provider)
 	if request.Stream {
 		if err := control.RecordGatewayCall(c.Request.Context(), auth, request.Model, status, summary); err != nil {
 			_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_not_accounted")
@@ -255,7 +269,11 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		if streamErr != nil {
 			responseSummary = streamErr.Error()
 		}
-		usageErr := recordGatewayUsage(control, c, auth, gatewayUsageInputForProtocol(request, provider, usageSource, usageStatus, errorType, time.Since(startedAt).Milliseconds(), ttftMS, streamUsage, upstreamRequestID(resp)))
+		usageInput := gatewayUsageInputForProtocol(request, provider, usageSource, usageStatus, errorType, time.Since(startedAt).Milliseconds(), ttftMS, streamUsage, upstreamRequestID(resp))
+		if gatewayAudioProtocol(request.Protocol) {
+			usageInput.UsageDimensions = gatewayAudioUsageDimensions(request, 0)
+		}
+		usageErr := recordGatewayUsage(control, c, auth, usageInput)
 		if usageErr != nil {
 			_ = complete(controlplane.AIOperationStatusFailed, "usage_ledger_error")
 		} else {
@@ -267,7 +285,11 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		}
 		return
 	}
-	contentType, upstreamBody, ttftMS, err := readUpstreamResponse(resp, startedAt)
+	responseLimit := int64(gatewayUpstreamBodyLimit)
+	if gatewayAudioProtocol(request.Protocol) {
+		responseLimit = directMediaInlineLimit
+	}
+	contentType, upstreamBody, ttftMS, err := readUpstreamResponseLimit(resp, startedAt, responseLimit)
 	if err != nil {
 		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_read_failed")
 		_ = control.CompleteAIAttempt(c.Request.Context(), provider.AttemptID, controlplane.AIAttemptStatusFailed, "response_read_error")
@@ -277,6 +299,29 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "upstream_error", resp.StatusCode, "response_read_error", time.Since(startedAt).Milliseconds(), 0, 0, err.Error(), routeAttempts))
 		openAIError(c, http.StatusBadGateway, "upstream_error", err.Error())
 		return
+	}
+	if status == "forwarded" && gatewayAudioProtocol(request.Protocol) {
+		attempt, found, attemptErr := control.AIAttempt(c.Request.Context(), provider.AttemptID)
+		if attemptErr != nil || !found {
+			if attemptErr == nil {
+				attemptErr = controlplane.ErrAIAttemptNotFound
+			}
+			_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "response_artifact_attempt_missing")
+			_ = complete(controlplane.AIOperationStatusFailed, "response_artifact_failed")
+			writeGatewayError(c, attemptErr)
+			return
+		}
+		artifact, artifactErr := control.StoreDirectResponseArtifact(c.Request.Context(), operation, attempt, "response", contentType, upstreamBody)
+		if artifactErr != nil {
+			_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "response_artifact_failed")
+			_ = control.CompleteAIAttempt(c.Request.Context(), provider.AttemptID, controlplane.AIAttemptStatusFailed, "response_artifact_failed")
+			_ = complete(controlplane.AIOperationStatusFailed, "response_artifact_failed")
+			writeDirectMediaArtifactError(c, artifactErr)
+			return
+		}
+		if artifact.ID != "" {
+			c.Header("X-AsterRouter-Output-Artifact-ID", artifact.ID)
+		}
 	}
 	if err := control.RecordGatewayCall(c.Request.Context(), auth, request.Model, status, summary); err != nil {
 		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_not_accounted")
@@ -302,7 +347,11 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		operationStatus = controlplane.AIOperationStatusFailed
 	}
 	_ = control.CompleteAIAttempt(c.Request.Context(), provider.AttemptID, attemptStatus, errorType)
-	usageErr := recordGatewayUsage(control, c, auth, gatewayUsageInputForProtocol(request, provider, usageSource, status, errorType, time.Since(startedAt).Milliseconds(), ttftMS, usage, upstreamRequestID(resp)))
+	usageInput := gatewayUsageInputForProtocol(request, provider, usageSource, status, errorType, time.Since(startedAt).Milliseconds(), ttftMS, usage, upstreamRequestID(resp))
+	if gatewayAudioProtocol(request.Protocol) {
+		usageInput.UsageDimensions = gatewayAudioUsageDimensions(request, int64(len(upstreamBody)))
+	}
+	usageErr := recordGatewayUsage(control, c, auth, usageInput)
 	if usageErr != nil {
 		_ = complete(controlplane.AIOperationStatusFailed, "usage_ledger_error")
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "error", http.StatusInternalServerError, "usage_ledger_error", time.Since(startedAt).Milliseconds(), usage.InputTokens, usage.OutputTokens, usageErr.Error(), routeAttempts))

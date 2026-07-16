@@ -19,6 +19,8 @@ type providerAccountPermitState struct {
 	store           ProviderCapacityStore
 	lease           ProviderCapacityLease
 	heartbeatCancel context.CancelFunc
+	lost            chan error
+	lostOnce        sync.Once
 	localRelease    func()
 	circuitRelease  func()
 }
@@ -76,7 +78,7 @@ func (s *Service) TryAcquireProviderAccountPermitContext(ctx context.Context, pr
 		s.recordProviderCapacitySample(provider.AccountID, request.EstimatedTokens)
 	}
 	state := &providerAccountPermitState{
-		store: store, lease: lease, localRelease: localRelease, circuitRelease: circuitRelease,
+		store: store, lease: lease, lost: make(chan error, 1), localRelease: localRelease, circuitRelease: circuitRelease,
 	}
 	state.startHeartbeat(providerCapacityLeaseTTL)
 	return ProviderAccountPermit{state: state}, "", true, nil
@@ -121,6 +123,15 @@ func (permit ProviderAccountPermit) Release() {
 		return
 	}
 	permit.state.close(true)
+}
+
+// Lost reports that the distributed provider lease could not be renewed.
+// Long-lived callers must terminate work when capacity ownership is lost.
+func (permit ProviderAccountPermit) Lost() <-chan error {
+	if permit.state == nil {
+		return nil
+	}
+	return permit.state.lost
 }
 
 // Retain keeps the distributed lease for an accepted or ambiguous durable
@@ -175,33 +186,46 @@ func (state *providerAccountPermitState) startHeartbeat(duration time.Duration) 
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				state.extend(ctx, duration)
+				if err := state.extend(ctx, duration); err != nil {
+					state.signalLost(err)
+				}
 			}
 		}
 	}()
 }
 
-func (state *providerAccountPermitState) extend(ctx context.Context, duration time.Duration) {
+func (state *providerAccountPermitState) extend(ctx context.Context, duration time.Duration) error {
 	state.mu.Lock()
 	if state.closed {
 		state.mu.Unlock()
-		return
+		return nil
 	}
 	lease := state.lease
 	store := state.store
 	state.mu.Unlock()
 	if store == nil {
-		return
+		return errors.New("provider capacity store is not available")
 	}
 	extended, found, err := store.Extend(ctx, lease, duration)
-	if err != nil || !found {
-		return
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("provider capacity lease was lost")
 	}
 	state.mu.Lock()
 	if !state.closed {
 		state.lease = extended
 	}
 	state.mu.Unlock()
+	return nil
+}
+
+func (state *providerAccountPermitState) signalLost(err error) {
+	if state == nil || err == nil || state.lost == nil {
+		return
+	}
+	state.lostOnce.Do(func() { state.lost <- err })
 }
 
 func (state *providerAccountPermitState) close(releaseStore bool) {

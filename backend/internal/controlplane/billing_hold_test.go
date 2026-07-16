@@ -318,6 +318,24 @@ func TestBillingHoldVideoAndAudioQuotaRequireBoundedDuration(t *testing.T) {
 		if _, _, err := svc.BeginCanonicalOperation(ctx, audioAuth, billingHoldMediaRequest("audio-over", "audio", 0, 1)); !errors.Is(err, ErrBillingHoldAudioQuotaExceeded) {
 			t.Fatalf("audio overage error=%v", err)
 		}
+
+		transcriptionAuth := billingHoldTestAuth("tenant-transcription", "credential-transcription", 0)
+		transcriptionAuth.Limits.MonthlyAudioSecondsLimit = 1
+		transcription := billingHoldMediaRequest("transcription-boundary", "audio", 0, 0)
+		transcription.Protocol = gatewaycore.ProtocolOpenAIAudioTranscriptions
+		transcription.Operation = GatewayOperationAudioTranscription
+		transcription.Lane = gatewaycore.LaneDirect
+		transcription.InputAudioDurationMS = 1000
+		if _, created, err := svc.BeginCanonicalOperation(ctx, transcriptionAuth, transcription); err != nil || !created {
+			t.Fatalf("transcription boundary created=%t err=%v", created, err)
+		}
+		transcription.ClientRequestID = "request-transcription-over"
+		transcription.Fingerprint = "fingerprint-transcription-over"
+		transcription.IdempotencyKey = "idempotency-transcription-over"
+		transcription.InputAudioDurationMS = 1
+		if _, _, err := svc.BeginCanonicalOperation(ctx, transcriptionAuth, transcription); !errors.Is(err, ErrBillingHoldAudioQuotaExceeded) {
+			t.Fatalf("transcription overage error=%v", err)
+		}
 	})
 }
 
@@ -361,6 +379,73 @@ func saveBillingHoldTestPricing(t *testing.T, repo Repository, model string) {
 		Status: ModelPricingStatusActive, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBillingHoldSettlesCumulativeIncrementalUsage(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*testing.T) Repository
+	}{
+		{name: "memory", open: func(*testing.T) Repository { return NewMemoryRepository() }},
+		{name: "postgres", open: func(t *testing.T) Repository {
+			schema := testutil.NewPostgresSchema(t)
+			repo, err := NewPostgresRepository(context.Background(), schema.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return repo
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := test.open(t)
+			defer repo.Close()
+			svc := NewService(repo, "/v1", "incremental-hold-secret")
+			identity := testutil.UniqueID("incremental-hold")
+			auth := billingHoldTestAuth("tenant-"+identity, "credential-"+identity, 0)
+			request := billingHoldTestRequest(identity)
+			operation, created, err := svc.BeginCanonicalOperation(ctx, auth, request)
+			if err != nil || !created {
+				t.Fatalf("operation=%+v created=%t err=%v", operation, created, err)
+			}
+			attempt, err := svc.BeginAIAttempt(ctx, operation.ID, 1, GatewayProvider{ID: "provider", AccountID: "account", UpstreamModel: operation.Model})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.CommitBillingHold(ctx, operation.ID, "provider_connected"); err != nil {
+				t.Fatal(err)
+			}
+			legacyAuth := GatewayAuthContext{APIKey: APIKeyRecord{ID: auth.CredentialID, Fingerprint: "fingerprint-" + identity, KeyType: APIKeyTypeService}}
+			record := func(version, amount int, source string) {
+				t.Helper()
+				err := svc.RecordGatewayUsage(ctx, legacyAuth, GatewayUsageInput{
+					OperationID: operation.ID, AttemptID: attempt.ID, UsageVersion: version, UsageSource: source,
+					RequestFingerprint: operation.RequestFingerprint, Model: operation.Model, UpstreamModel: attempt.UpstreamModel,
+					Protocol: operation.Protocol, ProviderID: attempt.ProviderID, ProviderAccountID: attempt.ProviderAccountID,
+					Status: "forwarded", CostCents: amount, SkipProcurementCostEstimate: true,
+				})
+				if err != nil {
+					t.Fatalf("RecordGatewayUsage(version=%d): %v", version, err)
+				}
+			}
+			record(1, 3, "provider_incremental")
+			record(2, 4, "provider_incremental")
+			hold, found, err := svc.BillingHoldForOperation(ctx, operation.ID)
+			if err != nil || !found || hold.Status != BillingHoldStatusCommitted || hold.SettledAmountCents != 0 {
+				t.Fatalf("incremental hold=%+v found=%t err=%v", hold, found, err)
+			}
+			record(3, 0, "gateway_final")
+			hold, found, err = svc.BillingHoldForOperation(ctx, operation.ID)
+			if err != nil || !found || hold.Status != BillingHoldStatusSettled || hold.SettledAmountCents != 7 {
+				t.Fatalf("settled hold=%+v found=%t err=%v", hold, found, err)
+			}
+			entries, err := svc.BillingLedgerEntries(ctx, operation.ID)
+			if err != nil || len(entries) != 3 {
+				t.Fatalf("billing entries=%+v err=%v", entries, err)
+			}
+		})
 	}
 }
 

@@ -3,16 +3,42 @@ import { computed, onMounted, ref } from 'vue'
 import { Ban, Eye, RefreshCw, RotateCw, Search, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import {
-  cancelAIJob,
-  getAIJob,
-  getAIJobRuntime,
-  getAIJobSummary,
-  getAIJobs,
-  scheduleAIJobAttemptReconciliation
+  cancelAIJob as cancelAdminAIJob,
+  getAIJob as getAdminAIJob,
+  getAIJobRuntime as getAdminAIJobRuntime,
+  getAIJobSummary as getAdminAIJobSummary,
+  getAIJobs as getAdminAIJobs,
+  scheduleAIJobAttemptReconciliation as scheduleAdminAIJobAttemptReconciliation
 } from '@/api/control'
+import {
+  cancelPlatformAIJob,
+  getPlatformAIJob,
+  getPlatformAIJobRuntime,
+  getPlatformAIJobSummary,
+  getPlatformAIJobs,
+  schedulePlatformAIJobAttemptReconciliation
+} from '@/api/platform'
 import type { AIAttemptAdminRecord, AIJobAdminDetail, AIJobAdminRecord, AIJobListQuery, AIJobRuntimeStatus, AIJobSummary } from '@/types'
 
+const props = withDefaults(defineProps<{ surface?: 'admin' | 'platform' }>(), { surface: 'admin' })
 const { t } = useI18n()
+const operations = props.surface === 'platform'
+  ? {
+      cancelJob: cancelPlatformAIJob,
+      getJob: getPlatformAIJob,
+      getRuntime: getPlatformAIJobRuntime,
+      getSummary: getPlatformAIJobSummary,
+      getJobs: getPlatformAIJobs,
+      reconcileAttempt: schedulePlatformAIJobAttemptReconciliation
+    }
+  : {
+      cancelJob: cancelAdminAIJob,
+      getJob: getAdminAIJob,
+      getRuntime: getAdminAIJobRuntime,
+      getSummary: getAdminAIJobSummary,
+      getJobs: getAdminAIJobs,
+      reconcileAttempt: scheduleAdminAIJobAttemptReconciliation
+    }
 const jobs = ref<AIJobAdminRecord[]>([])
 const summary = ref<AIJobSummary>({ total: 0, by_status: {} })
 const runtime = ref<AIJobRuntimeStatus | null>(null)
@@ -65,7 +91,11 @@ async function load() {
   error.value = ''
   try {
     const query = listQuery()
-    const [jobData, summaryData, runtimeData] = await Promise.all([getAIJobs(query), getAIJobSummary(query), getAIJobRuntime()])
+    const [jobData, summaryData, runtimeData] = await Promise.all([
+      operations.getJobs(query),
+      operations.getSummary(query),
+      operations.getRuntime()
+    ])
     jobs.value = jobData
     summary.value = summaryData
     runtime.value = runtimeData
@@ -97,7 +127,7 @@ async function showDetail(id: string) {
   detailLoading.value = true
   error.value = ''
   try {
-    selected.value = await getAIJob(id)
+    selected.value = await operations.getJob(id)
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -111,10 +141,10 @@ async function cancelSelected() {
   error.value = ''
   notice.value = ''
   try {
-    await cancelAIJob(selected.value.job.id)
+    await operations.cancelJob(selected.value.job.id)
     notice.value = t('aiJobOps.cancelScheduled')
     await load()
-    selected.value = await getAIJob(selected.value.job.id)
+    selected.value = await operations.getJob(selected.value.job.id)
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -128,9 +158,9 @@ async function reconcileAttempt(attempt: AIAttemptAdminRecord) {
   error.value = ''
   notice.value = ''
   try {
-    await scheduleAIJobAttemptReconciliation(selected.value.job.id, attempt.id)
+    await operations.reconcileAttempt(selected.value.job.id, attempt.id)
     notice.value = t('aiJobOps.reconcileScheduled')
-    selected.value = await getAIJob(selected.value.job.id)
+    selected.value = await operations.getJob(selected.value.job.id)
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {

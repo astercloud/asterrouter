@@ -22,6 +22,7 @@ import {
   getEffectivePricingDecisionEvaluations,
   getEffectivePricingDecisions,
   getEffectivePricingReport,
+  getGatewayModels,
   getProviderAccounts,
   getProviderBillingSourceEvidence,
   getProviderBillingSources,
@@ -41,6 +42,7 @@ import type {
   EffectivePricingPolicyRequest,
   EffectivePricingReport,
   EffectivePricingReportRow,
+  GatewayModel,
   ProcurementPriceRequest,
   ProviderAccount,
   ProviderBillingLineRequest,
@@ -67,6 +69,7 @@ const capabilities = ref<ProviderCacheCapability[]>([])
 const probes = ref<ProviderCacheProbeRun[]>([])
 const decisions = ref<EffectivePricingDecision[]>([])
 const accounts = ref<ProviderAccount[]>([])
+const gatewayModels = ref<GatewayModel[]>([])
 const billingSources = ref<ProviderBillingSource[]>([])
 const billingSourceInspection = ref<ProviderBillingSourceInspection | null>(null)
 const billingSourceEvidence = ref<ProviderBillingSourceEvidence | null>(null)
@@ -146,6 +149,7 @@ const metrics = computed(() => {
 })
 const capabilityRows = computed(() => rows.value.map((row) => ({ row, capability: capabilityFor(row) })))
 const accountOptions = computed(() => accounts.value.filter((account) => account.status === 'active'))
+const activeGatewayModels = computed(() => gatewayModels.value.filter((model) => model.status === 'active'))
 const selectedBillingSource = computed(() => billingSources.value.find((source) => source.provider_account_id === billingSourceAccountID.value))
 const billingSourceFormValid = computed(() => Number.isInteger(billingSourceForm.sync_interval_seconds) && billingSourceForm.sync_interval_seconds >= 60 && billingSourceForm.sync_interval_seconds <= 86400)
 const decisionUpstreamModelOptions = computed(() => [...new Set(rows.value.map((row) => row.upstream_model))])
@@ -184,6 +188,18 @@ function statusClass(value: string): string {
   return ''
 }
 function accountName(id: string): string { return accounts.value.find((account) => account.id === id)?.name || id || '-' }
+function accountModelOptions(accountID: string, current = ''): string[] {
+  const models = accounts.value.find((account) => account.id === accountID)?.models || []
+  return [...new Set([current.trim(), ...models].filter(Boolean))]
+}
+function gatewayModelOptions(current = ''): GatewayModel[] {
+  const historical = current ? gatewayModels.value.find((model) => model.model_id === current && model.status !== 'active') : undefined
+  return historical ? [historical, ...activeGatewayModels.value] : activeGatewayModels.value
+}
+function selectAccountModel(target: { provider_account_id: string; upstream_model: string }, allowEmpty = false) {
+  const models = accounts.value.find((account) => account.id === target.provider_account_id)?.models || []
+  if (!models.includes(target.upstream_model)) target.upstream_model = allowEmpty ? '' : models[0] || ''
+}
 function reportRowForDecision(decision: EffectivePricingDecision, accountID: string): EffectivePricingReportRow | undefined {
   return rows.value.find((row) => row.provider_account_id === accountID && row.upstream_model === decision.upstream_model && row.protocol === decision.protocol)
 }
@@ -284,9 +300,9 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [nextReport, nextCapabilities, nextProbes, nextDecisions, nextAccounts, nextBillingSources] = await Promise.all([
+    const [nextReport, nextCapabilities, nextProbes, nextDecisions, nextAccounts, nextBillingSources, nextGatewayModels] = await Promise.all([
       getEffectivePricingReport({ model: modelFilter.value.trim() || undefined, protocol: protocolFilter.value || undefined, window_hours: windowHours.value }),
-      getProviderCacheCapabilities(), getProviderCacheProbeRuns(100), getEffectivePricingDecisions(), getProviderAccounts(), getProviderBillingSources()
+      getProviderCacheCapabilities(), getProviderCacheProbeRuns(100), getEffectivePricingDecisions(), getProviderAccounts(), getProviderBillingSources(), getGatewayModels()
     ])
     report.value = nextReport
     capabilities.value = nextCapabilities
@@ -294,6 +310,7 @@ async function load() {
     decisions.value = nextDecisions
     accounts.value = nextAccounts
     billingSources.value = nextBillingSources
+    gatewayModels.value = nextGatewayModels
     if (!nextAccounts.some((account) => account.id === billingSourceAccountID.value)) {
       billingSourceAccountID.value = nextAccounts.find((account) => account.status === 'active')?.id || ''
       billingSourceInspection.value = null
@@ -311,7 +328,7 @@ function openPriceDialog(row?: EffectivePricingReportRow) {
   const account = accounts.value.find((item) => item.id === row?.provider_account_id) || accountOptions.value[0]
   Object.assign(priceForm, {
     provider_id: row?.provider_id || account?.provider_id || '', provider_account_id: row?.provider_account_id || account?.id || '',
-    upstream_model: row?.upstream_model || '', protocol: row?.protocol || protocolFilter.value, currency: row?.currency || 'USD',
+    upstream_model: row?.upstream_model || account?.models?.[0] || '', protocol: row?.protocol || protocolFilter.value, currency: row?.currency || 'USD',
     uncached_input_micros_per_1m_tokens: 0, cache_read_micros_per_1m_tokens: 0,
     cache_write_5m_micros_per_1m_tokens: 0, cache_write_1h_micros_per_1m_tokens: 0,
     output_micros_per_1m_tokens: 0, request_micros: 0, reference_input_micros_per_1m_tokens: 0,
@@ -333,7 +350,7 @@ function openDecisionDialog(row?: EffectivePricingReportRow) {
   const comparable = row ? comparableDecisionRows(row.upstream_model, row.protocol) : firstComparableDecisionRows()
   const source = row || comparable[0]
   Object.assign(decisionForm, {
-    model: '', upstream_model: source?.upstream_model || '', protocol: source?.protocol || '',
+    model: activeGatewayModels.value[0]?.model_id || '', upstream_model: source?.upstream_model || '', protocol: source?.protocol || '',
     current_provider_account_id: '', candidate_provider_account_id: ''
   })
   resetDecisionAccounts(row?.provider_account_id)
@@ -370,8 +387,19 @@ function openCapabilityDialog(row: EffectivePricingReportRow) {
 function capabilityTransportChanged() {
   if (capabilityForm.affinity_transport === 'none') capabilityForm.affinity_field = ''
 }
-function accountChanged(target: ProcurementPriceRequest | ProviderBillingLineRequest) {
-  target.provider_id = accounts.value.find((account) => account.id === target.provider_account_id)?.provider_id || ''
+function priceAccountChanged() {
+  priceForm.provider_id = accounts.value.find((account) => account.id === priceForm.provider_account_id)?.provider_id || ''
+  selectAccountModel(priceForm)
+}
+function billingAccountChanged() {
+  billingForm.provider_id = accounts.value.find((account) => account.id === billingForm.provider_account_id)?.provider_id || ''
+  selectAccountModel(billingForm, true)
+}
+function probeAccountChanged() {
+  selectAccountModel(probeForm)
+}
+function capabilityAccountChanged() {
+  selectAccountModel(capabilityForm)
 }
 
 async function saveDialog() {
@@ -526,7 +554,7 @@ onMounted(load)
       </button>
     </section>
     <section class="effective-filters">
-      <label><span>{{ t('usage.model') }}</span><input v-model="modelFilter" placeholder="claude-3-5-sonnet" @keyup.enter="load" /></label>
+      <label><span>{{ t('usage.model') }}</span><input v-model="modelFilter" :placeholder="t('effectivePricing.upstreamModel')" @keyup.enter="load" /></label>
       <label><span>{{ t('effectivePricing.protocol') }}</span><select v-model="protocolFilter" @change="load"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></label>
       <label><span>{{ t('effectivePricing.window') }}</span><select v-model.number="windowHours" @change="load"><option :value="24">24h</option><option :value="168">7d</option><option :value="720">30d</option></select></label>
       <span class="pill" :class="statusClass(report?.policy.mode || '')">{{ report?.policy.mode || 'observe_only' }}</span>
@@ -657,8 +685,8 @@ onMounted(load)
     </div>
 
     <div v-if="dialog" class="modal-backdrop"><form class="modal-card effective-dialog" role="dialog" aria-modal="true" aria-labelledby="effective-dialog-title" aria-describedby="effective-dialog-description" @submit.prevent="saveDialog"><header class="modal-header"><div><h2 id="effective-dialog-title">{{ t(`effectivePricing.dialogs.${dialog}`) }}</h2><p id="effective-dialog-description">{{ t(`effectivePricing.dialogHelp.${dialog}`) }}</p></div><button class="icon-button" type="button" :aria-label="t('common.close')" @click="dialog = null"><X :size="18" /></button></header><div class="modal-body form-grid">
-	      <template v-if="dialog === 'price'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="priceForm.provider_account_id" required @change="accountChanged(priceForm)"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><input v-model="priceForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="priceForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.currency') }}</label><input v-model="priceForm.currency" maxlength="3" required /></div><div class="field"><label>{{ t('effectivePricing.uncachedPrice') }}</label><input v-model.number="priceForm.uncached_input_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheReadPrice') }}</label><input v-model.number="priceForm.cache_read_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheWrite5mPrice') }}</label><input v-model.number="priceForm.cache_write_5m_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheWrite1hPrice') }}</label><input v-model.number="priceForm.cache_write_1h_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.outputPrice') }}</label><input v-model.number="priceForm.output_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.requestPrice') }}</label><input v-model.number="priceForm.request_micros" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.quoted') }}</label><input v-model.number="priceForm.quoted_multiplier" type="number" min="0" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.rechargeMultiplier') }}</label><input v-model.number="priceForm.recharge_multiplier" type="number" min="0" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.referenceInput') }}</label><input v-model.number="priceForm.reference_input_micros_per_1m_tokens" type="number" min="0" /></div><div class="field"><label>{{ t('effectivePricing.referenceOutput') }}</label><input v-model.number="priceForm.reference_output_micros_per_1m_tokens" type="number" min="0" /></div><div class="field"><label>{{ t('effectivePricing.confidence') }}</label><select v-model="priceForm.confidence"><option value="exact">exact</option><option value="derived">derived</option><option value="estimated">estimated</option></select></div><div class="field"><label>{{ t('effectivePricing.sourceReference') }}</label><input v-model="priceForm.source_reference" /></div></template>
-      <template v-else-if="dialog === 'billing'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="billingForm.provider_account_id" required @change="accountChanged(billingForm)"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><input v-model="billingForm.upstream_model" /></div><div class="field"><label>{{ t('effectivePricing.externalLine') }}</label><input v-model="billingForm.external_line_id" required /></div><div class="field"><label>{{ t('effectivePricing.upstreamRequest') }}</label><input v-model="billingForm.external_request_id" /></div><div class="field"><label>{{ t('effectivePricing.amountMicros') }}</label><input v-model.number="billingForm.amount_micros" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.confidence') }}</label><select v-model="billingForm.confidence"><option value="exact">exact</option><option value="derived">derived</option><option value="unallocated">unallocated</option><option value="unknown">unknown</option></select></div></template>
+	      <template v-if="dialog === 'price'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="priceForm.provider_account_id" required @change="priceAccountChanged"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><select v-if="accountModelOptions(priceForm.provider_account_id, priceForm.upstream_model).length" v-model="priceForm.upstream_model" required><option v-for="model in accountModelOptions(priceForm.provider_account_id, priceForm.upstream_model)" :key="model" :value="model">{{ model }}</option></select><input v-else v-model="priceForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="priceForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.currency') }}</label><input v-model="priceForm.currency" maxlength="3" required /></div><div class="field"><label>{{ t('effectivePricing.uncachedPrice') }}</label><input v-model.number="priceForm.uncached_input_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheReadPrice') }}</label><input v-model.number="priceForm.cache_read_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheWrite5mPrice') }}</label><input v-model.number="priceForm.cache_write_5m_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.cacheWrite1hPrice') }}</label><input v-model.number="priceForm.cache_write_1h_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.outputPrice') }}</label><input v-model.number="priceForm.output_micros_per_1m_tokens" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.requestPrice') }}</label><input v-model.number="priceForm.request_micros" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.quoted') }}</label><input v-model.number="priceForm.quoted_multiplier" type="number" min="0" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.rechargeMultiplier') }}</label><input v-model.number="priceForm.recharge_multiplier" type="number" min="0" step="0.01" /></div><div class="field"><label>{{ t('effectivePricing.referenceInput') }}</label><input v-model.number="priceForm.reference_input_micros_per_1m_tokens" type="number" min="0" /></div><div class="field"><label>{{ t('effectivePricing.referenceOutput') }}</label><input v-model.number="priceForm.reference_output_micros_per_1m_tokens" type="number" min="0" /></div><div class="field"><label>{{ t('effectivePricing.confidence') }}</label><select v-model="priceForm.confidence"><option value="exact">exact</option><option value="derived">derived</option><option value="estimated">estimated</option></select></div><div class="field"><label>{{ t('effectivePricing.sourceReference') }}</label><input v-model="priceForm.source_reference" /></div></template>
+      <template v-else-if="dialog === 'billing'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="billingForm.provider_account_id" required @change="billingAccountChanged"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><select v-if="accountModelOptions(billingForm.provider_account_id, billingForm.upstream_model).length" v-model="billingForm.upstream_model"><option value="">-</option><option v-for="model in accountModelOptions(billingForm.provider_account_id, billingForm.upstream_model)" :key="model" :value="model">{{ model }}</option></select><input v-else v-model="billingForm.upstream_model" /></div><div class="field"><label>{{ t('effectivePricing.externalLine') }}</label><input v-model="billingForm.external_line_id" required /></div><div class="field"><label>{{ t('effectivePricing.upstreamRequest') }}</label><input v-model="billingForm.external_request_id" /></div><div class="field"><label>{{ t('effectivePricing.amountMicros') }}</label><input v-model.number="billingForm.amount_micros" type="number" min="0" required /></div><div class="field"><label>{{ t('effectivePricing.confidence') }}</label><select v-model="billingForm.confidence"><option value="exact">exact</option><option value="derived">derived</option><option value="unallocated">unallocated</option><option value="unknown">unknown</option></select></div></template>
 	      <template v-else-if="dialog === 'policy'">
 	        <div class="field"><label>{{ t('effectivePricing.mode') }}</label><select v-model="policyForm.mode"><option value="observe_only">observe_only</option><option value="recommend">recommend</option><option value="canary">canary</option><option value="balanced">balanced</option><option value="cost_first">cost_first</option><option value="fixed_route">fixed_route</option></select></div>
 	        <div class="field"><label>{{ t('effectivePricing.minSamples') }}</label><input v-model.number="policyForm.min_sample_count" type="number" min="1" /></div>
@@ -682,10 +710,10 @@ onMounted(load)
 	        <label class="checkbox-row"><input v-model="policyForm.automatic_actions_enabled" type="checkbox" />{{ t('effectivePricing.enableAutomaticActions') }}</label>
 	        <label class="checkbox-row"><input v-model="policyForm.probe_enabled" type="checkbox" />{{ t('effectivePricing.enableProbes') }}</label>
 	      </template>
-	      <template v-else-if="dialog === 'probe'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="probeForm.provider_account_id" required><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><input v-model="probeForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="probeForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.probePrefixTokens') }}</label><input v-model.number="probeForm.prefix_tokens" type="number" min="256" max="32768" required /></div><div class="field"><label>{{ t('effectivePricing.probeMaxCost') }}</label><input v-model.number="probeForm.max_cost_micros" type="number" min="1" required /></div><label class="checkbox-row probe-confirmation"><input v-model="probeBudgetConfirmed" type="checkbox" />{{ t('effectivePricing.probeConfirm') }}</label></template>
-	      <template v-else-if="dialog === 'capability'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="capabilityForm.provider_account_id" required><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><input v-model="capabilityForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="capabilityForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.supportStatus') }}</label><select v-model="capabilityForm.support_status" :disabled="!['unknown','claimed','accepted'].includes(capabilityForm.support_status)"><option v-if="!['unknown','claimed','accepted'].includes(capabilityForm.support_status)" :value="capabilityForm.support_status">{{ capabilityForm.support_status }}</option><option value="unknown">unknown</option><option value="claimed">claimed</option><option value="accepted">accepted</option></select></div><div class="field"><label>{{ t('effectivePricing.poolAffinityGrade') }}</label><input v-model="capabilityForm.pool_affinity_grade" disabled /></div><div class="field"><label>{{ t('effectivePricing.affinityTransport') }}</label><select v-model="capabilityForm.affinity_transport" @change="capabilityTransportChanged"><option value="none">none</option><option value="header">header</option><option value="body">body</option></select></div><div class="field"><label>{{ t('effectivePricing.affinityField') }}</label><input v-model="capabilityForm.affinity_field" :disabled="capabilityForm.affinity_transport === 'none'" :required="capabilityForm.affinity_transport !== 'none'" /></div><div class="field"><label>{{ t('effectivePricing.cacheControlMode') }}</label><select v-model="capabilityForm.cache_control_mode"><option value="passthrough_if_present">passthrough_if_present</option><option value="prompt_cache_key">prompt_cache_key</option></select></div><div class="field"><label>{{ t('effectivePricing.usageSchema') }}</label><input v-model="capabilityForm.usage_schema" /></div></template>
+	      <template v-else-if="dialog === 'probe'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="probeForm.provider_account_id" required @change="probeAccountChanged"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><select v-if="accountModelOptions(probeForm.provider_account_id, probeForm.upstream_model).length" v-model="probeForm.upstream_model" required><option v-for="model in accountModelOptions(probeForm.provider_account_id, probeForm.upstream_model)" :key="model" :value="model">{{ model }}</option></select><input v-else v-model="probeForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="probeForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.probePrefixTokens') }}</label><input v-model.number="probeForm.prefix_tokens" type="number" min="256" max="32768" required /></div><div class="field"><label>{{ t('effectivePricing.probeMaxCost') }}</label><input v-model.number="probeForm.max_cost_micros" type="number" min="1" required /></div><label class="checkbox-row probe-confirmation"><input v-model="probeBudgetConfirmed" type="checkbox" />{{ t('effectivePricing.probeConfirm') }}</label></template>
+	      <template v-else-if="dialog === 'capability'"><div class="field"><label>{{ t('admin.providerAccounts') }}</label><select v-model="capabilityForm.provider_account_id" required @change="capabilityAccountChanged"><option v-for="account in accountOptions" :key="account.id" :value="account.id">{{ account.name }} · {{ account.id }}</option></select></div><div class="field"><label>{{ t('usage.model') }}</label><select v-if="accountModelOptions(capabilityForm.provider_account_id, capabilityForm.upstream_model).length" v-model="capabilityForm.upstream_model" required><option v-for="model in accountModelOptions(capabilityForm.provider_account_id, capabilityForm.upstream_model)" :key="model" :value="model">{{ model }}</option></select><input v-else v-model="capabilityForm.upstream_model" required /></div><div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="capabilityForm.protocol"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></div><div class="field"><label>{{ t('effectivePricing.supportStatus') }}</label><select v-model="capabilityForm.support_status" :disabled="!['unknown','claimed','accepted'].includes(capabilityForm.support_status)"><option v-if="!['unknown','claimed','accepted'].includes(capabilityForm.support_status)" :value="capabilityForm.support_status">{{ capabilityForm.support_status }}</option><option value="unknown">unknown</option><option value="claimed">claimed</option><option value="accepted">accepted</option></select></div><div class="field"><label>{{ t('effectivePricing.poolAffinityGrade') }}</label><input v-model="capabilityForm.pool_affinity_grade" disabled /></div><div class="field"><label>{{ t('effectivePricing.affinityTransport') }}</label><select v-model="capabilityForm.affinity_transport" @change="capabilityTransportChanged"><option value="none">none</option><option value="header">header</option><option value="body">body</option></select></div><div class="field"><label>{{ t('effectivePricing.affinityField') }}</label><input v-model="capabilityForm.affinity_field" :disabled="capabilityForm.affinity_transport === 'none'" :required="capabilityForm.affinity_transport !== 'none'" /></div><div class="field"><label>{{ t('effectivePricing.cacheControlMode') }}</label><select v-model="capabilityForm.cache_control_mode"><option value="passthrough_if_present">passthrough_if_present</option><option value="prompt_cache_key">prompt_cache_key</option></select></div><div class="field"><label>{{ t('effectivePricing.usageSchema') }}</label><input v-model="capabilityForm.usage_schema" /></div></template>
 	      <template v-else>
-        <div class="field"><label>{{ t('effectivePricing.routeModel') }}</label><input v-model="decisionForm.model" required /></div>
+        <div class="field"><label>{{ t('effectivePricing.routeModel') }}</label><select v-model="decisionForm.model" required><option v-if="!gatewayModelOptions(decisionForm.model).length" value="" disabled>{{ t('apiKeys.noActiveModels') }}</option><option v-for="model in gatewayModelOptions(decisionForm.model)" :key="model.id" :value="model.model_id">{{ model.model_id }} · {{ model.name }}<template v-if="model.status !== 'active'"> · {{ t('apiKeys.historicalModels') }}</template></option></select></div>
         <div class="field"><label>{{ t('effectivePricing.upstreamModel') }}</label><select v-model="decisionForm.upstream_model" required @change="decisionUpstreamModelChanged"><option v-for="model in decisionUpstreamModelOptions" :key="model" :value="model">{{ model }}</option></select></div>
         <div class="field"><label>{{ t('effectivePricing.protocol') }}</label><select v-model="decisionForm.protocol" required @change="resetDecisionAccounts()"><option v-for="protocol in decisionProtocolOptions" :key="protocol" :value="protocol">{{ protocol }}</option></select></div>
         <div class="field"><label>{{ t('effectivePricing.current') }}</label><select v-model="decisionForm.current_provider_account_id" required @change="decisionCurrentAccountChanged"><option v-for="row in decisionAccountRows" :key="`${row.provider_account_id}:${row.upstream_model}:${row.protocol}`" :value="row.provider_account_id">{{ row.provider_account_name || row.provider_account_id }}</option></select></div>

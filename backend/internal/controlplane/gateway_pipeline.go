@@ -27,6 +27,16 @@ type GatewayCandidateExclusion struct {
 }
 
 func (s *Service) AuthorizeCanonicalGatewayRequest(ctx context.Context, credential gatewaycore.CredentialEnvelope, request gatewaycore.CanonicalRequest) (GatewayAuthContext, gatewaycore.CanonicalAuthContext, error) {
+	return s.authorizeCanonicalGatewayRequest(ctx, credential, request, true)
+}
+
+// RevalidateCanonicalGatewayRequest repeats credential and canonical policy
+// checks for a live connection without updating API key LastUsedAt.
+func (s *Service) RevalidateCanonicalGatewayRequest(ctx context.Context, credential gatewaycore.CredentialEnvelope, request gatewaycore.CanonicalRequest) (GatewayAuthContext, gatewaycore.CanonicalAuthContext, error) {
+	return s.authorizeCanonicalGatewayRequest(ctx, credential, request, false)
+}
+
+func (s *Service) authorizeCanonicalGatewayRequest(ctx context.Context, credential gatewaycore.CredentialEnvelope, request gatewaycore.CanonicalRequest, recordLastUsed bool) (GatewayAuthContext, gatewaycore.CanonicalAuthContext, error) {
 	if request.Protocol == "" || request.Operation == "" || request.Modality == "" || request.Lane == "" {
 		return GatewayAuthContext{}, gatewaycore.CanonicalAuthContext{}, gatewaycore.ErrInvalidCanonicalRequest
 	}
@@ -35,10 +45,9 @@ func (s *Service) AuthorizeCanonicalGatewayRequest(ctx context.Context, credenti
 	}
 	var auth GatewayAuthContext
 	var err error
-	if request.Model == "" {
-		auth, err = s.AuthenticateGatewayCredential(ctx, credential.BearerToken, credential.SignedContext)
-	} else {
-		auth, err = s.AuthorizeGatewayCredential(ctx, credential.BearerToken, credential.SignedContext, request.Model)
+	auth, err = s.authenticateGatewayCredential(ctx, credential.BearerToken, credential.SignedContext, recordLastUsed)
+	if err == nil && request.Model != "" && !s.gatewayModelAllowed(auth, request.Model) {
+		err = ErrGatewayForbidden
 	}
 	if err != nil {
 		return GatewayAuthContext{}, gatewaycore.CanonicalAuthContext{}, err
@@ -210,6 +219,10 @@ func gatewayModelSupportsCanonicalRequest(model GatewayModel, request gatewaycor
 		return model.Modality == GatewayModalityImage || model.Modality == "multimodal"
 	case gatewaycore.ProtocolOpenAIMedia:
 		return model.Modality == request.Modality || model.Modality == "multimodal"
+	case gatewaycore.ProtocolOpenAIAudioTranscriptions, gatewaycore.ProtocolOpenAIAudioTranslations, gatewaycore.ProtocolOpenAIAudioSpeech:
+		return model.Modality == GatewayModalityAudio || model.Modality == "multimodal"
+	case gatewaycore.ProtocolRealtime:
+		return request.Operation == GatewayOperationRealtimeSession && (model.Modality == GatewayModalityAudio || model.Modality == "multimodal")
 	case gatewaycore.ProtocolAsterJobs:
 		return model.Modality == request.Modality || model.Modality == "multimodal"
 	default:

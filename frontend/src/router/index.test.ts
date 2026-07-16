@@ -113,4 +113,11 @@ describe('router guards', () => {
 
     expect(router.currentRoute.value.fullPath).toBe('/console/overview')
   })
+
+  it('passes an explicit platform surface to shared operation views', () => {
+    for (const path of ['/platform/ai-jobs', '/platform/artifacts']) {
+      const route = router.getRoutes().find((item) => item.path === path)
+      expect(route?.props.default).toEqual({ surface: 'platform' })
+    }
+  })
 })

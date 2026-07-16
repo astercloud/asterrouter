@@ -103,6 +103,31 @@ func TestPlanCanonicalGatewayRequestSupportsOpenAIMediaByModality(t *testing.T) 
 	}
 }
 
+func TestPlanCanonicalGatewayRequestSupportsRealtimeAudioModels(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1")
+	model, err := svc.CreateGatewayModel(ctx, "tester", GatewayModelRequest{
+		ModelID: "realtime-audio-model", Name: "Realtime audio", Modality: GatewayModalityAudio, Status: GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.PlanCanonicalGatewayRequest(ctx, gatewaycore.CanonicalAuthContext{CredentialID: "realtime-key"}, gatewaycore.CanonicalRequest{
+		Protocol: gatewaycore.ProtocolRealtime, Operation: GatewayOperationRealtimeSession,
+		Modality: GatewayModalityAudio, Lane: gatewaycore.LaneDirect, Model: "realtime-audio-model", Stream: true,
+	})
+	if err != nil || plan.GatewayModelID != model.ID || plan.RejectionReason != "" {
+		t.Fatalf("realtime plan=%+v err=%v", plan, err)
+	}
+	mismatch, err := svc.PlanCanonicalGatewayRequest(ctx, gatewaycore.CanonicalAuthContext{CredentialID: "realtime-key"}, gatewaycore.CanonicalRequest{
+		Protocol: gatewaycore.ProtocolRealtime, Operation: GatewayOperationChatCompletion,
+		Modality: GatewayModalityAudio, Lane: gatewaycore.LaneDirect, Model: "realtime-audio-model", Stream: true,
+	})
+	if err != nil || mismatch.RejectionReason != "capability_mismatch" {
+		t.Fatalf("realtime mismatch=%+v err=%v", mismatch, err)
+	}
+}
+
 func TestCanonicalAuthContextKeepsExternalSubjectsCredentialScoped(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1")
 	integration := ExternalAuthIntegration{ID: "integration-1", Protocol: ExternalAuthIntegrationProtocolHMAC}

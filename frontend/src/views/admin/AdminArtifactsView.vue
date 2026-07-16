@@ -3,12 +3,19 @@ import { computed, onMounted, ref } from 'vue'
 import { Eye, RefreshCw, RotateCcw, Search, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import {
-  getArtifact,
-  getArtifactRuntimes,
-  getArtifacts,
-  getArtifactSummary,
-  retryArtifactDelivery
+  getArtifact as getAdminArtifact,
+  getArtifactRuntimes as getAdminArtifactRuntimes,
+  getArtifacts as getAdminArtifacts,
+  getArtifactSummary as getAdminArtifactSummary,
+  retryArtifactDelivery as retryAdminArtifactDelivery
 } from '@/api/control'
+import {
+  getPlatformArtifact,
+  getPlatformArtifactRuntimes,
+  getPlatformArtifacts,
+  getPlatformArtifactSummary,
+  retryPlatformArtifactDelivery
+} from '@/api/platform'
 import type {
   ArtifactAdminDetail,
   ArtifactAdminRecord,
@@ -17,7 +24,23 @@ import type {
   ArtifactSummary
 } from '@/types'
 
+const props = withDefaults(defineProps<{ surface?: 'admin' | 'platform' }>(), { surface: 'admin' })
 const { t } = useI18n()
+const operations = props.surface === 'platform'
+  ? {
+      getArtifact: getPlatformArtifact,
+      getRuntimes: getPlatformArtifactRuntimes,
+      getArtifacts: getPlatformArtifacts,
+      getSummary: getPlatformArtifactSummary,
+      retryDelivery: retryPlatformArtifactDelivery
+    }
+  : {
+      getArtifact: getAdminArtifact,
+      getRuntimes: getAdminArtifactRuntimes,
+      getArtifacts: getAdminArtifacts,
+      getSummary: getAdminArtifactSummary,
+      retryDelivery: retryAdminArtifactDelivery
+    }
 const artifacts = ref<ArtifactAdminRecord[]>([])
 const summary = ref<ArtifactSummary>({ total: 0, size_bytes: 0, by_status: {} })
 const runtimes = ref<ArtifactRuntime[]>([])
@@ -62,9 +85,9 @@ async function load() {
   try {
     const query = listQuery()
     const [artifactData, summaryData, runtimeData] = await Promise.all([
-      getArtifacts(query),
-      getArtifactSummary(query),
-      getArtifactRuntimes()
+      operations.getArtifacts(query),
+      operations.getSummary(query),
+      operations.getRuntimes()
     ])
     artifacts.value = artifactData
     summary.value = summaryData
@@ -97,7 +120,7 @@ async function showDetail(id: string) {
   detailLoading.value = true
   error.value = ''
   try {
-    selected.value = await getArtifact(id)
+    selected.value = await operations.getArtifact(id)
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -112,10 +135,10 @@ async function retryDelivery() {
   error.value = ''
   notice.value = ''
   try {
-    await retryArtifactDelivery(artifact.id)
+    await operations.retryDelivery(artifact.id)
     notice.value = t('artifactOps.retryScheduled')
     await load()
-    selected.value = await getArtifact(artifact.id)
+    selected.value = await operations.getArtifact(artifact.id)
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {

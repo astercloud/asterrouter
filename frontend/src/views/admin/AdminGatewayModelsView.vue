@@ -160,7 +160,7 @@ onMounted(load)
       <form class="modal-card" @submit.prevent="save">
         <header class="modal-header"><div><h2>{{ editing ? t('gatewayModels.editModel') : t('gatewayModels.newModel') }}</h2><p>{{ t('gatewayModels.modalSubtitle') }}</p></div><button class="icon-button" type="button" @click="closeModal"><X :size="18" /></button></header>
         <div class="modal-body form-grid">
-          <div class="field"><label>{{ t('gatewayModels.modelId') }}</label><input v-model="form.model_id" required placeholder="gpt-5" /></div>
+          <div class="field"><label>{{ t('gatewayModels.modelId') }}</label><input v-model="form.model_id" required placeholder="gateway-chat" /></div>
           <div class="field"><label>{{ t('gatewayModels.name') }}</label><input v-model="form.name" required /></div>
           <div class="field"><label>{{ t('gatewayModels.modality') }}</label><select v-model="form.modality"><option v-for="item in ['chat','embedding','image','video','audio','multimodal']" :key="item" :value="item">{{ item }}</option></select></div>
           <div class="field"><label>{{ t('gatewayModels.defaultRouteGroup') }}</label><input v-model="form.default_route_group" required placeholder="default" /></div>

@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -24,6 +26,7 @@ const (
 	maxRequestIDBytes   = 128
 	maxIdempotencyBytes = 256
 	maxStickyKeyBytes   = 256
+	maxRealtimeSession  = time.Hour
 )
 
 func ExtractCredential(req *http.Request, protocol Protocol) (CredentialEnvelope, error) {
@@ -36,7 +39,7 @@ func ExtractCredential(req *http.Request, protocol Protocol) (CredentialEnvelope
 		}
 	}
 
-	candidates := make([]CredentialEnvelope, 0, 3)
+	candidates := make([]CredentialEnvelope, 0, 4)
 	authorization := strings.TrimSpace(req.Header.Get("Authorization"))
 	if authorization != "" {
 		parts := strings.Fields(authorization)
@@ -63,6 +66,20 @@ func ExtractCredential(req *http.Request, protocol Protocol) (CredentialEnvelope
 			return CredentialEnvelope{}, ErrCredentialTransportRejected
 		}
 		candidates = append(candidates, CredentialEnvelope{BearerToken: value, Transport: "gemini_x_goog_api_key"})
+	}
+	if protocol == ProtocolRealtime {
+		for _, requested := range strings.Split(req.Header.Get("Sec-WebSocket-Protocol"), ",") {
+			requested = strings.TrimSpace(requested)
+			const prefix = "openai-insecure-api-key."
+			if !strings.HasPrefix(requested, prefix) {
+				continue
+			}
+			token := strings.TrimSpace(strings.TrimPrefix(requested, prefix))
+			if token == "" {
+				return CredentialEnvelope{}, ErrCredentialTransportRejected
+			}
+			candidates = append(candidates, CredentialEnvelope{BearerToken: token, Transport: "realtime_subprotocol"})
+		}
 	}
 	if len(candidates) == 0 {
 		return CredentialEnvelope{}, ErrCredentialMissing
@@ -255,6 +272,48 @@ func CanonicalizeOpenAIModels(header http.Header) (CanonicalRequest, error) {
 		Operation:       "list_models",
 		Modality:        "metadata",
 		Lane:            LaneDirect,
+	}, nil
+}
+
+// CanonicalizeRealtimeSession freezes the routing and admission facts before
+// either WebSocket is opened. Realtime event payloads remain session-local and
+// are never used as the durable operation fingerprint.
+func CanonicalizeRealtimeSession(header http.Header, model string) (CanonicalRequest, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return CanonicalRequest{}, fmt.Errorf("%w: model is required", ErrInvalidCanonicalRequest)
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: a valid idempotency key is required", ErrInvalidCanonicalRequest)
+	}
+	stickyKey := strings.TrimSpace(header.Get("X-AsterRouter-Sticky-Key"))
+	if len(stickyKey) > maxStickyKeyBytes {
+		stickyKey = stickyKey[:maxStickyKeyBytes]
+	}
+	durationMS, err := canonicalAudioDurationEstimate(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	if durationMS > int64(maxRealtimeSession/time.Millisecond) {
+		return CanonicalRequest{}, fmt.Errorf("%w: realtime session duration must not exceed 60 minutes", ErrInvalidCanonicalRequest)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"model": model, "operation": "realtime_session", "modality": "audio", "estimated_audio_duration_ms": durationMS,
+	})
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(payload)
+	return CanonicalRequest{
+		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
+		Protocol: ProtocolRealtime, Operation: "realtime_session", Modality: "audio", Lane: LaneDirect,
+		Model: model, Stream: true, IdempotencyKey: idempotencyKey, StickyKey: stickyKey,
+		ResponseMode: "stream", DeliveryMode: "inline", AudioDurationMS: durationMS, Payload: payload,
 	}, nil
 }
 
@@ -476,6 +535,184 @@ func CanonicalizeAIJobAction(raw []byte, header http.Header, sourceJobID, model,
 		OutputCount: outputCount, VideoDurationMS: videoDurationMS, AudioDurationMS: audioDurationMS,
 		Payload: canonicalPayload,
 	}, nil
+}
+
+// CanonicalizeOpenAIAudioFile adapts multipart transcription and translation
+// requests without placing uploaded bytes in the stable canonical payload.
+// The bounded transport body remains request-local for provider forwarding.
+func CanonicalizeOpenAIAudioFile(fields map[string][]string, input CanonicalInputArtifact, transportBody []byte, contentType string, header http.Header, protocol Protocol) (CanonicalRequest, error) {
+	operation := ""
+	switch protocol {
+	case ProtocolOpenAIAudioTranscriptions:
+		operation = "audio_transcription"
+	case ProtocolOpenAIAudioTranslations:
+		operation = "audio_translation"
+	default:
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	if len(fields["model"]) != 1 || len(fields["stream"]) > 1 || len(fields["response_mode"]) > 1 {
+		return CanonicalRequest{}, fmt.Errorf("%w: model, stream and response_mode must not be repeated", ErrInvalidCanonicalRequest)
+	}
+	model := strings.TrimSpace(firstCanonicalFormValue(fields, "model"))
+	if model == "" || len(input.Content) == 0 || input.SizeBytes != int64(len(input.Content)) || input.SizeBytes <= 0 || strings.TrimSpace(input.SHA256) == "" {
+		return CanonicalRequest{}, fmt.Errorf("%w: model and audio file are required", ErrInvalidCanonicalRequest)
+	}
+	inputDigest := sha256.Sum256(input.Content)
+	if !strings.EqualFold(strings.TrimSpace(input.SHA256), hex.EncodeToString(inputDigest[:])) {
+		return CanonicalRequest{}, fmt.Errorf("%w: audio file digest does not match content", ErrInvalidCanonicalRequest)
+	}
+	if len(transportBody) == 0 || strings.TrimSpace(contentType) == "" {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	stream := false
+	if value := strings.TrimSpace(firstCanonicalFormValue(fields, "stream")); value != "" {
+		if protocol != ProtocolOpenAIAudioTranscriptions {
+			return CanonicalRequest{}, fmt.Errorf("%w: translations do not support stream", ErrInvalidCanonicalRequest)
+		}
+		var err error
+		stream, err = strconv.ParseBool(value)
+		if err != nil {
+			return CanonicalRequest{}, fmt.Errorf("%w: stream must be a boolean", ErrInvalidCanonicalRequest)
+		}
+	}
+	responseMode := "blocking"
+	if stream {
+		responseMode = "stream"
+	}
+	if value := strings.ToLower(strings.TrimSpace(firstCanonicalFormValue(fields, "response_mode"))); value != "" {
+		if value == "async" {
+			return CanonicalRequest{}, fmt.Errorf("%w: async audio file requests require a completed upload artifact and /v1/jobs", ErrInvalidCanonicalRequest)
+		}
+		if value != responseMode {
+			return CanonicalRequest{}, fmt.Errorf("%w: response_mode conflicts with stream", ErrInvalidCanonicalRequest)
+		}
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: a valid idempotency key is required", ErrInvalidCanonicalRequest)
+	}
+	audioDurationMS, err := canonicalAudioDurationEstimate(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	parameters := make(map[string][]string, len(fields))
+	for key, values := range fields {
+		switch key {
+		case "model", "response_mode":
+			continue
+		default:
+			parameters[key] = append([]string(nil), values...)
+		}
+	}
+	canonicalPayload, err := json.Marshal(map[string]any{
+		"model": model, "operation": operation, "modality": "audio",
+		"input":      map[string]any{"media_type": strings.TrimSpace(input.MediaType), "size_bytes": input.SizeBytes, "sha256": strings.ToLower(strings.TrimSpace(input.SHA256)), "audio_duration_ms": audioDurationMS},
+		"parameters": parameters, "response_mode": responseMode,
+	})
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(canonicalPayload)
+	inputCopy := input
+	inputCopy.Content = append([]byte(nil), input.Content...)
+	return CanonicalRequest{
+		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
+		Protocol: protocol, Operation: operation, Modality: "audio", Lane: LaneDirect, Model: model,
+		Stream: stream, IdempotencyKey: idempotencyKey, ResponseMode: responseMode, DeliveryMode: "inline", OutputCount: 1,
+		InputAudioDurationMS: audioDurationMS, Payload: canonicalPayload, TransportBody: append([]byte(nil), transportBody...), TransportContentType: contentType, InputArtifact: &inputCopy,
+	}, nil
+}
+
+func firstCanonicalFormValue(fields map[string][]string, key string) string {
+	values := fields[key]
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+// CanonicalizeOpenAIAudioSpeech preserves the provider-native JSON body while
+// freezing routing, billing and streaming facts for the shared Direct lane.
+func CanonicalizeOpenAIAudioSpeech(raw []byte, header http.Header) (CanonicalRequest, error) {
+	var payload map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload == nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	model := strings.TrimSpace(stringValue(payload["model"]))
+	input := stringValue(payload["input"])
+	voice, voiceExists := payload["voice"]
+	if model == "" || strings.TrimSpace(input) == "" || !voiceExists || voice == nil {
+		return CanonicalRequest{}, fmt.Errorf("%w: model, input and voice are required", ErrInvalidCanonicalRequest)
+	}
+	streamFormat := strings.ToLower(strings.TrimSpace(stringValue(payload["stream_format"])))
+	if streamFormat == "" {
+		streamFormat = "audio"
+	}
+	if streamFormat != "audio" && streamFormat != "sse" {
+		return CanonicalRequest{}, fmt.Errorf("%w: stream_format must be audio or sse", ErrInvalidCanonicalRequest)
+	}
+	responseMode := "blocking"
+	if streamFormat == "sse" {
+		responseMode = "stream"
+	}
+	if value := strings.ToLower(strings.TrimSpace(stringValue(payload["response_mode"]))); value != "" {
+		if value == "async" {
+			return CanonicalRequest{}, fmt.Errorf("%w: async speech requests require /v1/jobs", ErrInvalidCanonicalRequest)
+		}
+		if value != responseMode {
+			return CanonicalRequest{}, fmt.Errorf("%w: response_mode conflicts with stream_format", ErrInvalidCanonicalRequest)
+		}
+	}
+	requestID, err := canonicalRequestID(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > maxIdempotencyBytes {
+		return CanonicalRequest{}, fmt.Errorf("%w: a valid idempotency key is required", ErrInvalidCanonicalRequest)
+	}
+	audioDurationMS, err := canonicalAudioDurationEstimate(header)
+	if err != nil {
+		return CanonicalRequest{}, err
+	}
+	normalized, err := json.Marshal(map[string]any{"payload": payload, "estimated_audio_duration_ms": audioDurationMS})
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	fingerprint := sha256.Sum256(normalized)
+	transportPayload := make(map[string]any, len(payload))
+	for key, value := range payload {
+		if key != "response_mode" {
+			transportPayload[key] = value
+		}
+	}
+	transportBody, err := json.Marshal(transportPayload)
+	if err != nil {
+		return CanonicalRequest{}, ErrInvalidCanonicalRequest
+	}
+	return CanonicalRequest{
+		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
+		Protocol: ProtocolOpenAIAudioSpeech, Operation: "speech_generation", Modality: "audio", Lane: LaneDirect,
+		Model: model, Stream: streamFormat == "sse", IdempotencyKey: idempotencyKey,
+		ResponseMode: responseMode, DeliveryMode: "inline", OutputCount: 1, InputCharacters: int64(len([]rune(input))),
+		AudioDurationMS: audioDurationMS, Payload: append(json.RawMessage(nil), raw...), TransportBody: transportBody, TransportContentType: "application/json",
+	}, nil
+}
+
+func canonicalAudioDurationEstimate(header http.Header) (int64, error) {
+	value := strings.TrimSpace(header.Get("X-AsterRouter-Estimated-Audio-Duration-Ms"))
+	if value == "" {
+		return 0, nil
+	}
+	durationMS, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || durationMS <= 0 || durationMS > int64(24*time.Hour/time.Millisecond) {
+		return 0, fmt.Errorf("%w: estimated audio duration must be from 1 ms to 24 hours", ErrInvalidCanonicalRequest)
+	}
+	return durationMS, nil
 }
 
 // CanonicalizeOpenAIMediaJob adapts the public video/audio generation entry

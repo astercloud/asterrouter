@@ -3,9 +3,9 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { Activity, Code2, KeyRound, Plus, RefreshCw, RotateCw, Server, Settings, ShieldOff, WalletCards } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import { createAPIKey, disableAPIKey, getAPIKeys, getProviders, getUsageReport, rotateAPIKey } from '@/api/control'
+import { createAPIKey, disableAPIKey, getAPIKeys, getGatewayModels, getProviders, getUsageReport, rotateAPIKey } from '@/api/control'
 import { useAppStore } from '@/stores/app'
-import type { APIKeyCreateRequest, APIKeyRecord, ProviderConnection, UsageReport } from '@/types'
+import type { APIKeyCreateRequest, APIKeyRecord, GatewayModel, ProviderConnection, UsageReport } from '@/types'
 import { apiKeyLifecycleClass, apiKeyLifecycleLabelKey, apiKeyLifecycleStatus, canDisableAPIKey, canRotateAPIKey } from '@/utils/apiKeys'
 
 const { t } = useI18n()
@@ -17,6 +17,7 @@ const error = ref('')
 const notice = ref('')
 const createdSecret = ref('')
 const providers = ref<ProviderConnection[]>([])
+const gatewayModels = ref<GatewayModel[]>([])
 const apiKeys = ref<APIKeyRecord[]>([])
 const usage = ref<UsageReport | null>(null)
 const form = reactive<APIKeyCreateRequest>({
@@ -38,10 +39,11 @@ const gatewayBaseUrl = computed(() => {
 const activeProviders = computed(() => providers.value.filter((item) => item.status === 'active').length)
 const activeKeys = computed(() => apiKeys.value.filter((item) => apiKeyLifecycleStatus(item) === 'active').length)
 const activePanel = computed(() => (typeof route.meta.consolePanel === 'string' ? route.meta.consolePanel : 'overview'))
-const availableModels = computed(() => {
-  const models = Array.from(new Set(providers.value.flatMap((item) => item.models || []).filter(Boolean))).slice(0, 12)
-  return models.length ? models : ['gpt-4o-mini']
-})
+const availableModels = computed(() => gatewayModels.value
+  .filter((item) => item.status === 'active')
+  .map((item) => item.model_id)
+  .filter((item, index, values) => Boolean(item) && values.indexOf(item) === index)
+  .slice(0, 12))
 const sortedKeys = computed(() =>
   [...apiKeys.value].sort((a, b) => {
     const statusOrder = { active: 0, retiring: 1, disabled: 2, retired: 3 }
@@ -98,9 +100,15 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [providerList, keyList, usageReport] = await Promise.all([getProviders(), getAPIKeys(), getUsageReport()])
+    const [providerList, keyList, modelList, usageReport] = await Promise.all([
+      getProviders(),
+      getAPIKeys(),
+      getGatewayModels(),
+      getUsageReport()
+    ])
     providers.value = providerList
     apiKeys.value = keyList
+    gatewayModels.value = modelList
     usage.value = usageReport
     ensureFormDefaults()
   } catch (err) {
@@ -236,9 +244,10 @@ onMounted(load)
             <pre class="code-block" tabindex="0">curl {{ gatewayBaseUrl }}/chat/completions \
   -H "Authorization: Bearer $ASTERROUTER_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"{{ availableModels[0] || 'gpt-4o-mini' }}","messages":[{"role":"user","content":"ping"}]}'</pre>
+  -d '{"model":"{{ availableModels[0] || '<gateway-model-id>' }}","messages":[{"role":"user","content":"ping"}]}'</pre>
             <div class="chip-list">
               <span v-for="model in availableModels" :key="model" class="pill">{{ model }}</span>
+              <span v-if="!availableModels.length" class="hint">{{ t('apiKeys.noActiveModels') }}</span>
             </div>
           </div>
         </section>

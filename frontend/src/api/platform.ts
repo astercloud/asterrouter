@@ -1,10 +1,86 @@
 import { apiClient } from './client'
 import { listOrEmpty, normalizeDashboard, type DashboardPayload } from './normalizers'
-import type { APIKeyCreateRequest, APIKeyCreateResponse, APIKeyRecord, APIKeyUpdateRequest, Dashboard, ExternalAuthIntegration, ExternalAuthIntegrationCreateResponse, ExternalAuthIntegrationRequest, GatewayPrincipal, GatewayPrincipalRequest, PlatformTenant, PlatformTenantRequest, PlatformUsageDeliveryEvent, PlatformUsageSink, PlatformUsageSinkCreateResponse, PlatformUsageSinkRequest } from '@/types'
+import type {
+  APIKeyCreateRequest,
+  APIKeyCreateResponse,
+  APIKeyRecord,
+  APIKeyUpdateRequest,
+  AIAttemptReconcileScheduleResult,
+  AIJobAdminActionResult,
+  AIJobAdminDetail,
+  AIJobAdminRecord,
+  AIJobListQuery,
+  AIJobRuntimeStatus,
+  AIJobSummary,
+  ArtifactAdminDetail,
+  ArtifactAdminRecord,
+  ArtifactDeliveryRetryResult,
+  ArtifactListQuery,
+  ArtifactRuntime,
+  ArtifactSummary,
+  Dashboard,
+  ExternalAuthIntegration,
+  ExternalAuthIntegrationCreateResponse,
+  ExternalAuthIntegrationRequest,
+  GatewayPrincipal,
+  GatewayPrincipalRequest,
+  PlatformTenant,
+  PlatformTenantRequest,
+  PlatformUsageDeliveryEvent,
+  PlatformUsageSink,
+  PlatformUsageSinkCreateResponse,
+  PlatformUsageSinkRequest
+} from '@/types'
 
 export async function getPlatformDashboard(): Promise<Dashboard> {
   const response = await apiClient.get<DashboardPayload>('/platform/dashboard')
   return normalizeDashboard(response.data)
+}
+
+export async function getPlatformAIJobs(params?: AIJobListQuery): Promise<AIJobAdminRecord[]> {
+  return listOrEmpty((await apiClient.get<AIJobAdminRecord[] | null>('/platform/ai-jobs', { params })).data)
+}
+
+export async function getPlatformAIJobSummary(params?: AIJobListQuery): Promise<AIJobSummary> {
+  return (await apiClient.get<AIJobSummary>('/platform/ai-jobs/summary', { params })).data
+}
+
+export async function getPlatformAIJobRuntime(): Promise<AIJobRuntimeStatus> {
+  return (await apiClient.get<AIJobRuntimeStatus>('/platform/ai-jobs/runtime')).data
+}
+
+export async function getPlatformAIJob(id: string): Promise<AIJobAdminDetail> {
+  return (await apiClient.get<AIJobAdminDetail>(`/platform/ai-jobs/${encodeURIComponent(id)}`)).data
+}
+
+export async function cancelPlatformAIJob(id: string): Promise<AIJobAdminActionResult> {
+  return (await apiClient.post<AIJobAdminActionResult>(`/platform/ai-jobs/${encodeURIComponent(id)}/cancel`)).data
+}
+
+export async function schedulePlatformAIJobAttemptReconciliation(jobID: string, attemptID: string): Promise<AIAttemptReconcileScheduleResult> {
+  return (await apiClient.post<AIAttemptReconcileScheduleResult>(
+    `/platform/ai-jobs/${encodeURIComponent(jobID)}/attempts/${encodeURIComponent(attemptID)}/reconcile`
+  )).data
+}
+
+export async function getPlatformArtifacts(params?: ArtifactListQuery): Promise<ArtifactAdminRecord[]> {
+  return listOrEmpty((await apiClient.get<ArtifactAdminRecord[] | null>('/platform/artifacts', { params })).data)
+}
+
+export async function getPlatformArtifactSummary(params?: ArtifactListQuery): Promise<ArtifactSummary> {
+  return (await apiClient.get<ArtifactSummary>('/platform/artifacts/summary', { params })).data
+}
+
+export async function getPlatformArtifact(id: string): Promise<ArtifactAdminDetail> {
+  return (await apiClient.get<ArtifactAdminDetail>(`/platform/artifacts/${encodeURIComponent(id)}`)).data
+}
+
+export async function getPlatformArtifactRuntimes(): Promise<ArtifactRuntime[]> {
+  return listOrEmpty((await apiClient.get<ArtifactRuntime[] | null>('/platform/artifact-runtimes')).data)
+}
+
+export async function retryPlatformArtifactDelivery(id: string): Promise<ArtifactDeliveryRetryResult> {
+  return (await apiClient.post<ArtifactDeliveryRetryResult>(`/platform/artifacts/${encodeURIComponent(id)}/retry-delivery`)).data
 }
 
 export async function getPlatformAPIKeys(): Promise<APIKeyRecord[]> {

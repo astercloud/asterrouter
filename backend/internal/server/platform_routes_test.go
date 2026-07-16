@@ -11,6 +11,7 @@ import (
 
 	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
 	"github.com/astercloud/asterrouter/backend/internal/system"
 )
@@ -222,6 +223,125 @@ func TestPlatformAPIKeysAllowOnlyWorkspaceOrServiceOwnership(t *testing.T) {
 	if err != nil || len(keys) != 1 || keys[0].KeyType != controlplane.APIKeyTypeService || keys[0].ProfileScope != controlplane.ProfileScopePlatform || keys[0].PlatformTenantID != "ptn_default" || keys[0].GatewayPrincipalID != "gpr_default_service" {
 		t.Fatalf("stored platform keys=%+v err=%v", keys, err)
 	}
+}
+
+func TestPlatformOperationsAreProfileScopedAndDoNotDiscloseForeignResources(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{
+		Version: "test", StorageMode: "memory", EnabledProfiles: []string{"platform"}, DefaultProfile: "platform",
+	})
+	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	if err := control.SetArtifactStore(controlplane.NewMemoryArtifactStore()); err != nil {
+		t.Fatal(err)
+	}
+	model, err := control.CreateGatewayModel(context.Background(), "tester", controlplane.GatewayModelRequest{
+		ModelID: "platform-operations-model", Name: "Platform operations model", Modality: "image", Status: controlplane.GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	platformJob, platformArtifact := createScopedOperationsFixture(t, control, model.ModelID, "platform", controlplane.ProfileScopePlatform)
+	foreignJob, foreignArtifact := createScopedOperationsFixture(t, control, model.ModelID, "enterprise", "enterprise")
+	handler := New(Options{
+		Config:          config.Config{AdminToken: "secret"},
+		SettingsService: settingsService,
+		ControlService:  control,
+		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
+	})
+	request := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	jobs := request(http.MethodGet, "/api/v1/platform/ai-jobs?profile_scope=enterprise")
+	var jobsResponse struct {
+		Data []controlplane.AIJobAdminRecord `json:"data"`
+	}
+	if err := json.Unmarshal(jobs.Body.Bytes(), &jobsResponse); err != nil || jobs.Code != http.StatusOK || len(jobsResponse.Data) != 1 || jobsResponse.Data[0].ID != platformJob.ID {
+		t.Fatalf("platform jobs status=%d data=%+v body=%s err=%v", jobs.Code, jobsResponse.Data, jobs.Body.String(), err)
+	}
+	jobSummary := request(http.MethodGet, "/api/v1/platform/ai-jobs/summary?profile_scope=enterprise")
+	var jobSummaryResponse struct {
+		Data controlplane.AIJobSummary `json:"data"`
+	}
+	if err := json.Unmarshal(jobSummary.Body.Bytes(), &jobSummaryResponse); err != nil || jobSummary.Code != http.StatusOK || jobSummaryResponse.Data.Total != 1 {
+		t.Fatalf("platform job summary status=%d data=%+v body=%s err=%v", jobSummary.Code, jobSummaryResponse.Data, jobSummary.Body.String(), err)
+	}
+	if detail := request(http.MethodGet, "/api/v1/platform/ai-jobs/"+platformJob.ID); detail.Code != http.StatusOK {
+		t.Fatalf("platform job detail status=%d body=%s", detail.Code, detail.Body.String())
+	}
+	for _, result := range []*httptest.ResponseRecorder{
+		request(http.MethodGet, "/api/v1/platform/ai-jobs/"+foreignJob.ID),
+		request(http.MethodPost, "/api/v1/platform/ai-jobs/"+foreignJob.ID+"/cancel"),
+	} {
+		if result.Code != http.StatusNotFound || strings.Contains(result.Body.String(), foreignJob.ID) {
+			t.Fatalf("foreign job was disclosed status=%d body=%s", result.Code, result.Body.String())
+		}
+	}
+	if cancel := request(http.MethodPost, "/api/v1/platform/ai-jobs/"+platformJob.ID+"/cancel"); cancel.Code != http.StatusOK {
+		t.Fatalf("platform job cancel status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+	audits := request(http.MethodGet, "/api/v1/platform/audit-logs?action=cancel&resource_type=ai_job")
+	if audits.Code != http.StatusOK || !strings.Contains(audits.Body.String(), platformJob.ID) || strings.Contains(audits.Body.String(), foreignJob.ID) {
+		t.Fatalf("platform job audit status=%d body=%s", audits.Code, audits.Body.String())
+	}
+
+	artifacts := request(http.MethodGet, "/api/v1/platform/artifacts?profile_scope=enterprise")
+	var artifactsResponse struct {
+		Data []controlplane.ArtifactAdminRecord `json:"data"`
+	}
+	if err := json.Unmarshal(artifacts.Body.Bytes(), &artifactsResponse); err != nil || artifacts.Code != http.StatusOK || len(artifactsResponse.Data) != 1 || artifactsResponse.Data[0].ID != platformArtifact.ID {
+		t.Fatalf("platform artifacts status=%d data=%+v body=%s err=%v", artifacts.Code, artifactsResponse.Data, artifacts.Body.String(), err)
+	}
+	artifactSummary := request(http.MethodGet, "/api/v1/platform/artifacts/summary?profile_scope=enterprise")
+	var artifactSummaryResponse struct {
+		Data controlplane.ArtifactSummary `json:"data"`
+	}
+	if err := json.Unmarshal(artifactSummary.Body.Bytes(), &artifactSummaryResponse); err != nil || artifactSummary.Code != http.StatusOK || artifactSummaryResponse.Data.Total != 1 {
+		t.Fatalf("platform artifact summary status=%d data=%+v body=%s err=%v", artifactSummary.Code, artifactSummaryResponse.Data, artifactSummary.Body.String(), err)
+	}
+	if detail := request(http.MethodGet, "/api/v1/platform/artifacts/"+platformArtifact.ID); detail.Code != http.StatusOK {
+		t.Fatalf("platform artifact detail status=%d body=%s", detail.Code, detail.Body.String())
+	}
+	if runtimes := request(http.MethodGet, "/api/v1/platform/artifact-runtimes"); runtimes.Code != http.StatusOK {
+		t.Fatalf("platform artifact runtimes status=%d body=%s", runtimes.Code, runtimes.Body.String())
+	}
+	for _, result := range []*httptest.ResponseRecorder{
+		request(http.MethodGet, "/api/v1/platform/artifacts/"+foreignArtifact.ID),
+		request(http.MethodPost, "/api/v1/platform/artifacts/"+foreignArtifact.ID+"/retry-delivery"),
+	} {
+		if result.Code != http.StatusNotFound || strings.Contains(result.Body.String(), foreignArtifact.ID) {
+			t.Fatalf("foreign artifact was disclosed status=%d body=%s", result.Code, result.Body.String())
+		}
+	}
+}
+
+func createScopedOperationsFixture(t *testing.T, control *controlplane.Service, modelID, suffix, profileScope string) (controlplane.AIJob, controlplane.Artifact) {
+	t.Helper()
+	job, _, err := control.BeginDurableAIJob(context.Background(), gatewaycore.CanonicalAuthContext{
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "operations-key-" + suffix,
+		ProfileScope: profileScope, TenantID: "operations-tenant-" + suffix,
+		PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "operations-principal-" + suffix,
+		ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
+	}, gatewaycore.CanonicalRequest{
+		ID: "operations-request-" + suffix, Fingerprint: "operations-fingerprint-" + suffix,
+		IdempotencyKey: "operations-idempotency-" + suffix, Protocol: gatewaycore.ProtocolAsterJobs,
+		Operation: controlplane.GatewayOperationImageGeneration, Modality: controlplane.GatewayModalityImage,
+		Lane: gatewaycore.LaneDurable, Model: modelID, Payload: []byte(`{"input":{"prompt":"synthetic"}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := control.CreateArtifactFromReader(context.Background(), controlplane.ArtifactCreateInput{
+		OperationID: job.OperationID, JobID: job.ID, Role: controlplane.ArtifactRoleFinal,
+		Policy: controlplane.GatewayArtifactPolicyTemporary, MediaType: "image/png", StoreDriver: controlplane.ArtifactStoreDriverMemory,
+	}, bytes.NewBufferString("synthetic-artifact-"+suffix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return job, artifact
 }
 
 func TestPlatformControlPlaneScopesPlatformDomainAndObservability(t *testing.T) {

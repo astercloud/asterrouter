@@ -12,6 +12,7 @@ vi.mock('@/api/control', () => ({
   getEffectivePricingDecisions: vi.fn(),
   getEffectivePricingDecisionEvaluations: vi.fn(),
   getEffectivePricingReport: vi.fn(),
+  getGatewayModels: vi.fn(),
   getProviderAccounts: vi.fn(),
   getProviderBillingSourceEvidence: vi.fn(),
   getProviderBillingSources: vi.fn(),
@@ -67,6 +68,10 @@ describe('AdminEffectivePricingView', () => {
     vi.mocked(control.getProviderAccounts).mockResolvedValue([{
       id: 'account-a', provider_id: 'provider-a', name: 'Procurement A', status: 'active', models: ['model-a']
     } as never])
+    vi.mocked(control.getGatewayModels).mockResolvedValue([
+      { id: 'gateway-public', model_id: 'gateway-public', name: 'Gateway public', status: 'active' },
+      { id: 'gateway-retired', model_id: 'gateway-retired', name: 'Gateway retired', status: 'disabled' }
+    ] as never)
     vi.mocked(control.getProviderBillingSources).mockResolvedValue([])
     vi.mocked(control.runProviderCacheProbe).mockResolvedValue({ status: 'succeeded' } as never)
     vi.mocked(control.updateProviderCacheCapability).mockResolvedValue({ support_status: 'claimed' } as never)
@@ -149,6 +154,7 @@ describe('AdminEffectivePricingView', () => {
     expect(dialog.text()).toContain('Per-request fee')
     expect(dialog.text()).toContain('Recharge paid multiplier')
     expect(dialog.find('option[value="gemini_generate_content"]').exists()).toBe(true)
+    expect(dialog.find('option[value="model-a"]').exists()).toBe(true)
 
     const field = (label: string) => dialog.findAll('.field').find((item) => item.text().includes(label))!
     await field('5-minute cache write price').get('input').setValue(1250000)
@@ -341,12 +347,13 @@ describe('AdminEffectivePricingView', () => {
     expect(upstreamBRows[2].findAll('button')[1].attributes('disabled')).toBeUndefined()
     await upstreamBRows[2].findAll('button')[1].trigger('click')
     const dialog = wrapper.get('.effective-dialog')
-    expect(dialog.get('input').element.value).toBe('')
-    expect(dialog.findAll('select')[0].element.value).toBe('upstream-b')
-    expect(dialog.findAll('select')[2].element.value).toBe('account-a')
-    expect(dialog.findAll('select')[3].element.value).toBe('account-b')
+    const selects = dialog.findAll('select')
+    expect(selects[0].element.value).toBe('gateway-public')
+    expect(selects[0].find('option[value="gateway-retired"]').exists()).toBe(false)
+    expect(selects[1].element.value).toBe('upstream-b')
+    expect(selects[3].element.value).toBe('account-a')
+    expect(selects[4].element.value).toBe('account-b')
 
-    await dialog.get('input').setValue('gateway-public')
     await dialog.trigger('submit')
     await flushPromises()
     expect(control.evaluateEffectivePricingDecision).toHaveBeenCalledWith({

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { Activity, Edit3, Plus, RefreshCw, Save, Search, ShieldCheck, ShieldOff, Trash2, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import ProviderAccountModelEditor from '@/components/provider/ProviderAccountModelEditor.vue'
 import {
   checkProviderAccount,
   clearProviderAccountCooldown,
@@ -39,7 +40,7 @@ const platformFilter = ref('')
 const groupFilter = ref('')
 const modalOpen = ref(false)
 const editing = ref<ProviderAccount | null>(null)
-const modelsText = ref('gpt-4o-mini')
+const modelEditor = ref<{ discover: () => Promise<void> } | null>(null)
 
 const form = reactive<ProviderAccountRequest>({
   provider_id: '',
@@ -56,6 +57,7 @@ const form = reactive<ProviderAccountRequest>({
   load_factor: null,
   rate_multiplier: 1,
   models: [],
+  auto_enable_new_models: false,
   group_ids: [],
   secret: '',
   expires_at: '',
@@ -119,6 +121,7 @@ function accountToRequest(account: ProviderAccount, status = account.status): Pr
     load_factor: account.load_factor ?? null,
     rate_multiplier: account.rate_multiplier,
     models: [...account.models],
+    auto_enable_new_models: account.auto_enable_new_models,
     group_ids: [...account.group_ids],
     secret: '',
     expires_at: dateInputValue(account.expires_at),
@@ -145,6 +148,7 @@ function resetForm() {
     load_factor: null,
     rate_multiplier: 1,
     models: [],
+    auto_enable_new_models: false,
     group_ids: groups.value[0] ? [groups.value[0].id] : [],
     secret: '',
     temp_unschedulable_rules: [],
@@ -152,7 +156,6 @@ function resetForm() {
     circuit_failure_threshold: 5,
     circuit_open_seconds: 60
   })
-  modelsText.value = 'gpt-4o-mini'
 }
 
 function syncProviderPlatform() {
@@ -171,7 +174,6 @@ function openCreate() {
 function openEdit(account: ProviderAccount) {
   editing.value = account
   Object.assign(form, accountToRequest(account))
-  modelsText.value = account.models.join('\n')
   modalOpen.value = true
 }
 
@@ -186,6 +188,13 @@ function toggleGroup(groupID: string) {
     return
   }
   form.group_ids = [...form.group_ids, groupID]
+}
+
+function handleModelsSynced(account: ProviderAccount) {
+  editing.value = account
+  Object.assign(form, accountToRequest(account))
+  accounts.value = accounts.value.map((item) => item.id === account.id ? account : item)
+  message.value = t('providerAccounts.modelsSynced', { count: account.models.length })
 }
 
 async function load() {
@@ -216,18 +225,22 @@ async function save() {
   try {
     const payload = {
       ...form,
-      models: splitModels(modelsText.value),
       load_factor: form.load_factor ? Number(form.load_factor) : null
     }
     if (editing.value) {
       await updateProviderAccount(editing.value.id, payload)
       message.value = t('providerAccounts.updated')
+      closeModal()
+      await load()
     } else {
-      await createProviderAccount(payload)
+      const created = await createProviderAccount(payload)
+      editing.value = created
+      Object.assign(form, accountToRequest(created))
+      accounts.value = [...accounts.value, created]
       message.value = t('providerAccounts.created')
+      await nextTick()
+      await modelEditor.value?.discover()
     }
-    closeModal()
-    await load()
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -482,13 +495,13 @@ onMounted(load)
     </section>
 
     <div v-if="modalOpen" class="modal-backdrop" @click.self="closeModal">
-      <section class="modal-card">
+      <section class="modal-card modal-card-wide" role="dialog" aria-modal="true" :aria-label="editing ? t('providerAccounts.editAccount') : t('providerAccounts.newAccount')">
         <header class="modal-header">
           <div>
             <h2>{{ editing ? t('providerAccounts.editAccount') : t('providerAccounts.newAccount') }}</h2>
             <p>{{ t('providerAccounts.modalSubtitle') }}</p>
           </div>
-          <button class="icon-button" type="button" @click="closeModal">
+          <button class="icon-button" type="button" :title="t('common.close')" :aria-label="t('common.close')" @click="closeModal">
             <X :size="19" />
           </button>
         </header>
@@ -571,8 +584,13 @@ onMounted(load)
             </div>
           </div>
           <div class="field form-span-2">
-            <label>{{ t('providers.models') }}</label>
-            <textarea v-model="modelsText" rows="3" />
+            <ProviderAccountModelEditor
+              ref="modelEditor"
+              v-model="form.models"
+              v-model:auto-enable-new-models="form.auto_enable_new_models"
+              :account-id="editing?.id"
+              @synced="handleModelsSynced"
+            />
           </div>
           <div class="field form-span-2">
             <label>{{ t('providerAccounts.tempUnschedulableRules') }}</label>

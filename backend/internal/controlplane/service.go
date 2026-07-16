@@ -209,7 +209,7 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 		Type:             "openai_compatible",
 		BaseURL:          "https://api.openai.com/v1",
 		Status:           ProviderStatusNeedsSecret,
-		Models:           []string{"gpt-4o-mini", "gpt-4.1-mini"},
+		Models:           nil,
 		Priority:         100,
 		SecretConfigured: false,
 		SecretHint:       "",
@@ -363,6 +363,7 @@ func (s *Service) UpdateProvider(ctx context.Context, actor string, id string, r
 	provider.SecretCiphertext = existing.SecretCiphertext
 	provider.SecretConfigured = existing.SecretConfigured
 	provider.SecretHint = existing.SecretHint
+	provider.Models = append([]string(nil), existing.Models...)
 	if strings.TrimSpace(req.APIKey) != "" {
 		ciphertext, err := encryptSecret(s.secretKey, req.APIKey)
 		if err != nil {
@@ -394,29 +395,34 @@ func (s *Service) CheckProvider(ctx context.Context, actor string, id string) (P
 	}
 	started := time.Now()
 	status, message, models := s.checkProviderConfiguration(provider)
-	if status == "ok" && provider.Type == "openai_compatible" {
-		discovered, probeMessage, probeErr := s.probeOpenAICompatibleModels(ctx, provider)
-		if probeErr != nil {
-			status = "error"
-			message = probeMessage
-		} else if len(discovered) == 0 {
+	if status == "ok" {
+		adapter, supported := providerModelDiscoveryAdapterFor(provider.Type)
+		if !supported {
 			status = "warning"
-			message = "Provider /models endpoint responded without models"
+			message = fmt.Sprintf("Provider type %s requires a manually managed model catalog", provider.Type)
 		} else {
-			models = discovered
-			message = fmt.Sprintf("Provider is reachable; discovered %d models", len(discovered))
-			nextModels := mergeStringLists(provider.Models, discovered)
-			if !sameStringList(provider.Models, nextModels) {
-				provider.Models = nextModels
-				provider.UpdatedAt = time.Now().UTC()
-				if err := s.repo.SaveProvider(ctx, provider); err != nil {
-					return ProviderHealthCheck{}, err
+			apiKey, decryptErr := decryptSecret(s.secretKey, provider.SecretCiphertext)
+			if decryptErr != nil || strings.TrimSpace(apiKey) == "" {
+				status = "error"
+				message = "Provider secret cannot be decrypted"
+			} else {
+				discovered, probeErr := adapter.Discover(ctx, provider, ProviderAccount{}, apiKey)
+				if probeErr != nil {
+					status = "error"
+					message = probeErr.Error()
+				} else {
+					models = cleanStringList(discovered)
+					message = fmt.Sprintf("Provider is reachable; discovered %d models", len(models))
+					if !sameStringList(provider.Models, models) {
+						provider.Models = models
+						provider.UpdatedAt = time.Now().UTC()
+						if err := s.repo.SaveProvider(ctx, provider); err != nil {
+							return ProviderHealthCheck{}, err
+						}
+					}
 				}
 			}
 		}
-	} else if status == "ok" {
-		status = "warning"
-		message = fmt.Sprintf("Provider type %s does not support automatic /models probe yet", provider.Type)
 	}
 	checkedAt := time.Now().UTC()
 	result := ProviderHealthCheck{
@@ -451,17 +457,6 @@ func (s *Service) checkProviderConfiguration(provider ProviderConnection) (strin
 	return "ok", "Provider configuration is ready", provider.Models
 }
 
-func (s *Service) probeOpenAICompatibleModels(ctx context.Context, provider ProviderConnection) ([]string, string, error) {
-	apiKey, err := decryptSecret(s.secretKey, provider.SecretCiphertext)
-	if err != nil {
-		return nil, "Provider secret cannot be decrypted", err
-	}
-	if strings.TrimSpace(apiKey) == "" {
-		return nil, "Provider secret is empty", errors.New("provider secret is empty")
-	}
-	return probeOpenAICompatibleModelsWithKey(ctx, provider.BaseURL, apiKey, "Provider")
-}
-
 func probeOpenAICompatibleModelsWithKey(ctx context.Context, baseURL string, apiKey string, label string) ([]string, string, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	apiKey = strings.TrimSpace(apiKey)
@@ -482,7 +477,12 @@ func probeOpenAICompatibleModelsWithKey(ctx context.Context, baseURL string, api
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := (&http.Client{Timeout: providerProbeTimeout}).Do(req)
+	resp, err := (&http.Client{
+		Timeout: providerProbeTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("provider model discovery redirects are not allowed")
+		},
+	}).Do(req)
 	if err != nil {
 		return nil, fmt.Sprintf("%s /models request failed: %s", label, err.Error()), err
 	}
@@ -601,7 +601,7 @@ func (s *Service) CreateProviderAccount(ctx context.Context, actor string, req P
 		req.Platform = provider.Type
 	}
 	now := time.Now().UTC()
-	account, err := providerAccountFromRequest(req, now, true)
+	account, err := providerAccountFromRequest(req, now, true, false)
 	if err != nil {
 		return ProviderAccount{}, err
 	}
@@ -613,7 +613,8 @@ func (s *Service) CreateProviderAccount(ctx context.Context, actor string, req P
 		}
 		account.SecretCiphertext = ciphertext
 	}
-	if err := s.repo.SaveProviderAccount(ctx, account); err != nil {
+	inventory := reconcileConfiguredProviderAccountModels(account, nil, now)
+	if err := s.repo.SaveProviderAccountWithModels(ctx, account, inventory); err != nil {
 		return ProviderAccount{}, err
 	}
 	if err := s.audit(ctx, actor, "create", "provider_account", account.ID, fmt.Sprintf("Created provider account %s", account.Name)); err != nil {
@@ -637,7 +638,7 @@ func (s *Service) UpdateProviderAccount(ctx context.Context, actor string, id st
 	if err != nil {
 		return ProviderAccount{}, err
 	}
-	account, err := providerAccountFromRequest(req, existing.CreatedAt, existing.Schedulable)
+	account, err := providerAccountFromRequest(req, existing.CreatedAt, existing.Schedulable, existing.AutoEnableNewModels)
 	if err != nil {
 		return ProviderAccount{}, err
 	}
@@ -664,7 +665,12 @@ func (s *Service) UpdateProviderAccount(ctx context.Context, actor string, id st
 		account.SecretConfigured = true
 		account.SecretHint = maskSecret(req.Secret)
 	}
-	if err := s.repo.SaveProviderAccount(ctx, account); err != nil {
+	existingModels, err := s.providerAccountModels(ctx, existing)
+	if err != nil {
+		return ProviderAccount{}, err
+	}
+	inventory := reconcileConfiguredProviderAccountModels(account, existingModels, account.UpdatedAt)
+	if err := s.repo.SaveProviderAccountWithModels(ctx, account, inventory); err != nil {
 		return ProviderAccount{}, err
 	}
 	if err := s.audit(ctx, actor, "update", "provider_account", account.ID, fmt.Sprintf("Updated provider account %s", account.Name)); err != nil {
@@ -685,37 +691,44 @@ func (s *Service) CheckProviderAccount(ctx context.Context, actor string, id str
 
 	started := time.Now()
 	status, message, models := s.checkProviderAccountConfiguration(account, provider)
-	if status == "ok" && provider.Type == "openai_compatible" {
-		apiKey, err := decryptSecret(s.secretKey, account.SecretCiphertext)
-		if err != nil {
-			status = "error"
-			message = "Provider account secret cannot be decrypted"
+	if status == "ok" {
+		adapter, supported := providerModelDiscoveryAdapterFor(provider.Type)
+		if !supported {
+			status = "warning"
+			message = fmt.Sprintf("Provider type %s does not support automatic account /models probe yet", provider.Type)
 		} else {
-			discovered, probeMessage, probeErr := probeOpenAICompatibleModelsWithKey(ctx, provider.BaseURL, apiKey, "Provider account")
-			if probeErr != nil {
+			apiKey, err := decryptSecret(s.secretKey, account.SecretCiphertext)
+			if err != nil {
 				status = "error"
-				message = probeMessage
-			} else if len(discovered) == 0 {
-				status = "warning"
-				message = "Provider account /models endpoint responded without models"
+				message = "Provider account secret cannot be decrypted"
 			} else {
-				models = discovered
-				message = fmt.Sprintf("Provider account is reachable; discovered %d models", len(discovered))
-				nextModels := mergeStringLists(account.Models, discovered)
-				if !sameStringList(account.Models, nextModels) || account.Status == AccountStatusError || account.ErrorMessage != "" {
-					account.Models = nextModels
+				discovered, probeErr := adapter.Discover(ctx, provider, account, apiKey)
+				if probeErr != nil {
+					status = "error"
+					message = probeErr.Error()
+				} else {
+					models = discovered
+					message = fmt.Sprintf("Provider account is reachable; discovered %d models", len(discovered))
+					existingModels, err := s.providerAccountModels(ctx, account)
+					if err != nil {
+						return ProviderAccountHealthCheck{}, err
+					}
+					enabled := append([]string(nil), account.Models...)
+					if account.AutoEnableNewModels {
+						enabled = mergeStringLists(enabled, discovered)
+					}
+					now := time.Now().UTC()
+					inventory, _ := buildProviderAccountModelDiscovery(account, existingModels, discovered, enabled, now)
+					account.Models = enabled
 					account.Status = AccountStatusActive
 					account.ErrorMessage = ""
-					account.UpdatedAt = time.Now().UTC()
-					if err := s.repo.SaveProviderAccount(ctx, account); err != nil {
+					account.UpdatedAt = now
+					if err := s.repo.SaveProviderAccountWithModels(ctx, account, inventory); err != nil {
 						return ProviderAccountHealthCheck{}, err
 					}
 				}
 			}
 		}
-	} else if status == "ok" {
-		status = "warning"
-		message = fmt.Sprintf("Provider type %s does not support automatic account /models probe yet", provider.Type)
 	}
 
 	if status == "error" && account.Status != AccountStatusDisabled {
@@ -1184,6 +1197,25 @@ func (s *Service) AuthorizeGatewayCredential(ctx context.Context, rawKey, signed
 
 func (s *Service) EnforceGatewayPolicy(ctx context.Context, auth GatewayAuthContext) error {
 	now := s.nowUTC()
+	if err := s.enforceGatewayOngoingPolicy(ctx, auth, now); err != nil {
+		return err
+	}
+	qpsLimit := auth.effectiveQPSLimit()
+	if qpsLimit > 0 && !s.allowGatewayRequest(auth.APIKey.ID, qpsLimit, now) {
+		if auth.shouldBlockOverage() {
+			return ErrGatewayRateLimited
+		}
+	}
+	return nil
+}
+
+// EnforceGatewayOngoingPolicy rechecks usage-based limits for a long-lived
+// admitted request without consuming another QPS admission slot.
+func (s *Service) EnforceGatewayOngoingPolicy(ctx context.Context, auth GatewayAuthContext) error {
+	return s.enforceGatewayOngoingPolicy(ctx, auth, s.nowUTC())
+}
+
+func (s *Service) enforceGatewayOngoingPolicy(ctx context.Context, auth GatewayAuthContext, now time.Time) error {
 	if _, blocked, err := s.repo.FindActiveGatewayRiskBlock(ctx, auth.APIKey.ID, now); err != nil {
 		return err
 	} else if blocked {
@@ -1214,12 +1246,6 @@ func (s *Service) EnforceGatewayPolicy(ctx context.Context, auth GatewayAuthCont
 			if auth.shouldBlockOverage() {
 				return ErrGatewayBudgetExceeded
 			}
-		}
-	}
-	qpsLimit := auth.effectiveQPSLimit()
-	if qpsLimit > 0 && !s.allowGatewayRequest(auth.APIKey.ID, qpsLimit, now) {
-		if auth.shouldBlockOverage() {
-			return ErrGatewayRateLimited
 		}
 	}
 	return nil
@@ -2026,6 +2052,17 @@ func (s *Service) newAuditLog(actor, action, resourceType, resourceID, summary s
 	}
 }
 
+func scopeAuditLog(audit AuditLog, profileScope, tenantID, principalID, integrationID, externalSubjectReference string) AuditLog {
+	audit.ProfileScope = strings.TrimSpace(profileScope)
+	if audit.ProfileScope == ProfileScopePlatform {
+		audit.PlatformTenantID = strings.TrimSpace(tenantID)
+		audit.GatewayPrincipalID = strings.TrimSpace(principalID)
+		audit.ExternalAuthIntegrationID = strings.TrimSpace(integrationID)
+		audit.ExternalSubjectReference = strings.TrimSpace(externalSubjectReference)
+	}
+	return audit
+}
+
 func (s *Service) providerByID(ctx context.Context, id string) (ProviderConnection, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -2178,7 +2215,7 @@ func providerFromRequest(req ProviderRequest, now time.Time) (ProviderConnection
 		Type:             providerType,
 		BaseURL:          strings.TrimRight(baseURL, "/"),
 		Status:           status,
-		Models:           cleanStringList(req.Models),
+		Models:           nil,
 		Priority:         priority,
 		SecretConfigured: strings.TrimSpace(req.APIKey) != "",
 		SecretHint:       maskSecret(req.APIKey),
@@ -2398,7 +2435,7 @@ func validateNonNegativeFloatFields(values map[string]float64) error {
 	return nil
 }
 
-func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defaultSchedulable bool) (ProviderAccount, error) {
+func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defaultSchedulable bool, defaultAutoEnableNewModels bool) (ProviderAccount, error) {
 	providerID := strings.TrimSpace(req.ProviderID)
 	name := strings.TrimSpace(req.Name)
 	platform := strings.TrimSpace(req.Platform)
@@ -2478,9 +2515,6 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 		return ProviderAccount{}, errors.New("rate_multiplier must be greater than or equal to 0")
 	}
 	models := cleanStringList(req.Models)
-	if len(models) == 0 {
-		return ProviderAccount{}, errors.New("models must not be empty")
-	}
 	expiresAt, err := parseOptionalDate(req.ExpiresAt)
 	if err != nil {
 		return ProviderAccount{}, err
@@ -2492,6 +2526,10 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 	schedulable := defaultSchedulable
 	if req.Schedulable != nil {
 		schedulable = *req.Schedulable
+	}
+	autoEnableNewModels := defaultAutoEnableNewModels
+	if req.AutoEnableNewModels != nil {
+		autoEnableNewModels = *req.AutoEnableNewModels
 	}
 	return ProviderAccount{
 		ProviderID:              providerID,
@@ -2508,6 +2546,7 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 		LoadFactor:              loadFactor,
 		RateMultiplier:          rateMultiplier,
 		Models:                  models,
+		AutoEnableNewModels:     autoEnableNewModels,
 		GroupIDs:                cleanStringList(req.GroupIDs),
 		SecretConfigured:        strings.TrimSpace(req.Secret) != "",
 		SecretHint:              maskSecret(req.Secret),

@@ -137,6 +137,18 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 	if routeResp.Data.UpstreamModel != "upstream-chat" || routeResp.Data.ProviderAccountID != account.ID {
 		t.Fatalf("created route mismatch: %+v", routeResp.Data)
 	}
+	bulkModel, err := control.CreateGatewayModel(context.Background(), "tester", controlplane.GatewayModelRequest{ModelID: "public-bulk", Name: "Public Bulk", Modality: "chat", Status: controlplane.GatewayModelStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bulkBody := fmt.Sprintf(`{"routes":[{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","priority":30,"weight":100,"status":"active"}]}`, bulkModel.ID, account.ID)
+	bulkCreate := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes/bulk", bytes.NewBufferString(bulkBody))
+	bulkCreate.Header.Set("Content-Type", "application/json")
+	bulkCreateRec := httptest.NewRecorder()
+	handler.ServeHTTP(bulkCreateRec, bulkCreate)
+	if bulkCreateRec.Code != http.StatusOK || !strings.Contains(bulkCreateRec.Body.String(), `"routes"`) {
+		t.Fatalf("bulk model route status = %d body=%s", bulkCreateRec.Code, bulkCreateRec.Body.String())
+	}
 
 	modelList := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-models", nil)
 	modelListRec := httptest.NewRecorder()
@@ -161,8 +173,44 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 		t.Fatalf("delete gateway model status = %d body=%s", modelDeleteRec.Code, modelDeleteRec.Body.String())
 	}
 	routes, err := control.ListModelRoutes(context.Background())
-	if err != nil || len(routes) != 0 {
-		t.Fatalf("expected routes to be cascade deleted: routes=%+v err=%v", routes, err)
+	if err != nil || len(routes) != 1 || routes[0].GatewayModelID != bulkModel.ID {
+		t.Fatalf("expected only the deleted model's routes to be cascade deleted: routes=%+v err=%v", routes, err)
+	}
+}
+
+func TestAdminProviderAccountModelEndpoints(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"existing"},{"id":"new-model"}]}`))
+	}))
+	defer upstream.Close()
+	handler, control := newTestRuntime(t, config.Config{SecretKey: "admin-model-secret"})
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Inventory provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"existing"}, APIKey: "provider-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := createGatewayTestAccount(t, control, provider, "existing", "account-secret", 10, 3)
+
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-accounts/"+account.ID+"/models", nil)
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, list)
+	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), `"model_id":"existing"`) {
+		t.Fatalf("model inventory status = %d body=%s", listRec.Code, listRec.Body.String())
+	}
+
+	discover := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-accounts/"+account.ID+"/models/discover", nil)
+	discoverRec := httptest.NewRecorder()
+	handler.ServeHTTP(discoverRec, discover)
+	if discoverRec.Code != http.StatusOK || !strings.Contains(discoverRec.Body.String(), `"new-model"`) {
+		t.Fatalf("model discovery status = %d body=%s", discoverRec.Code, discoverRec.Body.String())
+	}
+
+	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-accounts/"+account.ID+"/models/sync", bytes.NewBufferString(`{"enabled_models":["existing","new-model"],"auto_enable_new_models":true}`))
+	syncReq.Header.Set("Content-Type", "application/json")
+	syncRec := httptest.NewRecorder()
+	handler.ServeHTTP(syncRec, syncReq)
+	if syncRec.Code != http.StatusOK || !strings.Contains(syncRec.Body.String(), `"auto_enable_new_models":true`) {
+		t.Fatalf("model sync status = %d body=%s", syncRec.Code, syncRec.Body.String())
 	}
 }
 

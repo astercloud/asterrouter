@@ -1,15 +1,30 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { FlaskConical, Play, Route } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { simulateGatewayRouting } from '@/api/control'
-import type { GatewaySimulation } from '@/types'
+import { getGatewayModels, simulateGatewayRouting } from '@/api/control'
+import type { GatewayModel, GatewaySimulation } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
 const error = ref('')
 const result = ref<GatewaySimulation | null>(null)
+const gatewayModels = ref<GatewayModel[]>([])
 const form = reactive({ model: '', estimated_tokens: 1000 })
+const activeGatewayModels = computed(() => gatewayModels.value.filter((item) => item.status === 'active'))
+
+async function load() {
+  loading.value = true
+  error.value = ''
+  try {
+    gatewayModels.value = await getGatewayModels()
+    form.model = activeGatewayModels.value[0]?.model_id || ''
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('common.failed')
+  } finally {
+    loading.value = false
+  }
+}
 
 async function simulate() {
   loading.value = true
@@ -18,15 +33,17 @@ async function simulate() {
   catch (err) { error.value = err instanceof Error ? err.message : t('common.failed') }
   finally { loading.value = false }
 }
+
+onMounted(load)
 </script>
 
 <template>
   <main class="content crud-page">
     <section class="page-header"><div><h1>{{ t('admin.gatewaySimulator') }}</h1><p>{{ t('gatewaySimulator.subtitle') }}</p></div></section>
     <form class="panel" @submit.prevent="simulate"><div class="panel-body form-grid">
-      <div class="field"><label>{{ t('gatewaySimulator.model') }}</label><input v-model="form.model" required placeholder="gpt-5:stable" /></div>
+      <div class="field"><label>{{ t('gatewaySimulator.model') }}</label><select v-model="form.model" required><option v-if="!activeGatewayModels.length" value="" disabled>{{ t('apiKeys.noActiveModels') }}</option><option v-for="model in activeGatewayModels" :key="model.id" :value="model.model_id">{{ model.model_id }} · {{ model.name }}</option></select></div>
       <div class="field"><label>{{ t('gatewaySimulator.estimatedTokens') }}</label><input v-model.number="form.estimated_tokens" type="number" min="0" /></div>
-    </div><footer class="modal-footer"><button class="button" type="submit" :disabled="loading"><Play :size="17" />{{ loading ? t('common.loading') : t('gatewaySimulator.run') }}</button></footer></form>
+    </div><footer class="modal-footer"><button class="button" type="submit" :disabled="loading || !form.model"><Play :size="17" />{{ loading ? t('common.loading') : t('gatewaySimulator.run') }}</button></footer></form>
     <div v-if="error" class="notice">{{ error }}</div>
     <template v-if="result">
       <div class="crud-summary"><span><strong>{{ result.status }}</strong>{{ t('gatewaySimulator.status') }}</span><span><strong>{{ result.resolved_model || '-' }}</strong>{{ t('gatewaySimulator.resolvedModel') }}</span><span><strong>{{ result.route_group || '-' }}</strong>{{ t('gatewaySimulator.routeGroup') }}</span><span><strong>{{ result.candidates.length }}</strong>{{ t('gatewaySimulator.candidates') }}</span></div>

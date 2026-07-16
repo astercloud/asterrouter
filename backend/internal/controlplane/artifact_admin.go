@@ -171,7 +171,8 @@ func (s *Service) RetryArtifactDelivery(ctx context.Context, actor, id string) (
 	requested := attempt
 	requested.ReconcileAfter = &now
 	requested.UpdatedAt = now
-	audit := s.newAuditLog(actor, "retry_delivery", "artifact", artifact.ID, "Scheduled failed artifact delivery for retry")
+	audit := scopeAuditLog(s.newAuditLog(actor, "retry_delivery", "artifact", artifact.ID, "Scheduled failed artifact delivery for retry"),
+		artifact.ProfileScope, artifact.TenantID, artifact.PrincipalID, artifact.IntegrationID, artifact.ExternalSubjectReference)
 	if _, changed, err := s.repo.ScheduleArtifactDeliveryRetry(ctx, artifact.ID, requested, attempt.DispatchVersion, audit); err != nil {
 		return ArtifactDeliveryRetryResult{}, err
 	} else if !changed {

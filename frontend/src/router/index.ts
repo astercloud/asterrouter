@@ -242,6 +242,8 @@ const router = createRouter({
         { path: 'usage', component: AdminUsageView, meta: { titleKey: 'admin.usage', descriptionKey: 'usage.subtitle' } },
         { path: 'traces', component: AdminGatewayTracesView, meta: { titleKey: 'admin.traces', descriptionKey: 'traces.subtitle' } },
         { path: 'alerts', component: AdminAlertsView, meta: { titleKey: 'admin.alerts', descriptionKey: 'alerts.subtitle' } },
+        { path: 'artifacts', component: AdminArtifactsView, props: { surface: 'platform' }, meta: { titleKey: 'admin.artifacts', descriptionKey: 'artifactOps.subtitle' } },
+        { path: 'ai-jobs', component: AdminAIJobsView, props: { surface: 'platform' }, meta: { titleKey: 'admin.aiJobs', descriptionKey: 'aiJobOps.subtitle' } },
         { path: 'audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },
         { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },

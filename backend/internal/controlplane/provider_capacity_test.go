@@ -175,6 +175,31 @@ func TestRedisProviderCapacityStoreConfiguration(t *testing.T) {
 	}
 }
 
+func TestProviderAccountPermitReportsLostHeartbeatLease(t *testing.T) {
+	store := NewMemoryProviderCapacityStore()
+	lease, _, acquired, err := store.Acquire(context.Background(), ProviderCapacityRequest{
+		LeaseID: "heartbeat-lost", ProviderAccountID: "heartbeat-account", CapacityUnits: 1,
+		ConcurrencyLimit: 1, LeaseDuration: time.Minute,
+	})
+	if err != nil || !acquired {
+		t.Fatalf("acquire=%t err=%v", acquired, err)
+	}
+	if err := store.Release(context.Background(), lease); err != nil {
+		t.Fatal(err)
+	}
+	permit := ProviderAccountPermit{state: &providerAccountPermitState{store: store, lease: lease, lost: make(chan error, 1)}}
+	permit.state.startHeartbeat(6 * time.Millisecond)
+	select {
+	case err := <-permit.Lost():
+		if err == nil || err.Error() != "provider capacity lease was lost" {
+			t.Fatalf("lost error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider heartbeat did not report the lost lease")
+	}
+	permit.Release()
+}
+
 func providerCapacityTestRequest(accountID, leaseID string) ProviderCapacityRequest {
 	return ProviderCapacityRequest{
 		LeaseID: leaseID, ProviderAccountID: accountID, CapacityUnits: 1, LeaseDuration: time.Minute,

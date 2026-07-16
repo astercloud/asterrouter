@@ -48,6 +48,8 @@ import type {
 	OrganizationGroup,
 	OrganizationGroupRequest,
 	ModelRoute,
+	ModelRouteBulkCreateRequest,
+	ModelRouteBulkCreateResult,
 	ModelRouteRequest,
   PortalWorkspace,
   RecordListQuery,
@@ -55,6 +57,10 @@ import type {
   RoleBindingRequest,
   ProviderAccount,
   ProviderAccountHealthCheck,
+  ProviderAccountModelDiscovery,
+  ProviderAccountModelInventory,
+  ProviderAccountModelSyncRequest,
+  ProviderAccountModelSyncResult,
   ProviderAccountRequest,
   ProviderBillingLine,
   ProviderBillingLineRequest,
@@ -109,6 +115,7 @@ function normalizeProviderAccount(account: ProviderAccountPayload): ProviderAcco
   return {
     ...account,
     models: stringListOrEmpty(account.models),
+    auto_enable_new_models: account.auto_enable_new_models === true,
     group_ids: stringListOrEmpty(account.group_ids),
     temp_unschedulable_rules: listOrEmpty(account.temp_unschedulable_rules)
   }
@@ -137,18 +144,18 @@ export async function getProviderHealthChecks(): Promise<ProviderHealthCheck[]> 
 }
 
 export async function createProvider(payload: ProviderRequest): Promise<ProviderConnection> {
-  const response = await apiClient.post<ProviderConnection>('/admin/providers', payload)
-  return response.data
+  const response = await apiClient.post<ProviderConnectionPayload>('/admin/providers', payload)
+  return normalizeProvider(response.data)
 }
 
 export async function updateProvider(id: string, payload: ProviderRequest): Promise<ProviderConnection> {
-  const response = await apiClient.put<ProviderConnection>(`/admin/providers/${id}`, payload)
-  return response.data
+  const response = await apiClient.put<ProviderConnectionPayload>(`/admin/providers/${id}`, payload)
+  return normalizeProvider(response.data)
 }
 
 export async function checkProvider(id: string): Promise<ProviderHealthCheck> {
-  const response = await apiClient.post<ProviderHealthCheck>(`/admin/providers/${id}/check`)
-  return response.data
+  const response = await apiClient.post<ProviderHealthCheckPayload>(`/admin/providers/${id}/check`)
+  return normalizeProviderHealthCheck(response.data)
 }
 
 export async function getDepartments(): Promise<Department[]> {
@@ -252,18 +259,55 @@ export async function getProviderAccountHealthChecks(): Promise<ProviderAccountH
 }
 
 export async function createProviderAccount(payload: ProviderAccountRequest): Promise<ProviderAccount> {
-  const response = await apiClient.post<ProviderAccount>('/admin/provider-accounts', payload)
-  return response.data
+  const response = await apiClient.post<ProviderAccountPayload>('/admin/provider-accounts', payload)
+  return normalizeProviderAccount(response.data)
 }
 
 export async function updateProviderAccount(id: string, payload: ProviderAccountRequest): Promise<ProviderAccount> {
-  const response = await apiClient.put<ProviderAccount>(`/admin/provider-accounts/${id}`, payload)
-  return response.data
+  const response = await apiClient.put<ProviderAccountPayload>(`/admin/provider-accounts/${id}`, payload)
+  return normalizeProviderAccount(response.data)
 }
 
 export async function checkProviderAccount(id: string): Promise<ProviderAccountHealthCheck> {
-  const response = await apiClient.post<ProviderAccountHealthCheck>(`/admin/provider-accounts/${id}/check`)
-  return response.data
+  const response = await apiClient.post<ProviderAccountHealthCheckPayload>(`/admin/provider-accounts/${id}/check`)
+  return normalizeProviderAccountHealthCheck(response.data)
+}
+
+export async function getProviderAccountModelInventory(id: string): Promise<ProviderAccountModelInventory> {
+  const response = await apiClient.get<ProviderAccountModelInventory>(`/admin/provider-accounts/${id}/models`)
+  return { ...response.data, models: listOrEmpty(response.data.models) }
+}
+
+export async function discoverProviderAccountModels(id: string): Promise<ProviderAccountModelDiscovery> {
+  const response = await apiClient.post<ProviderAccountModelDiscovery>(`/admin/provider-accounts/${id}/models/discover`)
+  return {
+    ...response.data,
+    models: listOrEmpty(response.data.models),
+    added_models: stringListOrEmpty(response.data.added_models),
+    missing_models: stringListOrEmpty(response.data.missing_models),
+    unchanged_models: stringListOrEmpty(response.data.unchanged_models),
+    affected_route_ids: stringListOrEmpty(response.data.affected_route_ids)
+  }
+}
+
+export async function syncProviderAccountModels(id: string, payload: ProviderAccountModelSyncRequest): Promise<ProviderAccountModelSyncResult> {
+  const response = await apiClient.post<ProviderAccountModelSyncResult>(`/admin/provider-accounts/${id}/models/sync`, payload)
+  return {
+    ...response.data,
+    account: normalizeProviderAccount(response.data.account),
+    inventory: {
+      ...response.data.inventory,
+      models: listOrEmpty(response.data.inventory.models)
+    },
+    discovery: {
+      ...response.data.discovery,
+      models: listOrEmpty(response.data.discovery.models),
+      added_models: stringListOrEmpty(response.data.discovery.added_models),
+      missing_models: stringListOrEmpty(response.data.discovery.missing_models),
+      unchanged_models: stringListOrEmpty(response.data.discovery.unchanged_models),
+      affected_route_ids: stringListOrEmpty(response.data.discovery.affected_route_ids)
+    }
+  }
 }
 
 export async function clearProviderAccountCooldown(id: string): Promise<ProviderAccount> {
@@ -297,6 +341,11 @@ export async function getModelRoutes(): Promise<ModelRoute[]> {
 
 export async function createModelRoute(payload: ModelRouteRequest): Promise<ModelRoute> {
   const response = await apiClient.post<ModelRoute>('/admin/model-routes', payload)
+  return response.data
+}
+
+export async function bulkCreateModelRoutes(payload: ModelRouteBulkCreateRequest): Promise<ModelRouteBulkCreateResult> {
+  const response = await apiClient.post<ModelRouteBulkCreateResult>('/admin/model-routes/bulk', payload)
   return response.data
 }
 

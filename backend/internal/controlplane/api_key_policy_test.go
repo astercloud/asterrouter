@@ -45,6 +45,54 @@ func TestRevalidateGatewayCredentialScopeDoesNotUpdateLastUsed(t *testing.T) {
 	}
 }
 
+func TestRevalidateCanonicalGatewayRequestUsesCurrentCredentialAndPolicy(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	created, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{
+		Name: "realtime session", ModelAllowlist: []string{"model-a"}, Scopes: []string{GatewayScopeInvoke},
+		AllowedModalities: []string{GatewayModalityAudio}, AllowedOperations: []string{GatewayOperationRealtimeSession},
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(): %v", err)
+	}
+	credential := gatewaycore.CredentialEnvelope{BearerToken: created.Key}
+	request := gatewaycore.CanonicalRequest{
+		ID: "realtime-policy", Protocol: gatewaycore.ProtocolRealtime, Operation: GatewayOperationRealtimeSession,
+		Modality: GatewayModalityAudio, Lane: gatewaycore.LaneDirect, Model: "model-a", SourceIP: "192.0.2.10",
+	}
+	firstUse := time.Date(2026, time.July, 16, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return firstUse }
+	if _, _, err := svc.AuthorizeCanonicalGatewayRequest(ctx, credential, request); err != nil {
+		t.Fatalf("AuthorizeCanonicalGatewayRequest(): %v", err)
+	}
+
+	svc.now = func() time.Time { return firstUse.Add(time.Minute) }
+	if _, _, err := svc.RevalidateCanonicalGatewayRequest(ctx, credential, request); err != nil {
+		t.Fatalf("RevalidateCanonicalGatewayRequest(): %v", err)
+	}
+	found, ok, err := repo.FindAPIKeyByHash(ctx, hashAPIKey(created.Key))
+	if err != nil || !ok || found.LastUsedAt == nil || !found.LastUsedAt.Equal(firstUse) {
+		t.Fatalf("last_used_at=%v found=%t err=%v, want %v", found.LastUsedAt, ok, err, firstUse)
+	}
+
+	if _, err := svc.UpdateAPIKey(ctx, "tester", created.Record.ID, APIKeyUpdateRequest{
+		Name: created.Record.Name, ModelAllowlist: []string{"model-a"}, Scopes: []string{GatewayScopeInvoke},
+		AllowedModalities: []string{GatewayModalityAudio}, AllowedOperations: []string{GatewayOperationSpeechGeneration},
+	}); err != nil {
+		t.Fatalf("UpdateAPIKey(): %v", err)
+	}
+	if _, _, err := svc.RevalidateCanonicalGatewayRequest(ctx, credential, request); !errors.Is(err, ErrGatewayPolicyForbidden) {
+		t.Fatalf("tightened policy revalidation error=%v, want policy forbidden", err)
+	}
+	if err := svc.DisableAPIKey(ctx, "tester", created.Record.ID); err != nil {
+		t.Fatalf("DisableAPIKey(): %v", err)
+	}
+	if _, _, err := svc.RevalidateCanonicalGatewayRequest(ctx, credential, request); !errors.Is(err, ErrGatewayUnauthorized) {
+		t.Fatalf("disabled credential revalidation error=%v, want unauthorized", err)
+	}
+}
+
 func TestCreateAPIKeyNormalizesPrincipalAndExtendedPolicy(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")
@@ -185,6 +233,33 @@ func TestAuthorizeCanonicalGatewayRequestAllowsMatchingCIDR(t *testing.T) {
 	}
 	if canonical.TenantID != gatewayDefaultTenantID || canonical.PrincipalID != created.Record.ID || len(canonical.AllowedCIDRs) != 1 {
 		t.Fatalf("canonical auth = %+v", canonical)
+	}
+}
+
+func TestEnforceGatewayOngoingPolicyDoesNotConsumeQPSAdmission(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	now := time.Date(2026, time.July, 16, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	created, err := svc.CreateAPIKey(context.Background(), "tester", APIKeyCreateRequest{
+		Name: "ongoing", ModelAllowlist: []string{"model-a"}, QPSLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := svc.AuthenticateGatewayKey(context.Background(), created.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnforceGatewayPolicy(context.Background(), auth); err != nil {
+		t.Fatalf("initial admission: %v", err)
+	}
+	for index := 0; index < 3; index++ {
+		if err := svc.EnforceGatewayOngoingPolicy(context.Background(), auth); err != nil {
+			t.Fatalf("ongoing check %d: %v", index, err)
+		}
+	}
+	if err := svc.EnforceGatewayPolicy(context.Background(), auth); !errors.Is(err, ErrGatewayRateLimited) {
+		t.Fatalf("second admission error=%v", err)
 	}
 }
 

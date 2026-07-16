@@ -1,5 +1,26 @@
-import { expect, test } from '@playwright/test'
-import { captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './fixtures'
+import { expect, type Page, test } from '@playwright/test'
+import { adminPost, captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './fixtures'
+
+async function createActiveGatewayModel(page: Page, prefix: string): Promise<string> {
+  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const modelID = `${prefix}-${Date.now()}`
+  await adminPost(page, token, '/gateway-models', {
+    model_id: modelID,
+    name: modelID,
+    description: 'Synthetic Platform Surface model',
+    modality: 'chat',
+    default_route_group: 'default',
+    status: 'active'
+  })
+  return modelID
+}
+
+async function selectGatewayModel(page: Page, modelID: string): Promise<void> {
+  const option = page.getByRole('group', { name: 'Model allowlist' }).getByRole('button', { name: modelID, exact: true })
+  await expect(option).toBeVisible()
+  if (await option.getAttribute('aria-pressed') !== 'true') await option.click()
+  await expect(option).toHaveAttribute('aria-pressed', 'true')
+}
 
 test('@platform Platform Console navigation excludes enterprise and relay operations', async ({ page }) => {
   const errors = captureBrowserErrors(page)
@@ -16,6 +37,8 @@ test('@platform Platform Console navigation excludes enterprise and relay operat
   await expect(page.getByRole('link', { name: 'Delegated access' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Usage delivery' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'API Keys' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Artifacts' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'AI Job Operations' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Users / RBAC' })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Departments' })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Customers' })).toHaveCount(0)
@@ -23,10 +46,48 @@ test('@platform Platform Console navigation excludes enterprise and relay operat
   expect(errors).toEqual([])
 })
 
+test('@platform Platform operations pages stay on scoped control-plane APIs', async ({ page }, testInfo) => {
+  const errors = captureBrowserErrors(page)
+  const operationRequests: string[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path.startsWith('/api/v1/') && /\/(ai-jobs|artifacts|artifact-runtimes)(\/|$)/.test(path)) operationRequests.push(path)
+  })
+  await loginDemo(page)
+
+  await page.goto('/platform/ai-jobs')
+  await expect(page).toHaveURL(/\/platform\/ai-jobs$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'AI Job Operations' })).toBeVisible()
+  await expect(page.getByText('No AI jobs match the current filters.')).toBeVisible()
+  await expect(page.locator('.notice')).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
+  await testInfo.attach('platform-ai-jobs', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
+
+  await page.goto('/platform/artifacts')
+  await expect(page).toHaveURL(/\/platform\/artifacts$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Artifacts' })).toBeVisible()
+  await expect(page.getByText('No artifacts match the current filters.')).toBeVisible()
+  await expect(page.locator('.notice')).toHaveCount(0)
+  await expectNoHorizontalOverflow(page)
+  await testInfo.attach('platform-artifacts', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
+
+  expect(operationRequests).toEqual(expect.arrayContaining([
+    '/api/v1/platform/ai-jobs',
+    '/api/v1/platform/ai-jobs/summary',
+    '/api/v1/platform/ai-jobs/runtime',
+    '/api/v1/platform/artifacts',
+    '/api/v1/platform/artifacts/summary',
+    '/api/v1/platform/artifact-runtimes'
+  ]))
+  expect(operationRequests.every((path) => path.startsWith('/api/v1/platform/'))).toBe(true)
+  expect(errors).toEqual([])
+})
+
 test('@platform Platform Console creates delegated access with a one-time secret', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The delegated access lifecycle runs once against the isolated demo runtime.')
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
+  const modelID = await createActiveGatewayModel(page, 'delegated-model')
 
   await page.goto('/platform/integrations')
   await expect(page).toHaveURL(/\/platform\/integrations$/)
@@ -35,7 +96,7 @@ test('@platform Platform Console creates delegated access with a one-time secret
   await page.getByLabel('Integration name').fill(integrationName)
   await page.getByLabel('Key ID').fill(`browser_${Date.now()}`)
   await page.getByLabel('Gateway audience').fill('https://gateway.example/v1')
-  await page.getByLabel('Model allowlist', { exact: true }).fill('gpt-4o-mini')
+  await selectGatewayModel(page, modelID)
   await page.getByRole('spinbutton', { name: 'QPS limit', exact: true }).fill('2')
   await page.getByLabel('Monthly token limit', { exact: true }).fill('1000')
   await page.getByRole('button', { name: 'Save' }).click()
@@ -54,13 +115,14 @@ test('@platform Platform Console creates a signed usage delivery destination', a
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The usage delivery lifecycle runs once against the isolated demo runtime.')
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
+  const modelID = await createActiveGatewayModel(page, 'usage-model')
 
   await page.goto('/platform/integrations')
   await page.getByRole('button', { name: 'New delegated access' }).click()
   await page.getByLabel('Integration name').fill(`browser-usage-integration-${Date.now()}`)
   await page.getByLabel('Key ID').fill(`usage_browser_${Date.now()}`)
   await page.getByLabel('Gateway audience').fill('https://gateway.example/v1')
-  await page.getByLabel('Model allowlist', { exact: true }).fill('gpt-4o-mini')
+  await selectGatewayModel(page, modelID)
   await page.getByRole('spinbutton', { name: 'QPS limit', exact: true }).fill('2')
   await page.getByLabel('Monthly token limit', { exact: true }).fill('1000')
   await page.getByRole('button', { name: 'Save' }).click()
@@ -87,6 +149,7 @@ test('@platform Platform Console configures JWT/JWKS delegated access without a 
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The JWT integration lifecycle runs once against the isolated demo runtime.')
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
+  const modelID = await createActiveGatewayModel(page, 'jwt-model')
 
   await page.goto('/platform/integrations')
   await page.getByRole('button', { name: 'New delegated access' }).click()
@@ -102,7 +165,7 @@ test('@platform Platform Console configures JWT/JWKS delegated access without a 
   await page.getByLabel('Gateway audience').fill('https://gateway.example/v1')
   await page.getByLabel('JWT issuer').fill(issuer)
   await page.getByLabel('JWKS URL').fill(`${issuer}/.well-known/jwks.json`)
-  await page.getByLabel('Model allowlist', { exact: true }).fill('gpt-4o-mini')
+  await selectGatewayModel(page, modelID)
   await page.getByRole('spinbutton', { name: 'QPS limit', exact: true }).fill('2')
   await page.getByLabel('Monthly token limit', { exact: true }).fill('1000')
   await page.getByRole('button', { name: 'Save' }).click()
@@ -136,6 +199,7 @@ test('@platform Platform Console creates service API Keys', async ({ page }, tes
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API credential lifecycle runs once against the isolated demo runtime.')
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
+  const modelID = await createActiveGatewayModel(page, 'service-key-model')
 
   await page.goto('/platform/api-keys')
   await expect(page).toHaveURL(/\/platform\/api-keys$/)
@@ -146,7 +210,7 @@ test('@platform Platform Console creates service API Keys', async ({ page }, tes
   const keyName = `platform-service-${Date.now()}`
   await page.getByLabel('Name').fill(keyName)
   await page.getByLabel('Key type').selectOption('service')
-  await page.getByLabel('Model allowlist').fill('gpt-4o-mini')
+  await selectGatewayModel(page, modelID)
   await page.getByRole('button', { name: 'Save' }).click()
   await expect(page.getByText('Copy now. This key is shown only once.')).toBeVisible()
   await expect(page.locator('tr', { hasText: keyName }).getByRole('cell', { name: 'service', exact: true })).toBeVisible()

@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { Activity, Edit3, Plus, RefreshCw, RotateCw, Save, Search, ShieldOff, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import APIKeyRotationDialog from '@/components/APIKeyRotationDialog.vue'
+import GatewayModelPicker from '@/components/model/GatewayModelPicker.vue'
 import { apiKeyLifecycleClass, apiKeyLifecycleLabelKey, apiKeyLifecycleStatus, canDisableAPIKey, canRotateAPIKey } from '@/utils/apiKeys'
 import {
   createAPIKey,
@@ -10,13 +11,14 @@ import {
   getAPIKeys,
   getAPIKeyPolicyExplanation,
   getGatewayTraces,
+  getGatewayModels,
   getGovernancePolicies,
   getUsageReport,
 	getWorkspaceUsers,
   rotateAPIKey,
   updateAPIKey
 } from '@/api/control'
-import type { APIKeyCreateRequest, APIKeyRecord, GatewayPolicyExplanation, GatewayTrace, GovernancePolicy, UsageReport, WorkspaceUser } from '@/types'
+import type { APIKeyCreateRequest, APIKeyRecord, GatewayModel, GatewayPolicyExplanation, GatewayTrace, GovernancePolicy, UsageReport, WorkspaceUser } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -37,9 +39,9 @@ const rotationSaving = ref(false)
 const apiKeys = ref<APIKeyRecord[]>([])
 const policies = ref<GovernancePolicy[]>([])
 const users = ref<WorkspaceUser[]>([])
+const gatewayModels = ref<GatewayModel[]>([])
 const query = ref('')
 const statusFilter = ref('')
-const modelsText = ref('gpt-4o-mini')
 const keyStatus = ref('active')
 const form = reactive<APIKeyCreateRequest>({
   name: '',
@@ -55,6 +57,7 @@ const form = reactive<APIKeyCreateRequest>({
 
 const policyByID = computed(() => new Map(policies.value.map((item) => [item.id, item])))
 const activePolicies = computed(() => policies.value.filter((item) => item.status === 'active'))
+const defaultGatewayModel = computed(() => gatewayModels.value.find((item) => item.status === 'active')?.model_id || '')
 
 const filteredKeys = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -76,10 +79,6 @@ const summary = computed(() => ({
   policies: new Set(apiKeys.value.map((item) => item.policy_id).filter(Boolean)).size
 }))
 
-function splitModels(value: string): string[] {
-  return value.split(/\n|,/).map((item) => item.trim()).filter(Boolean)
-}
-
 function dateInputValue(value?: string): string {
   return value ? value.slice(0, 10) : ''
 }
@@ -89,7 +88,7 @@ function openCreate() {
   Object.assign(form, {
     name: '',
     policy_id: '',
-    model_allowlist: [],
+    model_allowlist: defaultGatewayModel.value ? [defaultGatewayModel.value] : [],
     qps_limit: 10,
     monthly_token_limit: 1000000,
     expires_at: '',
@@ -98,7 +97,6 @@ function openCreate() {
     owner_user_id: ''
   })
   keyStatus.value = 'active'
-  modelsText.value = 'gpt-4o-mini'
   modalOpen.value = true
 }
 
@@ -116,7 +114,6 @@ function openEdit(key: APIKeyRecord) {
     owner_user_id: key.owner_user_id
   })
   keyStatus.value = key.status
-  modelsText.value = key.model_allowlist.join('\n')
   modalOpen.value = true
 }
 
@@ -144,15 +141,18 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [keyResult, policyResult, userResult] = await Promise.allSettled([
+    const [keyResult, policyResult, userResult, modelResult] = await Promise.allSettled([
       getAPIKeys(),
       getGovernancePolicies(),
-      getWorkspaceUsers()
+      getWorkspaceUsers(),
+      getGatewayModels()
     ])
     if (keyResult.status === 'rejected') throw keyResult.reason
+    if (modelResult.status === 'rejected') throw modelResult.reason
     apiKeys.value = keyResult.value
     policies.value = policyResult.status === 'fulfilled' ? policyResult.value : []
     users.value = userResult.status === 'fulfilled' ? userResult.value : []
+    gatewayModels.value = modelResult.value
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -165,12 +165,11 @@ async function save() {
   error.value = ''
   oneTimeKey.value = ''
   try {
-    const model_allowlist = splitModels(modelsText.value)
     if (editing.value) {
       await updateAPIKey(editing.value.id, {
         name: form.name,
         policy_id: form.policy_id,
-        model_allowlist,
+        model_allowlist: [...form.model_allowlist],
         qps_limit: form.qps_limit,
         monthly_token_limit: form.monthly_token_limit,
         expires_at: form.expires_at,
@@ -181,7 +180,7 @@ async function save() {
       })
       message.value = t('apiKeys.updated')
     } else {
-      const created = await createAPIKey({ ...form, model_allowlist })
+      const created = await createAPIKey({ ...form, model_allowlist: [...form.model_allowlist] })
       oneTimeKey.value = created.key
       message.value = t('apiKeys.created')
     }
@@ -413,7 +412,7 @@ onMounted(load)
           </div>
           <div class="field form-span-2">
             <label>{{ t('apiKeys.models') }}</label>
-            <textarea v-model="modelsText" rows="3" />
+            <GatewayModelPicker v-model="form.model_allowlist" :models="gatewayModels" :disabled="saving" />
           </div>
           <div class="field">
             <label>{{ t('apiKeys.qps') }}</label>
@@ -438,7 +437,7 @@ onMounted(load)
 
         <footer class="modal-footer">
           <button class="button secondary" type="button" @click="modalOpen = false; editing = null">{{ t('common.cancel') }}</button>
-          <button class="button" type="button" :disabled="saving" @click="save">
+          <button class="button" type="button" :disabled="saving || !form.model_allowlist.length" @click="save">
             <Save :size="17" />
             {{ saving ? t('common.saving') : t('common.save') }}
           </button>

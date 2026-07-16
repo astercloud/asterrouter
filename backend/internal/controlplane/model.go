@@ -29,11 +29,15 @@ const (
 	GatewayScopeArtifactsWrite  = "artifacts:write"
 	GatewayScopeArtifactsDelete = "artifacts:delete"
 
-	GatewayOperationListModels      = "list_models"
-	GatewayOperationChatCompletion  = "chat_completion"
-	GatewayOperationImageGeneration = "image_generation"
-	GatewayOperationVideoGeneration = "video_generation"
-	GatewayOperationAudioGeneration = "audio_generation"
+	GatewayOperationListModels         = "list_models"
+	GatewayOperationChatCompletion     = "chat_completion"
+	GatewayOperationImageGeneration    = "image_generation"
+	GatewayOperationVideoGeneration    = "video_generation"
+	GatewayOperationAudioGeneration    = "audio_generation"
+	GatewayOperationAudioTranscription = "audio_transcription"
+	GatewayOperationAudioTranslation   = "audio_translation"
+	GatewayOperationSpeechGeneration   = "speech_generation"
+	GatewayOperationRealtimeSession    = "realtime_session"
 
 	GatewayModalityMetadata = "metadata"
 	GatewayModalityText     = "text"
@@ -123,10 +127,12 @@ type ProviderHealthCheck struct {
 }
 
 type ProviderRequest struct {
-	Name     string   `json:"name"`
-	Type     string   `json:"type"`
-	BaseURL  string   `json:"base_url"`
-	Status   string   `json:"status"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	BaseURL string `json:"base_url"`
+	Status  string `json:"status"`
+	// Models is accepted for wire compatibility but ignored. Provider model
+	// snapshots are populated only by discovery during health checks.
 	Models   []string `json:"models"`
 	Priority int      `json:"priority"`
 	APIKey   string   `json:"api_key"`
@@ -215,6 +221,7 @@ type ProviderAccount struct {
 	LoadFactor              *int                                   `json:"load_factor,omitempty"`
 	RateMultiplier          float64                                `json:"rate_multiplier"`
 	Models                  []string                               `json:"models"`
+	AutoEnableNewModels     bool                                   `json:"auto_enable_new_models"`
 	GroupIDs                []string                               `json:"group_ids"`
 	SecretConfigured        bool                                   `json:"secret_configured"`
 	SecretHint              string                                 `json:"secret_hint"`
@@ -275,6 +282,7 @@ type ProviderAccountRequest struct {
 	LoadFactor              *int                                   `json:"load_factor"`
 	RateMultiplier          float64                                `json:"rate_multiplier"`
 	Models                  []string                               `json:"models"`
+	AutoEnableNewModels     *bool                                  `json:"auto_enable_new_models"`
 	GroupIDs                []string                               `json:"group_ids"`
 	Secret                  string                                 `json:"secret"`
 	ExpiresAt               string                                 `json:"expires_at"`

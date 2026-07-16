@@ -88,7 +88,7 @@ func (c *gatewaySSEUsageCollector) Flush() {
 
 func gatewaySSETerminalEvent(event string) bool {
 	switch strings.ToLower(strings.TrimSpace(event)) {
-	case "message_stop", "response.completed", "response.complete", "done", "completion":
+	case "message_stop", "response.completed", "response.complete", "transcript.text.done", "transcription.completed", "audio.done", "speech.done", "done", "completion":
 		return true
 	default:
 		return false

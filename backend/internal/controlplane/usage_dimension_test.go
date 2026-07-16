@@ -67,13 +67,14 @@ func TestUsageDimensionsRejectInvalidContracts(t *testing.T) {
 
 func TestUsageDimensionTotalsSaturate(t *testing.T) {
 	totals := UsageDimensionsTotals(UsageDimensions{
-		UsageDimensionOutputImages:            {Quantity: math.MaxInt64, Unit: UsageUnitCount},
-		UsageDimensionInputVideoMilliseconds:  {Quantity: math.MaxInt64, Unit: UsageUnitMillisecond},
-		UsageDimensionOutputVideoMilliseconds: {Quantity: 1, Unit: UsageUnitMillisecond},
-		UsageDimensionInputAudioMilliseconds:  {Quantity: 2, Unit: UsageUnitMillisecond},
-		UsageDimensionOutputAudioMilliseconds: {Quantity: 3, Unit: UsageUnitMillisecond},
+		UsageDimensionOutputImages:              {Quantity: math.MaxInt64, Unit: UsageUnitCount},
+		UsageDimensionInputVideoMilliseconds:    {Quantity: math.MaxInt64, Unit: UsageUnitMillisecond},
+		UsageDimensionOutputVideoMilliseconds:   {Quantity: 1, Unit: UsageUnitMillisecond},
+		UsageDimensionInputAudioMilliseconds:    {Quantity: 2, Unit: UsageUnitMillisecond},
+		UsageDimensionOutputAudioMilliseconds:   {Quantity: 3, Unit: UsageUnitMillisecond},
+		UsageDimensionRealtimeAudioMilliseconds: {Quantity: 7, Unit: UsageUnitMillisecond},
 	})
-	if totals.OutputImages != math.MaxInt64 || totals.VideoMilliseconds != math.MaxInt64 || totals.AudioMilliseconds != 5 {
+	if totals.OutputImages != math.MaxInt64 || totals.VideoMilliseconds != math.MaxInt64 || totals.AudioMilliseconds != 12 {
 		t.Fatalf("totals=%+v", totals)
 	}
 }

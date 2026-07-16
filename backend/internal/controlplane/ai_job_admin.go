@@ -170,7 +170,15 @@ func (s *Service) AIJobAdmin(ctx context.Context, id string) (AIJobAdminDetail, 
 func (s *Service) CancelAIJobAdmin(ctx context.Context, actor, id string) (AIJobAdminActionResult, error) {
 	now := s.nowUTC()
 	id = strings.TrimSpace(id)
-	audit := s.newAuditLog(actor, "cancel", "ai_job", id, "Requested AI job cancellation")
+	existing, found, err := s.repo.FindAIJob(ctx, id)
+	if err != nil {
+		return AIJobAdminActionResult{}, err
+	}
+	if !found {
+		return AIJobAdminActionResult{}, ErrAIJobNotFound
+	}
+	audit := scopeAuditLog(s.newAuditLog(actor, "cancel", "ai_job", id, "Requested AI job cancellation"),
+		existing.ProfileScope, existing.TenantID, existing.PrincipalID, existing.IntegrationID, existing.ExternalSubjectReference)
 	job, changed, found, err := s.repo.RequestAIJobAdminCancellation(ctx, id, now, audit)
 	if err != nil {
 		return AIJobAdminActionResult{}, err
@@ -197,7 +205,8 @@ func (s *Service) ScheduleAIAttemptReconciliationAdmin(ctx context.Context, acto
 		return AIAttemptReconcileScheduleResult{}, ErrAIAttemptNotFound
 	}
 	now := s.nowUTC()
-	audit := s.newAuditLog(actor, "schedule_reconciliation", "ai_attempt", attempt.ID, "Scheduled AI attempt for immediate reconciliation")
+	audit := scopeAuditLog(s.newAuditLog(actor, "schedule_reconciliation", "ai_attempt", attempt.ID, "Scheduled AI attempt for immediate reconciliation"),
+		job.ProfileScope, job.TenantID, job.PrincipalID, job.IntegrationID, job.ExternalSubjectReference)
 	updated, changed, err := s.repo.ScheduleAIAttemptReconciliation(ctx, attempt.ID, attempt.DispatchVersion, now, audit)
 	if err != nil {
 		return AIAttemptReconcileScheduleResult{}, err

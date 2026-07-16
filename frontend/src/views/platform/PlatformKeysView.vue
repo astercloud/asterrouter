@@ -3,10 +3,11 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { Edit3, KeyRound, Plus, RefreshCw, RotateCw, ShieldOff, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import APIKeyRotationDialog from '@/components/APIKeyRotationDialog.vue'
+import GatewayModelPicker from '@/components/model/GatewayModelPicker.vue'
 import { apiKeyLifecycleClass, apiKeyLifecycleLabelKey, apiKeyLifecycleStatus, canDisableAPIKey, canRotateAPIKey } from '@/utils/apiKeys'
-import { getGovernancePolicies } from '@/api/control'
+import { getGatewayModels, getGovernancePolicies } from '@/api/control'
 import { createPlatformAPIKey, disablePlatformAPIKey, getGatewayPrincipals, getPlatformAPIKeys, getPlatformTenants, rotatePlatformAPIKey, updatePlatformAPIKey } from '@/api/platform'
-import type { APIKeyCreateRequest, APIKeyRecord, GatewayPrincipal, GovernancePolicy, PlatformTenant } from '@/types'
+import type { APIKeyCreateRequest, APIKeyRecord, GatewayModel, GatewayPrincipal, GovernancePolicy, PlatformTenant } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -19,10 +20,10 @@ const keys = ref<APIKeyRecord[]>([])
 const policies = ref<GovernancePolicy[]>([])
 const tenants = ref<PlatformTenant[]>([])
 const principals = ref<GatewayPrincipal[]>([])
+const gatewayModels = ref<GatewayModel[]>([])
 const oneTimeKey = ref('')
 const rotationTarget = ref<APIKeyRecord | null>(null)
 const rotationSaving = ref(false)
-const modelsText = ref('')
 const status = ref('active')
 const form = reactive<APIKeyCreateRequest>({
   name: '',
@@ -39,6 +40,7 @@ const form = reactive<APIKeyCreateRequest>({
 const activePolicies = computed(() => policies.value.filter((policy) => policy.status === 'active'))
 const activeTenants = computed(() => tenants.value.filter((tenant) => tenant.status === 'active'))
 const availablePrincipals = computed(() => principals.value.filter((principal) => principal.status === 'active' && principal.tenant_id === form.platform_tenant_id))
+const defaultGatewayModel = computed(() => gatewayModels.value.find((item) => item.status === 'active')?.model_id || '')
 const summary = computed(() => ({
   total: keys.value.length,
   active: keys.value.filter((key) => apiKeyLifecycleStatus(key) === 'active').length,
@@ -46,17 +48,12 @@ const summary = computed(() => ({
   disabled: keys.value.filter((key) => ['disabled', 'retired'].includes(apiKeyLifecycleStatus(key))).length
 }))
 
-function splitModels(value: string): string[] {
-  return value.split(/[\n,]/).map((model) => model.trim()).filter(Boolean)
-}
-
 function resetForm() {
 	const tenantID = activeTenants.value[0]?.id || ''
   Object.assign(form, {
-    name: '', policy_id: '', model_allowlist: [], qps_limit: 10, monthly_token_limit: 1_000_000, expires_at: '', key_type: 'workspace',
+    name: '', policy_id: '', model_allowlist: defaultGatewayModel.value ? [defaultGatewayModel.value] : [], qps_limit: 10, monthly_token_limit: 1_000_000, expires_at: '', key_type: 'workspace',
     platform_tenant_id: tenantID, gateway_principal_id: principals.value.find((principal) => principal.status === 'active' && principal.tenant_id === tenantID)?.id || ''
   })
-  modelsText.value = ''
   status.value = 'active'
 }
 
@@ -82,7 +79,6 @@ function openEdit(key: APIKeyRecord) {
     platform_tenant_id: key.platform_tenant_id,
     gateway_principal_id: key.gateway_principal_id
   })
-  modelsText.value = key.model_allowlist.join('\n')
   status.value = key.status
   modalOpen.value = true
 }
@@ -91,14 +87,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [keyResult, policyResult, tenantResult, principalResult] = await Promise.allSettled([getPlatformAPIKeys(), getGovernancePolicies(), getPlatformTenants(), getGatewayPrincipals()])
+    const [keyResult, policyResult, tenantResult, principalResult, modelResult] = await Promise.allSettled([getPlatformAPIKeys(), getGovernancePolicies(), getPlatformTenants(), getGatewayPrincipals(), getGatewayModels()])
     if (keyResult.status === 'rejected') throw keyResult.reason
+    if (modelResult.status === 'rejected') throw modelResult.reason
     keys.value = keyResult.value
     policies.value = policyResult.status === 'fulfilled' ? policyResult.value : []
     if (tenantResult.status === 'rejected') throw tenantResult.reason
     if (principalResult.status === 'rejected') throw principalResult.reason
     tenants.value = tenantResult.value
     principals.value = principalResult.value
+    gatewayModels.value = modelResult.value
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -111,7 +109,7 @@ async function save() {
   error.value = ''
   oneTimeKey.value = ''
   try {
-    const payload = { ...form, model_allowlist: splitModels(modelsText.value), key_type: form.key_type === 'service' ? 'service' : 'workspace' }
+    const payload = { ...form, model_allowlist: [...form.model_allowlist], key_type: form.key_type === 'service' ? 'service' : 'workspace' }
     if (!payload.platform_tenant_id || !payload.gateway_principal_id) {
       error.value = t('platform.keyOwnershipRequired')
       return
@@ -234,12 +232,12 @@ onMounted(load)
           <div class="field"><label for="platform-key-tenant">{{ t('platform.tenant') }}</label><select id="platform-key-tenant" v-model="form.platform_tenant_id" @change="changeTenant"><option value="" disabled>{{ t('platform.tenant') }}</option><option v-for="tenant in activeTenants" :key="tenant.id" :value="tenant.id">{{ tenant.name }}</option></select></div>
           <div class="field"><label for="platform-key-principal">{{ t('platform.principal') }}</label><select id="platform-key-principal" v-model="form.gateway_principal_id"><option value="" disabled>{{ t('platform.principal') }}</option><option v-for="principal in availablePrincipals" :key="principal.id" :value="principal.id">{{ principal.name }} ({{ principal.principal_type }})</option></select></div>
           <div class="field form-span-2"><label for="platform-key-policy">{{ t('policies.policy') }}</label><select id="platform-key-policy" v-model="form.policy_id"><option value="">{{ t('policies.inherit') }}</option><option v-for="policy in activePolicies" :key="policy.id" :value="policy.id">{{ policy.name }}</option></select></div>
-          <div class="field form-span-2"><label for="platform-key-models">{{ t('apiKeys.models') }}</label><textarea id="platform-key-models" v-model="modelsText" rows="3" /></div>
+          <div class="field form-span-2"><label id="platform-key-models-label">{{ t('apiKeys.models') }}</label><GatewayModelPicker v-model="form.model_allowlist" :models="gatewayModels" :disabled="saving" aria-labelledby="platform-key-models-label" /></div>
           <div class="field"><label for="platform-key-qps">{{ t('apiKeys.qps') }}</label><input id="platform-key-qps" v-model.number="form.qps_limit" type="number" min="0" /></div>
           <div class="field"><label for="platform-key-monthly-tokens">{{ t('apiKeys.monthlyTokens') }}</label><input id="platform-key-monthly-tokens" v-model.number="form.monthly_token_limit" type="number" min="0" /></div>
           <div class="field"><label for="platform-key-expires-at">{{ t('apiKeys.expiresAt') }}</label><input id="platform-key-expires-at" v-model="form.expires_at" type="date" /></div>
         </div>
-        <footer class="modal-footer"><button class="button secondary" type="button" @click="modalOpen = false">{{ t('common.cancel') }}</button><button class="button" type="button" :disabled="saving" @click="save">{{ saving ? t('common.saving') : t('common.save') }}</button></footer>
+        <footer class="modal-footer"><button class="button secondary" type="button" @click="modalOpen = false">{{ t('common.cancel') }}</button><button class="button" type="button" :disabled="saving || !form.model_allowlist.length" @click="save">{{ saving ? t('common.saving') : t('common.save') }}</button></footer>
       </section>
     </div>
     <APIKeyRotationDialog

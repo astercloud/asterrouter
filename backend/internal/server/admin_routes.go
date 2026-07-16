@@ -23,7 +23,7 @@ func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, 
 	registerModelPricingAdminRoutes(admin, control)
 	registerEffectivePricingAdminRoutes(admin, control)
 	registerAIJobAdminRoutes(admin, control, runtime, "")
-	registerArtifactAdminRoutes(admin, control)
+	registerArtifactAdminRoutes(admin, control, "")
 	registerObservabilityAdminRoutesForScope(admin, control, "")
 	registerAlertAdminRoutes(admin, control)
 	registerCSVExportJobRoutes(admin.Group("/export-jobs"), control, exportJobs)
@@ -100,6 +100,19 @@ func registerGatewayModelAdminRoutes(admin *gin.RouterGroup, control *controlpla
 			return
 		}
 		data, err := control.CreateModelRoute(c.Request.Context(), actor(c), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1518, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.POST("/model-routes/bulk", func(c *gin.Context) {
+		var req controlplane.ModelRouteBulkCreateRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1517, "invalid model route batch payload")
+			return
+		}
+		data, err := control.BulkCreateModelRoutes(c.Request.Context(), actor(c), req)
 		if err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1518, err.Error())
 			return
@@ -263,6 +276,35 @@ func registerRoutingAdminRoutes(admin *gin.RouterGroup, control *controlplane.Se
 			return
 		}
 		data, err := control.UpdateProviderAccount(c.Request.Context(), actor(c), c.Param("id"), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1513, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.GET("/provider-accounts/:id/models", func(c *gin.Context) {
+		data, err := control.GetProviderAccountModelInventory(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1513, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.POST("/provider-accounts/:id/models/discover", func(c *gin.Context) {
+		data, err := control.DiscoverProviderAccountModels(c.Request.Context(), actor(c), c.Param("id"))
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1513, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.POST("/provider-accounts/:id/models/sync", func(c *gin.Context) {
+		var req controlplane.ProviderAccountModelSyncRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1512, "invalid provider account model sync payload")
+			return
+		}
+		data, err := control.SyncProviderAccountModels(c.Request.Context(), actor(c), c.Param("id"), req)
 		if err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1513, err.Error())
 			return

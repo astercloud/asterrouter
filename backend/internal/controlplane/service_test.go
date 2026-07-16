@@ -26,6 +26,13 @@ func TestEnsureSeedDataCreatesProductBaselineResources(t *testing.T) {
 	if len(dashboard.Models) != 0 {
 		t.Fatalf("models = %+v", dashboard.Models)
 	}
+	providers, err := svc.ListProviders(context.Background())
+	if err != nil {
+		t.Fatalf("ListProviders(): %v", err)
+	}
+	if len(providers) != 1 || len(providers[0].Models) != 0 {
+		t.Fatalf("seed provider must not declare a static model catalog: %+v", providers)
+	}
 }
 
 func TestCreateAPIKeyReturnsSecretOnceAndStoresHash(t *testing.T) {
@@ -599,8 +606,116 @@ func TestCheckProviderProbesModelsAndPersistsHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProviders(): %v", err)
 	}
-	if len(providers) != 1 || !contains(providers[0].Models, "manual-model") || !contains(providers[0].Models, "gpt-real") {
-		t.Fatalf("discovered models not merged: %+v", providers)
+	if len(providers) != 1 || !sameStringList(providers[0].Models, []string{"gpt-fast", "gpt-real"}) {
+		t.Fatalf("provider model snapshot was not replaced: %+v", providers)
+	}
+}
+
+func TestProviderModelSnapshotCanOnlyBeWrittenByDiscovery(t *testing.T) {
+	ctx := context.Background()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"discovered-current"}]}`))
+	}))
+	defer upstream.Close()
+
+	svc := NewService(NewMemoryRepository(), "/v1", "provider-snapshot-secret")
+	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
+		Name: "Read-only snapshot", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
+		Status: ProviderStatusActive, Models: []string{"forged-on-create"}, APIKey: "provider-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.Models) != 0 {
+		t.Fatalf("create accepted caller-owned model snapshot: %+v", provider.Models)
+	}
+	if _, err := svc.CheckProvider(ctx, "tester", provider.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.UpdateProvider(ctx, "tester", provider.ID, ProviderRequest{
+		Name: "Read-only snapshot updated", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
+		Status: ProviderStatusActive, Models: []string{"forged-on-update"}, Priority: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameStringList(updated.Models, []string{"discovered-current"}) {
+		t.Fatalf("update replaced discovered model snapshot: %+v", updated.Models)
+	}
+}
+
+func TestCheckProviderUsesTypedModelDiscoveryAdapters(t *testing.T) {
+	tests := []struct {
+		name           string
+		providerType   string
+		basePath       string
+		expectedHeader string
+		expectedValue  string
+		response       string
+		expectedModels []string
+	}{
+		{
+			name:           "anthropic",
+			providerType:   "anthropic",
+			basePath:       "/v1",
+			expectedHeader: "x-api-key",
+			expectedValue:  "provider-secret",
+			response:       `{"data":[{"id":"claude-current"}],"has_more":false}`,
+			expectedModels: []string{"claude-current"},
+		},
+		{
+			name:           "gemini",
+			providerType:   "gemini",
+			basePath:       "/v1beta",
+			expectedHeader: "x-goog-api-key",
+			expectedValue:  "provider-secret",
+			response:       `{"models":[{"name":"models/gemini-current"}]}`,
+			expectedModels: []string{"gemini-current"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.basePath+"/models" {
+					t.Fatalf("path = %s", r.URL.Path)
+				}
+				if got := r.Header.Get(tc.expectedHeader); got != tc.expectedValue {
+					t.Fatalf("%s = %q", tc.expectedHeader, got)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer upstream.Close()
+
+			svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+			provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
+				Name:    tc.name + " provider",
+				Type:    tc.providerType,
+				BaseURL: upstream.URL + tc.basePath,
+				Status:  ProviderStatusActive,
+				Models:  []string{"stale-model"},
+				APIKey:  "provider-secret",
+			})
+			if err != nil {
+				t.Fatalf("CreateProvider(): %v", err)
+			}
+
+			check, err := svc.CheckProvider(context.Background(), "tester", provider.ID)
+			if err != nil {
+				t.Fatalf("CheckProvider(): %v", err)
+			}
+			if check.Status != "ok" || !sameStringList(check.Models, tc.expectedModels) {
+				t.Fatalf("unexpected health check: %+v", check)
+			}
+			providers, err := svc.ListProviders(context.Background())
+			if err != nil {
+				t.Fatalf("ListProviders(): %v", err)
+			}
+			if len(providers) != 1 || !sameStringList(providers[0].Models, tc.expectedModels) {
+				t.Fatalf("provider model snapshot was not replaced: %+v", providers)
+			}
+		})
 	}
 }
 
@@ -983,8 +1098,15 @@ func TestCheckProviderAccountProbesModelsAndPersistsHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProviderAccounts(): %v", err)
 	}
-	if len(accounts) != 1 || !contains(accounts[0].Models, "manual-account-model") || !contains(accounts[0].Models, "gpt-account") {
-		t.Fatalf("account discovered models not merged: %+v", accounts)
+	if len(accounts) != 1 || !contains(accounts[0].Models, "manual-account-model") || contains(accounts[0].Models, "gpt-account") {
+		t.Fatalf("account discovery changed the explicit model selection: %+v", accounts)
+	}
+	inventory, err := svc.GetProviderAccountModelInventory(context.Background(), account.ID)
+	if err != nil {
+		t.Fatalf("GetProviderAccountModelInventory(): %v", err)
+	}
+	if model := findProviderAccountModel(inventory.Models, "gpt-account"); model == nil || model.Source != ProviderAccountModelSourceDiscovered || model.Availability != ProviderAccountModelAvailabilityAvailable || model.Enabled {
+		t.Fatalf("discovered model inventory mismatch: %+v", inventory.Models)
 	}
 }
 

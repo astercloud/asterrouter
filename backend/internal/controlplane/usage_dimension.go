@@ -8,18 +8,21 @@ import (
 )
 
 const (
-	UsageDimensionInputImages             = "input_images"
-	UsageDimensionOutputImages            = "output_images"
-	UsageDimensionPartialImages           = "partial_images"
-	UsageDimensionInputVideoMilliseconds  = "input_video_milliseconds"
-	UsageDimensionOutputVideoMilliseconds = "output_video_milliseconds"
-	UsageDimensionInputAudioMilliseconds  = "input_audio_milliseconds"
-	UsageDimensionOutputAudioMilliseconds = "output_audio_milliseconds"
-	UsageDimensionInputCharacters         = "input_characters"
-	UsageDimensionActions                 = "actions"
-	UsageDimensionBatchItems              = "batch_items"
-	UsageDimensionOutputBytes             = "output_bytes"
-	UsageDimensionTransferBytes           = "transfer_bytes"
+	UsageDimensionInputImages               = "input_images"
+	UsageDimensionOutputImages              = "output_images"
+	UsageDimensionPartialImages             = "partial_images"
+	UsageDimensionInputVideoMilliseconds    = "input_video_milliseconds"
+	UsageDimensionOutputVideoMilliseconds   = "output_video_milliseconds"
+	UsageDimensionInputAudioMilliseconds    = "input_audio_milliseconds"
+	UsageDimensionOutputAudioMilliseconds   = "output_audio_milliseconds"
+	UsageDimensionRealtimeAudioMilliseconds = "realtime_audio_milliseconds"
+	UsageDimensionInputCharacters           = "input_characters"
+	UsageDimensionActions                   = "actions"
+	UsageDimensionBatchItems                = "batch_items"
+	UsageDimensionInputBytes                = "input_bytes"
+	UsageDimensionOutputBytes               = "output_bytes"
+	UsageDimensionTransferBytes             = "transfer_bytes"
+	UsageDimensionSessionMilliseconds       = "session_milliseconds"
 
 	UsageUnitCount       = "count"
 	UsageUnitMillisecond = "millisecond"
@@ -35,18 +38,21 @@ const (
 var ErrUsageDimensionsInvalid = errors.New("usage dimensions are invalid")
 
 var usageDimensionUnits = map[string]string{
-	UsageDimensionInputImages:             UsageUnitCount,
-	UsageDimensionOutputImages:            UsageUnitCount,
-	UsageDimensionPartialImages:           UsageUnitCount,
-	UsageDimensionInputVideoMilliseconds:  UsageUnitMillisecond,
-	UsageDimensionOutputVideoMilliseconds: UsageUnitMillisecond,
-	UsageDimensionInputAudioMilliseconds:  UsageUnitMillisecond,
-	UsageDimensionOutputAudioMilliseconds: UsageUnitMillisecond,
-	UsageDimensionInputCharacters:         UsageUnitCharacter,
-	UsageDimensionActions:                 UsageUnitCount,
-	UsageDimensionBatchItems:              UsageUnitCount,
-	UsageDimensionOutputBytes:             UsageUnitByte,
-	UsageDimensionTransferBytes:           UsageUnitByte,
+	UsageDimensionInputImages:               UsageUnitCount,
+	UsageDimensionOutputImages:              UsageUnitCount,
+	UsageDimensionPartialImages:             UsageUnitCount,
+	UsageDimensionInputVideoMilliseconds:    UsageUnitMillisecond,
+	UsageDimensionOutputVideoMilliseconds:   UsageUnitMillisecond,
+	UsageDimensionInputAudioMilliseconds:    UsageUnitMillisecond,
+	UsageDimensionOutputAudioMilliseconds:   UsageUnitMillisecond,
+	UsageDimensionRealtimeAudioMilliseconds: UsageUnitMillisecond,
+	UsageDimensionInputCharacters:           UsageUnitCharacter,
+	UsageDimensionActions:                   UsageUnitCount,
+	UsageDimensionBatchItems:                UsageUnitCount,
+	UsageDimensionInputBytes:                UsageUnitByte,
+	UsageDimensionOutputBytes:               UsageUnitByte,
+	UsageDimensionTransferBytes:             UsageUnitByte,
+	UsageDimensionSessionMilliseconds:       UsageUnitMillisecond,
 }
 
 type UsageDimension struct {
@@ -135,8 +141,11 @@ func UsageDimensionsTotals(values UsageDimensions) UsageDimensionTotals {
 			usageDimensionQuantity(values, UsageDimensionOutputVideoMilliseconds),
 		),
 		AudioMilliseconds: saturatingUsageAdd(
-			usageDimensionQuantity(values, UsageDimensionInputAudioMilliseconds),
-			usageDimensionQuantity(values, UsageDimensionOutputAudioMilliseconds),
+			saturatingUsageAdd(
+				usageDimensionQuantity(values, UsageDimensionInputAudioMilliseconds),
+				usageDimensionQuantity(values, UsageDimensionOutputAudioMilliseconds),
+			),
+			usageDimensionQuantity(values, UsageDimensionRealtimeAudioMilliseconds),
 		),
 	}
 }

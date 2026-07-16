@@ -10,47 +10,61 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerArtifactAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {
-	admin.GET("/artifacts", func(c *gin.Context) {
-		data, err := control.ListArtifactsAdmin(c.Request.Context(), artifactAdminQuery(c))
+func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.Service, profileScope string) {
+	group.GET("/artifacts", func(c *gin.Context) {
+		data, err := control.ListArtifactsAdmin(c.Request.Context(), artifactAdminQuery(c, profileScope))
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
 		}
 		httpx.OK(c, data)
 	})
-	admin.GET("/artifacts/summary", func(c *gin.Context) {
-		data, err := control.ArtifactSummaryAdmin(c.Request.Context(), artifactAdminQuery(c))
+	group.GET("/artifacts/summary", func(c *gin.Context) {
+		data, err := control.ArtifactSummaryAdmin(c.Request.Context(), artifactAdminQuery(c, profileScope))
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
 		}
 		httpx.OK(c, data)
 	})
-	admin.GET("/artifacts/:id", func(c *gin.Context) {
+	group.GET("/artifacts/:id", func(c *gin.Context) {
 		data, err := control.ArtifactAdmin(c.Request.Context(), c.Param("id"))
+		if err == nil && !artifactAdminScopeMatches(data.Artifact, profileScope) {
+			err = controlplane.ErrArtifactNotFound
+		}
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
 		}
 		httpx.OK(c, data)
 	})
-	admin.POST("/artifacts/:id/retry-delivery", func(c *gin.Context) {
-		data, err := control.RetryArtifactDelivery(c.Request.Context(), actor(c), c.Param("id"))
+	group.POST("/artifacts/:id/retry-delivery", func(c *gin.Context) {
+		data, err := control.ArtifactAdmin(c.Request.Context(), c.Param("id"))
+		if err == nil && !artifactAdminScopeMatches(data.Artifact, profileScope) {
+			err = controlplane.ErrArtifactNotFound
+		}
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
 		}
-		httpx.OK(c, data)
+		result, err := control.RetryArtifactDelivery(c.Request.Context(), actor(c), data.Artifact.ID)
+		if err != nil {
+			writeArtifactAdminError(c, err)
+			return
+		}
+		httpx.OK(c, result)
 	})
-	admin.GET("/artifact-runtimes", func(c *gin.Context) {
+	group.GET("/artifact-runtimes", func(c *gin.Context) {
 		httpx.OK(c, control.ArtifactRuntimes())
 	})
 }
 
-func artifactAdminQuery(c *gin.Context) controlplane.ArtifactQuery {
+func artifactAdminQuery(c *gin.Context, profileScope string) controlplane.ArtifactQuery {
+	if strings.TrimSpace(profileScope) == "" {
+		profileScope = strings.TrimSpace(c.Query("profile_scope"))
+	}
 	return controlplane.ArtifactQuery{
-		ProfileScope: strings.TrimSpace(c.Query("profile_scope")),
+		ProfileScope: strings.TrimSpace(profileScope),
 		TenantID:     strings.TrimSpace(c.Query("tenant_id")),
 		Search:       strings.TrimSpace(c.Query("q")),
 		OperationID:  strings.TrimSpace(c.Query("operation_id")),
@@ -62,6 +76,11 @@ func artifactAdminQuery(c *gin.Context) controlplane.ArtifactQuery {
 		Limit:        intQuery(c, "limit", 50),
 		Offset:       intQuery(c, "offset", 0),
 	}
+}
+
+func artifactAdminScopeMatches(artifact controlplane.ArtifactAdminRecord, profileScope string) bool {
+	profileScope = strings.TrimSpace(profileScope)
+	return profileScope == "" || artifact.ProfileScope == profileScope
 }
 
 func writeArtifactAdminError(c *gin.Context, err error) {

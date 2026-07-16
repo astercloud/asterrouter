@@ -1,6 +1,9 @@
 package gatewaycore
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -22,6 +25,7 @@ func TestExtractCredentialUsesOneProtocolApprovedTransport(t *testing.T) {
 		{name: "signed context", protocol: ProtocolOpenAIChat, headers: http.Header{"Authorization": []string{"Aster-Context signed-1"}}, wantSigned: "signed-1", transport: "authorization_aster_context"},
 		{name: "anthropic", protocol: ProtocolAnthropicMessages, headers: http.Header{"X-Api-Key": []string{"key-2"}}, wantToken: "key-2", transport: "anthropic_x_api_key"},
 		{name: "gemini", protocol: ProtocolGeminiGenerate, headers: http.Header{"X-Goog-Api-Key": []string{"key-3"}}, wantToken: "key-3", transport: "gemini_x_goog_api_key"},
+		{name: "realtime browser", protocol: ProtocolRealtime, headers: http.Header{"Sec-Websocket-Protocol": []string{"realtime, openai-insecure-api-key.key-4"}}, wantToken: "key-4", transport: "realtime_subprotocol"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -70,6 +74,7 @@ func TestExtractCredentialFailsClosed(t *testing.T) {
 		{name: "multiple", protocol: ProtocolAnthropicMessages, rawURL: "https://gateway.test/v1/messages", headers: http.Header{"Authorization": []string{"Bearer one"}, "X-Api-Key": []string{"two"}}, want: ErrCredentialConflict},
 		{name: "anthropic header on openai", protocol: ProtocolOpenAIChat, rawURL: "https://gateway.test/v1/chat/completions", headers: http.Header{"X-Api-Key": []string{"one"}}, want: ErrCredentialTransportRejected},
 		{name: "unknown scheme", protocol: ProtocolOpenAIChat, rawURL: "https://gateway.test/v1/chat/completions", headers: http.Header{"Authorization": []string{"Basic abc"}}, want: ErrCredentialTransportRejected},
+		{name: "realtime conflicting", protocol: ProtocolRealtime, rawURL: "https://gateway.test/v1/realtime?model=audio", headers: http.Header{"Authorization": []string{"Bearer one"}, "Sec-Websocket-Protocol": []string{"realtime, openai-insecure-api-key.two"}}, want: ErrCredentialConflict},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -112,6 +117,40 @@ func TestCanonicalizeOpenAIModelsProducesCanonicalEnvelope(t *testing.T) {
 	}
 	if got.ID != "op_models-1" || got.Protocol != ProtocolOpenAIModels || got.Operation != "list_models" || got.Modality != "metadata" || got.Lane != LaneDirect || got.Model != "" || len(got.Fingerprint) != 64 {
 		t.Fatalf("canonical models request = %+v", got)
+	}
+}
+
+func TestCanonicalizeRealtimeSessionFreezesAdmissionEnvelope(t *testing.T) {
+	header := http.Header{
+		"X-Request-Id":                              []string{"realtime-1"},
+		"Idempotency-Key":                           []string{"realtime-idem-1"},
+		"X-Asterrouter-Sticky-Key":                  []string{"conversation-1"},
+		"X-Asterrouter-Estimated-Audio-Duration-Ms": []string{"90000"},
+	}
+	got, err := CanonicalizeRealtimeSession(header, " public-realtime ")
+	if err != nil {
+		t.Fatalf("CanonicalizeRealtimeSession(): %v", err)
+	}
+	if got.ID != "op_realtime-1" || got.Protocol != ProtocolRealtime || got.Operation != "realtime_session" || got.Modality != "audio" || got.Lane != LaneDirect || got.Model != "public-realtime" || !got.Stream || got.IdempotencyKey != "realtime-idem-1" || got.StickyKey != "conversation-1" || got.AudioDurationMS != 90000 || got.ResponseMode != "stream" {
+		t.Fatalf("canonical realtime request = %+v", got)
+	}
+	if len(got.Fingerprint) != 64 || strings.Contains(string(got.Payload), "realtime-idem-1") {
+		t.Fatalf("realtime fingerprint payload is invalid: %+v", got)
+	}
+}
+
+func TestCanonicalizeRealtimeSessionRejectsUnsafeAdmission(t *testing.T) {
+	valid := http.Header{"Idempotency-Key": []string{"realtime-idem"}}
+	if _, err := CanonicalizeRealtimeSession(valid, " "); !errors.Is(err, ErrInvalidCanonicalRequest) {
+		t.Fatalf("missing model error=%v", err)
+	}
+	if _, err := CanonicalizeRealtimeSession(http.Header{}, "model"); !errors.Is(err, ErrInvalidCanonicalRequest) {
+		t.Fatalf("missing idempotency error=%v", err)
+	}
+	tooLong := valid.Clone()
+	tooLong.Set("X-AsterRouter-Estimated-Audio-Duration-Ms", "3600001")
+	if _, err := CanonicalizeRealtimeSession(tooLong, "model"); !errors.Is(err, ErrInvalidCanonicalRequest) {
+		t.Fatalf("duration error=%v", err)
 	}
 }
 
@@ -337,6 +376,65 @@ func TestCanonicalizeOpenAIMediaJobPreservesPreviewContract(t *testing.T) {
 		if _, err := CanonicalizeOpenAIMediaJob([]byte(body), header, "video", "video_generation"); !errors.Is(err, ErrInvalidCanonicalRequest) {
 			t.Fatalf("body=%s error=%v, want invalid canonical request", body, err)
 		}
+	}
+}
+
+func TestCanonicalizeOpenAIAudioFileUsesDigestForStableIdentity(t *testing.T) {
+	header := http.Header{"X-Request-Id": []string{"audio-request-1"}, "Idempotency-Key": []string{"audio-idem-1"}}
+	content := []byte{0, 1, 2, 3, 255}
+	digest := sha256.Sum256(content)
+	input := CanonicalInputArtifact{Filename: "first.wav", MediaType: "audio/wav", SizeBytes: int64(len(content)), SHA256: hex.EncodeToString(digest[:]), Content: content}
+	first, err := CanonicalizeOpenAIAudioFile(map[string][]string{
+		"model": {"public-audio"}, "language": {"en"}, "stream": {"true"},
+	}, input, []byte("multipart-one"), "multipart/form-data; boundary=one", header, ProtocolOpenAIAudioTranscriptions)
+	if err != nil {
+		t.Fatalf("CanonicalizeOpenAIAudioFile(): %v", err)
+	}
+	input.Filename = "renamed.wav"
+	second, err := CanonicalizeOpenAIAudioFile(map[string][]string{
+		"stream": {"true"}, "language": {"en"}, "model": {"public-audio"},
+	}, input, []byte("multipart-two"), "multipart/form-data; boundary=two", header, ProtocolOpenAIAudioTranscriptions)
+	if err != nil {
+		t.Fatalf("CanonicalizeOpenAIAudioFile() second: %v", err)
+	}
+	if first.Fingerprint != second.Fingerprint || first.Protocol != ProtocolOpenAIAudioTranscriptions || first.Operation != "audio_transcription" || first.Lane != LaneDirect || !first.Stream || first.ResponseMode != "stream" {
+		t.Fatalf("canonical audio requests differ: first=%+v second=%+v", first, second)
+	}
+	if bytes.Contains(first.Payload, content) || bytes.Contains(first.Payload, []byte("first.wav")) || first.InputArtifact == nil || !bytes.Equal(first.InputArtifact.Content, content) {
+		t.Fatalf("audio bytes leaked into canonical payload: %s", first.Payload)
+	}
+	if _, err := CanonicalizeOpenAIAudioFile(map[string][]string{"model": {"one", "two"}}, input, []byte("multipart"), "multipart/form-data; boundary=one", header, ProtocolOpenAIAudioTranscriptions); !errors.Is(err, ErrInvalidCanonicalRequest) {
+		t.Fatalf("duplicate model error=%v", err)
+	}
+}
+
+func TestCanonicalizeOpenAIAudioSpeechPreservesBinaryAndSSEContracts(t *testing.T) {
+	header := http.Header{}
+	header.Set("X-AsterRouter-Estimated-Audio-Duration-Ms", "1250")
+	header.Set("Idempotency-Key", "speech-blocking")
+	blocking, err := CanonicalizeOpenAIAudioSpeech([]byte(`{"model":"voice-model","input":"hello","voice":"alloy","response_format":"mp3"}`), header)
+	if err != nil || blocking.Protocol != ProtocolOpenAIAudioSpeech || blocking.Operation != "speech_generation" || blocking.Stream || blocking.ResponseMode != "blocking" || blocking.InputCharacters != 5 || blocking.AudioDurationMS != 1250 {
+		t.Fatalf("blocking=%+v err=%v", blocking, err)
+	}
+	streamHeader := http.Header{}
+	streamHeader.Set("Idempotency-Key", "speech-stream")
+	streaming, err := CanonicalizeOpenAIAudioSpeech([]byte(`{"model":"voice-model","input":"hello","voice":"alloy","stream_format":"sse"}`), streamHeader)
+	if err != nil || !streaming.Stream || streaming.ResponseMode != "stream" {
+		t.Fatalf("streaming=%+v err=%v", streaming, err)
+	}
+	for _, raw := range []string{
+		`{"input":"hello","voice":"alloy"}`,
+		`{"model":"voice-model","voice":"alloy"}`,
+		`{"model":"voice-model","input":"hello","voice":"alloy","stream_format":"invalid"}`,
+	} {
+		if _, err := CanonicalizeOpenAIAudioSpeech([]byte(raw), http.Header{}); !errors.Is(err, ErrInvalidCanonicalRequest) {
+			t.Fatalf("raw=%s error=%v", raw, err)
+		}
+	}
+	invalidHeader := http.Header{}
+	invalidHeader.Set("X-AsterRouter-Estimated-Audio-Duration-Ms", "invalid")
+	if _, err := CanonicalizeOpenAIAudioSpeech([]byte(`{"model":"voice-model","input":"hello","voice":"alloy"}`), invalidHeader); !errors.Is(err, ErrInvalidCanonicalRequest) {
+		t.Fatalf("invalid duration error=%v", err)
 	}
 }
 

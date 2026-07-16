@@ -30,7 +30,7 @@ describe('control API contracts', () => {
     client.get.mockResolvedValueOnce({ data: [{ id: 'check-1', models: ['model', 1, null] }] })
     expect(await control.getProviderHealthChecks()).toEqual([{ id: 'check-1', models: ['model'] }])
     client.get.mockResolvedValueOnce({ data: [{ id: 'account-1', models: null, group_ids: null, temp_unschedulable_rules: null }] })
-    expect(await control.getProviderAccounts()).toEqual([{ id: 'account-1', models: [], group_ids: [], temp_unschedulable_rules: [] }])
+    expect(await control.getProviderAccounts()).toEqual([{ id: 'account-1', models: [], auto_enable_new_models: false, group_ids: [], temp_unschedulable_rules: [] }])
     client.get.mockResolvedValueOnce({ data: [{ id: 'check-2', models: null }] })
     expect(await control.getProviderAccountHealthChecks()).toEqual([{ id: 'check-2', models: [] }])
     client.get.mockResolvedValueOnce({ data: null })
@@ -43,6 +43,37 @@ describe('control API contracts', () => {
     expect(await control.getAPIKeys()).toEqual([])
     client.get.mockResolvedValueOnce({ data: null })
     expect(await control.getGovernancePolicies()).toEqual([])
+  })
+
+  it('normalizes nullable provider mutation responses', async () => {
+    const provider = { id: 'provider-1', models: null }
+    client.post.mockResolvedValueOnce({ data: provider })
+    expect(await control.createProvider({} as never)).toEqual({ id: 'provider-1', models: [] })
+    client.put.mockResolvedValueOnce({ data: provider })
+    expect(await control.updateProvider('provider-1', {} as never)).toEqual({ id: 'provider-1', models: [] })
+    client.post.mockResolvedValueOnce({ data: { id: 'check-1', models: null } })
+    expect(await control.checkProvider('provider-1')).toEqual({ id: 'check-1', models: [] })
+
+    const account = { id: 'account-1', models: null, group_ids: null, temp_unschedulable_rules: null }
+    client.post.mockResolvedValueOnce({ data: account })
+    expect(await control.createProviderAccount({} as never)).toMatchObject({ id: 'account-1', models: [], group_ids: [], temp_unschedulable_rules: [] })
+    client.put.mockResolvedValueOnce({ data: account })
+    expect(await control.updateProviderAccount('account-1', {} as never)).toMatchObject({ id: 'account-1', models: [], group_ids: [], temp_unschedulable_rules: [] })
+    client.post.mockResolvedValueOnce({ data: { id: 'check-2', models: null } })
+    expect(await control.checkProviderAccount('account-1')).toEqual({ id: 'check-2', models: [] })
+
+    client.post.mockResolvedValueOnce({
+      data: {
+        account,
+        inventory: { account_id: 'account-1', models: null },
+        discovery: { account_id: 'account-1', models: null, added_models: null, missing_models: null, unchanged_models: null, affected_route_ids: null }
+      }
+    })
+    expect(await control.syncProviderAccountModels('account-1', { enabled_models: [], auto_enable_new_models: false })).toMatchObject({
+      account: { models: [], group_ids: [], temp_unschedulable_rules: [] },
+      inventory: { models: [] },
+      discovery: { models: [], added_models: [], missing_models: [], unchanged_models: [], affected_route_ids: [] }
+    })
   })
 
   it('uses admin CRUD endpoint contracts', async () => {
@@ -78,6 +109,16 @@ describe('control API contracts', () => {
       { run: () => control.createProviderAccount(payload), method: 'post', args: ['/admin/provider-accounts', payload] },
       { run: () => control.updateProviderAccount('account-1', payload), method: 'put', args: ['/admin/provider-accounts/account-1', payload] },
       { run: () => control.checkProviderAccount('account-1'), method: 'post', args: ['/admin/provider-accounts/account-1/check'] },
+      { run: () => control.getProviderAccountModelInventory('account-1'), method: 'get', args: ['/admin/provider-accounts/account-1/models'] },
+      { run: () => control.discoverProviderAccountModels('account-1'), method: 'post', args: ['/admin/provider-accounts/account-1/models/discover'] },
+      {
+        run: () => {
+          client.post.mockResolvedValueOnce({ data: { account: {}, inventory: {}, discovery: {} } })
+          return control.syncProviderAccountModels('account-1', { enabled_models: ['model-a'], auto_enable_new_models: false })
+        },
+        method: 'post',
+        args: ['/admin/provider-accounts/account-1/models/sync', { enabled_models: ['model-a'], auto_enable_new_models: false }]
+      },
       { run: () => control.clearProviderAccountCooldown('account-1'), method: 'post', args: ['/admin/provider-accounts/account-1/clear-cooldown'] },
       { run: () => control.getGatewayModels(), method: 'get', args: ['/admin/gateway-models'] },
       { run: () => control.createGatewayModel(payload), method: 'post', args: ['/admin/gateway-models', payload] },
@@ -85,6 +126,7 @@ describe('control API contracts', () => {
       { run: () => control.deleteGatewayModel('model-1'), method: 'delete', args: ['/admin/gateway-models/model-1'] },
       { run: () => control.getModelRoutes(), method: 'get', args: ['/admin/model-routes'] },
       { run: () => control.createModelRoute(payload), method: 'post', args: ['/admin/model-routes', payload] },
+      { run: () => control.bulkCreateModelRoutes({ routes: [payload] }), method: 'post', args: ['/admin/model-routes/bulk', { routes: [payload] }] },
       { run: () => control.updateModelRoute('route-1', payload), method: 'put', args: ['/admin/model-routes/route-1', payload] },
       { run: () => control.deleteModelRoute('route-1'), method: 'delete', args: ['/admin/model-routes/route-1'] },
       { run: () => control.simulateGatewayRouting('model-a', 123), method: 'post', args: ['/admin/gateway-simulator', { model: 'model-a', estimated_tokens: 123 }] },

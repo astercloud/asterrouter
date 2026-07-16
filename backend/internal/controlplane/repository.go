@@ -46,6 +46,9 @@ type Repository interface {
 	FindAIOperation(ctx context.Context, id string) (AIOperation, bool, error)
 	MarkAIOperationRunning(ctx context.Context, id string, updatedAt time.Time) (bool, error)
 	CompleteAIOperation(ctx context.Context, id, status, errorType string, completedAt time.Time) (bool, error)
+	CreateOrGetRealtimeSession(ctx context.Context, session RealtimeSession) (RealtimeSession, bool, error)
+	FindRealtimeSession(ctx context.Context, id string) (RealtimeSession, bool, error)
+	UpdateRealtimeSession(ctx context.Context, id string, expectedVersion int, update RealtimeSessionUpdate) (RealtimeSession, bool, error)
 	CreateDurableAIJob(ctx context.Context, operation AIOperation, job AIJob, event AIJobEvent, outbox TransactionalOutboxEvent, limits AIJobAdmissionLimits, billing BillingHoldAdmission) (AIJob, bool, error)
 	FindAIJob(ctx context.Context, id string) (AIJob, bool, error)
 	FindAIJobByOperationID(ctx context.Context, operationID string) (AIJob, bool, error)
@@ -118,11 +121,14 @@ type Repository interface {
 	SaveRoutingGroup(ctx context.Context, group RoutingGroup) error
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error)
 	SaveProviderAccount(ctx context.Context, account ProviderAccount) error
+	ListProviderAccountModels(ctx context.Context, accountID string) ([]ProviderAccountModel, error)
+	SaveProviderAccountWithModels(ctx context.Context, account ProviderAccount, models []ProviderAccountModel) error
 	ListGatewayModels(ctx context.Context) ([]GatewayModel, error)
 	SaveGatewayModel(ctx context.Context, model GatewayModel) error
 	DeleteGatewayModel(ctx context.Context, id string) error
 	ListModelRoutes(ctx context.Context) ([]ModelRoute, error)
 	SaveModelRoute(ctx context.Context, route ModelRoute) error
+	SaveModelRoutes(ctx context.Context, routes []ModelRoute) error
 	DeleteModelRoute(ctx context.Context, id string) error
 	ListLatestProviderAccountHealthChecks(ctx context.Context) ([]ProviderAccountHealthCheck, error)
 	SaveProviderAccountHealthCheck(ctx context.Context, check ProviderAccountHealthCheck) error
@@ -233,6 +239,7 @@ type MemoryRepository struct {
 	roleBindings                    map[string]RoleBinding
 	groups                          map[string]RoutingGroup
 	accounts                        map[string]ProviderAccount
+	accountModels                   map[string]map[string]ProviderAccountModel
 	gatewayModels                   map[string]GatewayModel
 	modelRoutes                     map[string]ModelRoute
 	accountHealthChecks             map[string]ProviderAccountHealthCheck
@@ -252,6 +259,7 @@ type MemoryRepository struct {
 	routingAffinityBindings         map[string]RoutingAffinityBinding
 	apiKeys                         map[string]APIKeyRecord
 	aiOperations                    map[string]AIOperation
+	realtimeSessions                map[string]RealtimeSession
 	aiJobs                          map[string]AIJob
 	aiJobEvents                     map[string]AIJobEvent
 	aiJobProgressEvents             map[string]AIJobProgressEvent
@@ -296,6 +304,7 @@ func NewMemoryRepository() *MemoryRepository {
 		roleBindings:                    map[string]RoleBinding{},
 		groups:                          map[string]RoutingGroup{},
 		accounts:                        map[string]ProviderAccount{},
+		accountModels:                   map[string]map[string]ProviderAccountModel{},
 		gatewayModels:                   map[string]GatewayModel{},
 		modelRoutes:                     map[string]ModelRoute{},
 		accountHealthChecks:             map[string]ProviderAccountHealthCheck{},
@@ -315,6 +324,7 @@ func NewMemoryRepository() *MemoryRepository {
 		routingAffinityBindings:         map[string]RoutingAffinityBinding{},
 		apiKeys:                         map[string]APIKeyRecord{},
 		aiOperations:                    map[string]AIOperation{},
+		realtimeSessions:                map[string]RealtimeSession{},
 		aiJobs:                          map[string]AIJob{},
 		aiJobEvents:                     map[string]AIJobEvent{},
 		aiJobProgressEvents:             map[string]AIJobProgressEvent{},
@@ -420,6 +430,30 @@ func (r *MemoryRepository) SaveProviderAccount(_ context.Context, account Provid
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.accounts[account.ID] = account
+	return nil
+}
+
+func (r *MemoryRepository) ListProviderAccountModels(_ context.Context, accountID string) ([]ProviderAccountModel, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	stored := r.accountModels[accountID]
+	out := make([]ProviderAccountModel, 0, len(stored))
+	for _, model := range stored {
+		out = append(out, model)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ModelID < out[j].ModelID })
+	return out, nil
+}
+
+func (r *MemoryRepository) SaveProviderAccountWithModels(_ context.Context, account ProviderAccount, models []ProviderAccountModel) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.accounts[account.ID] = account
+	stored := make(map[string]ProviderAccountModel, len(models))
+	for _, model := range models {
+		stored[model.ModelID] = model
+	}
+	r.accountModels[account.ID] = stored
 	return nil
 }
 
@@ -1363,6 +1397,7 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   load_factor INTEGER,
   rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1,
   models TEXT NOT NULL DEFAULT '[]',
+  auto_enable_new_models BOOLEAN NOT NULL DEFAULT false,
   group_ids TEXT NOT NULL DEFAULT '[]',
   secret_configured BOOLEAN NOT NULL DEFAULT false,
   secret_hint TEXT NOT NULL DEFAULT '',
@@ -1397,6 +1432,25 @@ ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS circuit_opened_until TIME
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS last_failure_at TIMESTAMPTZ;
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS temp_unschedulable_rules TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS temp_unschedulable_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS auto_enable_new_models BOOLEAN NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS provider_account_models (
+  provider_account_id TEXT NOT NULL REFERENCES provider_accounts(id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('discovered', 'manual')),
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  availability TEXT NOT NULL CHECK (availability IN ('available', 'missing', 'unverified')),
+  first_seen_at TIMESTAMPTZ NOT NULL,
+  last_seen_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (provider_account_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS provider_account_models_account_enabled_idx
+  ON provider_account_models(provider_account_id, enabled, model_id);
+
+CREATE INDEX IF NOT EXISTS provider_account_models_availability_idx
+  ON provider_account_models(availability, last_seen_at DESC);
 
 CREATE TABLE IF NOT EXISTS provider_account_health_checks (
   id TEXT PRIMARY KEY,
@@ -1897,6 +1951,46 @@ CREATE INDEX IF NOT EXISTS ai_attempts_reconciliation_idx
 CREATE UNIQUE INDEX IF NOT EXISTS ai_attempts_provider_task_idx
   ON ai_attempts(provider_account_id, provider_task_id)
   WHERE provider_task_id <> '';
+
+CREATE TABLE IF NOT EXISTS realtime_sessions (
+  id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL UNIQUE REFERENCES ai_operations(id) ON DELETE RESTRICT,
+  attempt_id TEXT NOT NULL UNIQUE REFERENCES ai_attempts(id) ON DELETE RESTRICT,
+  profile_scope TEXT NOT NULL DEFAULT '',
+  tenant_id TEXT NOT NULL DEFAULT '',
+  credential_id TEXT NOT NULL,
+  principal_type TEXT NOT NULL DEFAULT '',
+  principal_id TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL,
+  provider_id TEXT NOT NULL DEFAULT '',
+  provider_account_id TEXT NOT NULL DEFAULT '',
+  upstream_model TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  input_audio_bytes BIGINT NOT NULL DEFAULT 0,
+  output_audio_bytes BIGINT NOT NULL DEFAULT 0,
+  client_message_count BIGINT NOT NULL DEFAULT 0,
+  provider_message_count BIGINT NOT NULL DEFAULT 0,
+  transfer_bytes BIGINT NOT NULL DEFAULT 0,
+  usage_version INTEGER NOT NULL DEFAULT 0,
+  session_duration_ms BIGINT NOT NULL DEFAULT 0,
+  error_type TEXT NOT NULL DEFAULT '',
+  connected_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  CHECK (status IN ('connecting', 'connected', 'completed', 'failed', 'canceled')),
+  CHECK (version > 0),
+  CHECK (input_audio_bytes >= 0 AND output_audio_bytes >= 0),
+  CHECK (client_message_count >= 0 AND provider_message_count >= 0),
+  CHECK (transfer_bytes >= 0 AND usage_version >= 0 AND session_duration_ms >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS realtime_sessions_tenant_created_idx
+  ON realtime_sessions(profile_scope, tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS realtime_sessions_status_updated_idx
+  ON realtime_sessions(status, updated_at);
 
 CREATE TABLE IF NOT EXISTS ai_job_progress_events (
   id TEXT PRIMARY KEY,
@@ -2963,7 +3057,7 @@ ON CONFLICT(id) DO UPDATE SET
 
 func (r *PostgresRepository) ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, provider_id, name, platform, auth_type, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at
+	SELECT id, provider_id, name, platform, auth_type, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, auto_enable_new_models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at
 FROM provider_accounts
 ORDER BY priority ASC, name ASC
 `)
@@ -2978,7 +3072,7 @@ ORDER BY priority ASC, name ASC
 		var models, groupIDs, tempUnschedulableRules string
 		var loadFactor sql.NullInt64
 		var lastUsedAt, expiresAt, cooldownUntil, circuitOpenedUntil, lastFailureAt sql.NullTime
-		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Name, &account.Platform, &account.AuthType, &account.Status, &account.Schedulable, &account.Priority, &account.Weight, &account.Concurrency, &account.RPMLimit, &account.TPMLimit, &loadFactor, &account.RateMultiplier, &models, &groupIDs, &account.SecretConfigured, &account.SecretHint, &account.SecretCiphertext, &account.ErrorMessage, &lastUsedAt, &expiresAt, &cooldownUntil, &account.CircuitState, &account.CircuitFailureThreshold, &account.CircuitOpenSeconds, &account.ConsecutiveFailures, &circuitOpenedUntil, &lastFailureAt, &tempUnschedulableRules, &account.TempUnschedulableReason, &account.CreatedAt, &account.UpdatedAt); err != nil {
+		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Name, &account.Platform, &account.AuthType, &account.Status, &account.Schedulable, &account.Priority, &account.Weight, &account.Concurrency, &account.RPMLimit, &account.TPMLimit, &loadFactor, &account.RateMultiplier, &models, &account.AutoEnableNewModels, &groupIDs, &account.SecretConfigured, &account.SecretHint, &account.SecretCiphertext, &account.ErrorMessage, &lastUsedAt, &expiresAt, &cooldownUntil, &account.CircuitState, &account.CircuitFailureThreshold, &account.CircuitOpenSeconds, &account.ConsecutiveFailures, &circuitOpenedUntil, &lastFailureAt, &tempUnschedulableRules, &account.TempUnschedulableReason, &account.CreatedAt, &account.UpdatedAt); err != nil {
 			return nil, err
 		}
 		account.Models = parseStringList(models)
@@ -3009,6 +3103,14 @@ ORDER BY priority ASC, name ASC
 }
 
 func (r *PostgresRepository) SaveProviderAccount(ctx context.Context, account ProviderAccount) error {
+	return saveProviderAccount(ctx, r.db, account)
+}
+
+type providerAccountExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func saveProviderAccount(ctx context.Context, executor providerAccountExecutor, account ProviderAccount) error {
 	models := marshalStringList(account.Models)
 	groupIDs := marshalStringList(account.GroupIDs)
 	tempUnschedulableRules := marshalTempUnschedulableRules(account.TempUnschedulableRules)
@@ -3016,9 +3118,9 @@ func (r *PostgresRepository) SaveProviderAccount(ctx context.Context, account Pr
 	if account.LoadFactor != nil {
 		loadFactor = sql.NullInt64{Int64: int64(*account.LoadFactor), Valid: true}
 	}
-	_, err := r.db.ExecContext(ctx, `
-INSERT INTO provider_accounts(id, provider_id, name, platform, auth_type, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
+	_, err := executor.ExecContext(ctx, `
+INSERT INTO provider_accounts(id, provider_id, name, platform, auth_type, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, auto_enable_new_models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
 ON CONFLICT(id) DO UPDATE SET
   provider_id = EXCLUDED.provider_id,
   name = EXCLUDED.name,
@@ -3034,6 +3136,7 @@ ON CONFLICT(id) DO UPDATE SET
   load_factor = EXCLUDED.load_factor,
   rate_multiplier = EXCLUDED.rate_multiplier,
   models = EXCLUDED.models,
+  auto_enable_new_models = EXCLUDED.auto_enable_new_models,
   group_ids = EXCLUDED.group_ids,
   secret_configured = EXCLUDED.secret_configured,
   secret_hint = EXCLUDED.secret_hint,
@@ -3051,8 +3154,57 @@ ON CONFLICT(id) DO UPDATE SET
   temp_unschedulable_rules = EXCLUDED.temp_unschedulable_rules,
   temp_unschedulable_reason = EXCLUDED.temp_unschedulable_reason,
   updated_at = EXCLUDED.updated_at
-`, account.ID, account.ProviderID, account.Name, account.Platform, account.AuthType, account.Status, account.Schedulable, account.Priority, account.Weight, account.Concurrency, account.RPMLimit, account.TPMLimit, loadFactor, account.RateMultiplier, models, groupIDs, account.SecretConfigured, account.SecretHint, account.SecretCiphertext, account.ErrorMessage, account.LastUsedAt, account.ExpiresAt, account.CooldownUntil, account.CircuitState, account.CircuitFailureThreshold, account.CircuitOpenSeconds, account.ConsecutiveFailures, account.CircuitOpenedUntil, account.LastFailureAt, tempUnschedulableRules, account.TempUnschedulableReason, account.CreatedAt, account.UpdatedAt)
+`, account.ID, account.ProviderID, account.Name, account.Platform, account.AuthType, account.Status, account.Schedulable, account.Priority, account.Weight, account.Concurrency, account.RPMLimit, account.TPMLimit, loadFactor, account.RateMultiplier, models, account.AutoEnableNewModels, groupIDs, account.SecretConfigured, account.SecretHint, account.SecretCiphertext, account.ErrorMessage, account.LastUsedAt, account.ExpiresAt, account.CooldownUntil, account.CircuitState, account.CircuitFailureThreshold, account.CircuitOpenSeconds, account.ConsecutiveFailures, account.CircuitOpenedUntil, account.LastFailureAt, tempUnschedulableRules, account.TempUnschedulableReason, account.CreatedAt, account.UpdatedAt)
 	return err
+}
+
+func (r *PostgresRepository) ListProviderAccountModels(ctx context.Context, accountID string) ([]ProviderAccountModel, error) {
+	rows, err := r.db.QueryContext(ctx, `
+	SELECT provider_account_id, model_id, source, enabled, availability, first_seen_at, last_seen_at, updated_at
+	FROM provider_account_models
+	WHERE provider_account_id = $1
+	ORDER BY model_id ASC
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProviderAccountModel
+	for rows.Next() {
+		var model ProviderAccountModel
+		var lastSeenAt sql.NullTime
+		if err := rows.Scan(&model.ProviderAccountID, &model.ModelID, &model.Source, &model.Enabled, &model.Availability, &model.FirstSeenAt, &lastSeenAt, &model.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if lastSeenAt.Valid {
+			model.LastSeenAt = &lastSeenAt.Time
+		}
+		out = append(out, model)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgresRepository) SaveProviderAccountWithModels(ctx context.Context, account ProviderAccount, models []ProviderAccountModel) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := saveProviderAccount(ctx, tx, account); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM provider_account_models WHERE provider_account_id = $1`, account.ID); err != nil {
+		return err
+	}
+	for _, model := range models {
+		if _, err := tx.ExecContext(ctx, `
+		INSERT INTO provider_account_models(provider_account_id, model_id, source, enabled, availability, first_seen_at, last_seen_at, updated_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+		`, model.ProviderAccountID, model.ModelID, model.Source, model.Enabled, model.Availability, model.FirstSeenAt, model.LastSeenAt, model.UpdatedAt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (r *PostgresRepository) ListLatestProviderAccountHealthChecks(ctx context.Context) ([]ProviderAccountHealthCheck, error) {

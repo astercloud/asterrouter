@@ -2,8 +2,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { BadgeDollarSign, Edit3, Plus, RefreshCw, Save, Search, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { createModelPricing, getModelPricings, updateModelPricing } from '@/api/control'
-import type { ModelPricing, ModelPricingRequest } from '@/types'
+import { createModelPricing, getGatewayModels, getModelPricings, updateModelPricing } from '@/api/control'
+import type { GatewayModel, ModelPricing, ModelPricingRequest } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -11,6 +11,7 @@ const saving = ref(false)
 const error = ref('')
 const message = ref('')
 const pricings = ref<ModelPricing[]>([])
+const gatewayModels = ref<GatewayModel[]>([])
 const query = ref('')
 const statusFilter = ref('')
 const modalOpen = ref(false)
@@ -33,6 +34,9 @@ const filteredPricings = computed(() => {
   })
 })
 
+const activeGatewayModels = computed(() => gatewayModels.value.filter((item) => item.status === 'active'))
+const formModelIsHistorical = computed(() => Boolean(form.model) && !activeGatewayModels.value.some((item) => item.model_id === form.model))
+
 const summary = computed(() => ({
   total: pricings.value.length,
   active: pricings.value.filter((item) => item.status === 'active').length,
@@ -42,7 +46,7 @@ const summary = computed(() => ({
 
 function resetForm() {
   Object.assign(form, {
-    model: '',
+    model: activeGatewayModels.value[0]?.model_id || '',
     currency: 'USD',
     input_price_cents_per_1m_tokens: 0,
     output_price_cents_per_1m_tokens: 0,
@@ -91,7 +95,9 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    pricings.value = await getModelPricings()
+    const [pricingList, modelList] = await Promise.all([getModelPricings(), getGatewayModels()])
+    pricings.value = pricingList
+    gatewayModels.value = modelList
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -221,7 +227,11 @@ onMounted(load)
         <div class="modal-body form-grid">
           <div class="field">
             <label>{{ t('modelPricings.model') }}</label>
-            <input v-model="form.model" required placeholder="gpt-4o-mini" />
+            <select v-model="form.model" required>
+              <option v-if="formModelIsHistorical" :value="form.model">{{ form.model }} · {{ t('apiKeys.historicalModels') }}</option>
+              <option v-if="!activeGatewayModels.length" value="" disabled>{{ t('apiKeys.noActiveModels') }}</option>
+              <option v-for="model in activeGatewayModels" :key="model.id" :value="model.model_id">{{ model.model_id }} · {{ model.name }}</option>
+            </select>
           </div>
           <div class="field">
             <label>{{ t('modelPricings.currency') }}</label>

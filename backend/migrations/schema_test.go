@@ -254,6 +254,85 @@ func TestAIJobProgressMigrationIsIdempotentAndEnforcesConstraints(t *testing.T) 
 	}
 }
 
+func TestProviderAccountModelInventoryMigrationIsIdempotentAndPersists(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	initializeRuntimeSchema(t, schema.URL)
+	db := testutil.OpenPostgres(t, schema.URL)
+	body, err := migrationFiles.ReadFile("065_provider_account_model_inventory.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		if _, err := db.ExecContext(context.Background(), string(body)); err != nil {
+			t.Fatalf("apply 065 run %d: %v", run+1, err)
+		}
+	}
+
+	ctx := context.Background()
+	now := time.Date(2026, time.July, 16, 4, 0, 0, 0, time.UTC)
+	repo, err := controlplane.NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveProvider(ctx, controlplane.ProviderConnection{ID: "inventory-provider", Name: "Inventory provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: controlplane.ProviderStatusActive, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	account := controlplane.ProviderAccount{ID: "inventory-account", ProviderID: "inventory-provider", Name: "Inventory account", Platform: "openai_compatible", AuthType: "api_key", Status: controlplane.AccountStatusActive, Models: []string{"model-a"}, AutoEnableNewModels: true, CreatedAt: now, UpdatedAt: now}
+	lastSeen := now
+	models := []controlplane.ProviderAccountModel{{ProviderAccountID: account.ID, ModelID: "model-a", Source: controlplane.ProviderAccountModelSourceDiscovered, Enabled: true, Availability: controlplane.ProviderAccountModelAvailabilityAvailable, FirstSeenAt: now, LastSeenAt: &lastSeen, UpdatedAt: now}}
+	if err := repo.SaveProviderAccountWithModels(ctx, account, models); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := controlplane.NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	accounts, err := reopened.ListProviderAccounts(ctx)
+	if err != nil || len(accounts) != 1 || !accounts[0].AutoEnableNewModels {
+		t.Fatalf("accounts=%+v err=%v", accounts, err)
+	}
+	persisted, err := reopened.ListProviderAccountModels(ctx, account.ID)
+	if err != nil || len(persisted) != 1 || persisted[0].ModelID != "model-a" || persisted[0].LastSeenAt == nil {
+		t.Fatalf("models=%+v err=%v", persisted, err)
+	}
+	failedAccount := accounts[0]
+	failedAccount.Name = "must roll back"
+	failedAccount.Models = []string{"invalid-model"}
+	invalidInventory := []controlplane.ProviderAccountModel{{
+		ProviderAccountID: failedAccount.ID,
+		ModelID:           "invalid-model",
+		Source:            "invalid",
+		Enabled:           true,
+		Availability:      controlplane.ProviderAccountModelAvailabilityAvailable,
+		FirstSeenAt:       now,
+		UpdatedAt:         now,
+	}}
+	if err := reopened.SaveProviderAccountWithModels(ctx, failedAccount, invalidInventory); err == nil {
+		t.Fatal("invalid inventory unexpectedly committed")
+	}
+	accounts, err = reopened.ListProviderAccounts(ctx)
+	if err != nil || len(accounts) != 1 || accounts[0].Name != account.Name || !reflect.DeepEqual(accounts[0].Models, account.Models) {
+		t.Fatalf("account update was not rolled back: accounts=%+v err=%v", accounts, err)
+	}
+	persisted, err = reopened.ListProviderAccountModels(ctx, account.ID)
+	if err != nil || len(persisted) != 1 || persisted[0].ModelID != "model-a" {
+		t.Fatalf("inventory replacement was not rolled back: models=%+v err=%v", persisted, err)
+	}
+	for name, statement := range map[string]string{
+		"invalid source":       `INSERT INTO provider_account_models(provider_account_id,model_id,source,enabled,availability,first_seen_at,updated_at) VALUES('inventory-account','bad-source','invalid',TRUE,'available',NOW(),NOW())`,
+		"invalid availability": `INSERT INTO provider_account_models(provider_account_id,model_id,source,enabled,availability,first_seen_at,updated_at) VALUES('inventory-account','bad-status','manual',TRUE,'invalid',NOW(),NOW())`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err == nil {
+			t.Fatalf("%s constraint accepted invalid data", name)
+		}
+	}
+}
+
 func TestRuntimeSchemaMatchesMigrationSnapshots(t *testing.T) {
 	snapshotSchema := testutil.NewPostgresSchema(t)
 	initializeRuntimeSchema(t, snapshotSchema.URL)

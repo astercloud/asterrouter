@@ -427,12 +427,32 @@ func settleMemoryBillingHoldForUsage(r *MemoryRepository, record UsageRecord, bi
 	if !found || oneOf(hold.Status, BillingHoldStatusSettled, BillingHoldStatusReleased) {
 		return nil
 	}
-	updated, err := prepareBillingHoldTransition(hold, BillingHoldStatusSettled, billing.AmountCents, "usage_ledger_applied", record.CreatedAt)
+	settledAmount, err := cumulativeMemoryBillingAmount(r, billing)
+	if err != nil {
+		return err
+	}
+	updated, err := prepareBillingHoldTransition(hold, BillingHoldStatusSettled, settledAmount, "usage_ledger_applied", record.CreatedAt)
 	if err != nil {
 		return err
 	}
 	r.billingHolds[hold.ID] = updated
 	return nil
+}
+
+func cumulativeMemoryBillingAmount(r *MemoryRepository, current BillingLedgerEntry) (int, error) {
+	total := int64(current.AmountCents)
+	for _, entry := range r.billingLedgerEntries {
+		if entry.OperationID == current.OperationID && entry.Status == BillingLedgerStatusApplied {
+			if int64(entry.AmountCents) > math.MaxInt64-total {
+				return 0, errors.New("cumulative billing amount exceeds supported range")
+			}
+			total += int64(entry.AmountCents)
+		}
+	}
+	if total < 0 || uint64(total) > uint64(^uint(0)>>1) {
+		return 0, errors.New("cumulative billing amount exceeds supported range")
+	}
+	return int(total), nil
 }
 
 func billingHoldUsageIsFinal(record UsageRecord) bool {
@@ -492,7 +512,14 @@ func settlePostgresBillingHoldForUsage(ctx context.Context, tx *sql.Tx, record U
 	if err != nil || !found || oneOf(hold.Status, BillingHoldStatusSettled, BillingHoldStatusReleased) {
 		return err
 	}
-	updated, err := prepareBillingHoldTransition(hold, BillingHoldStatusSettled, billing.AmountCents, "usage_ledger_applied", record.CreatedAt)
+	var total int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_cents),0) FROM billing_ledger_entries WHERE operation_id=$1 AND status=$2`, billing.OperationID, BillingLedgerStatusApplied).Scan(&total); err != nil {
+		return err
+	}
+	if total < 0 || uint64(total) > uint64(^uint(0)>>1) {
+		return errors.New("cumulative billing amount exceeds supported range")
+	}
+	updated, err := prepareBillingHoldTransition(hold, BillingHoldStatusSettled, int(total), "usage_ledger_applied", record.CreatedAt)
 	if err != nil {
 		return err
 	}

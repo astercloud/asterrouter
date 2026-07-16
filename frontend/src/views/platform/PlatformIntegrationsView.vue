@@ -2,9 +2,10 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Edit3, KeyRound, Link2, Plus, RefreshCw, RotateCw, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { getGovernancePolicies } from '@/api/control'
+import GatewayModelPicker from '@/components/model/GatewayModelPicker.vue'
+import { getGatewayModels, getGovernancePolicies } from '@/api/control'
 import { createExternalAuthIntegration, getExternalAuthIntegrations, getGatewayPrincipals, getPlatformTenants, rotateExternalAuthIntegrationSecret, updateExternalAuthIntegration } from '@/api/platform'
-import type { ExternalAuthIntegration, ExternalAuthIntegrationRequest, GatewayPrincipal, GovernancePolicy, PlatformTenant } from '@/types'
+import type { ExternalAuthIntegration, ExternalAuthIntegrationRequest, GatewayModel, GatewayPrincipal, GovernancePolicy, PlatformTenant } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -17,7 +18,7 @@ const integrations = ref<ExternalAuthIntegration[]>([])
 const tenants = ref<PlatformTenant[]>([])
 const principals = ref<GatewayPrincipal[]>([])
 const policies = ref<GovernancePolicy[]>([])
-const modelsText = ref('')
+const gatewayModels = ref<GatewayModel[]>([])
 const oneTimeSecret = ref('')
 const form = reactive<ExternalAuthIntegrationRequest>({
   tenant_id: '', gateway_principal_id: '', name: '', protocol: 'hmac_signed_context', key_id: '', audience: '', policy_id: '',
@@ -30,22 +31,18 @@ const isJWTIntegration = computed(() => form.protocol === 'jwt_jwks')
 const activeTenants = computed(() => tenants.value.filter((tenant) => tenant.status === 'active'))
 const compatiblePrincipals = computed(() => principals.value.filter((principal) => principal.status === 'active' && principal.tenant_id === form.tenant_id && (principal.principal_type === 'service' || principal.principal_type === 'integration')))
 const activePolicies = computed(() => policies.value.filter((policy) => policy.status === 'active'))
+const defaultGatewayModel = computed(() => gatewayModels.value.find((item) => item.status === 'active')?.model_id || '')
 const tenantNameByID = computed(() => new Map(tenants.value.map((tenant) => [tenant.id, tenant.name])))
 const principalNameByID = computed(() => new Map(principals.value.map((principal) => [principal.id, principal.name])))
-
-function splitModels(value: string): string[] {
-  return value.split(/[\n,]/).map((model) => model.trim()).filter(Boolean)
-}
 
 function resetForm() {
   const tenantID = activeTenants.value[0]?.id || ''
   Object.assign(form, {
     tenant_id: tenantID,
     gateway_principal_id: principals.value.find((principal) => principal.status === 'active' && principal.tenant_id === tenantID && (principal.principal_type === 'service' || principal.principal_type === 'integration'))?.id || '',
-    name: '', protocol: 'hmac_signed_context', key_id: '', audience: '', policy_id: '', issuer: '', jwks_url: '', subject_claim: '', models_claim: '', qps_limit_claim: '', monthly_token_limit_claim: '', model_allowlist: [], qps_limit: 10,
+    name: '', protocol: 'hmac_signed_context', key_id: '', audience: '', policy_id: '', issuer: '', jwks_url: '', subject_claim: '', models_claim: '', qps_limit_claim: '', monthly_token_limit_claim: '', model_allowlist: defaultGatewayModel.value ? [defaultGatewayModel.value] : [], qps_limit: 10,
     monthly_token_limit: 1_000_000, max_ttl_seconds: 300, status: 'active'
   })
-  modelsText.value = ''
 }
 
 function openCreate() {
@@ -63,7 +60,6 @@ function openEdit(integration: ExternalAuthIntegration) {
     model_allowlist: [...integration.model_allowlist], qps_limit: integration.qps_limit, monthly_token_limit: integration.monthly_token_limit,
     max_ttl_seconds: integration.max_ttl_seconds, status: integration.status
   })
-  modelsText.value = integration.model_allowlist.join('\n')
   modalOpen.value = true
 }
 
@@ -87,14 +83,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [integrationResult, tenantResult, principalResult, policyResult] = await Promise.allSettled([getExternalAuthIntegrations(), getPlatformTenants(), getGatewayPrincipals(), getGovernancePolicies()])
+    const [integrationResult, tenantResult, principalResult, policyResult, modelResult] = await Promise.allSettled([getExternalAuthIntegrations(), getPlatformTenants(), getGatewayPrincipals(), getGovernancePolicies(), getGatewayModels()])
     if (integrationResult.status === 'rejected') throw integrationResult.reason
     if (tenantResult.status === 'rejected') throw tenantResult.reason
     if (principalResult.status === 'rejected') throw principalResult.reason
+    if (modelResult.status === 'rejected') throw modelResult.reason
     integrations.value = integrationResult.value
     tenants.value = tenantResult.value
     principals.value = principalResult.value
     policies.value = policyResult.status === 'fulfilled' ? policyResult.value : []
+    gatewayModels.value = modelResult.value
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -107,7 +105,7 @@ async function save() {
   error.value = ''
   oneTimeSecret.value = ''
   try {
-    const payload: ExternalAuthIntegrationRequest = { ...form, model_allowlist: splitModels(modelsText.value) }
+    const payload: ExternalAuthIntegrationRequest = { ...form, model_allowlist: [...form.model_allowlist] }
     if (payload.protocol === 'hmac_signed_context') {
       Object.assign(payload, {
         issuer: '', jwks_url: '', subject_claim: '', models_claim: '', qps_limit_claim: '', monthly_token_limit_claim: ''
@@ -204,12 +202,12 @@ onMounted(load)
             <div class="field"><label for="integration-monthly-claim">{{ t('platform.integrationMonthlyClaim') }}</label><input id="integration-monthly-claim" v-model="form.monthly_token_limit_claim" :disabled="Boolean(editing)" /></div>
           </template>
           <div class="field form-span-2"><label for="integration-policy">{{ t('policies.policy') }}</label><select id="integration-policy" v-model="form.policy_id"><option value="">{{ t('policies.inherit') }}</option><option v-for="policy in activePolicies" :key="policy.id" :value="policy.id">{{ policy.name }}</option></select></div>
-          <div class="field form-span-2"><label for="integration-models">{{ t('apiKeys.models') }}</label><textarea id="integration-models" v-model="modelsText" rows="3" /></div>
+          <div class="field form-span-2"><label id="integration-models-label">{{ t('apiKeys.models') }}</label><GatewayModelPicker v-model="form.model_allowlist" :models="gatewayModels" :disabled="saving" aria-labelledby="integration-models-label" /></div>
           <div class="field"><label for="integration-qps">{{ t('apiKeys.qps') }}</label><input id="integration-qps" v-model.number="form.qps_limit" type="number" min="1" /></div>
           <div class="field"><label for="integration-tokens">{{ t('apiKeys.monthlyTokens') }}</label><input id="integration-tokens" v-model.number="form.monthly_token_limit" type="number" min="1" /></div>
           <div class="field"><label for="integration-ttl">{{ t('platform.integrationMaxTTL') }}</label><input id="integration-ttl" v-model.number="form.max_ttl_seconds" type="number" min="30" max="3600" /></div>
         </div>
-        <footer class="modal-footer"><button class="button secondary" type="button" @click="modalOpen = false">{{ t('common.cancel') }}</button><button class="button" type="button" :disabled="saving" @click="save"><KeyRound :size="16" />{{ saving ? t('common.saving') : t('common.save') }}</button></footer>
+        <footer class="modal-footer"><button class="button secondary" type="button" @click="modalOpen = false">{{ t('common.cancel') }}</button><button class="button" type="button" :disabled="saving || !form.model_allowlist.length" @click="save"><KeyRound :size="16" />{{ saving ? t('common.saving') : t('common.save') }}</button></footer>
       </section>
     </div>
   </main>

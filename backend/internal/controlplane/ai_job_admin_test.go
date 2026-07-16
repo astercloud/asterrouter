@@ -72,11 +72,11 @@ func TestAIJobAdminQueriesRedactSecretsAndSupportsSafeActions(t *testing.T) {
 		t.Fatalf("idempotent cancellation error=%v", err)
 	}
 	audits, err := service.ListAuditLogsQuery(ctx, AuditLogQuery{ResourceType: "ai_job", Action: "cancel", Limit: 10})
-	if err != nil || len(audits) != 1 {
+	if err != nil || len(audits) != 1 || audits[0].ProfileScope != ProfileScopePlatform || audits[0].PlatformTenantID != job.TenantID || audits[0].GatewayPrincipalID != job.PrincipalID {
 		t.Fatalf("cancel audits=%+v err=%v", audits, err)
 	}
 	audits, err = service.ListAuditLogsQuery(ctx, AuditLogQuery{ResourceType: "ai_attempt", Action: "schedule_reconciliation", Limit: 10})
-	if err != nil || len(audits) != 1 {
+	if err != nil || len(audits) != 1 || audits[0].ProfileScope != ProfileScopePlatform || audits[0].PlatformTenantID != job.TenantID || audits[0].GatewayPrincipalID != job.PrincipalID {
 		t.Fatalf("reconcile audits=%+v err=%v", audits, err)
 	}
 }
