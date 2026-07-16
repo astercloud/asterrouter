@@ -1,30 +1,31 @@
 # AsterRouter 测试计划 v1 实施状态
 
-> 最近核验：2026-07-14 15:46 CST
+> 最近核验：2026-07-16 CST
 >
-> 证据提交：`7eb4c5ece7bb5fa68f22028ee651f72970ca8193`（`v0.6.0`）
+> 基准提交：`0c2b61d70f9eb05aec9638e402ba624bbdc3629a`（`main`）
 >
-> 结论：Phase 0-4 的实现、候选发布验收和三次固定环境 Nightly 证据均已完成，性能基线已确认。当前还需推送 Nightly `pipefail` 回归门禁并在新提交上复验，然后由仓库管理员将 CI/security checks 配置为 `main` required checks。
+> 结论：Phase 0-4 的实现和历史候选发布验收已完成，性能基线已确认。`main` 的配置重构已通过 CI、Security Scan 和 Build Artifacts；`v0.15.0` 候选仍必须在本轮提交上重新取得同等证据。
 
-当前主工作树包含其他未提交的控制面和网关开发修改。本文件只把已推送的 `7eb4c5e` 及其 GitHub Actions 产物作为发布证据；本轮测试门禁修改与并行业务修改必须分别暂存。
+配置与启动重构已在 `0c2b61d` 通过 PostgreSQL、浏览器、容器、安全、候选运行时以及 Linux 安装/升级/回滚门禁。当前发布分支新增空集合 API 契约修复和前端响应归一化，必须重新运行全量测试并由 GitHub Actions 验证。
 
 ## 1. 当前自动化与证据
 
 | 能力 | 自动化入口 | 已核验证据 |
 | --- | --- | --- |
-| 后端全量 | `cd backend && go test -count=1 ./...` | 干净基线和当前工作树均通过；PostgreSQL 16 CI 通过 |
-| 后端 race | `cd backend && GOTOOLCHAIN=go1.25.1 go test -race -count=1 -timeout=15m ./...` | 本地通过；三次 Ubuntu 24.04 Nightly 均通过 |
-| 后端覆盖率 | `GOTOOLCHAIN=go1.25.1 bash scripts/test.sh backend-coverage` | profile 已归档；总 statements 56.8%，继续按包级 ratchet 管理 |
-| 前端单元/组件 | `cd frontend && npm run test:unit:coverage` | 11 文件、47 用例通过；lines 70.75%、branches 41.17%，新增关键逻辑继续执行 80% 目标 |
-| 浏览器 E2E | `cd frontend && npm run test:e2e` | 本地 Chromium 31 通过、26 个按视口设计跳过；三次 Nightly Chromium/Firefox/WebKit 全矩阵通过 |
-| 首装与候选旅程 | `bash scripts/test-setup-browser-journey.sh`、`bash scripts/test-release-browser-journeys.sh <version>` | PostgreSQL 空库首装、四个独立单 Profile 候选 runtime 和 J01-J06/J09 通过 |
-| J04 失败矩阵 | `node scripts/gateway-failure-matrix.mjs` | 401/429/5xx、timeout、SSE 中断、并发、circuit、cooldown 通过 |
-| J07 信任链 | `go test -json -count=1 ./internal/plugins -run '<trust-chain-matrix>'` | catalog、sidecar、篡改、revocation、checksum、回滚、token scope 通过 |
-| 30 分钟 soak | `ASTER_GATEWAY_SOAK=1 ASTER_GATEWAY_SOAK_DURATION=30m go test ...` | 三次分别完成 17,588、17,522、17,616 请求；goroutine 增量均为 3，产物均为 `PASS` |
-| 发布验收 | build/release workflows | Linux amd64/arm64、QEMU、checksum、候选 runtime、安装/升级/回滚、GitHub Release 全部通过 |
-| 安全 | CodeQL、govulncheck、npm audit、gitleaks、Trivy | 当前提交全部通过，无未接受高危结果 |
+| 后端全量 | `cd backend && go test -count=1 ./...` | `0c2b61d` 的 PostgreSQL 16 CI 通过；发布分支待复验 |
+| 后端 race | `cd backend && go test -race -count=1 -timeout=15m ./...` | Go 1.26.1 本地基线通过；发布分支待复验 |
+| 后端覆盖率 | `bash scripts/test.sh backend-coverage` | 项目基线使用 Go 1.26.1；关键包继续执行 75% 渐进目标 |
+| 前端单元/组件 | `cd frontend && npm run test:unit` | `0c2b61d` 的 34 文件、102 用例通过；发布分支待复验 |
+| 开发浏览器 smoke | `cd frontend && npm run test:e2e:smoke` | `0c2b61d` 的 demo 多 Surface Chromium smoke 通过 |
+| 首装与候选旅程 | `bash scripts/test-setup-browser-journey.sh`、`bash scripts/test-release-browser-journeys.sh <version>` | `0c2b61d` 的空库首装、四个单 Profile 候选 runtime 和浏览器旅程通过 |
+| 非 demo 候选路径模拟 | 每个部署角色使用独立 runtime 和数据库 | `enterprise`、`relay_operator`、`personal`、`platform` 候选路径通过 |
+| J04 失败矩阵 | `node scripts/gateway-failure-matrix.mjs` | 6 个场景通过：401/429/5xx、timeout、SSE 中断、并发、circuit、cooldown |
+| J07 信任链 | `go test -json -count=1 ./internal/plugins -run '^(TestPluginTrustChainCatalogToSidecarFeed|...)$'` | catalog 到真实 sidecar helper、篡改、revocation、checksum、回滚、token scope 通过 |
+| 30 分钟 soak | `ASTER_GATEWAY_SOAK=1 ASTER_GATEWAY_SOAK_DURATION=30m go test ...` | 三次历史 Nightly 均通过；新发布提交需再次运行 |
+| 发布验收 | build/release workflows | `0c2b61d` 的 amd64/arm64、QEMU、checksum、候选 runtime 和安装/升级/回滚通过 |
+| 安全 | CodeQL、govulncheck、npm audit、gitleaks、Trivy | `0c2b61d` 全部通过，无未接受高危结果 |
 
-本机为 macOS arm64、Go 1.24.3（测试使用 `GOTOOLCHAIN=go1.25.1`）、Node 23.4.0。Node 23 不在项目支持矩阵内，本地前端结果仅作辅助证据；GitHub Actions 的 Go 1.25、Node 24、PostgreSQL 16 和 Ubuntu Linux 结果是发布事实来源。
+本地环境版本仅用于快速反馈。项目 CI 的 Go 1.26、Node 24 与 Ubuntu Linux 结果才是版本和发布门禁的事实来源。
 
 ## 2. Phase 状态
 
@@ -60,8 +61,8 @@
 
 ## 5. 当前未闭环项
 
-1. Nightly soak 原为单行 `go test | tee`，缺少 `pipefail`。历史产物证明失败可能被绿色 job 掩盖；本轮已改为显式 `set -o pipefail`，并增加 `check-workflow-pipefail.mjs` 回归门禁，但这些修改尚未提交和推送。
-2. 修正后的提交必须重新通过 CI、Build Artifacts、Security Scan，并至少运行一次 Nightly，证明 soak 失败传播门禁在远端生效且 confirmed baseline 无回归。
+1. Nightly soak 已使用显式 `pipefail`，并由前端 `check-workflow-pipefail.mjs` 门禁防止失败传播回归；仍需在新发布 SHA 上运行一次 Nightly。
+2. `v0.15.0` 候选必须重新通过 CI、Build Artifacts、Security Scan 和 GitHub Release，历史成功记录不能替代本轮证据。
 3. `main` 当前没有 branch protection 或 ruleset。需将 `backend`、`frontend`、`e2e`、`recovery`、`container-smoke`、`build`、`secrets`、`codeql`、`dependencies`、`container` 配置为 required checks。
 4. 覆盖率的 75%/80% 是渐进 ratchet 目标，当前总量尚未达到；不得把现有总覆盖率描述为达标。它不替代已完成的 P0 旅程、隔离、恢复、发布和安全证据。
 

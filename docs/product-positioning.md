@@ -53,7 +53,7 @@ AsterRouter 是面向企业团队、AI API 平台和客户产品的 AI Access Ga
 
 `platform` 是第四个独立部署角色，不是 Enterprise 的功能页，也不是 Relay Operator 的另一种 Customer。虽然 Platform 和 Relay 都可使用 API Key，选择的依据是业务所有权：需要余额、套餐、分配和风控运营时选择 Relay；需要把 AI 能力嵌入已有产品、同时不接管该产品用户体系时选择 Platform。Platform 的用量回传只投递可幂等、脱敏的计量事实；产品订单、订阅、余额与用户档案始终留在所属业务系统。
 
-首次运行只启用一个部署角色。交互安装会显示初始后台以及该角色包含和排除的业务范围，且不预选任何角色；无人值守部署优先使用 `ASTER_DEPLOYMENT_ROLE`，旧的相同 `ASTER_PROFILES` / `ASTER_DEFAULT_PROFILE` 值仍兼容作为首次启动配置。系统管理员可以在设置中切换活动角色，普通实例始终只开放一个角色，旧角色数据保留但入口隐藏；Demo 实例可以同时开放全部形态。这样切换不会删除 Provider、Credential、Usage 和 Audit 数据，也不会让多个业务模型同时成为活动入口。
+首次运行只启用一个部署角色。交互安装会显示初始后台以及该角色包含和排除的业务范围，且不预选任何角色；无人值守运行时使用 `ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE`。该选择在新生产实例中不可切换，避免 Provider、Credential、Usage 和 Audit 跨业务模型混用；需要另一种形态时部署独立实例。完整规则见 [V4 部署角色与安装分流](./roadmap/v4/profile-bundles-and-installation.md)。
 
 ## 当前正式接入范围
 
