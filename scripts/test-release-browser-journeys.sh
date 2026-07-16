@@ -175,7 +175,7 @@ tar -C "${RUN_DIR}" -xzf "${ARCHIVE}"
 ) >"${RUN_DIR}/fake-upstream.log" 2>&1 &
 PIDS+=("$!")
 
-DATABASE_URL="$(database_url_for platform_setup)" \
+ASTER_SETUP_JOURNEY_DATABASE_URL="$(database_url_for platform_setup)" \
   ASTER_SETUP_JOURNEY_DIR="${RUN_DIR}/setup" \
   ASTER_SETUP_JOURNEY_PORT="${BACKEND_PORT}" \
   ASTER_SETUP_JOURNEY_BINARY="${PACKAGE_DIR}/asterrouter" \
