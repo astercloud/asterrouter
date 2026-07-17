@@ -1091,8 +1091,6 @@ CREATE TABLE IF NOT EXISTS provider_connections (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
-ALTER TABLE provider_connections ADD COLUMN IF NOT EXISTS secret_ciphertext TEXT NOT NULL DEFAULT '';
-
 CREATE TABLE IF NOT EXISTS provider_health_checks (
   id TEXT PRIMARY KEY,
   provider_id TEXT NOT NULL REFERENCES provider_connections(id) ON DELETE CASCADE,
@@ -1117,6 +1115,28 @@ CREATE TABLE IF NOT EXISTS departments (
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'departments'
+      AND column_name = 'monthly_budget_micros'
+  ) THEN
+    ALTER TABLE departments ADD COLUMN IF NOT EXISTS monthly_budget_micros BIGINT NOT NULL DEFAULT 0;
+    IF EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'departments'
+        AND column_name = 'monthly_budget_cents'
+    ) THEN
+      UPDATE departments
+      SET monthly_budget_micros = monthly_budget_cents::BIGINT * 10000;
+    END IF;
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS departments_parent_idx
   ON departments(parent_id);
@@ -1386,6 +1406,7 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   name TEXT NOT NULL,
   platform TEXT NOT NULL,
   auth_type TEXT NOT NULL,
+  adapter_config JSONB NOT NULL DEFAULT '{}'::jsonb,
   status TEXT NOT NULL,
   schedulable BOOLEAN NOT NULL DEFAULT true,
   priority INTEGER NOT NULL DEFAULT 50,
@@ -1418,6 +1439,7 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
 );
 
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS provider_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS adapter_config JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS load_factor INTEGER;
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS weight INTEGER NOT NULL DEFAULT 100;
 ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS rpm_limit INTEGER NOT NULL DEFAULT 0;
@@ -1491,6 +1513,8 @@ CREATE TABLE IF NOT EXISTS model_routes (
   route_group TEXT NOT NULL DEFAULT 'default',
   provider_account_id TEXT NOT NULL REFERENCES provider_accounts(id) ON DELETE CASCADE,
   upstream_model TEXT NOT NULL,
+  upstream_format TEXT NOT NULL DEFAULT '',
+  disabled_reason TEXT NOT NULL DEFAULT '',
   priority INTEGER NOT NULL DEFAULT 100,
   weight INTEGER NOT NULL DEFAULT 100,
   status TEXT NOT NULL DEFAULT 'active',
@@ -1498,6 +1522,67 @@ CREATE TABLE IF NOT EXISTS model_routes (
   updated_at TIMESTAMPTZ NOT NULL,
   UNIQUE(gateway_model_id, route_group, provider_account_id, upstream_model)
 );
+
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS upstream_format TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS disabled_reason TEXT NOT NULL DEFAULT '';
+
+UPDATE provider_connections SET type = 'anthropic_compatible' WHERE type = 'anthropic';
+UPDATE provider_connections SET type = 'gemini_compatible' WHERE type = 'gemini';
+UPDATE provider_connections SET type = 'openai_compatible' WHERE type = 'self_hosted';
+
+UPDATE model_routes AS route
+SET upstream_format = CASE
+  WHEN gateway_model.modality IN ('image','video','multimodal') AND provider.type IN ('openai_compatible','anthropic_compatible','gemini_compatible','aws_bedrock','gcp_vertex','azure_openai') THEN 'native_media'
+  WHEN gateway_model.modality = 'audio' AND provider.type = 'openai_compatible' THEN 'native_media'
+  WHEN gateway_model.modality = 'chat' THEN CASE provider.type
+    WHEN 'anthropic_compatible' THEN 'anthropic_messages'
+    WHEN 'gemini_compatible' THEN 'gemini_generate_content'
+    WHEN 'aws_bedrock' THEN 'bedrock_converse'
+    WHEN 'azure_openai' THEN 'openai_chat'
+    WHEN 'openai_compatible' THEN 'openai_chat'
+    ELSE ''
+  END
+  ELSE ''
+END
+FROM provider_accounts AS account
+JOIN provider_connections AS provider ON provider.id = account.provider_id
+CROSS JOIN gateway_models AS gateway_model
+WHERE route.provider_account_id = account.id
+  AND gateway_model.id = route.gateway_model_id
+  AND route.upstream_format = '';
+
+UPDATE model_routes
+SET status = 'disabled', disabled_reason = 'migration_requires_explicit_upstream_format'
+WHERE upstream_format = '';
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'provider_connections'
+      AND column_name IN ('secret_configured', 'secret_hint', 'secret_ciphertext')
+    GROUP BY table_name
+    HAVING COUNT(*) = 3
+  ) THEN
+    EXECUTE $migration$
+      UPDATE provider_accounts AS account
+      SET secret_configured = provider.secret_configured,
+          secret_hint = provider.secret_hint,
+          secret_ciphertext = provider.secret_ciphertext
+      FROM provider_connections AS provider
+      WHERE account.provider_id = provider.id
+        AND account.secret_ciphertext = ''
+        AND provider.secret_ciphertext <> ''
+    $migration$;
+  END IF;
+END $$;
+
+ALTER TABLE provider_connections DROP COLUMN IF EXISTS models;
+ALTER TABLE provider_connections DROP COLUMN IF EXISTS secret_configured;
+ALTER TABLE provider_connections DROP COLUMN IF EXISTS secret_hint;
+ALTER TABLE provider_connections DROP COLUMN IF EXISTS secret_ciphertext;
+ALTER TABLE provider_health_checks DROP COLUMN IF EXISTS models;
 
 CREATE INDEX IF NOT EXISTS model_routes_resolution_idx
   ON model_routes(gateway_model_id, route_group, status, priority);
@@ -2807,7 +2892,7 @@ CREATE INDEX IF NOT EXISTS routing_affinity_bindings_expiry_idx
 
 func (r *PostgresRepository) ListProviders(ctx context.Context) ([]ProviderConnection, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, type, base_url, status, models, priority, secret_configured, secret_hint, secret_ciphertext, created_at, updated_at
+SELECT id, name, type, base_url, status, priority, created_at, updated_at
 FROM provider_connections
 ORDER BY priority ASC, name ASC
 `)
@@ -2818,39 +2903,32 @@ ORDER BY priority ASC, name ASC
 	out := make([]ProviderConnection, 0)
 	for rows.Next() {
 		var provider ProviderConnection
-		var models string
-		if err := rows.Scan(&provider.ID, &provider.Name, &provider.Type, &provider.BaseURL, &provider.Status, &models, &provider.Priority, &provider.SecretConfigured, &provider.SecretHint, &provider.SecretCiphertext, &provider.CreatedAt, &provider.UpdatedAt); err != nil {
+		if err := rows.Scan(&provider.ID, &provider.Name, &provider.Type, &provider.BaseURL, &provider.Status, &provider.Priority, &provider.CreatedAt, &provider.UpdatedAt); err != nil {
 			return nil, err
 		}
-		provider.Models = parseStringList(models)
 		out = append(out, provider)
 	}
 	return out, rows.Err()
 }
 
 func (r *PostgresRepository) SaveProvider(ctx context.Context, provider ProviderConnection) error {
-	models := marshalStringList(provider.Models)
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO provider_connections(id, name, type, base_url, status, models, priority, secret_configured, secret_hint, secret_ciphertext, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+INSERT INTO provider_connections(id, name, type, base_url, status, priority, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8)
 ON CONFLICT(id) DO UPDATE SET
   name = EXCLUDED.name,
   type = EXCLUDED.type,
   base_url = EXCLUDED.base_url,
   status = EXCLUDED.status,
-  models = EXCLUDED.models,
   priority = EXCLUDED.priority,
-  secret_configured = EXCLUDED.secret_configured,
-  secret_hint = EXCLUDED.secret_hint,
-  secret_ciphertext = EXCLUDED.secret_ciphertext,
   updated_at = EXCLUDED.updated_at
-`, provider.ID, provider.Name, provider.Type, provider.BaseURL, provider.Status, models, provider.Priority, provider.SecretConfigured, provider.SecretHint, provider.SecretCiphertext, provider.CreatedAt, provider.UpdatedAt)
+`, provider.ID, provider.Name, provider.Type, provider.BaseURL, provider.Status, provider.Priority, provider.CreatedAt, provider.UpdatedAt)
 	return err
 }
 
 func (r *PostgresRepository) ListLatestProviderHealthChecks(ctx context.Context) ([]ProviderHealthCheck, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT DISTINCT ON (provider_id) id, provider_id, status, latency_ms, message, models, checked_at
+SELECT DISTINCT ON (provider_id) id, provider_id, status, latency_ms, message, checked_at
 FROM provider_health_checks
 ORDER BY provider_id, checked_at DESC
 `)
@@ -2861,11 +2939,9 @@ ORDER BY provider_id, checked_at DESC
 	out := make([]ProviderHealthCheck, 0)
 	for rows.Next() {
 		var check ProviderHealthCheck
-		var models string
-		if err := rows.Scan(&check.ID, &check.ProviderID, &check.Status, &check.LatencyMS, &check.Message, &models, &check.CheckedAt); err != nil {
+		if err := rows.Scan(&check.ID, &check.ProviderID, &check.Status, &check.LatencyMS, &check.Message, &check.CheckedAt); err != nil {
 			return nil, err
 		}
-		check.Models = parseStringList(models)
 		out = append(out, check)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CheckedAt.After(out[j].CheckedAt) })
@@ -2873,11 +2949,10 @@ ORDER BY provider_id, checked_at DESC
 }
 
 func (r *PostgresRepository) SaveProviderHealthCheck(ctx context.Context, check ProviderHealthCheck) error {
-	models := marshalStringList(check.Models)
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO provider_health_checks(id, provider_id, status, latency_ms, message, models, checked_at)
-VALUES($1,$2,$3,$4,$5,$6,$7)
-`, check.ID, check.ProviderID, check.Status, check.LatencyMS, check.Message, models, check.CheckedAt)
+INSERT INTO provider_health_checks(id, provider_id, status, latency_ms, message, checked_at)
+VALUES($1,$2,$3,$4,$5,$6)
+`, check.ID, check.ProviderID, check.Status, check.LatencyMS, check.Message, check.CheckedAt)
 	return err
 }
 
@@ -3033,7 +3108,7 @@ ON CONFLICT(id) DO UPDATE SET
 
 func (r *PostgresRepository) ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error) {
 	rows, err := r.db.QueryContext(ctx, `
-	SELECT id, provider_id, name, platform, auth_type, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, auto_enable_new_models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at
+	SELECT id, provider_id, name, platform, auth_type, adapter_config::text, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, auto_enable_new_models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at
 FROM provider_accounts
 ORDER BY priority ASC, name ASC
 `)
@@ -3045,13 +3120,14 @@ ORDER BY priority ASC, name ASC
 	out := make([]ProviderAccount, 0)
 	for rows.Next() {
 		var account ProviderAccount
-		var models, groupIDs, tempUnschedulableRules string
+		var models, groupIDs, adapterConfig, tempUnschedulableRules string
 		var loadFactor sql.NullInt64
 		var lastUsedAt, expiresAt, cooldownUntil, circuitOpenedUntil, lastFailureAt sql.NullTime
-		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Name, &account.Platform, &account.AuthType, &account.Status, &account.Schedulable, &account.Priority, &account.Weight, &account.Concurrency, &account.RPMLimit, &account.TPMLimit, &loadFactor, &account.RateMultiplier, &models, &account.AutoEnableNewModels, &groupIDs, &account.SecretConfigured, &account.SecretHint, &account.SecretCiphertext, &account.ErrorMessage, &lastUsedAt, &expiresAt, &cooldownUntil, &account.CircuitState, &account.CircuitFailureThreshold, &account.CircuitOpenSeconds, &account.ConsecutiveFailures, &circuitOpenedUntil, &lastFailureAt, &tempUnschedulableRules, &account.TempUnschedulableReason, &account.CreatedAt, &account.UpdatedAt); err != nil {
+		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Name, &account.Platform, &account.AuthType, &adapterConfig, &account.Status, &account.Schedulable, &account.Priority, &account.Weight, &account.Concurrency, &account.RPMLimit, &account.TPMLimit, &loadFactor, &account.RateMultiplier, &models, &account.AutoEnableNewModels, &groupIDs, &account.SecretConfigured, &account.SecretHint, &account.SecretCiphertext, &account.ErrorMessage, &lastUsedAt, &expiresAt, &cooldownUntil, &account.CircuitState, &account.CircuitFailureThreshold, &account.CircuitOpenSeconds, &account.ConsecutiveFailures, &circuitOpenedUntil, &lastFailureAt, &tempUnschedulableRules, &account.TempUnschedulableReason, &account.CreatedAt, &account.UpdatedAt); err != nil {
 			return nil, err
 		}
 		account.Models = parseStringList(models)
+		account.AdapterConfig = parseStringMap(adapterConfig)
 		account.GroupIDs = parseStringList(groupIDs)
 		account.TempUnschedulableRules = parseTempUnschedulableRules(tempUnschedulableRules)
 		if loadFactor.Valid {
@@ -3088,6 +3164,7 @@ type providerAccountExecutor interface {
 
 func saveProviderAccount(ctx context.Context, executor providerAccountExecutor, account ProviderAccount) error {
 	models := marshalStringList(account.Models)
+	adapterConfig := marshalStringMap(account.AdapterConfig)
 	groupIDs := marshalStringList(account.GroupIDs)
 	tempUnschedulableRules := marshalTempUnschedulableRules(account.TempUnschedulableRules)
 	var loadFactor sql.NullInt64
@@ -3095,13 +3172,14 @@ func saveProviderAccount(ctx context.Context, executor providerAccountExecutor, 
 		loadFactor = sql.NullInt64{Int64: int64(*account.LoadFactor), Valid: true}
 	}
 	_, err := executor.ExecContext(ctx, `
-INSERT INTO provider_accounts(id, provider_id, name, platform, auth_type, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, auto_enable_new_models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
+INSERT INTO provider_accounts(id, provider_id, name, platform, auth_type, adapter_config, status, schedulable, priority, weight, concurrency, rpm_limit, tpm_limit, load_factor, rate_multiplier, models, auto_enable_new_models, group_ids, secret_configured, secret_hint, secret_ciphertext, error_message, last_used_at, expires_at, cooldown_until, circuit_state, circuit_failure_threshold, circuit_open_seconds, consecutive_failures, circuit_opened_until, last_failure_at, temp_unschedulable_rules, temp_unschedulable_reason, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
 ON CONFLICT(id) DO UPDATE SET
   provider_id = EXCLUDED.provider_id,
   name = EXCLUDED.name,
   platform = EXCLUDED.platform,
   auth_type = EXCLUDED.auth_type,
+  adapter_config = EXCLUDED.adapter_config,
   status = EXCLUDED.status,
   schedulable = EXCLUDED.schedulable,
   priority = EXCLUDED.priority,
@@ -3130,7 +3208,7 @@ ON CONFLICT(id) DO UPDATE SET
   temp_unschedulable_rules = EXCLUDED.temp_unschedulable_rules,
   temp_unschedulable_reason = EXCLUDED.temp_unschedulable_reason,
   updated_at = EXCLUDED.updated_at
-`, account.ID, account.ProviderID, account.Name, account.Platform, account.AuthType, account.Status, account.Schedulable, account.Priority, account.Weight, account.Concurrency, account.RPMLimit, account.TPMLimit, loadFactor, account.RateMultiplier, models, account.AutoEnableNewModels, groupIDs, account.SecretConfigured, account.SecretHint, account.SecretCiphertext, account.ErrorMessage, account.LastUsedAt, account.ExpiresAt, account.CooldownUntil, account.CircuitState, account.CircuitFailureThreshold, account.CircuitOpenSeconds, account.ConsecutiveFailures, account.CircuitOpenedUntil, account.LastFailureAt, tempUnschedulableRules, account.TempUnschedulableReason, account.CreatedAt, account.UpdatedAt)
+`, account.ID, account.ProviderID, account.Name, account.Platform, account.AuthType, adapterConfig, account.Status, account.Schedulable, account.Priority, account.Weight, account.Concurrency, account.RPMLimit, account.TPMLimit, loadFactor, account.RateMultiplier, models, account.AutoEnableNewModels, groupIDs, account.SecretConfigured, account.SecretHint, account.SecretCiphertext, account.ErrorMessage, account.LastUsedAt, account.ExpiresAt, account.CooldownUntil, account.CircuitState, account.CircuitFailureThreshold, account.CircuitOpenSeconds, account.ConsecutiveFailures, account.CircuitOpenedUntil, account.LastFailureAt, tempUnschedulableRules, account.TempUnschedulableReason, account.CreatedAt, account.UpdatedAt)
 	return err
 }
 
@@ -3804,6 +3882,25 @@ func parseStringList(value string) []string {
 		return []string{}
 	}
 	return out
+}
+
+func marshalStringMap(values map[string]string) string {
+	if values == nil {
+		values = map[string]string{}
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func parseStringMap(value string) map[string]string {
+	result := map[string]string{}
+	if err := json.Unmarshal([]byte(value), &result); err != nil || result == nil {
+		return map[string]string{}
+	}
+	return result
 }
 
 func marshalTempUnschedulableRules(rules []ProviderAccountTempUnschedulableRule) string {

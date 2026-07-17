@@ -108,7 +108,7 @@ func newDirectImageHTTPFixtureWithAdmission(t *testing.T, adapter *directImageAd
 	for index := 0; index < routes; index++ {
 		provider, createErr := control.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
 			Name: "Image provider", Type: "openai_compatible", BaseURL: "https://provider.invalid/v1",
-			Status: controlplane.ProviderStatusActive, Models: []string{"provider-image"}, APIKey: "provider-secret",
+			Status: controlplane.ProviderStatusActive,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -116,7 +116,7 @@ func newDirectImageHTTPFixtureWithAdmission(t *testing.T, adapter *directImageAd
 		account := createGatewayTestAccount(t, control, provider, "provider-image", "provider-secret", 10+index, concurrency)
 		if _, createErr = control.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
 			GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID,
-			UpstreamModel: "provider-image", Priority: 10 + index, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+			UpstreamModel: "provider-image", Priority: 10 + index, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
 		}); createErr != nil {
 			t.Fatal(createErr)
 		}
@@ -298,7 +298,7 @@ func TestGatewayMediaDirectStreamUsesCoreArtifactAndUsagePipeline(t *testing.T) 
 	}
 	provider, err := fixture.control.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
 		Name: "Video provider", Type: "openai_compatible", BaseURL: "https://provider.invalid/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"provider-video"}, APIKey: "provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -306,7 +306,7 @@ func TestGatewayMediaDirectStreamUsesCoreArtifactAndUsagePipeline(t *testing.T) 
 	account := createGatewayTestAccount(t, fixture.control, provider, "provider-video", "provider-secret", 10, 2)
 	if _, err := fixture.control.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID,
-		UpstreamModel: "provider-video", Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+		UpstreamModel: "provider-video", Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestGatewayAudioDirectBlockingUsesSharedMediaExecution(t *testing.T) {
 	}
 	provider, err := fixture.control.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
 		Name: "Audio provider", Type: "openai_compatible", BaseURL: "https://provider.invalid/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"provider-audio"}, APIKey: "provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +355,7 @@ func TestGatewayAudioDirectBlockingUsesSharedMediaExecution(t *testing.T) {
 	account := createGatewayTestAccount(t, fixture.control, provider, "provider-audio", "provider-secret", 10, 2)
 	if _, err := fixture.control.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID,
-		UpstreamModel: "provider-audio", Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+		UpstreamModel: "provider-audio", Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatal(err)
 	}

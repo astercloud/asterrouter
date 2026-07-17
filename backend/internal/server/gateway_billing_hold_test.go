@@ -15,7 +15,7 @@ func TestGatewayBillingHoldLifecycle(t *testing.T) {
 	t.Run("authoritative usage settles actual cost", func(t *testing.T) {
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"id":"billing-success","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":5}}`))
+			_, _ = w.Write([]byte(`{"id":"billing-success","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":5}}`))
 		}))
 		defer upstream.Close()
 		handler, control, key := setupGatewayBillingHoldRuntime(t, upstream.URL)
@@ -33,7 +33,7 @@ func TestGatewayBillingHoldLifecycle(t *testing.T) {
 	t.Run("missing usage remains disputed", func(t *testing.T) {
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"id":"billing-missing","choices":[]}`))
+			_, _ = w.Write([]byte(`{"id":"billing-missing","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
 		}))
 		defer upstream.Close()
 		handler, control, key := setupGatewayBillingHoldRuntime(t, upstream.URL)
@@ -97,7 +97,7 @@ func setupGatewayBillingHoldRuntime(t *testing.T, upstreamURL string) (http.Hand
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "Billing provider", Type: "openai_compatible", BaseURL: upstreamURL + "/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"billing-upstream"}, APIKey: "billing-provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)

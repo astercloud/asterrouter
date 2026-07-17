@@ -28,7 +28,9 @@ export default {
     next: '下一页',
     page: '页码',
     yes: '是',
-    no: '否'
+    no: '否',
+    all: '全部',
+    delete: '删除'
   },
   nav: {
     setup: '初始化',
@@ -591,20 +593,22 @@ export default {
   modelRoutes: {
     subtitle: '将网关模型和路由组显式映射到 Provider 账号与上游模型标识。',
     newRoute: '新增模型路由', editRoute: '编辑模型路由', routes: '路由', routeGroups: '路由组', allModels: '全部网关模型',
-    gatewayModel: '网关模型', routeGroup: '路由组', account: 'Provider 账号', upstreamModel: '上游模型', order: '调度参数', priority: '优先级', weight: '权重',
+    gatewayModel: '网关模型', routeGroup: '路由组', account: 'Provider 账号', upstreamModel: '上游模型', upstreamFormat: '上游格式', order: '调度参数', priority: '优先级', weight: '权重',
+    viewsLabel: '模型路由视图', routeList: '路由', supportMatrix: '支持矩阵', formats: '种格式', inventoryModels: '个库存模型', routed: '个已路由', unrouted: '未路由',
     searchPlaceholder: '搜索网关模型、路由组、账号或上游模型', modalSubtitle: '每条路由都是网关热路径真实使用、可审计的显式映射。',
     bulkMatch: '批量匹配模型',
     bulkMatchSubtitle: '从账号已启用的上游模型生成候选映射；同名公共模型会自动匹配，其余模型需人工确认。',
     selected: '已选', unmatched: '未匹配', existing: '已存在',
     toggleBulkRoute: '选择上游模型 {model} 的路由', gatewayModelFor: '上游模型 {model} 对应的网关模型',
     noMatch: '请选择网关模型', alreadyExists: '路由已存在', ready: '可创建', needsMatch: '待匹配', noAccountModels: '该账号没有已启用的模型。',
+    unsupportedPair: '该 Provider 与网关模型当前没有可执行的路由格式。', capabilityMismatch: '能力不匹配', textCore: '文本 Core', mediaAdapter: '媒体 Adapter', builtinDirect: '内置直连',
     bulkAtomicHint: '所选路由会先整批校验，再在一个事务中写入。', createSelected: '创建 {count} 条路由', bulkCreated: '已批量创建 {count} 条模型路由',
     created: '模型路由已创建', updated: '模型路由已更新', deleted: '模型路由已删除', delete: '删除模型路由', deleteConfirm: '确定删除这条模型路由吗？', empty: ''
   },
   gatewaySimulator: {
     subtitle: '不调用上游、不消耗限流额度，解析并检查当前真实调度计划。',
-    model: '请求模型', estimatedTokens: '预估 Token', run: '运行模拟', status: '状态', resolvedModel: '解析模型', routeGroup: '路由组', candidates: '候选',
-    route: '路由', account: 'Provider / 账号', headroom: '余量', limits: '限流 / 熔断', decision: '调度结论', eligible: '可调度'
+    model: '请求模型', clientProtocol: '客户端协议', requiredFeatures: '必需能力', estimatedTokens: '预估 Token', run: '运行模拟', status: '状态', resolvedModel: '解析模型', routeGroup: '路由组', candidates: '候选',
+    route: '路由', account: 'Provider / 账号', adapter: 'Adapter', headroom: '余量', limits: '限流 / 熔断', decision: '调度结论', eligible: '可调度', eligibleCount: '{count} 个可调度', concurrent: '{count} 并发'
   },
   routingGroups: {
     subtitle: '维护 fallback、排序、容量和路由治理所需的高级路由边界。',
@@ -689,6 +693,11 @@ export default {
     selectProvider: '请选择 Provider 连接',
     name: '资源名称',
     authType: '认证方式',
+    adapterConfig: {
+      anthropic_version: 'Anthropic 版本', region: 'AWS 区域', endpoint: '自定义端点',
+      project: 'GCP 项目 ID', location: 'GCP 区域', api_version: 'Azure API 版本',
+      audience: '令牌受众', managed_identity_client_id: '托管身份客户端 ID'
+    },
     groups: '所属分组',
     allGroups: '全部分组',
     capacity: '并发 / 优先级',

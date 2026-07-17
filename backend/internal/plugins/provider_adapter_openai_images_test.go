@@ -47,7 +47,7 @@ func TestBuiltinOpenAIImageAdapterRunsDurableJobToArtifact(t *testing.T) {
 	}
 	provider, err := controlService.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
 		Name: "Image provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"image-upstream"}, APIKey: "connection-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestBuiltinOpenAIImageAdapterRunsDurableJobToArtifact(t *testing.T) {
 	}
 	if _, err := controlService.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: account.ID,
-		UpstreamModel: "image-upstream", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+		UpstreamModel: "image-upstream", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatal(err)
 	}

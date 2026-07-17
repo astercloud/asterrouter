@@ -62,6 +62,7 @@ type CanonicalRequest struct {
 	InputAudioDurationMS int64                   `json:"input_audio_duration_ms,omitempty"`
 	InputCharacters      int64                   `json:"input_characters,omitempty"`
 	SourceIP             string                  `json:"-"`
+	Text                 *CanonicalTextRequest   `json:"-"`
 	Payload              json.RawMessage         `json:"-"`
 	TransportBody        []byte                  `json:"-"`
 	TransportContentType string                  `json:"-"`

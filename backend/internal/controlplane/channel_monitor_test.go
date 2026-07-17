@@ -23,14 +23,14 @@ func TestRunChannelMonitorCycleChecksOnlyActiveChannels(t *testing.T) {
 	service := NewService(repo, "/v1", "test-secret")
 	active, err := service.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Active", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: ProviderStatusActive, APIKey: "secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(active): %v", err)
 	}
 	_, err = service.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Disabled", Type: "openai_compatible", BaseURL: "http://127.0.0.1:1/v1",
-		Status: ProviderStatusDisabled, APIKey: "secret",
+		Status: ProviderStatusDisabled,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(disabled): %v", err)

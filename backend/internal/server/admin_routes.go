@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
@@ -32,7 +34,7 @@ func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, 
 func registerGatewayModelAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {
 	admin.POST("/gateway-simulator", func(c *gin.Context) {
 		var req controlplane.GatewaySimulationRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1519, "invalid gateway simulation payload")
 			return
 		}
@@ -95,7 +97,7 @@ func registerGatewayModelAdminRoutes(admin *gin.RouterGroup, control *controlpla
 	})
 	admin.POST("/model-routes", func(c *gin.Context) {
 		var req controlplane.ModelRouteRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1517, "invalid model route payload")
 			return
 		}
@@ -108,7 +110,7 @@ func registerGatewayModelAdminRoutes(admin *gin.RouterGroup, control *controlpla
 	})
 	admin.POST("/model-routes/bulk", func(c *gin.Context) {
 		var req controlplane.ModelRouteBulkCreateRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1517, "invalid model route batch payload")
 			return
 		}
@@ -121,7 +123,7 @@ func registerGatewayModelAdminRoutes(admin *gin.RouterGroup, control *controlpla
 	})
 	admin.PUT("/model-routes/:id", func(c *gin.Context) {
 		var req controlplane.ModelRouteRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1517, "invalid model route payload")
 			return
 		}
@@ -171,7 +173,7 @@ func registerProviderAdminRoutes(admin *gin.RouterGroup, control *controlplane.S
 	})
 	admin.POST("/providers", func(c *gin.Context) {
 		var req controlplane.ProviderRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1500, "invalid provider payload")
 			return
 		}
@@ -184,7 +186,7 @@ func registerProviderAdminRoutes(admin *gin.RouterGroup, control *controlplane.S
 	})
 	admin.PUT("/providers/:id", func(c *gin.Context) {
 		var req controlplane.ProviderRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1500, "invalid provider payload")
 			return
 		}
@@ -258,7 +260,7 @@ func registerRoutingAdminRoutes(admin *gin.RouterGroup, control *controlplane.Se
 	})
 	admin.POST("/provider-accounts", func(c *gin.Context) {
 		var req controlplane.ProviderAccountRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1512, "invalid provider account payload")
 			return
 		}
@@ -271,7 +273,7 @@ func registerRoutingAdminRoutes(admin *gin.RouterGroup, control *controlplane.Se
 	})
 	admin.PUT("/provider-accounts/:id", func(c *gin.Context) {
 		var req controlplane.ProviderAccountRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1512, "invalid provider account payload")
 			return
 		}
@@ -327,6 +329,21 @@ func registerRoutingAdminRoutes(admin *gin.RouterGroup, control *controlplane.Se
 		}
 		httpx.OK(c, data)
 	})
+}
+
+func decodeStrictAdminJSON(c *gin.Context, destination any) error {
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return io.ErrUnexpectedEOF
+		}
+		return err
+	}
+	return nil
 }
 
 func registerAPIKeyAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {

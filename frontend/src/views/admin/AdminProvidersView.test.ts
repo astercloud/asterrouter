@@ -27,7 +27,7 @@ describe('AdminProvidersView', () => {
     const createButton = wrapper.findAll('button').find((button) => button.text().includes('New provider'))
     await createButton!.trigger('click')
 
-    expect(wrapper.get('[role="dialog"]').text()).toContain('New provider connection')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('New provider')
     expect(wrapper.find('.provider-model-section').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Recommended models')
     expect(wrapper.text()).not.toMatch(/gpt-\d|claude-|gemini-\d|grok-\d/)

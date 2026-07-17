@@ -165,11 +165,11 @@ func requireDiscoveredModels(models []string, providerName string) ([]string, er
 
 func providerModelDiscoveryAdapterFor(providerType string) (providerModelDiscoveryAdapter, bool) {
 	switch strings.ToLower(strings.TrimSpace(providerType)) {
-	case "openai_compatible", "self_hosted":
+	case ProviderTypeOpenAICompatible:
 		return openAICompatibleModelDiscoveryAdapter{}, true
-	case "anthropic":
+	case ProviderTypeAnthropicCompatible:
 		return anthropicModelDiscoveryAdapter{}, true
-	case "gemini":
+	case ProviderTypeGeminiCompatible:
 		return geminiModelDiscoveryAdapter{}, true
 	default:
 		return nil, false

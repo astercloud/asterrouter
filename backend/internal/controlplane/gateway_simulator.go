@@ -3,12 +3,15 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
 type GatewaySimulationRequest struct {
-	Model           string `json:"model"`
-	EstimatedTokens int    `json:"estimated_tokens"`
+	Model            string   `json:"model"`
+	EstimatedTokens  int      `json:"estimated_tokens"`
+	Protocol         string   `json:"protocol"`
+	RequiredFeatures []string `json:"required_features"`
 }
 
 type GatewaySimulationCandidate struct {
@@ -18,6 +21,9 @@ type GatewaySimulationCandidate struct {
 	ProviderID        string  `json:"provider_id"`
 	ProviderAccountID string  `json:"provider_account_id"`
 	UpstreamModel     string  `json:"upstream_model"`
+	ProviderType      string  `json:"provider_type"`
+	UpstreamFormat    string  `json:"upstream_format"`
+	Adapter           string  `json:"adapter"`
 	Headroom          float64 `json:"headroom"`
 	RPMLimit          int     `json:"rpm_limit"`
 	TPMLimit          int     `json:"tpm_limit"`
@@ -67,9 +73,13 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 			CircuitState: candidate.circuitState, CircuitProbe: candidate.circuitProbe, Concurrency: candidate.account.Concurrency,
 		}
 		reason := simulationPermitReason(s, provider, req.EstimatedTokens)
+		if reason == "" {
+			reason = simulationProtocolReason(req.Protocol, req.RequiredFeatures, candidate.route.UpstreamFormat)
+		}
 		result.Candidates = append(result.Candidates, GatewaySimulationCandidate{
 			Rank: index + 1, RouteID: candidate.route.ID, RouteGroup: candidate.route.RouteGroup,
 			ProviderID: candidate.provider.ID, ProviderAccountID: candidate.account.ID, UpstreamModel: candidate.route.UpstreamModel,
+			ProviderType: candidate.provider.Type, UpstreamFormat: candidate.route.UpstreamFormat, Adapter: candidate.provider.Type,
 			Headroom: candidate.headroom, RPMLimit: candidate.account.RPMLimit, TPMLimit: candidate.account.TPMLimit,
 			Concurrency: candidate.account.Concurrency, CircuitState: candidate.circuitState,
 			Eligible: reason == "", Reason: reason,
@@ -114,7 +124,7 @@ func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved Reso
 		}
 		candidate := GatewaySimulationCandidate{
 			Rank: rankStart + len(out), RouteID: route.ID, RouteGroup: route.RouteGroup,
-			ProviderAccountID: route.ProviderAccountID, UpstreamModel: route.UpstreamModel,
+			ProviderAccountID: route.ProviderAccountID, UpstreamModel: route.UpstreamModel, UpstreamFormat: route.UpstreamFormat,
 			Eligible: false,
 		}
 		if route.Status != ModelRouteStatusActive {
@@ -151,9 +161,39 @@ func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved Reso
 		} else {
 			candidate.Reason = "not_schedulable"
 		}
+		if ok {
+			candidate.ProviderType = provider.Type
+			candidate.Adapter = provider.Type
+		}
 		out = append(out, candidate)
 	}
 	return out, nil
+}
+
+func simulationProtocolReason(protocol string, features []string, upstreamFormat string) string {
+	protocol = strings.TrimSpace(protocol)
+	if protocol != "" && !oneOf(protocol, "openai_chat_completions", "openai_responses", "anthropic_messages", "gemini_generate_content") {
+		return "client_protocol_unsupported"
+	}
+	if protocol != "" && upstreamFormat == UpstreamFormatNativeMedia {
+		return "protocol_incompatible:native_media"
+	}
+	for _, feature := range cleanStringList(features) {
+		switch feature {
+		case "text", "tools", "stream":
+		case "response_format":
+			if !oneOf(upstreamFormat, UpstreamFormatOpenAIChat, UpstreamFormatOpenAIResponses, UpstreamFormatGemini) {
+				return "protocol_incompatible:response_format"
+			}
+		case "top_k":
+			if !oneOf(upstreamFormat, UpstreamFormatAnthropic, UpstreamFormatGemini) {
+				return "protocol_incompatible:top_k"
+			}
+		default:
+			return "feature_unsupported:" + feature
+		}
+	}
+	return ""
 }
 
 func accountRoutingIneligibilityReason(account ProviderAccount, model string, now time.Time) string {
@@ -162,9 +202,7 @@ func accountRoutingIneligibilityReason(account ProviderAccount, model string, no
 		return "account_" + account.Status
 	case !account.Schedulable:
 		return "account_not_schedulable"
-	case account.AuthType != "api_key":
-		return "auth_type_unsupported"
-	case !account.SecretConfigured || account.SecretCiphertext == "":
+	case providerAuthRequiresSecret(account.AuthType) && (!account.SecretConfigured || account.SecretCiphertext == ""):
 		return "secret_missing"
 	case account.ExpiresAt != nil && now.After(*account.ExpiresAt):
 		return "account_expired"

@@ -148,6 +148,8 @@ func handleGatewayRealtime(c *gin.Context, control *controlplane.Service) {
 		errorType := "upstream_handshake_error"
 		if errors.Is(err, errNoSchedulableSlot) {
 			errorType = "provider_capacity_exhausted"
+		} else if errors.Is(err, errGatewayProviderCapability) {
+			errorType = "unsupported_capability"
 		}
 		_ = control.RecordGatewayCall(c.Request.Context(), auth, request.Model, "upstream_error", err.Error())
 		_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{
@@ -159,6 +161,10 @@ func handleGatewayRealtime(c *gin.Context, control *controlplane.Service) {
 		_ = completeRealtimeOperation(c.Request.Context(), control, operation.ID, controlplane.AIOperationStatusFailed, errorType, &operationCompleted)
 		if errors.Is(err, errNoSchedulableSlot) {
 			writeGatewayError(c, controlplane.ErrGatewayCapacityLimited)
+			return
+		}
+		if errors.Is(err, errGatewayProviderCapability) {
+			writeGatewayProtocolError(c, request.Protocol, http.StatusServiceUnavailable, "unsupported_capability", "no configured provider route can execute this realtime request")
 			return
 		}
 		openAIError(c, http.StatusBadGateway, "upstream_error", "failed to establish upstream realtime session")
@@ -305,6 +311,12 @@ func dialRealtimeCandidates(ctx context.Context, control *controlplane.Service, 
 		}
 		candidate.AttemptID = attempt.ID
 		result.provider = candidate
+		if !controlplane.ProviderSupportsGatewayModelRoute(candidate.Type, controlplane.GatewayModalityAudio, candidate.UpstreamFormat) {
+			lastErr = fmt.Errorf("%w: provider type %q cannot execute realtime", errGatewayProviderCapability, candidate.Type)
+			_ = control.CompleteAIAttempt(ctx, attempt.ID, controlplane.AIAttemptStatusSkipped, "provider_capability_incompatible")
+			result.attempts = append(result.attempts, gatewayRouteAttempt{AttemptID: attempt.ID, AccountID: candidate.AccountID, ProviderID: candidate.ID, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup, Model: candidate.UpstreamModel, Outcome: "skipped", Detail: "provider_capability_incompatible"})
+			continue
+		}
 		permit, reason, acquired, err := control.TryAcquireProviderAccountPermitContext(ctx, candidate, 0, "provider_lease_"+attempt.ID)
 		if err != nil {
 			_ = control.CompleteAIAttempt(ctx, attempt.ID, controlplane.AIAttemptStatusFailed, "capacity_store_error")
@@ -386,6 +398,9 @@ func dialRealtimeCandidates(ctx context.Context, control *controlplane.Service, 
 }
 
 func realtimeProviderURL(provider controlplane.GatewayProvider) (string, error) {
+	if !controlplane.ProviderSupportsGatewayModelRoute(provider.Type, controlplane.GatewayModalityAudio, provider.UpstreamFormat) {
+		return "", fmt.Errorf("%w: provider type %q cannot execute realtime", errGatewayProviderCapability, provider.Type)
+	}
 	target, err := url.Parse(strings.TrimSpace(provider.BaseURL))
 	if err != nil || target.Host == "" || target.User != nil {
 		return "", errors.New("invalid realtime provider base URL")

@@ -3,9 +3,8 @@ package controlplane
 import "time"
 
 const (
-	ProviderStatusActive      = "active"
-	ProviderStatusDisabled    = "disabled"
-	ProviderStatusNeedsSecret = "needs_secret"
+	ProviderStatusActive   = "active"
+	ProviderStatusDisabled = "disabled"
 
 	APIKeyStatusActive   = "active"
 	APIKeyStatusDisabled = "disabled"
@@ -96,21 +95,32 @@ const (
 	RoutingGroupTypeExclusive       = "exclusive"
 	RoutingGroupTypeImageGeneration = "image_generation"
 	RoutingGroupTypeVideoGeneration = "video_generation"
+
+	ProviderTypeOpenAICompatible    = "openai_compatible"
+	ProviderTypeAnthropicCompatible = "anthropic_compatible"
+	ProviderTypeGeminiCompatible    = "gemini_compatible"
+	ProviderTypeAWSBedrock          = "aws_bedrock"
+	ProviderTypeGCPVertex           = "gcp_vertex"
+	ProviderTypeAzureOpenAI         = "azure_openai"
+
+	ProviderAuthAPIKey               = "api_key"
+	ProviderAuthBearer               = "bearer"
+	ProviderAuthAWSDefault           = "aws_default_chain"
+	ProviderAuthAWSAccessKey         = "aws_access_key"
+	ProviderAuthGCPADC               = "gcp_adc"
+	ProviderAuthGCPServiceAccount    = "gcp_service_account"
+	ProviderAuthAzureManagedIdentity = "azure_managed_identity"
 )
 
 type ProviderConnection struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Type             string    `json:"type"`
-	BaseURL          string    `json:"base_url"`
-	Status           string    `json:"status"`
-	Models           []string  `json:"models"`
-	Priority         int       `json:"priority"`
-	SecretConfigured bool      `json:"secret_configured"`
-	SecretHint       string    `json:"secret_hint"`
-	SecretCiphertext string    `json:"-"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	BaseURL   string    `json:"base_url"`
+	Status    string    `json:"status"`
+	Priority  int       `json:"priority"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type ProviderHealthCheck struct {
@@ -119,20 +129,15 @@ type ProviderHealthCheck struct {
 	Status     string    `json:"status"`
 	LatencyMS  int64     `json:"latency_ms"`
 	Message    string    `json:"message"`
-	Models     []string  `json:"models"`
 	CheckedAt  time.Time `json:"checked_at"`
 }
 
 type ProviderRequest struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	BaseURL string `json:"base_url"`
-	Status  string `json:"status"`
-	// Models is accepted for wire compatibility but ignored. Provider model
-	// snapshots are populated only by discovery during health checks.
-	Models   []string `json:"models"`
-	Priority int      `json:"priority"`
-	APIKey   string   `json:"api_key"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	BaseURL  string `json:"base_url"`
+	Status   string `json:"status"`
+	Priority int    `json:"priority"`
 }
 
 type RoutingGroup struct {
@@ -208,6 +213,7 @@ type ProviderAccount struct {
 	Name                    string                                 `json:"name"`
 	Platform                string                                 `json:"platform"`
 	AuthType                string                                 `json:"auth_type"`
+	AdapterConfig           map[string]string                      `json:"adapter_config"`
 	Status                  string                                 `json:"status"`
 	Schedulable             bool                                   `json:"schedulable"`
 	Priority                int                                    `json:"priority"`
@@ -269,6 +275,7 @@ type ProviderAccountRequest struct {
 	Name                    string                                 `json:"name"`
 	Platform                string                                 `json:"platform"`
 	AuthType                string                                 `json:"auth_type"`
+	AdapterConfig           map[string]string                      `json:"adapter_config"`
 	Status                  string                                 `json:"status"`
 	Schedulable             *bool                                  `json:"schedulable"`
 	Priority                int                                    `json:"priority"`
@@ -875,6 +882,8 @@ type GatewayProvider struct {
 	Type             string
 	BaseURL          string
 	APIKey           string
+	AuthType         string
+	AdapterConfig    map[string]string
 	AdapterID        string
 	AccountID        string
 	AccountName      string
@@ -882,6 +891,7 @@ type GatewayProvider struct {
 	GatewayModelID   string
 	RequestedModel   string
 	UpstreamModel    string
+	UpstreamFormat   string
 	RouteID          string
 	RouteGroup       string
 	RoutePriority    int

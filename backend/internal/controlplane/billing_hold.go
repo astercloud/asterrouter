@@ -173,6 +173,9 @@ func (s *Service) estimateBillingHold(ctx context.Context, operation AIOperation
 			return billingHoldEstimate{}, err
 		}
 	}
+	if request.Text != nil && request.Text.Generation.MaxOutputTokens != nil && *request.Text.Generation.MaxOutputTokens > limits.MaxCompletionTokens {
+		limits.MaxCompletionTokens = *request.Text.Generation.MaxOutputTokens
+	}
 	if limits.MaxTokens < 0 || limits.MaxCompletionTokens < 0 || limits.MaxCostMicros < 0 {
 		return billingHoldEstimate{}, errors.New("billing hold request limits must be non-negative")
 	}

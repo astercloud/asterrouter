@@ -66,7 +66,7 @@ func setupSingleDurableCapacityRoute(t *testing.T, svc *Service) string {
 	ctx := context.Background()
 	provider, err := svc.CreateProvider(ctx, "test", ProviderRequest{
 		Name: "Capacity provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: ProviderStatusActive, Models: []string{"capacity-upstream"}, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func setupSingleDurableCapacityRoute(t *testing.T, svc *Service) string {
 	}
 	if _, err := svc.CreateModelRoute(ctx, "test", ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: DefaultModelRouteGroup, ProviderAccountID: account.ID,
-		UpstreamModel: "capacity-upstream", Priority: 10, Weight: 100, Status: ModelRouteStatusActive,
+		UpstreamModel: "capacity-upstream", Priority: 10, Weight: 100, Status: ModelRouteStatusActive, UpstreamFormat: UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatal(err)
 	}

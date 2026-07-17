@@ -24,7 +24,7 @@ func TestProviderAccountModelSyncTracksDiffAndAffectedRoutes(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "model-sync-secret")
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Model sync provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: ProviderStatusActive, Models: []string{"legacy-upstream"}, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestProviderAccountModelSyncTracksDiffAndAffectedRoutes(t *testing.T) {
 	}
 	route, err := svc.CreateModelRoute(ctx, "tester", ModelRouteRequest{
 		GatewayModelID: gatewayModel.ID, RouteGroup: DefaultModelRouteGroup, ProviderAccountID: account.ID,
-		UpstreamModel: "legacy-upstream", Priority: 10, Weight: 100, Status: ModelRouteStatusActive,
+		UpstreamModel: "legacy-upstream", Priority: 10, Weight: 100, Status: ModelRouteStatusActive, UpstreamFormat: "openai_chat",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestCreateProviderAccountAllowsEmptyInventoryBeforeDiscovery(t *testing.T) 
 	svc := NewService(NewMemoryRepository(), "/v1", "empty-inventory-secret")
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Empty inventory provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: ProviderStatusActive, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestProviderAccountModelSyncAllowsDisablingEveryModel(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "disable-all-models-secret")
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Disable all provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: ProviderStatusActive, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestActiveModelRouteRejectsDisabledGatewayModel(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "disabled-route-model-secret")
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Disabled route provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: ProviderStatusActive, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestActiveModelRouteRejectsDisabledGatewayModel(t *testing.T) {
 	}
 	request := ModelRouteRequest{
 		GatewayModelID: model.ID, ProviderAccountID: account.ID, UpstreamModel: "upstream-model",
-		RouteGroup: DefaultModelRouteGroup, Status: ModelRouteStatusActive,
+		RouteGroup: DefaultModelRouteGroup, Status: ModelRouteStatusActive, UpstreamFormat: "openai_chat",
 	}
 	if _, err := svc.CreateModelRoute(ctx, "tester", request); err == nil || !strings.Contains(err.Error(), "active gateway model") {
 		t.Fatalf("active route error = %v", err)
@@ -206,7 +206,7 @@ func TestProviderAccountHealthCheckAutoEnablesNewModelsOnlyWhenConfigured(t *tes
 	}))
 	defer upstream.Close()
 	svc := NewService(NewMemoryRepository(), "/v1", "auto-model-secret")
-	provider, _ := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Auto provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1", Status: ProviderStatusActive, Models: []string{"existing"}, APIKey: "provider-secret"})
+	provider, _ := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Auto provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1", Status: ProviderStatusActive})
 	autoEnable := true
 	account, err := svc.CreateProviderAccount(ctx, "tester", ProviderAccountRequest{
 		ProviderID: provider.ID, Name: "Auto account", Platform: "openai_compatible", AuthType: "api_key",
@@ -285,7 +285,7 @@ func TestProviderModelDiscoveryRejectsRedirectsBeforeForwardingSecret(t *testing
 }
 
 func TestProviderModelDiscoveryAdapterCoverage(t *testing.T) {
-	for _, providerType := range []string{"openai_compatible", "self_hosted", "anthropic", "gemini"} {
+	for _, providerType := range []string{ProviderTypeOpenAICompatible, ProviderTypeAnthropicCompatible, ProviderTypeGeminiCompatible} {
 		if _, ok := providerModelDiscoveryAdapterFor(providerType); !ok {
 			t.Fatalf("expected discovery adapter for %s", providerType)
 		}
@@ -298,14 +298,14 @@ func TestProviderModelDiscoveryAdapterCoverage(t *testing.T) {
 func TestBulkCreateModelRoutesValidatesWholeBatchBeforeWrite(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1", "bulk-route-secret")
-	provider, _ := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Bulk provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: ProviderStatusActive, Models: []string{"upstream-a", "upstream-b"}, APIKey: "provider-secret"})
+	provider, _ := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Bulk provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: ProviderStatusActive})
 	account, _ := svc.CreateProviderAccount(ctx, "tester", ProviderAccountRequest{ProviderID: provider.ID, Name: "Bulk account", Platform: "openai_compatible", AuthType: "api_key", Status: AccountStatusActive, Models: []string{"upstream-a", "upstream-b"}, Secret: "account-secret"})
 	modelA, _ := svc.CreateGatewayModel(ctx, "tester", GatewayModelRequest{ModelID: "public-a", Name: "Public A", Modality: "chat", Status: GatewayModelStatusActive})
 	modelB, _ := svc.CreateGatewayModel(ctx, "tester", GatewayModelRequest{ModelID: "public-b", Name: "Public B", Modality: "chat", Status: GatewayModelStatusActive})
 
 	_, err := svc.BulkCreateModelRoutes(ctx, "tester", ModelRouteBulkCreateRequest{Routes: []ModelRouteRequest{
-		{GatewayModelID: modelA.ID, ProviderAccountID: account.ID, UpstreamModel: "upstream-a", Status: ModelRouteStatusActive},
-		{GatewayModelID: modelB.ID, ProviderAccountID: account.ID, UpstreamModel: "not-exposed", Status: ModelRouteStatusActive},
+		{GatewayModelID: modelA.ID, ProviderAccountID: account.ID, UpstreamModel: "upstream-a", UpstreamFormat: UpstreamFormatOpenAIChat, Status: ModelRouteStatusActive},
+		{GatewayModelID: modelB.ID, ProviderAccountID: account.ID, UpstreamModel: "not-exposed", UpstreamFormat: UpstreamFormatOpenAIChat, Status: ModelRouteStatusActive},
 	}})
 	if err == nil {
 		t.Fatal("BulkCreateModelRoutes() accepted an invalid second route")
@@ -316,8 +316,8 @@ func TestBulkCreateModelRoutesValidatesWholeBatchBeforeWrite(t *testing.T) {
 	}
 
 	created, err := svc.BulkCreateModelRoutes(ctx, "tester", ModelRouteBulkCreateRequest{Routes: []ModelRouteRequest{
-		{GatewayModelID: modelA.ID, ProviderAccountID: account.ID, UpstreamModel: "upstream-a", Status: ModelRouteStatusActive},
-		{GatewayModelID: modelB.ID, ProviderAccountID: account.ID, UpstreamModel: "upstream-b", Status: ModelRouteStatusActive},
+		{GatewayModelID: modelA.ID, ProviderAccountID: account.ID, UpstreamModel: "upstream-a", UpstreamFormat: UpstreamFormatOpenAIChat, Status: ModelRouteStatusActive},
+		{GatewayModelID: modelB.ID, ProviderAccountID: account.ID, UpstreamModel: "upstream-b", UpstreamFormat: UpstreamFormatOpenAIChat, Status: ModelRouteStatusActive},
 	}})
 	if err != nil || len(created.Routes) != 2 {
 		t.Fatalf("created=%+v err=%v", created, err)

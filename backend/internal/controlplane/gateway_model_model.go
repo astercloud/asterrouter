@@ -10,6 +10,13 @@ const (
 	ModelRouteStatusDisabled = "disabled"
 
 	DefaultModelRouteGroup = "default"
+
+	UpstreamFormatOpenAIChat      = "openai_chat"
+	UpstreamFormatOpenAIResponses = "openai_responses"
+	UpstreamFormatAnthropic       = "anthropic_messages"
+	UpstreamFormatGemini          = "gemini_generate_content"
+	UpstreamFormatBedrockConverse = "bedrock_converse"
+	UpstreamFormatNativeMedia     = "native_media"
 )
 
 type GatewayModel struct {
@@ -44,6 +51,8 @@ type ModelRoute struct {
 	RouteGroup        string    `json:"route_group"`
 	ProviderAccountID string    `json:"provider_account_id"`
 	UpstreamModel     string    `json:"upstream_model"`
+	UpstreamFormat    string    `json:"upstream_format"`
+	DisabledReason    string    `json:"disabled_reason"`
 	Priority          int       `json:"priority"`
 	Weight            int       `json:"weight"`
 	Status            string    `json:"status"`
@@ -56,6 +65,7 @@ type ModelRouteRequest struct {
 	RouteGroup        string `json:"route_group"`
 	ProviderAccountID string `json:"provider_account_id"`
 	UpstreamModel     string `json:"upstream_model"`
+	UpstreamFormat    string `json:"upstream_format"`
 	Priority          int    `json:"priority"`
 	Weight            int    `json:"weight"`
 	Status            string `json:"status"`

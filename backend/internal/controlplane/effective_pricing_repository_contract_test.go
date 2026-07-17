@@ -34,7 +34,7 @@ func TestEffectivePricingRepositoryContract(t *testing.T) {
 			provider := ProviderConnection{
 				ID: "provider-contract", Name: "Contract Provider", Type: "openai_compatible",
 				BaseURL: "https://provider.example/v1", Status: ProviderStatusActive,
-				Models: []string{"model-contract"}, CreatedAt: now, UpdatedAt: now,
+				CreatedAt: now, UpdatedAt: now,
 			}
 			if err := repo.SaveProvider(ctx, provider); err != nil {
 				t.Fatalf("SaveProvider(): %v", err)

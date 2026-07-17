@@ -417,7 +417,7 @@ func newProviderOutputFixture(t *testing.T, modality, policy string, payload []b
 	}
 	provider, err := fixture.service.CreateProvider(ctx, "test", ProviderRequest{
 		Name: "Output provider " + modality, Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: ProviderStatusActive, Models: []string{"output-upstream-" + modality}, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -442,7 +442,7 @@ func newProviderOutputFixture(t *testing.T, modality, policy string, payload []b
 	}
 	if _, err := fixture.service.CreateModelRoute(ctx, "test", ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: DefaultModelRouteGroup, ProviderAccountID: account.ID,
-		UpstreamModel: "output-upstream-" + modality, Priority: 10, Weight: 100, Status: ModelRouteStatusActive,
+		UpstreamModel: "output-upstream-" + modality, Priority: 10, Weight: 100, Status: ModelRouteStatusActive, UpstreamFormat: UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatal(err)
 	}

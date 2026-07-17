@@ -121,18 +121,18 @@ func TestGatewayIdempotencyPreventsDuplicateDirectExecution(t *testing.T) {
 	}
 }
 
-func TestGatewayOpenAIContractPassesThroughFinalUpstreamError(t *testing.T) {
+func TestGatewayOpenAIContractNormalizesFinalUpstreamError(t *testing.T) {
 	upstream := testutil.NewFakeOpenAI(t)
 	upstream.SetHTTPError(http.StatusTooManyRequests)
 	handler, control, key := gatewayContractRuntime(t, upstream)
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"public-model","messages":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"public-model","messages":[{"role":"user","content":"synthetic"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), "synthetic failure") {
+	if rec.Code != http.StatusTooManyRequests || !strings.Contains(rec.Body.String(), "synthetic failure") || !strings.Contains(rec.Body.String(), `"type":"rate_limit_error"`) {
 		t.Fatalf("response status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	traces, err := control.ListGatewayTraces(context.Background(), 10)
@@ -175,7 +175,7 @@ func TestGatewayProtocolEdgeRejectsQueryAndConflictingCredentials(t *testing.T) 
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, test.target, bytes.NewBufferString(`{"model":"public-model","messages":[]}`))
+			req := httptest.NewRequest(http.MethodPost, test.target, bytes.NewBufferString(`{"model":"public-model","messages":[{"role":"user","content":"synthetic"}]}`))
 			for key, values := range test.headers {
 				req.Header[key] = append([]string(nil), values...)
 			}
@@ -200,7 +200,6 @@ func TestGatewayCanonicalPlannerRejectsChatOnImageOnlyModel(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "image provider", Type: "openai_compatible", BaseURL: upstream.BaseURL(), Status: controlplane.ProviderStatusActive,
-		Models: []string{"upstream-image"}, APIKey: "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -214,7 +213,7 @@ func TestGatewayCanonicalPlannerRejectsChatOnImageOnlyModel(t *testing.T) {
 	}
 	if _, err := control.CreateModelRoute(context.Background(), "tester", controlplane.ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: account.ID,
-		UpstreamModel: "upstream-image", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+		UpstreamModel: "upstream-image", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatalf("CreateModelRoute(): %v", err)
 	}
@@ -224,7 +223,7 @@ func TestGatewayCanonicalPlannerRejectsChatOnImageOnlyModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAPIKey(): %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"public-image","messages":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"public-image","messages":[{"role":"user","content":"synthetic"}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+created.Key)
 	rec := httptest.NewRecorder()
@@ -242,7 +241,6 @@ func TestGatewayTraceIncludesPlannerExclusionEvidence(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "excluded provider", Type: "openai_compatible", BaseURL: upstream.BaseURL(), Status: controlplane.ProviderStatusActive,
-		Models: []string{"upstream-model"}, APIKey: "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -256,7 +254,7 @@ func TestGatewayTraceIncludesPlannerExclusionEvidence(t *testing.T) {
 	}
 	if _, err := control.CreateModelRoute(context.Background(), "tester", controlplane.ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: account.ID,
-		UpstreamModel: "upstream-model", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusDisabled,
+		UpstreamModel: "upstream-model", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusDisabled, UpstreamFormat: "openai_chat",
 	}); err != nil {
 		t.Fatalf("CreateModelRoute(): %v", err)
 	}
@@ -264,7 +262,7 @@ func TestGatewayTraceIncludesPlannerExclusionEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAPIKey(): %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"excluded-model","messages":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"excluded-model","messages":[{"role":"user","content":"synthetic"}]}`))
 	req.Header.Set("Authorization", "Bearer "+created.Key)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -299,7 +297,7 @@ func TestGatewayCanonicalPolicyRejectsDisallowedNetworkBeforeUpstream(t *testing
 	handler, _, key := gatewayContractRuntimeWithKeyRequest(t, upstream, controlplane.APIKeyCreateRequest{
 		AllowedCIDRs: []string{"192.0.2.0/24"},
 	})
-	body := `{"model":"public-model","messages":[]}`
+	body := `{"model":"public-model","messages":[{"role":"user","content":"synthetic"}]}`
 
 	denied := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))
 	denied.RemoteAddr = "203.0.113.10:43100"
@@ -331,7 +329,7 @@ func TestGatewayCredentialRPMLimitRejectsBeforeUpstream(t *testing.T) {
 	upstream := testutil.NewFakeOpenAI(t)
 	handler, control, key := gatewayContractRuntimeWithKeyRequest(t, upstream, controlplane.APIKeyCreateRequest{RPMLimit: 1})
 	request := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"public-model","messages":[]}`))
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"public-model","messages":[{"role":"user","content":"synthetic"}]}`))
 		req.Header.Set("Authorization", "Bearer "+key)
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, req)
@@ -361,7 +359,7 @@ func gatewayContractRuntimeWithKeyRequest(t *testing.T, upstream *testutil.FakeO
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "contract provider", Type: "openai_compatible", BaseURL: upstream.BaseURL(),
-		Status: controlplane.ProviderStatusActive, Models: []string{"upstream-model"}, APIKey: "provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)

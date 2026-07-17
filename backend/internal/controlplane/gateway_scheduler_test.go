@@ -41,7 +41,7 @@ func TestProviderAccountCircuitOpensAndHalfOpenProbeIsExclusive(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret")
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Circuit provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: ProviderStatusActive, Models: []string{"upstream-model"}, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -210,7 +210,7 @@ func TestGatewaySimulationDoesNotConsumeRateCapacity(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret")
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Simulator provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: ProviderStatusActive, Models: []string{"upstream-model"}, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -228,7 +228,7 @@ func TestGatewaySimulationDoesNotConsumeRateCapacity(t *testing.T) {
 	}
 	if _, err := svc.CreateModelRoute(ctx, "tester", ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID,
-		UpstreamModel: "upstream-model", Priority: 10, Weight: 100, Status: ModelRouteStatusActive,
+		UpstreamModel: "upstream-model", Priority: 10, Weight: 100, Status: ModelRouteStatusActive, UpstreamFormat: "openai_chat",
 	}); err != nil {
 		t.Fatalf("CreateModelRoute(): %v", err)
 	}
@@ -252,10 +252,10 @@ func TestGatewaySimulationDoesNotConsumeRateCapacity(t *testing.T) {
 func TestGatewaySimulationIncludesSkippedCircuitCandidate(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret")
-	provider, _ := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Skipped provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: ProviderStatusActive, Models: []string{"upstream"}, APIKey: "secret"})
+	provider, _ := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Skipped provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: ProviderStatusActive})
 	account, _ := svc.CreateProviderAccount(ctx, "tester", ProviderAccountRequest{ProviderID: provider.ID, Name: "Skipped account", Platform: "openai_compatible", AuthType: "api_key", Status: AccountStatusActive, Models: []string{"upstream"}, Secret: "secret", CircuitFailureThreshold: 1})
 	model, _ := svc.CreateGatewayModel(ctx, "tester", GatewayModelRequest{ModelID: "public", Name: "Public", Status: GatewayModelStatusActive})
-	_, _ = svc.CreateModelRoute(ctx, "tester", ModelRouteRequest{GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID, UpstreamModel: "upstream", Status: ModelRouteStatusActive})
+	_, _ = svc.CreateModelRoute(ctx, "tester", ModelRouteRequest{GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID, UpstreamModel: "upstream", Status: ModelRouteStatusActive, UpstreamFormat: "openai_chat"})
 	if err := svc.RecordProviderAccountFailure(ctx, account.ID, 500, "failed"); err != nil {
 		t.Fatalf("RecordProviderAccountFailure(): %v", err)
 	}

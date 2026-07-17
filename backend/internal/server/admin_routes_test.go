@@ -108,7 +108,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "route provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"upstream-chat"}, APIKey: "provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -129,7 +129,25 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 		t.Fatalf("decode gateway model: %v", err)
 	}
 
-	routeBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","priority":10,"weight":100,"status":"active"}`, modelResp.Data.ID, account.ID)
+	missingFormatBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","priority":10,"weight":100,"status":"active"}`, modelResp.Data.ID, account.ID)
+	missingFormat := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes", bytes.NewBufferString(missingFormatBody))
+	missingFormat.Header.Set("Content-Type", "application/json")
+	missingFormatRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingFormatRec, missingFormat)
+	if missingFormatRec.Code != http.StatusBadRequest || !strings.Contains(missingFormatRec.Body.String(), "upstream_format is required") {
+		t.Fatalf("missing format status = %d body=%s", missingFormatRec.Code, missingFormatRec.Body.String())
+	}
+
+	incompatibleFormatBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","upstream_format":"anthropic_messages","priority":10,"weight":100,"status":"active"}`, modelResp.Data.ID, account.ID)
+	incompatibleFormat := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes", bytes.NewBufferString(incompatibleFormatBody))
+	incompatibleFormat.Header.Set("Content-Type", "application/json")
+	incompatibleFormatRec := httptest.NewRecorder()
+	handler.ServeHTTP(incompatibleFormatRec, incompatibleFormat)
+	if incompatibleFormatRec.Code != http.StatusBadRequest || !strings.Contains(incompatibleFormatRec.Body.String(), "does not support gateway model modality") {
+		t.Fatalf("incompatible format status = %d body=%s", incompatibleFormatRec.Code, incompatibleFormatRec.Body.String())
+	}
+
+	routeBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","upstream_format":"openai_chat","priority":10,"weight":100,"status":"active"}`, modelResp.Data.ID, account.ID)
 	routeCreate := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes", bytes.NewBufferString(routeBody))
 	routeCreate.Header.Set("Content-Type", "application/json")
 	routeCreateRec := httptest.NewRecorder()
@@ -143,14 +161,14 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 	if err := json.Unmarshal(routeCreateRec.Body.Bytes(), &routeResp); err != nil {
 		t.Fatalf("decode model route: %v", err)
 	}
-	if routeResp.Data.UpstreamModel != "upstream-chat" || routeResp.Data.ProviderAccountID != account.ID {
+	if routeResp.Data.UpstreamModel != "upstream-chat" || routeResp.Data.ProviderAccountID != account.ID || routeResp.Data.UpstreamFormat != controlplane.UpstreamFormatOpenAIChat {
 		t.Fatalf("created route mismatch: %+v", routeResp.Data)
 	}
 	bulkModel, err := control.CreateGatewayModel(context.Background(), "tester", controlplane.GatewayModelRequest{ModelID: "public-bulk", Name: "Public Bulk", Modality: "chat", Status: controlplane.GatewayModelStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bulkBody := fmt.Sprintf(`{"routes":[{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","priority":30,"weight":100,"status":"active"}]}`, bulkModel.ID, account.ID)
+	bulkBody := fmt.Sprintf(`{"routes":[{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","upstream_format":"openai_chat","priority":30,"weight":100,"status":"active"}]}`, bulkModel.ID, account.ID)
 	bulkCreate := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes/bulk", bytes.NewBufferString(bulkBody))
 	bulkCreate.Header.Set("Content-Type", "application/json")
 	bulkCreateRec := httptest.NewRecorder()
@@ -166,7 +184,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 		t.Fatalf("gateway model list status = %d body=%s", modelListRec.Code, modelListRec.Body.String())
 	}
 
-	routeUpdateBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","priority":20,"weight":250,"status":"disabled"}`, modelResp.Data.ID, account.ID)
+	routeUpdateBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","upstream_format":"openai_chat","priority":20,"weight":250,"status":"disabled"}`, modelResp.Data.ID, account.ID)
 	routeUpdate := httptest.NewRequest(http.MethodPut, "/api/v1/admin/model-routes/"+routeResp.Data.ID, bytes.NewBufferString(routeUpdateBody))
 	routeUpdate.Header.Set("Content-Type", "application/json")
 	routeUpdateRec := httptest.NewRecorder()
@@ -194,7 +212,7 @@ func TestAdminProviderAccountModelEndpoints(t *testing.T) {
 	}))
 	defer upstream.Close()
 	handler, control := newTestRuntime(t, RuntimeConfig{})
-	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Inventory provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"existing"}, APIKey: "provider-secret"})
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Inventory provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1", Status: controlplane.ProviderStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +638,7 @@ func TestAPIKeyPolicyExplanationEndpoint(t *testing.T) {
 	}
 }
 
-func TestUpdateProviderEndpointKeepsExistingSecret(t *testing.T) {
+func TestProviderEndpointRejectsLegacyCredentialAndModelFields(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
 	createBody := bytes.NewBufferString(`{"name":"Vendor A","type":"openai_compatible","base_url":"https://example.com/v1","status":"active","models":["gpt-4o-mini"],"priority":10,"api_key":"sk-test-123456"}`)
@@ -628,32 +646,32 @@ func TestUpdateProviderEndpointKeepsExistingSecret(t *testing.T) {
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
-	if createRec.Code != http.StatusOK {
-		t.Fatalf("create status = %d body=%s", createRec.Code, createRec.Body.String())
+	if createRec.Code != http.StatusBadRequest {
+		t.Fatalf("legacy create status = %d body=%s", createRec.Code, createRec.Body.String())
+	}
+
+	validBody := bytes.NewBufferString(`{"name":"Vendor A","type":"openai_compatible","base_url":"https://example.com/v1","status":"active","priority":10}`)
+	validReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/providers", validBody)
+	validReq.Header.Set("Content-Type", "application/json")
+	validRec := httptest.NewRecorder()
+	handler.ServeHTTP(validRec, validReq)
+	if validRec.Code != http.StatusOK {
+		t.Fatalf("valid create status = %d body=%s", validRec.Code, validRec.Body.String())
 	}
 	var createResp struct {
 		Data controlplane.ProviderConnection `json:"data"`
 	}
-	if err := json.Unmarshal(createRec.Body.Bytes(), &createResp); err != nil {
+	if err := json.Unmarshal(validRec.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
 
-	updateBody := bytes.NewBufferString(`{"name":"Vendor A Updated","type":"openai_compatible","base_url":"https://example.com/v1","status":"active","models":["gpt-4o-mini","gpt-4.1-mini"],"priority":20,"api_key":""}`)
+	updateBody := bytes.NewBufferString(`{"name":"Vendor A Updated","type":"openai_compatible","base_url":"https://example.com/v1","status":"active","models":["gpt-4o-mini"],"priority":20}`)
 	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/providers/"+createResp.Data.ID, updateBody)
 	updateReq.Header.Set("Content-Type", "application/json")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
-	if updateRec.Code != http.StatusOK {
-		t.Fatalf("update status = %d body=%s", updateRec.Code, updateRec.Body.String())
-	}
-	var updateResp struct {
-		Data controlplane.ProviderConnection `json:"data"`
-	}
-	if err := json.Unmarshal(updateRec.Body.Bytes(), &updateResp); err != nil {
-		t.Fatalf("decode update: %v", err)
-	}
-	if updateResp.Data.Status != controlplane.ProviderStatusActive || !updateResp.Data.SecretConfigured {
-		t.Fatalf("secret/status not preserved: %+v", updateResp.Data)
+	if updateRec.Code != http.StatusBadRequest {
+		t.Fatalf("legacy update status = %d body=%s", updateRec.Code, updateRec.Body.String())
 	}
 }
 
@@ -725,7 +743,7 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 		t.Fatalf("group id missing: %+v", groupResp.Data)
 	}
 
-	providerPayload := `{"name":"Account Provider","type":"openai_compatible","base_url":"` + upstream.URL + `/v1","status":"active","models":["gpt-4o-mini"],"priority":10,"api_key":"provider-secret"}`
+	providerPayload := `{"name":"Account Provider","type":"openai_compatible","base_url":"` + upstream.URL + `/v1","status":"active","priority":10}`
 	providerReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/providers", bytes.NewBufferString(providerPayload))
 	providerReq.Header.Set("Content-Type", "application/json")
 	providerRec := httptest.NewRecorder()
@@ -817,8 +835,6 @@ func TestAdminProviderAccountClearCooldownEndpoint(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)

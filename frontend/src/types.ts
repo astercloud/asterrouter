@@ -207,10 +207,7 @@ export interface ProviderConnection {
   type: string
   base_url: string
   status: string
-  models: string[]
   priority: number
-  secret_configured: boolean
-  secret_hint: string
   created_at: string
   updated_at: string
 }
@@ -221,7 +218,6 @@ export interface ProviderRequest {
   base_url: string
   status: string
   priority: number
-  api_key: string
 }
 
 export interface ProviderHealthCheck {
@@ -230,7 +226,6 @@ export interface ProviderHealthCheck {
   status: string
   latency_ms: number
   message: string
-  models: string[]
   checked_at: string
 }
 
@@ -450,6 +445,7 @@ export interface ProviderAccount {
   name: string
   platform: string
   auth_type: string
+  adapter_config: Record<string, string>
   status: string
   schedulable: boolean
   priority: number
@@ -485,6 +481,7 @@ export interface ProviderAccountRequest {
   name: string
   platform: string
   auth_type: string
+  adapter_config: Record<string, string>
   status: string
   schedulable: boolean
   priority: number
@@ -592,6 +589,8 @@ export interface ModelRoute {
   route_group: string
   provider_account_id: string
   upstream_model: string
+  upstream_format: string
+  disabled_reason: string
   priority: number
   weight: number
   status: string
@@ -604,6 +603,7 @@ export interface ModelRouteRequest {
   route_group: string
   provider_account_id: string
   upstream_model: string
+  upstream_format: string
   priority: number
   weight: number
   status: string
@@ -624,6 +624,9 @@ export interface GatewaySimulationCandidate {
   provider_id: string
   provider_account_id: string
   upstream_model: string
+  provider_type: string
+  upstream_format: string
+  adapter: string
   headroom: number
   rpm_limit: number
   tpm_limit: number

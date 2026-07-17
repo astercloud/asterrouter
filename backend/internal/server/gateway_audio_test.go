@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"testing"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
+	"github.com/gin-gonic/gin"
 )
 
 type audioProtocolFixture struct {
@@ -92,7 +95,6 @@ func newAudioProtocolFixture(t *testing.T, artifactPolicy string) *audioProtocol
 	}
 	provider, err := control.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
 		Name: "Audio protocol provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1", Status: controlplane.ProviderStatusActive,
-		Models: []string{"audio-upstream"}, APIKey: "provider-secret",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +109,7 @@ func newAudioProtocolFixture(t *testing.T, artifactPolicy string) *audioProtocol
 	account := createGatewayTestAccount(t, control, provider, "audio-upstream", "provider-secret", 10, 4)
 	if _, err := control.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID, UpstreamModel: "audio-upstream",
-		Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+		Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -278,6 +280,47 @@ func TestGatewayAudioRejectsMissingCredentialBeforeUpstream(t *testing.T) {
 	fixture.handler.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized || fixture.requestCount() != 0 {
 		t.Fatalf("status=%d upstream_calls=%d body=%s", response.Code, fixture.requestCount(), response.Body.String())
+	}
+}
+
+func TestForwardGatewayAudioRejectsCloudTextProviderBeforeTransport(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	requestContext, _ := gin.CreateTestContext(recorder)
+	requestContext.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+	request := gatewaycore.CanonicalRequest{
+		Protocol:  gatewaycore.ProtocolOpenAIAudioSpeech,
+		Operation: controlplane.GatewayOperationSpeechGeneration,
+		Modality:  controlplane.GatewayModalityAudio,
+		Payload:   []byte(`{"model":"public-audio","input":"hello","voice":"alloy"}`),
+	}
+	provider := controlplane.GatewayProvider{
+		Type: controlplane.ProviderTypeAWSBedrock, BaseURL: "https://bedrock-runtime.example",
+		UpstreamModel: "claude", UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
+	}
+
+	response, err := forwardGatewayCanonicalRequest(requestContext, provider, request, controlplane.GatewayUpstreamAffinity{})
+	if response != nil || !errors.Is(err, errGatewayProviderCapability) {
+		t.Fatalf("response=%v err=%v", response, err)
+	}
+}
+
+func TestForwardGatewayAudioRejectsTextFormatBeforeTransport(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	requestContext, _ := gin.CreateTestContext(recorder)
+	requestContext.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+	request := gatewaycore.CanonicalRequest{
+		Protocol:  gatewaycore.ProtocolOpenAIAudioSpeech,
+		Operation: controlplane.GatewayOperationSpeechGeneration,
+		Modality:  controlplane.GatewayModalityAudio,
+	}
+	provider := controlplane.GatewayProvider{
+		Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: "https://openai.example/v1",
+		UpstreamModel: "audio", UpstreamFormat: controlplane.UpstreamFormatOpenAIChat,
+	}
+
+	response, err := forwardGatewayCanonicalRequest(requestContext, provider, request, controlplane.GatewayUpstreamAffinity{})
+	if response != nil || !errors.Is(err, errGatewayProviderCapability) {
+		t.Fatalf("response=%v err=%v", response, err)
 	}
 }
 

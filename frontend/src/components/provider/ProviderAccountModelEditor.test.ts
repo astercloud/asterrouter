@@ -137,6 +137,25 @@ describe('ProviderAccountModelEditor', () => {
     wrapper.unmount()
   })
 
+  it('keeps manual cloud inventories free of unsupported discovery actions', async () => {
+    const wrapper = mount(ProviderAccountModelEditor, {
+      props: {
+        modelValue: ['azure-gpt-deployment'],
+        autoEnableNewModels: false,
+        accountId: 'azure-account',
+        discoveryEnabled: false
+      },
+      global: { plugins: [i18n] }
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('azure-gpt-deployment')
+    expect(wrapper.text()).not.toContain('Discover models')
+    expect(wrapper.text()).not.toContain('Discover and apply')
+    expect(control.discoverProviderAccountModels).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('applies an explicitly empty enabled set without deleting discovered inventory', async () => {
     vi.mocked(control.syncProviderAccountModels).mockResolvedValue({
       account: { id: 'account-1', models: [], auto_enable_new_models: false } as never,

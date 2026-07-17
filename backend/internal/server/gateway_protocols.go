@@ -20,7 +20,7 @@ func registerGatewayProtocolRoutes(r *gin.Engine, control *controlplane.Service)
 			return gatewaycore.CanonicalizeOpenAIResponses(raw, header)
 		})
 		if err != nil {
-			writeGatewayProtocolParseError(c, err, "invalid responses payload")
+			writeGatewayProtocolParseError(c, gatewaycore.ProtocolOpenAIResponses, err, "invalid responses payload")
 			return
 		}
 		handleGatewayProtocolRequest(c, control, gatewaycore.ProtocolOpenAIResponses, request)
@@ -31,7 +31,7 @@ func registerGatewayProtocolRoutes(r *gin.Engine, control *controlplane.Service)
 			return gatewaycore.CanonicalizeAnthropicMessages(raw, header)
 		})
 		if err != nil {
-			writeGatewayProtocolParseError(c, err, "invalid Anthropic Messages payload")
+			writeGatewayProtocolParseError(c, gatewaycore.ProtocolAnthropicMessages, err, "invalid Anthropic Messages payload")
 			return
 		}
 		handleGatewayProtocolRequest(c, control, gatewaycore.ProtocolAnthropicMessages, request)
@@ -49,14 +49,14 @@ func registerGatewayProtocolRoutes(r *gin.Engine, control *controlplane.Service)
 		case strings.HasSuffix(modelPath, ":generateContent"):
 			modelPath = strings.TrimSuffix(modelPath, ":generateContent")
 		default:
-			openAIError(c, http.StatusNotFound, "resource_not_found", "gemini method not found")
+			writeGatewayProtocolError(c, gatewaycore.ProtocolGeminiGenerate, http.StatusNotFound, "resource_not_found", "gemini method not found")
 			return
 		}
 		request, err := readGatewayProtocolBody(c, func(raw []byte, header http.Header) (gatewaycore.CanonicalRequest, error) {
 			return gatewaycore.CanonicalizeGeminiGenerate(raw, header, modelPath, stream)
 		})
 		if err != nil {
-			writeGatewayProtocolParseError(c, err, "invalid Gemini generate content payload")
+			writeGatewayProtocolParseError(c, gatewaycore.ProtocolGeminiGenerate, err, "invalid Gemini generate content payload")
 			return
 		}
 		handleGatewayProtocolRequest(c, control, gatewaycore.ProtocolGeminiGenerate, request)
@@ -84,31 +84,35 @@ func readGatewayProtocolBody(c *gin.Context, canonicalize func([]byte, http.Head
 	return request, nil
 }
 
-func writeGatewayProtocolParseError(c *gin.Context, err error, message string) {
+func writeGatewayProtocolParseError(c *gin.Context, protocol gatewaycore.Protocol, err error, message string) {
 	if errors.Is(err, errGatewayRequestTooLarge) {
-		openAIError(c, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body exceeds 16 MiB limit")
+		writeGatewayProtocolError(c, protocol, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body exceeds 16 MiB limit")
+		return
+	}
+	if errors.Is(err, gatewaycore.ErrUnsupportedTextFeature) {
+		writeGatewayProtocolError(c, protocol, http.StatusBadRequest, "unsupported_feature", err.Error())
 		return
 	}
 	if errors.Is(err, gatewaycore.ErrInvalidCanonicalRequest) {
-		openAIError(c, http.StatusBadRequest, "invalid_request_error", message)
+		writeGatewayProtocolError(c, protocol, http.StatusBadRequest, "invalid_request_error", message)
 		return
 	}
-	openAIError(c, http.StatusBadRequest, "invalid_request_error", message)
+	writeGatewayProtocolError(c, protocol, http.StatusBadRequest, "invalid_request_error", message)
 }
 
 func handleGatewayProtocolRequest(c *gin.Context, control *controlplane.Service, protocol gatewaycore.Protocol, request gatewaycore.CanonicalRequest) {
 	if control == nil {
-		openAIError(c, http.StatusServiceUnavailable, "service_unavailable", "gateway control service is not available")
+		writeGatewayProtocolError(c, protocol, http.StatusServiceUnavailable, "service_unavailable", "gateway control service is not available")
 		return
 	}
 	credential, err := gatewaycore.ExtractCredential(c.Request, protocol)
 	if err != nil {
-		writeGatewayError(c, controlplane.ErrGatewayUnauthorized)
+		writeGatewayProtocolControlError(c, protocol, controlplane.ErrGatewayUnauthorized)
 		return
 	}
 	auth, canonicalAuth, err := control.AuthorizeCanonicalGatewayRequest(c.Request.Context(), credential, request)
 	if err != nil {
-		writeGatewayError(c, err)
+		writeGatewayProtocolControlError(c, protocol, err)
 		return
 	}
 	executeGatewayProtocolDirect(c, control, auth, canonicalAuth, request)
@@ -121,18 +125,18 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		_ = control.RecordGatewayCall(c.Request.Context(), auth, request.Model, "policy_rejected", err.Error())
 		_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{Model: request.Model, Protocol: string(request.Protocol), Status: "error", ErrorType: errorType, LatencyMS: time.Since(startedAt).Milliseconds()})
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, controlplane.GatewayProvider{}, "error", http.StatusTooManyRequests, errorType, time.Since(startedAt).Milliseconds(), 0, 0, err.Error(), ""))
-		writeGatewayError(c, err)
+		writeGatewayProtocolControlError(c, request.Protocol, err)
 		return
 	}
 	if request.Stream && gatewayAudioProtocol(request.Protocol) && canonicalAuth.ArtifactPolicy != controlplane.GatewayArtifactPolicyProxyOnly {
-		openAIError(c, http.StatusBadRequest, "unsupported_artifact_policy", "streaming audio currently requires artifact_policy=proxy_only")
+		writeGatewayProtocolError(c, request.Protocol, http.StatusBadRequest, "unsupported_artifact_policy", "streaming audio currently requires artifact_policy=proxy_only")
 		return
 	}
 	plan, err := control.PlanCanonicalGatewayRequest(c.Request.Context(), canonicalAuth, request)
 	if err != nil {
 		_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{Model: request.Model, Protocol: string(request.Protocol), Status: "error", ErrorType: "provider_selection_error", LatencyMS: time.Since(startedAt).Milliseconds()})
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, controlplane.GatewayProvider{}, "error", 0, "provider_selection_error", time.Since(startedAt).Milliseconds(), 0, 0, err.Error(), ""))
-		writeGatewayError(c, err)
+		writeGatewayProtocolControlError(c, request.Protocol, err)
 		return
 	}
 	if len(plan.Candidates) == 0 {
@@ -140,17 +144,17 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		_ = control.RecordGatewayCall(c.Request.Context(), auth, request.Model, "policy_rejected", routeErr.Error())
 		_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{Model: request.Model, Protocol: string(request.Protocol), Status: "error", ErrorType: "route_unavailable", LatencyMS: time.Since(startedAt).Milliseconds()})
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, controlplane.GatewayProvider{}, "error", http.StatusServiceUnavailable, "route_unavailable", time.Since(startedAt).Milliseconds(), 0, 0, routeErr.Error(), marshalRouteEvidence(plan.Exclusions, nil)))
-		writeGatewayError(c, routeErr)
+		writeGatewayProtocolControlError(c, request.Protocol, routeErr)
 		return
 	}
 	operation, created, err := control.BeginCanonicalOperation(c.Request.Context(), canonicalAuth, request)
 	if err != nil {
 		recordGatewayAdmissionRejected(c, control, auth, request, startedAt, err)
-		writeGatewayError(c, err)
+		writeGatewayProtocolControlError(c, request.Protocol, err)
 		return
 	}
 	if !created {
-		writeGatewayError(c, controlplane.ErrGatewayIdempotencyReplay)
+		writeGatewayProtocolControlError(c, request.Protocol, controlplane.ErrGatewayIdempotencyReplay)
 		return
 	}
 	c.Set(gatewayOperationContextKey, operation.ID)
@@ -177,7 +181,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		if artifactErr != nil {
 			_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "input_artifact_failed")
 			_ = complete(controlplane.AIOperationStatusFailed, "input_artifact_failed")
-			writeGatewayError(c, artifactErr)
+			writeGatewayProtocolControlError(c, request.Protocol, artifactErr)
 			return
 		}
 		c.Header("X-AsterRouter-Input-Artifact-ID", artifact.ID)
@@ -185,14 +189,14 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 	if err := control.MarkAIOperationRunning(c.Request.Context(), operation.ID); err != nil {
 		_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "operation_start_failed")
 		_ = complete(controlplane.AIOperationStatusFailed, "operation_transition_error")
-		openAIError(c, http.StatusInternalServerError, "server_error", "failed to start gateway operation")
+		writeGatewayProtocolError(c, request.Protocol, http.StatusInternalServerError, "server_error", "failed to start gateway operation")
 		return
 	}
 	permit, capacityReason, acquired, err := control.TryAcquireGatewayCredentialPermit(c.Request.Context(), canonicalAuth, estimateGatewayRequestTokens(request.Payload))
 	if err != nil {
 		_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "credential_capacity_error")
 		_ = complete(controlplane.AIOperationStatusFailed, "credential_capacity_error")
-		openAIError(c, http.StatusInternalServerError, "server_error", "failed to reserve gateway credential capacity")
+		writeGatewayProtocolError(c, request.Protocol, http.StatusInternalServerError, "server_error", "failed to reserve gateway credential capacity")
 		return
 	}
 	if !acquired {
@@ -200,7 +204,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{Model: request.Model, Protocol: string(request.Protocol), Status: "error", ErrorType: capacityReason, LatencyMS: time.Since(startedAt).Milliseconds()})
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, controlplane.GatewayProvider{}, "error", http.StatusTooManyRequests, capacityReason, time.Since(startedAt).Milliseconds(), 0, 0, "gateway credential capacity rejected the request", ""))
 		_ = complete(controlplane.AIOperationStatusFailed, capacityReason)
-		writeGatewayError(c, controlplane.ErrGatewayCapacityLimited)
+		writeGatewayProtocolControlError(c, request.Protocol, controlplane.ErrGatewayCapacityLimited)
 		return
 	}
 	defer permit.Release()
@@ -216,6 +220,22 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		if attemptErr == nil {
 			attemptErr = errNoSchedulableSlot
 		}
+		if errors.Is(attemptErr, gatewaycore.ErrUnsupportedTextFeature) {
+			_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "protocol_incompatible")
+			_ = complete(controlplane.AIOperationStatusFailed, "protocol_incompatible")
+			_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{Model: request.Model, Protocol: string(request.Protocol), Status: "error", ErrorType: "protocol_incompatible", LatencyMS: time.Since(startedAt).Milliseconds()})
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "error", http.StatusBadRequest, "protocol_incompatible", time.Since(startedAt).Milliseconds(), 0, 0, attemptErr.Error(), routeAttempts))
+			writeGatewayProtocolControlError(c, request.Protocol, attemptErr)
+			return
+		}
+		if errors.Is(attemptErr, errGatewayProviderCapability) {
+			_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "provider_capability_incompatible")
+			_ = complete(controlplane.AIOperationStatusFailed, "unsupported_capability")
+			_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{Model: request.Model, Protocol: string(request.Protocol), Status: "error", ErrorType: "unsupported_capability", LatencyMS: time.Since(startedAt).Milliseconds()})
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "error", http.StatusServiceUnavailable, "unsupported_capability", time.Since(startedAt).Milliseconds(), 0, 0, attemptErr.Error(), routeAttempts))
+			writeGatewayProtocolError(c, request.Protocol, http.StatusServiceUnavailable, "unsupported_capability", "no configured provider route can execute this request")
+			return
+		}
 		if !gatewayAttemptsBillingUncertain(attempts) {
 			_ = control.ReleaseBillingHold(c.Request.Context(), operation.ID, "provider_capacity_unavailable")
 		}
@@ -223,7 +243,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{UsageSource: "gateway_observation", Model: request.Model, UpstreamModel: provider.UpstreamModel, Protocol: string(request.Protocol), ProviderID: provider.ID, ProviderAccountID: provider.AccountID, Status: "upstream_error", ErrorType: "transport_error", LatencyMS: time.Since(startedAt).Milliseconds()})
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "upstream_error", 0, "transport_error", time.Since(startedAt).Milliseconds(), 0, 0, attemptErr.Error(), routeAttempts))
 		_ = complete(controlplane.AIOperationStatusFailed, "transport_error")
-		openAIError(c, http.StatusBadGateway, "upstream_error", attemptErr.Error())
+		writeGatewayProtocolError(c, request.Protocol, http.StatusBadGateway, "upstream_error", attemptErr.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -241,14 +261,19 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 			_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_not_accounted")
 			_ = control.CompleteAIAttempt(c.Request.Context(), provider.AttemptID, controlplane.AIAttemptStatusFailed, "audit_error")
 			_ = complete(controlplane.AIOperationStatusFailed, "audit_error")
-			openAIError(c, http.StatusInternalServerError, "server_error", err.Error())
+			writeGatewayProtocolError(c, request.Protocol, http.StatusInternalServerError, "server_error", err.Error())
 			return
 		}
-		streamUsage, ttftMS, streamErr := streamUpstreamResponse(c, resp, startedAt)
+		streamUsage, ttftMS, streamErr := streamCanonicalGatewayResponse(c, resp, request, provider, startedAt)
 		errorType := ""
 		usageStatus := status
 		if streamErr != nil {
-			errorType = "stream_error"
+			var statusErr *gatewayUpstreamStatusError
+			if errors.As(streamErr, &statusErr) {
+				errorType = "upstream_status"
+			} else {
+				errorType = "stream_error"
+			}
 			usageStatus = "upstream_error"
 		}
 		attemptStatus := controlplane.AIAttemptStatusSucceeded
@@ -282,7 +307,16 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		}
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, usageStatus, resp.StatusCode, errorType, time.Since(startedAt).Milliseconds(), streamUsage.InputTokens, streamUsage.OutputTokens, responseSummary, routeAttempts))
 		if streamErr != nil && !c.Writer.Written() {
-			openAIError(c, http.StatusBadGateway, "upstream_error", streamErr.Error())
+			responseStatus := http.StatusBadGateway
+			message := streamErr.Error()
+			var statusErr *gatewayUpstreamStatusError
+			if errors.As(streamErr, &statusErr) {
+				responseStatus = statusErr.StatusCode
+				message = statusErr.Message
+			}
+			writeGatewayProtocolError(c, request.Protocol, responseStatus, "upstream_error", message)
+		} else if streamErr != nil && request.Text != nil && c.Request.Context().Err() == nil {
+			_ = writeGatewayProtocolStreamError(c, request.Protocol, "upstream stream terminated before completion")
 		}
 		return
 	}
@@ -298,7 +332,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		_ = control.RecordGatewayCall(c.Request.Context(), auth, request.Model, "upstream_error", err.Error())
 		_ = recordGatewayUsage(control, c, auth, controlplane.GatewayUsageInput{UsageSource: "gateway_observation", Model: request.Model, UpstreamModel: provider.UpstreamModel, Protocol: string(request.Protocol), ProviderID: provider.ID, ProviderAccountID: provider.AccountID, Status: "upstream_error", ErrorType: "response_read_error", LatencyMS: time.Since(startedAt).Milliseconds()})
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "upstream_error", resp.StatusCode, "response_read_error", time.Since(startedAt).Milliseconds(), 0, 0, err.Error(), routeAttempts))
-		openAIError(c, http.StatusBadGateway, "upstream_error", err.Error())
+		writeGatewayProtocolError(c, request.Protocol, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
 	if status == "forwarded" && gatewayAudioProtocol(request.Protocol) {
@@ -309,7 +343,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 			}
 			_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "response_artifact_attempt_missing")
 			_ = complete(controlplane.AIOperationStatusFailed, "response_artifact_failed")
-			writeGatewayError(c, attemptErr)
+			writeGatewayProtocolControlError(c, request.Protocol, attemptErr)
 			return
 		}
 		artifact, artifactErr := control.StoreDirectResponseArtifact(c.Request.Context(), operation, attempt, "response", contentType, upstreamBody)
@@ -328,10 +362,24 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_not_accounted")
 		_ = control.CompleteAIAttempt(c.Request.Context(), provider.AttemptID, controlplane.AIAttemptStatusFailed, "audit_error")
 		_ = complete(controlplane.AIOperationStatusFailed, "audit_error")
-		openAIError(c, http.StatusInternalServerError, "server_error", err.Error())
+		writeGatewayProtocolError(c, request.Protocol, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 	usage := parseGatewayUsage(upstreamBody)
+	if request.Text != nil && status == "forwarded" {
+		translatedBody, canonicalUsage, translationErr := translateGatewayTextResponse(request, provider, upstreamBody)
+		if translationErr != nil {
+			_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_translation_failed")
+			_ = control.CompleteAIAttempt(c.Request.Context(), provider.AttemptID, controlplane.AIAttemptStatusFailed, "response_translation_error")
+			_ = complete(controlplane.AIOperationStatusFailed, "response_translation_error")
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "error", http.StatusBadGateway, "response_translation_error", time.Since(startedAt).Milliseconds(), 0, 0, translationErr.Error(), routeAttempts))
+			writeGatewayProtocolError(c, request.Protocol, http.StatusBadGateway, "upstream_error", "upstream response cannot be represented by the requested protocol")
+			return
+		}
+		upstreamBody = translatedBody
+		contentType = "application/json"
+		usage = canonicalUsage
+	}
 	usageSource := "gateway_final"
 	if gatewayAttemptsBillingUncertain(attempts) || !gatewayUsageObservationFinal(usage) {
 		usageSource = "gateway_observation"
@@ -356,11 +404,15 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 	if usageErr != nil {
 		_ = complete(controlplane.AIOperationStatusFailed, "usage_ledger_error")
 		recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "error", http.StatusInternalServerError, "usage_ledger_error", time.Since(startedAt).Milliseconds(), usage.InputTokens, usage.OutputTokens, usageErr.Error(), routeAttempts))
-		openAIError(c, http.StatusInternalServerError, "server_error", "failed to record gateway usage")
+		writeGatewayProtocolError(c, request.Protocol, http.StatusInternalServerError, "server_error", "failed to record gateway usage")
 		return
 	}
 	_ = complete(operationStatus, errorType)
 	recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, status, resp.StatusCode, errorType, time.Since(startedAt).Milliseconds(), usage.InputTokens, usage.OutputTokens, upstreamResponseSummary(resp.StatusCode, upstreamBody), routeAttempts))
+	if request.Text != nil && status == "upstream_error" {
+		writeGatewayProtocolError(c, request.Protocol, resp.StatusCode, "upstream_error", gatewayUpstreamErrorMessage(resp.StatusCode, upstreamBody))
+		return
+	}
 	c.Data(resp.StatusCode, contentType, upstreamBody)
 }
 

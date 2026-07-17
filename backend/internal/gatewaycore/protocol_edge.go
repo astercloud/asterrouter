@@ -91,18 +91,29 @@ func ExtractCredential(req *http.Request, protocol Protocol) (CredentialEnvelope
 }
 
 func CanonicalizeOpenAIChat(raw []byte, header http.Header) (CanonicalRequest, error) {
-	var payload struct {
-		Model    string            `json:"model"`
-		Messages []json.RawMessage `json:"messages"`
-		Stream   bool              `json:"stream"`
-		User     string            `json:"user"`
+	return canonicalizeTextProtocol(ProtocolOpenAIChat, raw, header, "", nil)
+}
+
+func CanonicalizeOpenAIResponses(raw []byte, header http.Header) (CanonicalRequest, error) {
+	return canonicalizeTextProtocol(ProtocolOpenAIResponses, raw, header, "", nil)
+}
+
+func CanonicalizeAnthropicMessages(raw []byte, header http.Header) (CanonicalRequest, error) {
+	return canonicalizeTextProtocol(ProtocolAnthropicMessages, raw, header, "", nil)
+}
+
+func CanonicalizeGeminiGenerate(raw []byte, header http.Header, model string, stream bool) (CanonicalRequest, error) {
+	return canonicalizeTextProtocol(ProtocolGeminiGenerate, raw, header, model, &stream)
+}
+
+func canonicalizeTextProtocol(protocol Protocol, raw []byte, header http.Header, modelOverride string, streamOverride *bool) (CanonicalRequest, error) {
+	text, err := DecodeCanonicalTextRequest(protocol, raw, modelOverride, streamOverride)
+	if err != nil {
+		return CanonicalRequest{}, err
 	}
-	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil {
+	normalized, err := json.Marshal(text)
+	if err != nil {
 		return CanonicalRequest{}, ErrInvalidCanonicalRequest
-	}
-	payload.Model = strings.TrimSpace(payload.Model)
-	if payload.Model == "" {
-		return CanonicalRequest{}, fmt.Errorf("%w: model is required", ErrInvalidCanonicalRequest)
 	}
 	requestID, err := canonicalRequestID(header)
 	if err != nil {
@@ -114,147 +125,17 @@ func CanonicalizeOpenAIChat(raw []byte, header http.Header) (CanonicalRequest, e
 	}
 	stickyKey := strings.TrimSpace(header.Get("X-AsterRouter-Sticky-Key"))
 	if stickyKey == "" {
-		stickyKey = strings.TrimSpace(payload.User)
+		stickyKey = text.ClientUser
 	}
 	if len(stickyKey) > maxStickyKeyBytes {
 		stickyKey = stickyKey[:maxStickyKeyBytes]
 	}
-	fingerprint := sha256.Sum256(raw)
-	return CanonicalRequest{
-		ID:              "op_" + requestID,
-		ClientRequestID: requestID,
-		Fingerprint:     hex.EncodeToString(fingerprint[:]),
-		Protocol:        ProtocolOpenAIChat,
-		Operation:       "chat_completion",
-		Modality:        "text",
-		Lane:            LaneDirect,
-		Model:           payload.Model,
-		Stream:          payload.Stream,
-		MessageCount:    len(payload.Messages),
-		IdempotencyKey:  idempotencyKey,
-		StickyKey:       stickyKey,
-		Payload:         append(json.RawMessage(nil), raw...),
-	}, nil
-}
-
-// CanonicalizeOpenAIResponses keeps the Responses request on the same Direct
-// execution contract as Chat Completions while preserving the provider-native
-// payload and response format.
-func CanonicalizeOpenAIResponses(raw []byte, header http.Header) (CanonicalRequest, error) {
-	var payload map[string]any
-	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload == nil {
-		return CanonicalRequest{}, ErrInvalidCanonicalRequest
-	}
-	model, _ := payload["model"].(string)
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return CanonicalRequest{}, fmt.Errorf("%w: model is required", ErrInvalidCanonicalRequest)
-	}
-	stream := false
-	if value, exists := payload["stream"]; exists {
-		var ok bool
-		stream, ok = value.(bool)
-		if !ok {
-			return CanonicalRequest{}, fmt.Errorf("%w: stream must be a boolean", ErrInvalidCanonicalRequest)
-		}
-	}
-	requestID, err := canonicalRequestID(header)
-	if err != nil {
-		return CanonicalRequest{}, err
-	}
-	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
-	if len(idempotencyKey) > maxIdempotencyBytes {
-		return CanonicalRequest{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidCanonicalRequest)
-	}
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return CanonicalRequest{}, ErrInvalidCanonicalRequest
-	}
 	fingerprint := sha256.Sum256(normalized)
 	return CanonicalRequest{
 		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
-		Protocol: ProtocolOpenAIResponses, Operation: "chat_completion", Modality: "text", Lane: LaneDirect,
-		Model: model, Stream: stream, IdempotencyKey: idempotencyKey, Payload: append(json.RawMessage(nil), raw...),
-	}, nil
-}
-
-// CanonicalizeAnthropicMessages adapts the Anthropic Messages request to the
-// shared Direct pipeline without converting the provider-native body.
-func CanonicalizeAnthropicMessages(raw []byte, header http.Header) (CanonicalRequest, error) {
-	var rawPayload map[string]any
-	if len(raw) == 0 || json.Unmarshal(raw, &rawPayload) != nil || rawPayload == nil {
-		return CanonicalRequest{}, ErrInvalidCanonicalRequest
-	}
-	var payload struct {
-		Model    string            `json:"model"`
-		Messages []json.RawMessage `json:"messages"`
-		Stream   bool              `json:"stream"`
-	}
-	if json.Unmarshal(raw, &payload) != nil {
-		return CanonicalRequest{}, ErrInvalidCanonicalRequest
-	}
-	payload.Model = strings.TrimSpace(payload.Model)
-	if payload.Model == "" || len(payload.Messages) == 0 {
-		return CanonicalRequest{}, fmt.Errorf("%w: model and messages are required", ErrInvalidCanonicalRequest)
-	}
-	requestID, err := canonicalRequestID(header)
-	if err != nil {
-		return CanonicalRequest{}, err
-	}
-	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
-	if len(idempotencyKey) > maxIdempotencyBytes {
-		return CanonicalRequest{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidCanonicalRequest)
-	}
-	normalized, err := json.Marshal(rawPayload)
-	if err != nil {
-		return CanonicalRequest{}, ErrInvalidCanonicalRequest
-	}
-	fingerprint := sha256.Sum256(normalized)
-	return CanonicalRequest{
-		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
-		Protocol: ProtocolAnthropicMessages, Operation: "chat_completion", Modality: "text", Lane: LaneDirect,
-		Model: payload.Model, Stream: payload.Stream, MessageCount: len(payload.Messages), IdempotencyKey: idempotencyKey, Payload: append(json.RawMessage(nil), raw...),
-	}, nil
-}
-
-// CanonicalizeGeminiGenerate adapts both generateContent and
-// streamGenerateContent paths. Gemini carries the model in the URL, so the
-// canonical payload records it while the upstream body remains provider-native.
-func CanonicalizeGeminiGenerate(raw []byte, header http.Header, model string, stream bool) (CanonicalRequest, error) {
-	var payload map[string]any
-	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload == nil {
-		return CanonicalRequest{}, ErrInvalidCanonicalRequest
-	}
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return CanonicalRequest{}, fmt.Errorf("%w: model is required", ErrInvalidCanonicalRequest)
-	}
-	contents, ok := payload["contents"].([]any)
-	if !ok || len(contents) == 0 {
-		return CanonicalRequest{}, fmt.Errorf("%w: contents are required", ErrInvalidCanonicalRequest)
-	}
-	requestID, err := canonicalRequestID(header)
-	if err != nil {
-		return CanonicalRequest{}, err
-	}
-	idempotencyKey := strings.TrimSpace(header.Get("Idempotency-Key"))
-	if len(idempotencyKey) > maxIdempotencyBytes {
-		return CanonicalRequest{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidCanonicalRequest)
-	}
-	normalized, err := json.Marshal(struct {
-		Model    string         `json:"model"`
-		Contents []any          `json:"contents"`
-		Payload  map[string]any `json:"payload"`
-		Stream   bool           `json:"stream"`
-	}{Model: model, Contents: contents, Payload: payload, Stream: stream})
-	if err != nil {
-		return CanonicalRequest{}, ErrInvalidCanonicalRequest
-	}
-	fingerprint := sha256.Sum256(normalized)
-	return CanonicalRequest{
-		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
-		Protocol: ProtocolGeminiGenerate, Operation: "chat_completion", Modality: "text", Lane: LaneDirect,
-		Model: model, Stream: stream, IdempotencyKey: idempotencyKey, Payload: append(json.RawMessage(nil), raw...),
+		Protocol: protocol, Operation: "chat_completion", Modality: "text", Lane: LaneDirect,
+		Model: text.Model, Stream: text.Stream, MessageCount: len(text.Messages), IdempotencyKey: idempotencyKey,
+		StickyKey: stickyKey, Text: &text, Payload: normalized,
 	}, nil
 }
 

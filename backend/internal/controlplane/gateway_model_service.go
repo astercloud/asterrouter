@@ -255,12 +255,17 @@ func (s *Service) modelRouteFromRequest(ctx context.Context, req ModelRouteReque
 	routeGroup := strings.TrimSpace(req.RouteGroup)
 	providerAccountID := strings.TrimSpace(req.ProviderAccountID)
 	upstreamModel := strings.TrimSpace(req.UpstreamModel)
+	upstreamFormat := strings.TrimSpace(req.UpstreamFormat)
 	status := strings.TrimSpace(req.Status)
 	gatewayModel, err := s.gatewayModelByID(ctx, gatewayModelID)
 	if err != nil {
 		return ModelRoute{}, err
 	}
 	account, err := s.providerAccountByID(ctx, providerAccountID)
+	if err != nil {
+		return ModelRoute{}, err
+	}
+	provider, err := s.providerByID(ctx, account.ProviderID)
 	if err != nil {
 		return ModelRoute{}, err
 	}
@@ -272,6 +277,15 @@ func (s *Service) modelRouteFromRequest(ctx context.Context, req ModelRouteReque
 	}
 	if upstreamModel == "" {
 		return ModelRoute{}, errors.New("upstream_model is required")
+	}
+	if upstreamFormat == "" {
+		return ModelRoute{}, errors.New("upstream_format is required")
+	}
+	if !gatewayModelSupportsUpstreamFormat(gatewayModel.Modality, upstreamFormat) {
+		return ModelRoute{}, fmt.Errorf("gateway model modality %q does not support upstream_format %q", gatewayModel.Modality, upstreamFormat)
+	}
+	if !ProviderSupportsGatewayModelRoute(provider.Type, gatewayModel.Modality, upstreamFormat) {
+		return ModelRoute{}, fmt.Errorf("provider type %q does not support gateway model modality %q with upstream_format %q", provider.Type, gatewayModel.Modality, upstreamFormat)
 	}
 	if !contains(account.Models, upstreamModel) {
 		return ModelRoute{}, fmt.Errorf("provider account %q does not expose upstream model %q", account.ID, upstreamModel)
@@ -300,12 +314,60 @@ func (s *Service) modelRouteFromRequest(ctx context.Context, req ModelRouteReque
 		RouteGroup:        routeGroup,
 		ProviderAccountID: providerAccountID,
 		UpstreamModel:     upstreamModel,
+		UpstreamFormat:    upstreamFormat,
 		Priority:          req.Priority,
 		Weight:            weight,
 		Status:            status,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}, nil
+}
+
+// ProviderSupportsGatewayModelRoute validates the executable route boundary.
+// Media plugins may extend image and video providers, while the built-in audio
+// and Realtime transports are deliberately limited to OpenAI-compatible APIs.
+func ProviderSupportsGatewayModelRoute(providerType, modality, upstreamFormat string) bool {
+	providerType = strings.TrimSpace(providerType)
+	modality = strings.TrimSpace(modality)
+	upstreamFormat = strings.TrimSpace(upstreamFormat)
+	if !gatewayModelSupportsUpstreamFormat(modality, upstreamFormat) {
+		return false
+	}
+	providerTypes := []string{ProviderTypeOpenAICompatible, ProviderTypeAnthropicCompatible, ProviderTypeGeminiCompatible, ProviderTypeAWSBedrock, ProviderTypeGCPVertex, ProviderTypeAzureOpenAI}
+	if upstreamFormat == UpstreamFormatNativeMedia {
+		switch modality {
+		case GatewayModalityAudio:
+			return providerType == ProviderTypeOpenAICompatible
+		case GatewayModalityImage, GatewayModalityVideo, "multimodal":
+			return contains(providerTypes, providerType)
+		default:
+			return false
+		}
+	}
+	formats := map[string][]string{
+		ProviderTypeOpenAICompatible:    {UpstreamFormatOpenAIChat, UpstreamFormatOpenAIResponses},
+		ProviderTypeAnthropicCompatible: {UpstreamFormatAnthropic},
+		ProviderTypeGeminiCompatible:    {UpstreamFormatGemini},
+		ProviderTypeAWSBedrock:          {UpstreamFormatBedrockConverse},
+		ProviderTypeGCPVertex:           {UpstreamFormatAnthropic, UpstreamFormatGemini},
+		ProviderTypeAzureOpenAI:         {UpstreamFormatOpenAIChat, UpstreamFormatOpenAIResponses},
+	}
+	return contains(formats[providerType], upstreamFormat)
+}
+
+func gatewayModelSupportsUpstreamFormat(modality, upstreamFormat string) bool {
+	switch strings.TrimSpace(modality) {
+	case "chat":
+		return upstreamFormat != UpstreamFormatNativeMedia
+	case "multimodal":
+		return true
+	case GatewayModalityImage, GatewayModalityVideo, GatewayModalityAudio:
+		return upstreamFormat == UpstreamFormatNativeMedia
+	default:
+		// Embedding inventory can be recorded on Provider Accounts, but this
+		// release does not expose an executable embedding gateway protocol.
+		return false
+	}
 }
 
 func (s *Service) gatewayModelByID(ctx context.Context, id string) (GatewayModel, error) {

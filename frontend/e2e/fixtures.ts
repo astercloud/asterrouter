@@ -134,9 +134,7 @@ export async function createGatewayFixture(page: Page, token: string, runID: str
     type: 'openai_compatible',
     base_url: `http://127.0.0.1:${upstreamPort}/v1`,
     status: 'active',
-    models: ['upstream-model'],
-    priority: 10,
-    api_key: 'synthetic-provider-secret'
+    priority: 10
   })
   const account = await adminPost<{ id: string; secret_configured: boolean }>(page, token, '/provider-accounts', {
     provider_id: provider.id,
@@ -167,6 +165,7 @@ export async function createGatewayFixture(page: Page, token: string, runID: str
     route_group: 'default',
     provider_account_id: account.id,
     upstream_model: 'upstream-model',
+    upstream_format: 'openai_chat',
     priority: 10,
     weight: 100,
     status: 'active'

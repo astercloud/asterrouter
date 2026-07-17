@@ -37,7 +37,7 @@ func registerGatewayAudioRoutes(r *gin.Engine, control *controlplane.Service) {
 		r.POST(route.path, func(c *gin.Context) {
 			request, err := readGatewayAudioMultipartRequest(c, route.protocol)
 			if err != nil {
-				writeGatewayAudioParseError(c, err, "invalid audio multipart payload")
+				writeGatewayAudioParseError(c, route.protocol, err, "invalid audio multipart payload")
 				return
 			}
 			handleGatewayProtocolRequest(c, control, route.protocol, request)
@@ -47,7 +47,7 @@ func registerGatewayAudioRoutes(r *gin.Engine, control *controlplane.Service) {
 	r.POST("/v1/audio/speech", func(c *gin.Context) {
 		request, err := readGatewayProtocolBody(c, gatewaycore.CanonicalizeOpenAIAudioSpeech)
 		if err != nil {
-			writeGatewayProtocolParseError(c, err, "invalid audio speech payload")
+			writeGatewayProtocolParseError(c, gatewaycore.ProtocolOpenAIAudioSpeech, err, "invalid audio speech payload")
 			return
 		}
 		handleGatewayProtocolRequest(c, control, gatewaycore.ProtocolOpenAIAudioSpeech, request)
@@ -137,12 +137,12 @@ func readGatewayAudioMultipartRequest(c *gin.Context, protocol gatewaycore.Proto
 	return request, nil
 }
 
-func writeGatewayAudioParseError(c *gin.Context, err error, message string) {
+func writeGatewayAudioParseError(c *gin.Context, protocol gatewaycore.Protocol, err error, message string) {
 	if errors.Is(err, errGatewayRequestTooLarge) {
 		openAIError(c, http.StatusRequestEntityTooLarge, "invalid_request_error", "audio request exceeds the 32 MiB request or 25 MiB file limit")
 		return
 	}
-	writeGatewayProtocolParseError(c, err, message)
+	writeGatewayProtocolParseError(c, protocol, err, message)
 }
 
 func persistGatewayInputArtifact(ctx context.Context, control *controlplane.Service, operation controlplane.AIOperation, request gatewaycore.CanonicalRequest) (controlplane.Artifact, error) {

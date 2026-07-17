@@ -199,17 +199,8 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 
 	now := time.Now().UTC()
 	provider := ProviderConnection{
-		ID:               "prov_openai_compatible",
-		Name:             "OpenAI-compatible Provider",
-		Type:             "openai_compatible",
-		BaseURL:          "https://api.openai.com/v1",
-		Status:           ProviderStatusNeedsSecret,
-		Models:           nil,
-		Priority:         100,
-		SecretConfigured: false,
-		SecretHint:       "",
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID: "prov_openai_compatible", Name: "OpenAI-compatible Provider", Type: ProviderTypeOpenAICompatible,
+		BaseURL: "https://api.openai.com/v1", Status: ProviderStatusActive, Priority: 100, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.repo.SaveProvider(ctx, provider); err != nil {
 		return err
@@ -233,7 +224,7 @@ func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {
 
 	var activeProviders, activeKeys int
 	for _, provider := range providers {
-		if provider.Status == ProviderStatusActive || provider.Status == ProviderStatusNeedsSecret {
+		if provider.Status == ProviderStatusActive {
 			activeProviders++
 		}
 	}
@@ -272,7 +263,7 @@ func (s *Service) PlatformDashboard(ctx context.Context) (Dashboard, error) {
 	}
 	var activeProviders, activeKeys int
 	for _, provider := range providers {
-		if provider.Status == ProviderStatusActive || provider.Status == ProviderStatusNeedsSecret {
+		if provider.Status == ProviderStatusActive {
 			activeProviders++
 		}
 	}
@@ -322,13 +313,6 @@ func (s *Service) CreateProvider(ctx context.Context, actor string, req Provider
 		return ProviderConnection{}, err
 	}
 	provider.ID = "prov_" + randomID(10)
-	if strings.TrimSpace(req.APIKey) != "" {
-		ciphertext, err := encryptSecret(s.secretKey, req.APIKey)
-		if err != nil {
-			return ProviderConnection{}, err
-		}
-		provider.SecretCiphertext = ciphertext
-	}
 	if err := s.repo.SaveProvider(ctx, provider); err != nil {
 		return ProviderConnection{}, err
 	}
@@ -355,25 +339,6 @@ func (s *Service) UpdateProvider(ctx context.Context, actor string, id string, r
 	provider.ID = existing.ID
 	provider.CreatedAt = existing.CreatedAt
 	provider.UpdatedAt = now
-	provider.SecretCiphertext = existing.SecretCiphertext
-	provider.SecretConfigured = existing.SecretConfigured
-	provider.SecretHint = existing.SecretHint
-	provider.Models = append([]string(nil), existing.Models...)
-	if strings.TrimSpace(req.APIKey) != "" {
-		ciphertext, err := encryptSecret(s.secretKey, req.APIKey)
-		if err != nil {
-			return ProviderConnection{}, err
-		}
-		provider.SecretCiphertext = ciphertext
-		provider.SecretConfigured = true
-		provider.SecretHint = maskSecret(req.APIKey)
-	}
-	if req.Status == ProviderStatusActive && provider.SecretConfigured {
-		provider.Status = ProviderStatusActive
-	}
-	if provider.Status == ProviderStatusActive && !provider.SecretConfigured {
-		provider.Status = ProviderStatusNeedsSecret
-	}
 	if err := s.repo.SaveProvider(ctx, provider); err != nil {
 		return ProviderConnection{}, err
 	}
@@ -389,36 +354,7 @@ func (s *Service) CheckProvider(ctx context.Context, actor string, id string) (P
 		return ProviderHealthCheck{}, err
 	}
 	started := time.Now()
-	status, message, models := s.checkProviderConfiguration(provider)
-	if status == "ok" {
-		adapter, supported := providerModelDiscoveryAdapterFor(provider.Type)
-		if !supported {
-			status = "warning"
-			message = fmt.Sprintf("Provider type %s requires a manually managed model catalog", provider.Type)
-		} else {
-			apiKey, decryptErr := decryptSecret(s.secretKey, provider.SecretCiphertext)
-			if decryptErr != nil || strings.TrimSpace(apiKey) == "" {
-				status = "error"
-				message = "Provider secret cannot be decrypted"
-			} else {
-				discovered, probeErr := adapter.Discover(ctx, provider, ProviderAccount{}, apiKey)
-				if probeErr != nil {
-					status = "error"
-					message = probeErr.Error()
-				} else {
-					models = cleanStringList(discovered)
-					message = fmt.Sprintf("Provider is reachable; discovered %d models", len(models))
-					if !sameStringList(provider.Models, models) {
-						provider.Models = models
-						provider.UpdatedAt = time.Now().UTC()
-						if err := s.repo.SaveProvider(ctx, provider); err != nil {
-							return ProviderHealthCheck{}, err
-						}
-					}
-				}
-			}
-		}
-	}
+	status, message := s.checkProviderConfiguration(provider)
 	checkedAt := time.Now().UTC()
 	result := ProviderHealthCheck{
 		ID:         "phc_" + randomID(12),
@@ -426,7 +362,6 @@ func (s *Service) CheckProvider(ctx context.Context, actor string, id string) (P
 		Status:     status,
 		LatencyMS:  time.Since(started).Milliseconds(),
 		Message:    message,
-		Models:     models,
 		CheckedAt:  checkedAt,
 	}
 	if err := s.repo.SaveProviderHealthCheck(ctx, result); err != nil {
@@ -439,17 +374,14 @@ func (s *Service) CheckProvider(ctx context.Context, actor string, id string) (P
 	return result, nil
 }
 
-func (s *Service) checkProviderConfiguration(provider ProviderConnection) (string, string, []string) {
+func (s *Service) checkProviderConfiguration(provider ProviderConnection) (string, string) {
 	if provider.Status == ProviderStatusDisabled {
-		return "disabled", "Provider is disabled", provider.Models
+		return "disabled", "Provider is disabled"
 	}
 	if !validHTTPURL(provider.BaseURL) {
-		return "error", "Provider base URL is invalid", provider.Models
+		return "error", "Provider base URL is invalid"
 	}
-	if !provider.SecretConfigured || provider.SecretCiphertext == "" {
-		return "warning", "Provider secret is not configured", provider.Models
-	}
-	return "ok", "Provider configuration is ready", provider.Models
+	return "ok", "Provider endpoint configuration is ready; credentials are validated on provider accounts"
 }
 
 func probeOpenAICompatibleModelsWithKey(ctx context.Context, baseURL string, apiKey string, label string) ([]string, string, error) {
@@ -595,6 +527,9 @@ func (s *Service) CreateProviderAccount(ctx context.Context, actor string, req P
 	if strings.TrimSpace(req.Platform) == "" {
 		req.Platform = provider.Type
 	}
+	if err := validateProviderAccountAdapter(provider.Type, &req); err != nil {
+		return ProviderAccount{}, err
+	}
 	now := time.Now().UTC()
 	account, err := providerAccountFromRequest(req, now, true, false)
 	if err != nil {
@@ -628,6 +563,9 @@ func (s *Service) UpdateProviderAccount(ctx context.Context, actor string, id st
 	}
 	if strings.TrimSpace(req.Platform) == "" {
 		req.Platform = provider.Type
+	}
+	if err := validateProviderAccountAdapter(provider.Type, &req); err != nil {
+		return ProviderAccount{}, err
 	}
 	existing, err := s.providerAccountByID(ctx, id)
 	if err != nil {
@@ -768,10 +706,10 @@ func (s *Service) checkProviderAccountConfiguration(account ProviderAccount, pro
 	if account.ProviderID == "" {
 		return "error", "Provider account is not bound to a provider connection", account.Models
 	}
-	if !account.SecretConfigured || account.SecretCiphertext == "" {
+	if providerAuthRequiresSecret(account.AuthType) && (!account.SecretConfigured || account.SecretCiphertext == "") {
 		return "warning", "Provider account secret is not configured", account.Models
 	}
-	if account.AuthType != "api_key" {
+	if account.AuthType != ProviderAuthAPIKey {
 		return "warning", fmt.Sprintf("Provider account auth type %s does not support automatic probe yet", account.AuthType), account.Models
 	}
 	return "ok", "Provider account configuration is ready", account.Models
@@ -1826,12 +1764,15 @@ func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model s
 			Type:             entry.provider.Type,
 			BaseURL:          entry.provider.BaseURL,
 			APIKey:           secret,
+			AuthType:         entry.account.AuthType,
+			AdapterConfig:    cloneStringMap(entry.account.AdapterConfig),
 			AccountID:        entry.account.ID,
 			AccountName:      entry.account.Name,
 			Concurrency:      entry.account.Concurrency,
 			GatewayModelID:   resolved.GatewayModel.ID,
 			RequestedModel:   resolved.RequestedID,
 			UpstreamModel:    entry.route.UpstreamModel,
+			UpstreamFormat:   entry.route.UpstreamFormat,
 			RouteID:          entry.route.ID,
 			RouteGroup:       resolved.RouteGroup,
 			RoutePriority:    entry.route.Priority,
@@ -2131,10 +2072,7 @@ func accountEligibleForRouting(account ProviderAccount, model string, now time.T
 	if account.Status != AccountStatusActive || !account.Schedulable {
 		return false
 	}
-	if account.AuthType != "api_key" {
-		return false
-	}
-	if !account.SecretConfigured || account.SecretCiphertext == "" {
+	if providerAuthRequiresSecret(account.AuthType) && (!account.SecretConfigured || account.SecretCiphertext == "") {
 		return false
 	}
 	if account.ExpiresAt != nil && now.After(*account.ExpiresAt) {
@@ -2195,8 +2133,8 @@ func providerFromRequest(req ProviderRequest, now time.Time) (ProviderConnection
 	if name == "" {
 		return ProviderConnection{}, errors.New("name is required")
 	}
-	if !oneOf(providerType, "openai_compatible", "azure_openai", "anthropic", "gemini", "self_hosted") {
-		return ProviderConnection{}, errors.New("type must be openai_compatible, azure_openai, anthropic, gemini, or self_hosted")
+	if !oneOf(providerType, ProviderTypeOpenAICompatible, ProviderTypeAnthropicCompatible, ProviderTypeGeminiCompatible, ProviderTypeAWSBedrock, ProviderTypeGCPVertex, ProviderTypeAzureOpenAI) {
+		return ProviderConnection{}, errors.New("type must be openai_compatible, anthropic_compatible, gemini_compatible, aws_bedrock, gcp_vertex, or azure_openai")
 	}
 	if !validHTTPURL(baseURL) {
 		return ProviderConnection{}, errors.New("base_url must be an absolute http or https URL")
@@ -2205,27 +2143,21 @@ func providerFromRequest(req ProviderRequest, now time.Time) (ProviderConnection
 	if status == "" {
 		status = ProviderStatusActive
 	}
-	if req.APIKey == "" && status == ProviderStatusActive {
-		status = ProviderStatusNeedsSecret
-	}
-	if !oneOf(status, ProviderStatusActive, ProviderStatusDisabled, ProviderStatusNeedsSecret) {
-		return ProviderConnection{}, errors.New("status must be active, disabled, or needs_secret")
+	if !oneOf(status, ProviderStatusActive, ProviderStatusDisabled) {
+		return ProviderConnection{}, errors.New("status must be active or disabled")
 	}
 	priority := req.Priority
 	if priority <= 0 {
 		priority = 100
 	}
 	return ProviderConnection{
-		Name:             name,
-		Type:             providerType,
-		BaseURL:          strings.TrimRight(baseURL, "/"),
-		Status:           status,
-		Models:           nil,
-		Priority:         priority,
-		SecretConfigured: strings.TrimSpace(req.APIKey) != "",
-		SecretHint:       maskSecret(req.APIKey),
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		Name:      name,
+		Type:      providerType,
+		BaseURL:   strings.TrimRight(baseURL, "/"),
+		Status:    status,
+		Priority:  priority,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}, nil
 }
 
@@ -2470,8 +2402,8 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 	if authType == "" {
 		authType = "api_key"
 	}
-	if !oneOf(authType, "api_key") {
-		return ProviderAccount{}, errors.New("auth_type must be api_key")
+	if !oneOf(authType, ProviderAuthAPIKey, ProviderAuthBearer, ProviderAuthAWSDefault, ProviderAuthAWSAccessKey, ProviderAuthGCPADC, ProviderAuthGCPServiceAccount, ProviderAuthAzureManagedIdentity) {
+		return ProviderAccount{}, errors.New("auth_type is not supported")
 	}
 	status := req.Status
 	if status == "" {
@@ -2554,6 +2486,7 @@ func providerAccountFromRequest(req ProviderAccountRequest, now time.Time, defau
 		Name:                    name,
 		Platform:                platform,
 		AuthType:                authType,
+		AdapterConfig:           cloneStringMap(req.AdapterConfig),
 		Status:                  status,
 		Schedulable:             schedulable,
 		Priority:                priority,
@@ -2624,6 +2557,63 @@ func cleanStringList(values []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func validateProviderAccountAdapter(providerType string, req *ProviderAccountRequest) error {
+	if req == nil {
+		return errors.New("provider account request is required")
+	}
+	authType := strings.TrimSpace(req.AuthType)
+	if authType == "" {
+		authType = ProviderAuthAPIKey
+	}
+	allowedAuth := map[string][]string{
+		ProviderTypeOpenAICompatible:    {ProviderAuthAPIKey, ProviderAuthBearer},
+		ProviderTypeAnthropicCompatible: {ProviderAuthAPIKey},
+		ProviderTypeGeminiCompatible:    {ProviderAuthAPIKey},
+		ProviderTypeAWSBedrock:          {ProviderAuthAWSDefault, ProviderAuthAWSAccessKey},
+		ProviderTypeGCPVertex:           {ProviderAuthGCPADC, ProviderAuthGCPServiceAccount},
+		ProviderTypeAzureOpenAI:         {ProviderAuthAPIKey, ProviderAuthAzureManagedIdentity},
+	}
+	if !contains(allowedAuth[providerType], authType) {
+		return fmt.Errorf("auth_type %q is not valid for provider type %q", authType, providerType)
+	}
+	req.AuthType = authType
+	req.Platform = providerType
+	req.AdapterConfig = cloneStringMap(req.AdapterConfig)
+	allowedKeys := map[string][]string{
+		ProviderTypeOpenAICompatible:    {},
+		ProviderTypeAnthropicCompatible: {"anthropic_version"},
+		ProviderTypeGeminiCompatible:    {},
+		ProviderTypeAWSBedrock:          {"region", "endpoint"},
+		ProviderTypeGCPVertex:           {"project", "location", "endpoint"},
+		ProviderTypeAzureOpenAI:         {"api_version", "audience", "managed_identity_client_id"},
+	}
+	for key := range req.AdapterConfig {
+		if key == "" || !contains(allowedKeys[providerType], key) {
+			return fmt.Errorf("adapter_config field %q is not valid for provider type %q", key, providerType)
+		}
+	}
+	required := map[string][]string{
+		ProviderTypeAWSBedrock:  {"region"},
+		ProviderTypeGCPVertex:   {"project", "location"},
+		ProviderTypeAzureOpenAI: {"api_version"},
+	}
+	for _, key := range required[providerType] {
+		if strings.TrimSpace(req.AdapterConfig[key]) == "" {
+			return fmt.Errorf("adapter_config.%s is required for provider type %q", key, providerType)
+		}
+	}
+	return nil
+}
+
+func providerAuthRequiresSecret(authType string) bool {
+	switch authType {
+	case ProviderAuthAPIKey, ProviderAuthBearer, ProviderAuthAWSAccessKey, ProviderAuthGCPServiceAccount:
+		return true
+	default:
+		return false
+	}
 }
 
 func mergeStringLists(left []string, right []string) []string {

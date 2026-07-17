@@ -41,22 +41,22 @@ func TestExtractCredentialUsesOneProtocolApprovedTransport(t *testing.T) {
 	}
 }
 
-func TestCanonicalizeNativeTextProtocolsPreservesProviderPayload(t *testing.T) {
+func TestCanonicalizeNativeTextProtocolsProducesCanonicalTextIR(t *testing.T) {
 	header := http.Header{"X-Request-ID": []string{"native-protocol"}, "Idempotency-Key": []string{"native-idem"}}
 
-	responsesRaw := []byte(`{"model":"responses-model","input":"hello","metadata":{"opaque":"kept"},"stream":true}`)
+	responsesRaw := []byte(`{"model":"responses-model","input":"hello","stream":true}`)
 	responses, err := CanonicalizeOpenAIResponses(responsesRaw, header)
-	if err != nil || responses.Protocol != ProtocolOpenAIResponses || !responses.Stream || string(responses.Payload) != string(responsesRaw) || responses.Operation != "chat_completion" {
+	if err != nil || responses.Protocol != ProtocolOpenAIResponses || !responses.Stream || responses.Text == nil || responses.Text.Messages[0].Content[0].Text != "hello" || responses.Operation != "chat_completion" || string(responses.Payload) == string(responsesRaw) {
 		t.Fatalf("responses=%+v err=%v", responses, err)
 	}
 	anthropicRaw := []byte(`{"model":"claude-model","max_tokens":64,"system":"keep","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	anthropic, err := CanonicalizeAnthropicMessages(anthropicRaw, header)
-	if err != nil || anthropic.Protocol != ProtocolAnthropicMessages || anthropic.MessageCount != 1 || !anthropic.Stream || string(anthropic.Payload) != string(anthropicRaw) {
+	if err != nil || anthropic.Protocol != ProtocolAnthropicMessages || anthropic.MessageCount != 1 || !anthropic.Stream || anthropic.Text == nil || len(anthropic.Text.System) != 1 || string(anthropic.Payload) == string(anthropicRaw) {
 		t.Fatalf("anthropic=%+v err=%v", anthropic, err)
 	}
 	geminiRaw := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"generationConfig":{"maxOutputTokens":64}}`)
 	gemini, err := CanonicalizeGeminiGenerate(geminiRaw, header, "gemini-model", true)
-	if err != nil || gemini.Protocol != ProtocolGeminiGenerate || !gemini.Stream || gemini.Model != "gemini-model" || string(gemini.Payload) != string(geminiRaw) {
+	if err != nil || gemini.Protocol != ProtocolGeminiGenerate || !gemini.Stream || gemini.Model != "gemini-model" || gemini.Text == nil || string(gemini.Payload) == string(geminiRaw) {
 		t.Fatalf("gemini=%+v err=%v", gemini, err)
 	}
 }

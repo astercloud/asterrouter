@@ -5,11 +5,12 @@ import { useI18n } from 'vue-i18n'
 import { discoverProviderAccountModels, getProviderAccountModelInventory, syncProviderAccountModels } from '@/api/control'
 import type { ProviderAccount, ProviderAccountModel, ProviderAccountModelDiscovery } from '@/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: string[]
   autoEnableNewModels: boolean
   accountId?: string
-}>()
+  discoveryEnabled?: boolean
+}>(), { discoveryEnabled: true })
 
 const emit = defineEmits<{
   'update:modelValue': [value: string[]]
@@ -169,7 +170,7 @@ onMounted(loadInventory)
         <strong>{{ t('providerAccounts.upstreamModels') }}</strong>
         <span>{{ t('providerAccounts.modelInventorySummary', { enabled: modelValue.length, available: availableCount }) }}</span>
       </div>
-      <button class="button secondary" type="button" :disabled="!accountId || discovering" @click="discover">
+      <button v-if="discoveryEnabled !== false" class="button secondary" type="button" :disabled="!accountId || discovering" @click="discover">
         <RefreshCw :size="15" />
         {{ discovering ? t('providerAccounts.discoveringModels') : t('providerAccounts.discoverModels') }}
       </button>
@@ -186,8 +187,8 @@ onMounted(loadInventory)
         <option value="missing">{{ t('providerAccounts.modelMissing') }}</option>
         <option value="unverified">{{ t('providerAccounts.modelUnverified') }}</option>
       </select>
-      <button class="icon-button" type="button" :title="t('providerAccounts.enableAvailable')" @click="enableAvailable"><CheckCircle2 :size="16" /></button>
-      <button class="icon-button" type="button" :title="t('providerAccounts.clearEnabled')" @click="clearEnabled"><X :size="16" /></button>
+      <button class="icon-button" type="button" :aria-label="t('providerAccounts.enableAvailable')" :title="t('providerAccounts.enableAvailable')" @click="enableAvailable"><CheckCircle2 :size="16" /></button>
+      <button class="icon-button" type="button" :aria-label="t('providerAccounts.clearEnabled')" :title="t('providerAccounts.clearEnabled')" @click="clearEnabled"><X :size="16" /></button>
     </div>
 
     <div class="model-inventory-custom">
@@ -219,13 +220,13 @@ onMounted(loadInventory)
     </div>
 
     <footer class="model-inventory-footer">
-      <label class="model-auto-enable">
+      <label v-if="discoveryEnabled !== false" class="model-auto-enable">
         <input type="checkbox" :checked="autoEnableNewModels" @change="emit('update:autoEnableNewModels', ($event.target as HTMLInputElement).checked)" />
         <span><strong>{{ t('providerAccounts.autoEnableNewModels') }}</strong><small>{{ t('providerAccounts.autoEnableNewModelsHint') }}</small></span>
       </label>
       <div class="model-inventory-actions">
         <span v-if="missingCount" class="status-text danger">{{ t('providerAccounts.missingCount', { count: missingCount }) }}</span>
-        <button v-if="accountId" class="button" type="button" :disabled="syncing" @click="applySync"><Save :size="15" />{{ syncing ? t('common.saving') : t('providerAccounts.applyModelChanges') }}</button>
+        <button v-if="accountId && discoveryEnabled !== false" class="button" type="button" :disabled="syncing" @click="applySync"><Save :size="15" />{{ syncing ? t('common.saving') : t('providerAccounts.applyModelChanges') }}</button>
       </div>
     </footer>
   </section>

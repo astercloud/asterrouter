@@ -333,6 +333,87 @@ func TestProviderAccountModelInventoryMigrationIsIdempotentAndPersists(t *testin
 	}
 }
 
+func TestMultiCloudProtocolRoutingMigrationHardCutsLegacyProviderState(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	db := testutil.OpenPostgres(t, schema.URL)
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE provider_connections (
+  id TEXT PRIMARY KEY, type TEXT NOT NULL, models TEXT NOT NULL DEFAULT '[]',
+  secret_configured BOOLEAN NOT NULL DEFAULT false, secret_hint TEXT NOT NULL DEFAULT '', secret_ciphertext TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE provider_accounts (
+  id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, secret_configured BOOLEAN NOT NULL DEFAULT false,
+  secret_hint TEXT NOT NULL DEFAULT '', secret_ciphertext TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE gateway_models (id TEXT PRIMARY KEY, modality TEXT NOT NULL DEFAULT 'chat');
+CREATE TABLE model_routes (
+  id TEXT PRIMARY KEY, gateway_model_id TEXT NOT NULL, provider_account_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active'
+);
+CREATE TABLE provider_health_checks (id TEXT PRIMARY KEY, models TEXT NOT NULL DEFAULT '[]');
+INSERT INTO provider_connections(id,type,models,secret_configured,secret_hint,secret_ciphertext)
+VALUES('provider-anthropic','anthropic','["claude"]',true,'sk-...','encrypted-secret'),
+      ('provider-media','self_hosted','["image-model"]',false,'',''),
+      ('provider-audio','aws_bedrock','["audio-model"]',false,'',''),
+      ('provider-unknown','custom_gateway','[]',false,'','');
+INSERT INTO provider_accounts(id,provider_id) VALUES('account-anthropic','provider-anthropic'),('account-media','provider-media'),('account-audio','provider-audio'),('account-unknown','provider-unknown');
+INSERT INTO gateway_models(id,modality) VALUES('model-chat','chat'),('model-media','image'),('model-audio','audio'),('model-embedding','embedding');
+INSERT INTO model_routes(id,gateway_model_id,provider_account_id)
+VALUES('route-anthropic','model-chat','account-anthropic'),('route-media','model-media','account-media'),('route-audio','model-audio','account-audio'),('route-embedding','model-embedding','account-anthropic'),('route-unknown','model-chat','account-unknown');
+`); err != nil {
+		t.Fatal(err)
+	}
+	body, err := migrationFiles.ReadFile("068_multi_cloud_protocol_routing.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		if _, err := db.ExecContext(ctx, string(body)); err != nil {
+			t.Fatalf("apply 068 run %d: %v", run+1, err)
+		}
+	}
+	var providerType, authCiphertext, format, status, reason string
+	var adapterConfig string
+	if err := db.QueryRowContext(ctx, `SELECT type FROM provider_connections WHERE id='provider-anthropic'`).Scan(&providerType); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT secret_ciphertext,adapter_config::text FROM provider_accounts WHERE id='account-anthropic'`).Scan(&authCiphertext, &adapterConfig); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT upstream_format,status,disabled_reason FROM model_routes WHERE id='route-anthropic'`).Scan(&format, &status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if providerType != controlplane.ProviderTypeAnthropicCompatible || authCiphertext != "encrypted-secret" || adapterConfig != "{}" || format != controlplane.UpstreamFormatAnthropic || status != controlplane.ModelRouteStatusActive || reason != "" {
+		t.Fatalf("provider=%s secret=%s config=%s format=%s status=%s reason=%s", providerType, authCiphertext, adapterConfig, format, status, reason)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT upstream_format,status,disabled_reason FROM model_routes WHERE id='route-media'`).Scan(&format, &status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if format != controlplane.UpstreamFormatNativeMedia || status != controlplane.ModelRouteStatusActive || reason != "" {
+		t.Fatalf("media route format=%q status=%q reason=%q", format, status, reason)
+	}
+	for _, routeID := range []string{"route-audio", "route-embedding"} {
+		if err := db.QueryRowContext(ctx, `SELECT upstream_format,status,disabled_reason FROM model_routes WHERE id=$1`, routeID).Scan(&format, &status, &reason); err != nil {
+			t.Fatal(err)
+		}
+		if format != "" || status != controlplane.ModelRouteStatusDisabled || reason != "migration_requires_explicit_upstream_format" {
+			t.Fatalf("unsupported route %s format=%q status=%q reason=%q", routeID, format, status, reason)
+		}
+	}
+	if err := db.QueryRowContext(ctx, `SELECT upstream_format,status,disabled_reason FROM model_routes WHERE id='route-unknown'`).Scan(&format, &status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if format != "" || status != controlplane.ModelRouteStatusDisabled || reason != "migration_requires_explicit_upstream_format" {
+		t.Fatalf("unknown route format=%q status=%q reason=%q", format, status, reason)
+	}
+	columns := schemaColumns(t, db, schema.Name)
+	for _, removed := range []string{"provider_connections.models", "provider_connections.secret_configured", "provider_connections.secret_hint", "provider_connections.secret_ciphertext", "provider_health_checks.models"} {
+		if _, exists := columns[removed]; exists {
+			t.Fatalf("legacy column %s still exists", removed)
+		}
+	}
+}
+
 func TestRuntimeSchemaMatchesMigrationSnapshots(t *testing.T) {
 	snapshotSchema := testutil.NewPostgresSchema(t)
 	initializeRuntimeSchema(t, snapshotSchema.URL)

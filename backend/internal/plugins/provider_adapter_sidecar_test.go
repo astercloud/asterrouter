@@ -245,11 +245,11 @@ func TestManifestProviderJobSupportExplainsMostSpecificMismatch(t *testing.T) {
 }
 
 func TestManifestDirectProviderJobRequiresPreviewCapabilityWhenRequested(t *testing.T) {
-	provider := controlplane.GatewayProvider{Type: "self_hosted"}
+	provider := controlplane.GatewayProvider{Type: controlplane.ProviderTypeOpenAICompatible}
 	job := controlplane.AIJob{Modality: "video", Operation: "video_generation", ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary}
 	request := gatewaycore.CanonicalRequest{PreviewMode: "required"}
 	manifest := sidecarManifest{ProviderAdapters: []providerAdapterManifestCapability{{
-		ProviderTypes: []string{"self_hosted"}, Modalities: []string{"video"}, Operations: []string{"video_generation"},
+		ProviderTypes: []string{controlplane.ProviderTypeOpenAICompatible}, Modalities: []string{"video"}, Operations: []string{"video_generation"},
 		ArtifactPolicies: []string{controlplane.GatewayArtifactPolicyTemporary},
 	}}}
 	if manifestSupportsDirectProviderJob(manifest, provider, job, request) {
@@ -314,7 +314,7 @@ func TestProviderAdapterSidecarDurableVideoWorkerContract(t *testing.T) {
 	manifest, err := json.Marshal(sidecarManifest{
 		ID: pluginID, Version: version, Runtime: "sidecar",
 		ProviderAdapters: []providerAdapterManifestCapability{{
-			ProviderTypes: []string{"self_hosted"}, Modalities: []string{"video"}, Operations: []string{"video_generation"},
+			ProviderTypes: []string{controlplane.ProviderTypeOpenAICompatible}, Modalities: []string{"video"}, Operations: []string{"video_generation"},
 			ArtifactPolicies: []string{controlplane.GatewayArtifactPolicyTemporary},
 		}},
 	})
@@ -333,11 +333,11 @@ func TestProviderAdapterSidecarDurableVideoWorkerContract(t *testing.T) {
 	if err := control.SetArtifactStore(controlplane.NewMemoryArtifactStore()); err != nil {
 		t.Fatal(err)
 	}
-	provider, err := control.CreateProvider(ctx, "test", controlplane.ProviderRequest{Name: "Video provider", Type: "self_hosted", BaseURL: "https://provider.invalid/v1", Status: controlplane.ProviderStatusActive, Models: []string{"video-upstream"}, APIKey: "provider-secret"})
+	provider, err := control.CreateProvider(ctx, "test", controlplane.ProviderRequest{Name: "Video provider", Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: "https://provider.invalid/v1", Status: controlplane.ProviderStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}
-	account, err := control.CreateProviderAccount(ctx, "test", controlplane.ProviderAccountRequest{ProviderID: provider.ID, Name: "Video account", Platform: "self_hosted", AuthType: "api_key", Status: controlplane.AccountStatusActive, Models: []string{"video-upstream"}, Secret: "provider-secret", Concurrency: 1})
+	account, err := control.CreateProviderAccount(ctx, "test", controlplane.ProviderAccountRequest{ProviderID: provider.ID, Name: "Video account", Platform: controlplane.ProviderTypeOpenAICompatible, AuthType: "api_key", Status: controlplane.AccountStatusActive, Models: []string{"video-upstream"}, Secret: "provider-secret", Concurrency: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestProviderAdapterSidecarDurableVideoWorkerContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := control.CreateModelRoute(ctx, "test", controlplane.ModelRouteRequest{GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: account.ID, UpstreamModel: "video-upstream", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive}); err != nil {
+	if _, err := control.CreateModelRoute(ctx, "test", controlplane.ModelRouteRequest{GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: account.ID, UpstreamModel: "video-upstream", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia}); err != nil {
 		t.Fatal(err)
 	}
 	auth := gatewaycore.CanonicalAuthContext{CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "video-key", ProfileScope: controlplane.ProfileScopePlatform, TenantID: "video-tenant", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "video-principal", ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary}

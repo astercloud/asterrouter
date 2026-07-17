@@ -33,7 +33,7 @@ describe('AdminProviderAccountsView', () => {
     setLocale('en-US')
     vi.mocked(control.getProviderAccounts).mockResolvedValue([])
     vi.mocked(control.getProviderAccountHealthChecks).mockResolvedValue([])
-    vi.mocked(control.getProviders).mockResolvedValue([{ id: 'provider-1', name: 'Provider One', type: 'openai_compatible', models: [] }] as never)
+    vi.mocked(control.getProviders).mockResolvedValue([{ id: 'provider-1', name: 'Provider One', type: 'openai_compatible' }] as never)
     vi.mocked(control.getRoutingGroups).mockResolvedValue([{ id: 'group-1', name: 'Default' }] as never)
     vi.mocked(control.createProviderAccount).mockResolvedValue({
       id: 'account-1', provider_id: 'provider-1', name: 'Discovered account', platform: 'openai_compatible', auth_type: 'api_key',
@@ -54,6 +54,15 @@ describe('AdminProviderAccountsView', () => {
 
     const newButton = wrapper.findAll('button').find((button) => button.text().includes('New route resource'))
     await newButton!.trigger('click')
+    await wrapper.get('#account-name').setValue('Discovered account')
+    let nextButton = wrapper.findAll('.modal-footer button').find((button) => button.text().includes('Next'))
+    await nextButton!.trigger('click')
+    await wrapper.get('#account-secret').setValue('test-secret')
+    for (let step = 0; step < 2; step++) {
+      nextButton = wrapper.findAll('.modal-footer button').find((button) => button.text().includes('Next'))
+      expect(nextButton!.attributes('disabled')).toBeUndefined()
+      await nextButton!.trigger('click')
+    }
     const saveButton = wrapper.findAll('.modal-footer button').find((button) => button.text().includes('Save'))
     expect(saveButton!.attributes('disabled')).toBeUndefined()
     await saveButton!.trigger('click')
@@ -61,6 +70,7 @@ describe('AdminProviderAccountsView', () => {
 
     expect(control.createProviderAccount).toHaveBeenCalledWith(expect.objectContaining({
       provider_id: 'provider-1',
+      adapter_config: {},
       models: [],
       auto_enable_new_models: false
     }))

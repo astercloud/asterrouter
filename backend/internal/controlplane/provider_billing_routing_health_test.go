@@ -51,7 +51,7 @@ func TestGatewayRoutingUsesOnlyActiveHardBillingEvidence(t *testing.T) {
 	repo := NewMemoryRepository()
 	svc := NewService(repo, "/v1", "billing-routing-test")
 	svc.now = func() time.Time { return now }
-	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Billing route", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: ProviderStatusActive, APIKey: "provider-secret"})
+	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Billing route", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: ProviderStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestGatewayRoutingFiltersExhaustedKeyQuota(t *testing.T) {
 	now := time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC)
 	repo := NewMemoryRepository()
 	svc := NewService(repo, "/v1", "billing-quota-test")
-	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Quota route", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: ProviderStatusActive, APIKey: "provider-secret"})
+	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{Name: "Quota route", Type: "openai_compatible", BaseURL: "https://provider.example/v1", Status: ProviderStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -193,7 +193,7 @@ func createProviderBillingSyncAccount(t *testing.T, svc *Service, baseURL, suffi
 	ctx := context.Background()
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Billing provider " + suffix, Type: "openai_compatible", BaseURL: baseURL,
-		Status: ProviderStatusActive, Models: []string{"model"}, APIKey: "provider-secret-" + suffix,
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)

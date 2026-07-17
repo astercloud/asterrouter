@@ -185,7 +185,7 @@ func TestPlanCanonicalGatewayRequestRecordsCandidateExclusions(t *testing.T) {
 			svc := NewService(repo, "/v1", "planner-secret")
 			provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 				Name: "planner provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-				Status: test.providerStatus, Models: []string{"upstream-model"}, APIKey: "provider-secret",
+				Status: test.providerStatus,
 			})
 			if err != nil {
 				t.Fatalf("CreateProvider(): %v", err)
@@ -203,7 +203,7 @@ func TestPlanCanonicalGatewayRequestRecordsCandidateExclusions(t *testing.T) {
 			}
 			route, err := svc.CreateModelRoute(ctx, "tester", ModelRouteRequest{
 				GatewayModelID: model.ID, RouteGroup: DefaultModelRouteGroup, ProviderAccountID: account.ID,
-				UpstreamModel: "upstream-model", Status: test.routeStatus,
+				UpstreamModel: "upstream-model", Status: test.routeStatus, UpstreamFormat: "openai_chat",
 			})
 			if err != nil {
 				t.Fatalf("CreateModelRoute(): %v", err)

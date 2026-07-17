@@ -14,9 +14,7 @@ async function invokeWithSyntheticUsage(page: Page, key: string, model: string, 
   return page.request.post('/v1/chat/completions', {
     data: {
       model,
-      max_cost_micros: 1,
-      messages: [{ role: 'user', content: `synthetic ${tokens}-token policy request` }],
-      synthetic_usage: { prompt_tokens: tokens, completion_tokens: 0 }
+      messages: [{ role: 'user', content: `synthetic ${tokens}-token policy request` }]
     },
     headers: { Authorization: `Bearer ${key}` }
   })
@@ -233,9 +231,7 @@ test('@smoke @j04 failed primary route falls back and records attempts', async (
     type: 'openai_compatible',
     base_url: `http://127.0.0.1:${upstreamPort}/v1`,
     status: 'active',
-    models: ['fail-model', 'upstream-model'],
-    priority: 10,
-    api_key: 'synthetic-provider-secret'
+    priority: 10
   })
   const createAccount = (name: string, model: string, priority: number) => adminPost<{ id: string }>(page, token, '/provider-accounts', {
     provider_id: provider.id,
@@ -266,6 +262,7 @@ test('@smoke @j04 failed primary route falls back and records attempts', async (
       route_group: 'default',
       provider_account_id: account.id,
       upstream_model: upstreamModel,
+      upstream_format: 'openai_chat',
       priority,
       weight: 100,
       status: 'active'

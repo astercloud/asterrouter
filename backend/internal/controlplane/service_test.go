@@ -30,8 +30,8 @@ func TestEnsureSeedDataCreatesProductBaselineResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProviders(): %v", err)
 	}
-	if len(providers) != 1 || len(providers[0].Models) != 0 {
-		t.Fatalf("seed provider must not declare a static model catalog: %+v", providers)
+	if len(providers) != 1 || providers[0].Status != ProviderStatusActive {
+		t.Fatalf("seed provider must be an active endpoint definition: %+v", providers)
 	}
 }
 
@@ -475,192 +475,37 @@ func TestCreateProviderRequiresAbsoluteURL(t *testing.T) {
 		Name:    "bad",
 		Type:    "openai_compatible",
 		BaseURL: "/relative",
-		Models:  []string{"gpt-4o-mini"},
 	})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
 }
 
-func TestCreateProviderEncryptsSecret(t *testing.T) {
-	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
-	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
-		Name:    "OpenAI-compatible test",
-		Type:    "openai_compatible",
-		BaseURL: "https://provider.example/v1",
-		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "upstream-secret",
-	})
-	if err != nil {
-		t.Fatalf("CreateProvider(): %v", err)
-	}
-	if !provider.SecretConfigured || provider.SecretCiphertext == "" {
-		t.Fatalf("secret metadata not configured: %+v", provider)
-	}
-	if provider.SecretCiphertext == "upstream-secret" {
-		t.Fatal("provider secret stored in plaintext")
-	}
-
-}
-
-func TestCheckProviderProbesModelsAndPersistsHealth(t *testing.T) {
+func TestProviderConnectionOwnsEndpointStateOnly(t *testing.T) {
 	repo := NewMemoryRepository()
 	svc := NewService(repo, "/v1", "test-secret-key")
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
-			t.Fatalf("path = %s", r.URL.Path)
-		}
-		if r.Header.Get("Authorization") != "Bearer upstream-secret" {
-			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"gpt-real"},{"id":"gpt-fast"}]}`))
-	}))
-	defer upstream.Close()
-
 	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
-		Name:    "Probe provider",
-		Type:    "openai_compatible",
-		BaseURL: upstream.URL + "/v1",
+		Name:    "Endpoint provider",
+		Type:    ProviderTypeOpenAICompatible,
+		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"manual-model"},
-		APIKey:  "upstream-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
 	}
-
 	check, err := svc.CheckProvider(context.Background(), "tester", provider.ID)
 	if err != nil {
 		t.Fatalf("CheckProvider(): %v", err)
 	}
-	if check.Status != "ok" || len(check.Models) != 2 {
+	if check.Status != "ok" {
 		t.Fatalf("unexpected health check: %+v", check)
 	}
-
 	health, err := svc.ListProviderHealthChecks(context.Background())
 	if err != nil {
 		t.Fatalf("ListProviderHealthChecks(): %v", err)
 	}
 	if len(health) != 1 || health[0].ProviderID != provider.ID || health[0].Status != "ok" {
 		t.Fatalf("health not persisted: %+v", health)
-	}
-
-	providers, err := svc.ListProviders(context.Background())
-	if err != nil {
-		t.Fatalf("ListProviders(): %v", err)
-	}
-	if len(providers) != 1 || !sameStringList(providers[0].Models, []string{"gpt-fast", "gpt-real"}) {
-		t.Fatalf("provider model snapshot was not replaced: %+v", providers)
-	}
-}
-
-func TestProviderModelSnapshotCanOnlyBeWrittenByDiscovery(t *testing.T) {
-	ctx := context.Background()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"discovered-current"}]}`))
-	}))
-	defer upstream.Close()
-
-	svc := NewService(NewMemoryRepository(), "/v1", "provider-snapshot-secret")
-	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
-		Name: "Read-only snapshot", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: ProviderStatusActive, Models: []string{"forged-on-create"}, APIKey: "provider-secret",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(provider.Models) != 0 {
-		t.Fatalf("create accepted caller-owned model snapshot: %+v", provider.Models)
-	}
-	if _, err := svc.CheckProvider(ctx, "tester", provider.ID); err != nil {
-		t.Fatal(err)
-	}
-	updated, err := svc.UpdateProvider(ctx, "tester", provider.ID, ProviderRequest{
-		Name: "Read-only snapshot updated", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: ProviderStatusActive, Models: []string{"forged-on-update"}, Priority: 20,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !sameStringList(updated.Models, []string{"discovered-current"}) {
-		t.Fatalf("update replaced discovered model snapshot: %+v", updated.Models)
-	}
-}
-
-func TestCheckProviderUsesTypedModelDiscoveryAdapters(t *testing.T) {
-	tests := []struct {
-		name           string
-		providerType   string
-		basePath       string
-		expectedHeader string
-		expectedValue  string
-		response       string
-		expectedModels []string
-	}{
-		{
-			name:           "anthropic",
-			providerType:   "anthropic",
-			basePath:       "/v1",
-			expectedHeader: "x-api-key",
-			expectedValue:  "provider-secret",
-			response:       `{"data":[{"id":"claude-current"}],"has_more":false}`,
-			expectedModels: []string{"claude-current"},
-		},
-		{
-			name:           "gemini",
-			providerType:   "gemini",
-			basePath:       "/v1beta",
-			expectedHeader: "x-goog-api-key",
-			expectedValue:  "provider-secret",
-			response:       `{"models":[{"name":"models/gemini-current"}]}`,
-			expectedModels: []string{"gemini-current"},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != tc.basePath+"/models" {
-					t.Fatalf("path = %s", r.URL.Path)
-				}
-				if got := r.Header.Get(tc.expectedHeader); got != tc.expectedValue {
-					t.Fatalf("%s = %q", tc.expectedHeader, got)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(tc.response))
-			}))
-			defer upstream.Close()
-
-			svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
-			provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
-				Name:    tc.name + " provider",
-				Type:    tc.providerType,
-				BaseURL: upstream.URL + tc.basePath,
-				Status:  ProviderStatusActive,
-				Models:  []string{"stale-model"},
-				APIKey:  "provider-secret",
-			})
-			if err != nil {
-				t.Fatalf("CreateProvider(): %v", err)
-			}
-
-			check, err := svc.CheckProvider(context.Background(), "tester", provider.ID)
-			if err != nil {
-				t.Fatalf("CheckProvider(): %v", err)
-			}
-			if check.Status != "ok" || !sameStringList(check.Models, tc.expectedModels) {
-				t.Fatalf("unexpected health check: %+v", check)
-			}
-			providers, err := svc.ListProviders(context.Background())
-			if err != nil {
-				t.Fatalf("ListProviders(): %v", err)
-			}
-			if len(providers) != 1 || !sameStringList(providers[0].Models, tc.expectedModels) {
-				t.Fatalf("provider model snapshot was not replaced: %+v", providers)
-			}
-		})
 	}
 }
 
@@ -671,8 +516,6 @@ func TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts(t
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -888,8 +731,6 @@ func TestCreateProviderAccountRejectsLegacyAuthTypes(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -918,8 +759,6 @@ func TestGatewayProviderForModelPrefersSchedulableProviderAccount(t *testing.T) 
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -998,8 +837,6 @@ func TestCheckProviderAccountProbesModelsAndPersistsHealth(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: upstream.URL + "/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"manual-provider-model"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -1115,8 +952,6 @@ func TestRankedProviderAccountCandidatesOrdersByPriorityThenLoadThenRate(t *test
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -1169,8 +1004,6 @@ func TestGatewayProviderCandidatesForModelSkipsCooldownAccounts(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -1230,8 +1063,6 @@ func TestCreateProviderAccountValidatesTempUnschedulableRules(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -1264,8 +1095,6 @@ func TestRecordProviderAccountFailureAppliesMatchingRuleDuration(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -1330,8 +1159,6 @@ func TestClearProviderAccountCooldownMakesAccountImmediatelyEligible(t *testing.
 		Type:    "openai_compatible",
 		BaseURL: "https://provider.example/v1",
 		Status:  ProviderStatusActive,
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -1386,7 +1213,7 @@ func mustCreateGatewayModelRoutes(t *testing.T, svc *Service, modelID string, ac
 			UpstreamModel:     modelID,
 			Priority:          (index + 1) * 10,
 			Weight:            100,
-			Status:            ModelRouteStatusActive,
+			Status:            ModelRouteStatusActive, UpstreamFormat: "openai_chat",
 		}); err != nil {
 			t.Fatalf("CreateModelRoute(%s, %s): %v", modelID, account.ID, err)
 		}
@@ -1398,7 +1225,7 @@ func TestGatewayModelRouteMapsExternalModelAndRouteGroup(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
 	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{
 		Name: "Mapped provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: ProviderStatusActive, Models: []string{"upstream-chat-v2"}, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -1418,7 +1245,7 @@ func TestGatewayModelRouteMapsExternalModelAndRouteGroup(t *testing.T) {
 	}
 	if _, err := svc.CreateModelRoute(context.Background(), "tester", ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: "stable", ProviderAccountID: account.ID,
-		UpstreamModel: "upstream-chat-v2", Priority: 10, Weight: 100, Status: ModelRouteStatusActive,
+		UpstreamModel: "upstream-chat-v2", Priority: 10, Weight: 100, Status: ModelRouteStatusActive, UpstreamFormat: "openai_chat",
 	}); err != nil {
 		t.Fatalf("CreateModelRoute(): %v", err)
 	}

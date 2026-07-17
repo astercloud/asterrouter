@@ -32,7 +32,17 @@ describe('AdminGatewaySimulatorView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(control.simulateGatewayRouting).toHaveBeenCalledWith('gateway-current', 1000)
+    expect(control.simulateGatewayRouting).toHaveBeenCalledWith('gateway-current', 1000, 'openai_chat_completions', ['text'])
+    wrapper.unmount()
+  })
+
+  it('localizes the simulator controls and route decision labels', async () => {
+    setLocale('zh-CN')
+    const wrapper = mount(AdminGatewaySimulatorView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    expect(wrapper.get('label[for="simulator-protocol"]').text()).toBe('客户端协议')
+    expect(wrapper.text()).toContain('必需能力')
     wrapper.unmount()
   })
 })

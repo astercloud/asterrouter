@@ -468,7 +468,7 @@ func setupDurableWorkerRoutes(t *testing.T, svc *Service) {
 	ctx := context.Background()
 	provider, err := svc.CreateProvider(ctx, "test", ProviderRequest{
 		Name: "Durable provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: ProviderStatusActive, Models: []string{"worker-upstream-a", "worker-upstream-b"}, APIKey: "provider-secret",
+		Status: ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -491,7 +491,7 @@ func setupDurableWorkerRoutes(t *testing.T, svc *Service) {
 	for index, account := range accounts {
 		if _, err := svc.CreateModelRoute(ctx, "test", ModelRouteRequest{
 			GatewayModelID: model.ID, RouteGroup: DefaultModelRouteGroup, ProviderAccountID: account.ID,
-			UpstreamModel: []string{"worker-upstream-a", "worker-upstream-b"}[index], Priority: 100 - index, Weight: 100, Status: ModelRouteStatusActive,
+			UpstreamModel: []string{"worker-upstream-a", "worker-upstream-b"}[index], Priority: 100 - index, Weight: 100, Status: ModelRouteStatusActive, UpstreamFormat: UpstreamFormatNativeMedia,
 		}); err != nil {
 			t.Fatal(err)
 		}

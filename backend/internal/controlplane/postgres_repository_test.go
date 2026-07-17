@@ -73,8 +73,8 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	}
 	provider := ProviderConnection{
 		ID: "provider-postgres", Name: "Postgres Provider", Type: "openai_compatible",
-		BaseURL: "https://provider.test/v1", Status: ProviderStatusActive, Models: []string{"model-a"},
-		SecretConfigured: true, SecretHint: "...test", SecretCiphertext: "ciphertext", CreatedAt: now, UpdatedAt: now,
+		BaseURL: "https://provider.test/v1", Status: ProviderStatusActive,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := repo.SaveProvider(ctx, provider); err != nil {
 		t.Fatalf("SaveProvider(): %v", err)
@@ -114,7 +114,7 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProviders(): %v", err)
 	}
-	if len(providers) != 1 || providers[0].ID != provider.ID || providers[0].SecretCiphertext != "ciphertext" {
+	if len(providers) != 1 || providers[0].ID != provider.ID || providers[0].BaseURL != provider.BaseURL {
 		t.Fatalf("persisted providers = %#v", providers)
 	}
 	found, ok, err := reopened.FindAPIKeyByHash(ctx, key.KeyHash)
@@ -135,6 +135,51 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	}
 	if len(users) != 1 || users[0].ID != user.ID || users[0].SessionVersion != 7 {
 		t.Fatalf("persisted session version users=%#v", users)
+	}
+}
+
+func TestPostgresRepositoryUpgradesLegacyDepartmentBudget(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	db := testutil.OpenPostgres(t, schema.URL)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE departments (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  code TEXT NOT NULL UNIQUE,
+  parent_id TEXT NOT NULL DEFAULT '',
+  cost_center TEXT NOT NULL DEFAULT '',
+  monthly_budget_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+`); err != nil {
+		t.Fatalf("create legacy departments schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO departments(id, name, code, monthly_budget_cents, created_at, updated_at)
+VALUES('department-legacy', 'Legacy department', 'legacy', 25, $1, $1)
+`, now); err != nil {
+		t.Fatalf("insert legacy department: %v", err)
+	}
+
+	for run := 1; run <= 2; run++ {
+		repo, err := NewPostgresRepository(ctx, schema.URL)
+		if err != nil {
+			t.Fatalf("NewPostgresRepository() run %d: %v", run, err)
+		}
+		departments, err := repo.ListDepartments(ctx)
+		if closeErr := repo.Close(); closeErr != nil {
+			t.Fatalf("Close() run %d: %v", run, closeErr)
+		}
+		if err != nil {
+			t.Fatalf("ListDepartments() run %d: %v", run, err)
+		}
+		if len(departments) != 1 || departments[0].ID != "department-legacy" || departments[0].MonthlyBudgetMicros != 250000 {
+			t.Fatalf("upgraded departments run %d = %#v", run, departments)
+		}
 	}
 }
 

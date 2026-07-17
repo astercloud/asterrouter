@@ -17,7 +17,7 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "pricing provider", Type: "openai_compatible", BaseURL: "https://provider.example/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"upstream-model"}, APIKey: "provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLi
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "billing source", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfir
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "probe provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"probe-model"}, APIKey: "provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -28,7 +28,9 @@ export default {
     next: 'Next',
     page: 'Page',
     yes: 'Yes',
-    no: 'No'
+    no: 'No',
+    all: 'All',
+    delete: 'Delete'
   },
   nav: {
     setup: 'Setup',
@@ -591,20 +593,22 @@ export default {
   modelRoutes: {
     subtitle: 'Map gateway models and route groups to explicit provider accounts and upstream model identifiers.',
     newRoute: 'New model route', editRoute: 'Edit model route', routes: 'routes', routeGroups: 'route groups', allModels: 'All gateway models',
-    gatewayModel: 'Gateway model', routeGroup: 'Route group', account: 'Provider account', upstreamModel: 'Upstream model', order: 'Scheduling', priority: 'Priority', weight: 'Weight',
+    gatewayModel: 'Gateway model', routeGroup: 'Route group', account: 'Provider account', upstreamModel: 'Upstream model', upstreamFormat: 'Upstream format', order: 'Scheduling', priority: 'Priority', weight: 'Weight',
+    viewsLabel: 'Model route views', routeList: 'Routes', supportMatrix: 'Support matrix', formats: 'formats', inventoryModels: 'inventory models', routed: 'routed', unrouted: 'Unrouted',
     searchPlaceholder: 'Search gateway model, route group, account, or upstream model', modalSubtitle: 'Each route is an explicit, auditable mapping used by the gateway hot path.',
     bulkMatch: 'Bulk match models',
     bulkMatchSubtitle: 'Generate candidates from models enabled on an account. Exact public-model IDs are matched automatically; review the rest manually.',
     selected: 'selected', unmatched: 'unmatched', existing: 'existing',
     toggleBulkRoute: 'Select a route for upstream model {model}', gatewayModelFor: 'Gateway model for upstream model {model}',
     noMatch: 'Select a gateway model', alreadyExists: 'Route exists', ready: 'Ready', needsMatch: 'Needs match', noAccountModels: 'This account has no enabled models.',
+    unsupportedPair: 'This provider and gateway model do not have an executable route format.', capabilityMismatch: 'Capability mismatch', textCore: 'Text Core', mediaAdapter: 'Media adapter', builtinDirect: 'Built-in direct',
     bulkAtomicHint: 'All selected routes are validated first, then written in one transaction.', createSelected: 'Create {count} routes', bulkCreated: 'Created {count} model routes',
     created: 'Model route created', updated: 'Model route updated', deleted: 'Model route deleted', delete: 'Delete model route', deleteConfirm: 'Delete this model route?', empty: ''
   },
   gatewaySimulator: {
     subtitle: 'Resolve and inspect the current scheduling plan without calling an upstream provider or consuming limits.',
-    model: 'Requested model', estimatedTokens: 'Estimated tokens', run: 'Run simulation', status: 'status', resolvedModel: 'resolved model', routeGroup: 'route group', candidates: 'candidates',
-    route: 'Route', account: 'Provider / account', headroom: 'Headroom', limits: 'Limits / circuit', decision: 'Decision', eligible: 'eligible'
+    model: 'Requested model', clientProtocol: 'Client protocol', requiredFeatures: 'Required features', estimatedTokens: 'Estimated tokens', run: 'Run simulation', status: 'status', resolvedModel: 'resolved model', routeGroup: 'route group', candidates: 'candidates',
+    route: 'Route', account: 'Provider / account', adapter: 'Adapter', headroom: 'Headroom', limits: 'Limits / circuit', decision: 'Decision', eligible: 'eligible', eligibleCount: '{count} eligible', concurrent: '{count} concurrent'
   },
   routingGroups: {
     subtitle: 'Advanced routing boundaries for fallback, ordering, capacity, and route governance.',
@@ -689,6 +693,11 @@ export default {
     selectProvider: 'Select a provider connection',
     name: 'Resource name',
     authType: 'Auth type',
+    adapterConfig: {
+      anthropic_version: 'Anthropic version', region: 'AWS region', endpoint: 'Endpoint override',
+      project: 'GCP project ID', location: 'GCP location', api_version: 'Azure API version',
+      audience: 'Token audience', managed_identity_client_id: 'Managed Identity client ID'
+    },
     groups: 'Groups',
     allGroups: 'All groups',
     capacity: 'Concurrency / priority',

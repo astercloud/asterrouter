@@ -51,10 +51,21 @@ func TestPostgresBackupRestoreRehearsal(t *testing.T) {
 	controlService := controlplane.NewService(controlRepo, "/v1", secretKey)
 	provider, err := controlService.CreateProvider(ctx, "recovery-test", controlplane.ProviderRequest{
 		Name: "Recovery Provider", Type: "openai_compatible", BaseURL: upstream.BaseURL(),
-		Status: controlplane.ProviderStatusActive, Models: []string{"upstream-model"}, APIKey: "synthetic-recovery-provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
+	}
+	account, err := controlService.CreateProviderAccount(ctx, "recovery-test", controlplane.ProviderAccountRequest{
+		ProviderID: provider.ID,
+		Name:       "Recovery Account",
+		Platform:   controlplane.ProviderTypeOpenAICompatible,
+		AuthType:   controlplane.ProviderAuthAPIKey,
+		Models:     []string{"recovery-model"},
+		Secret:     "synthetic-recovery-provider-secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderAccount(): %v", err)
 	}
 	user, _, err := controlService.RegisterWorkspaceUser(ctx, "recovery-user@example.test", "synthetic-password-123", "Recovery User", false)
 	if err != nil {
@@ -179,15 +190,26 @@ ON CONFLICT(id) DO UPDATE SET body = EXCLUDED.body, updated_at = EXCLUDED.update
 	if err != nil {
 		t.Fatalf("ListProviders(): %v", err)
 	}
-	if len(providers) != 1 || providers[0].ID != provider.ID || !providers[0].SecretConfigured {
+	if len(providers) != 1 || providers[0].ID != provider.ID {
 		t.Fatalf("restored providers = %#v", providers)
+	}
+	accounts, err := restoredControl.ListProviderAccounts(ctx)
+	if err != nil {
+		t.Fatalf("ListProviderAccounts(): %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].ID != account.ID || !accounts[0].SecretConfigured {
+		t.Fatalf("restored provider accounts = %#v", accounts)
 	}
 	check, err := restoredControl.CheckProvider(ctx, "recovery-test", provider.ID)
 	if err != nil || check.Status != "ok" {
 		t.Fatalf("CheckProvider() = %#v, err=%v", check, err)
 	}
+	accountCheck, err := restoredControl.CheckProviderAccount(ctx, "recovery-test", account.ID)
+	if err != nil || accountCheck.Status != "ok" {
+		t.Fatalf("CheckProviderAccount() = %#v, err=%v", accountCheck, err)
+	}
 	requests := upstream.Requests()
-	if len(requests) != 1 || requests[0].Authorization != "Bearer synthetic-recovery-provider-secret" {
+	if len(requests) != 1 || requests[0].Path != "/v1/models" || requests[0].Authorization != "Bearer synthetic-recovery-provider-secret" {
 		t.Fatalf("restored provider secret was not usable: %#v", requests)
 	}
 	users, err := restoredControl.ListWorkspaceUsers(ctx)

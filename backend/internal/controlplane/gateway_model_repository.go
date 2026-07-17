@@ -141,7 +141,7 @@ func (r *PostgresRepository) DeleteGatewayModel(ctx context.Context, id string) 
 
 func (r *PostgresRepository) ListModelRoutes(ctx context.Context) ([]ModelRoute, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, gateway_model_id, route_group, provider_account_id, upstream_model, priority, weight, status, created_at, updated_at
+SELECT id, gateway_model_id, route_group, provider_account_id, upstream_model, upstream_format, disabled_reason, priority, weight, status, created_at, updated_at
 FROM model_routes
 ORDER BY gateway_model_id ASC, route_group ASC, priority ASC, id ASC
 `)
@@ -152,7 +152,7 @@ ORDER BY gateway_model_id ASC, route_group ASC, priority ASC, id ASC
 	out := make([]ModelRoute, 0)
 	for rows.Next() {
 		var route ModelRoute
-		if err := rows.Scan(&route.ID, &route.GatewayModelID, &route.RouteGroup, &route.ProviderAccountID, &route.UpstreamModel, &route.Priority, &route.Weight, &route.Status, &route.CreatedAt, &route.UpdatedAt); err != nil {
+		if err := rows.Scan(&route.ID, &route.GatewayModelID, &route.RouteGroup, &route.ProviderAccountID, &route.UpstreamModel, &route.UpstreamFormat, &route.DisabledReason, &route.Priority, &route.Weight, &route.Status, &route.CreatedAt, &route.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, route)
@@ -170,18 +170,20 @@ type modelRouteExecutor interface {
 
 func saveModelRoute(ctx context.Context, executor modelRouteExecutor, route ModelRoute) error {
 	_, err := executor.ExecContext(ctx, `
-INSERT INTO model_routes(id, gateway_model_id, route_group, provider_account_id, upstream_model, priority, weight, status, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+INSERT INTO model_routes(id, gateway_model_id, route_group, provider_account_id, upstream_model, upstream_format, disabled_reason, priority, weight, status, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 ON CONFLICT(id) DO UPDATE SET
   gateway_model_id = EXCLUDED.gateway_model_id,
   route_group = EXCLUDED.route_group,
   provider_account_id = EXCLUDED.provider_account_id,
   upstream_model = EXCLUDED.upstream_model,
+  upstream_format = EXCLUDED.upstream_format,
+  disabled_reason = EXCLUDED.disabled_reason,
   priority = EXCLUDED.priority,
   weight = EXCLUDED.weight,
   status = EXCLUDED.status,
   updated_at = EXCLUDED.updated_at
-`, route.ID, route.GatewayModelID, route.RouteGroup, route.ProviderAccountID, route.UpstreamModel, route.Priority, route.Weight, route.Status, route.CreatedAt, route.UpdatedAt)
+`, route.ID, route.GatewayModelID, route.RouteGroup, route.ProviderAccountID, route.UpstreamModel, route.UpstreamFormat, route.DisabledReason, route.Priority, route.Weight, route.Status, route.CreatedAt, route.UpdatedAt)
 	return err
 }
 

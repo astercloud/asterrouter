@@ -30,6 +30,16 @@ type realtimeUpstreamFixture struct {
 	serveErrors []error
 }
 
+func TestRealtimeProviderURLRejectsCloudTextProvider(t *testing.T) {
+	provider := controlplane.GatewayProvider{
+		Type: controlplane.ProviderTypeGCPVertex, BaseURL: "https://vertex.example/v1",
+		UpstreamModel: "gemini", UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
+	}
+	if target, err := realtimeProviderURL(provider); target != "" || !errors.Is(err, errGatewayProviderCapability) {
+		t.Fatalf("target=%q err=%v", target, err)
+	}
+}
+
 func newRealtimeUpstreamFixture(t *testing.T) *realtimeUpstreamFixture {
 	t.Helper()
 	fixture := &realtimeUpstreamFixture{}
@@ -129,7 +139,7 @@ func newRealtimeGatewayFixture(t *testing.T, upstreamURL string) realtimeGateway
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
 		Name: "Realtime provider", Type: "openai_compatible", BaseURL: upstreamURL + "/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"upstream-realtime"}, APIKey: "provider-fallback-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +154,7 @@ func newRealtimeGatewayFixture(t *testing.T, upstreamURL string) realtimeGateway
 	}
 	if _, err := control.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
 		GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID,
-		UpstreamModel: "upstream-realtime", Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+		UpstreamModel: "upstream-realtime", Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +507,7 @@ func TestGatewayRealtimeFailsOverBeforeClientUpgrade(t *testing.T) {
 	defer failing.Close()
 	provider, err := fixture.control.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
 		Name: "Failing realtime provider", Type: "openai_compatible", BaseURL: failing.URL + "/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"failing-upstream"}, APIKey: "provider-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -509,7 +519,7 @@ func TestGatewayRealtimeFailsOverBeforeClientUpgrade(t *testing.T) {
 	}
 	if _, err := fixture.control.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
 		GatewayModelID: resolved.GatewayModel.ID, RouteGroup: "default", ProviderAccountID: account.ID,
-		UpstreamModel: "failing-upstream", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+		UpstreamModel: "failing-upstream", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia,
 	}); err != nil {
 		t.Fatal(err)
 	}

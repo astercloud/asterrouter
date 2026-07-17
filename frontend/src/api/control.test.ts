@@ -22,13 +22,13 @@ describe('control API contracts', () => {
     window.history.replaceState({}, '', '/admin/dashboard')
   })
 
-  it('normalizes nullable provider and routing collections', async () => {
+  it('normalizes nullable account inventory and routing collections', async () => {
     client.get.mockResolvedValueOnce({ data: { provider_count: 0, active_provider_count: 0, api_key_count: 0, active_api_key_count: 0, models: null, recent_audit: null } })
     expect(await control.getDashboard()).toMatchObject({ models: [], recent_audit: [] })
-    client.get.mockResolvedValueOnce({ data: [{ id: 'provider-1', models: null }] })
-    expect(await control.getProviders()).toEqual([{ id: 'provider-1', models: [] }])
-    client.get.mockResolvedValueOnce({ data: [{ id: 'check-1', models: ['model', 1, null] }] })
-    expect(await control.getProviderHealthChecks()).toEqual([{ id: 'check-1', models: ['model'] }])
+    client.get.mockResolvedValueOnce({ data: [{ id: 'provider-1' }] })
+    expect(await control.getProviders()).toEqual([{ id: 'provider-1' }])
+    client.get.mockResolvedValueOnce({ data: [{ id: 'check-1' }] })
+    expect(await control.getProviderHealthChecks()).toEqual([{ id: 'check-1' }])
     client.get.mockResolvedValueOnce({ data: [{ id: 'account-1', models: null, group_ids: null, temp_unschedulable_rules: null }] })
     expect(await control.getProviderAccounts()).toEqual([{ id: 'account-1', models: [], auto_enable_new_models: false, group_ids: [], temp_unschedulable_rules: [] }])
     client.get.mockResolvedValueOnce({ data: [{ id: 'check-2', models: null }] })
@@ -110,13 +110,13 @@ describe('control API contracts', () => {
   })
 
   it('normalizes nullable provider mutation responses', async () => {
-    const provider = { id: 'provider-1', models: null }
+    const provider = { id: 'provider-1' }
     client.post.mockResolvedValueOnce({ data: provider })
-    expect(await control.createProvider({} as never)).toEqual({ id: 'provider-1', models: [] })
+    expect(await control.createProvider({} as never)).toEqual({ id: 'provider-1' })
     client.put.mockResolvedValueOnce({ data: provider })
-    expect(await control.updateProvider('provider-1', {} as never)).toEqual({ id: 'provider-1', models: [] })
-    client.post.mockResolvedValueOnce({ data: { id: 'check-1', models: null } })
-    expect(await control.checkProvider('provider-1')).toEqual({ id: 'check-1', models: [] })
+    expect(await control.updateProvider('provider-1', {} as never)).toEqual({ id: 'provider-1' })
+    client.post.mockResolvedValueOnce({ data: { id: 'check-1' } })
+    expect(await control.checkProvider('provider-1')).toEqual({ id: 'check-1' })
 
     const account = { id: 'account-1', models: null, group_ids: null, temp_unschedulable_rules: null }
     client.post.mockResolvedValueOnce({ data: account })
@@ -193,7 +193,7 @@ describe('control API contracts', () => {
       { run: () => control.bulkCreateModelRoutes({ routes: [payload] }), method: 'post', args: ['/admin/model-routes/bulk', { routes: [payload] }] },
       { run: () => control.updateModelRoute('route-1', payload), method: 'put', args: ['/admin/model-routes/route-1', payload] },
       { run: () => control.deleteModelRoute('route-1'), method: 'delete', args: ['/admin/model-routes/route-1'] },
-      { run: () => control.simulateGatewayRouting('model-a', 123), method: 'post', args: ['/admin/gateway-simulator', { model: 'model-a', estimated_tokens: 123 }] },
+      { run: () => control.simulateGatewayRouting('model-a', 123), method: 'post', args: ['/admin/gateway-simulator', { model: 'model-a', estimated_tokens: 123, protocol: 'openai_chat_completions', required_features: [] }] },
       { run: () => control.getPricingRules('admin'), method: 'get', args: ['/admin/pricing-rules', { params: undefined }] },
       { run: () => control.getPricingRule('admin', 'pricing-1'), method: 'get', args: ['/admin/pricing-rules/pricing-1'] },
       { run: () => control.createPricingRule('admin', payload), method: 'post', args: ['/admin/pricing-rules', payload] },

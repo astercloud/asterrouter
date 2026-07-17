@@ -160,7 +160,6 @@ func TestInspectProviderBillingSourceUsesProcurementAccountSecretAndAudits(t *te
 	svc := NewService(repo, "/v1", "billing-inspection-secret")
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "Sub2API compatible", Type: "openai_compatible", BaseURL: upstream.URL + "/v1", Status: ProviderStatusActive,
-		Models: []string{"model"}, APIKey: "provider-secret",
 	})
 	if err != nil {
 		t.Fatal(err)

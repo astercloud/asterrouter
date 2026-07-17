@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X github.com/astercloud/asterrouter/backend/internal/buildinfo.Version=${ASTER_VERSION} -X github.com/astercloud/asterrouter/backend/internal/buildinfo.Commit=${ASTER_COMMIT} -X github.com/astercloud/asterrouter/backend/internal/buildinfo.Date=${ASTER_DATE} -X github.com/astercloud/asterrouter/backend/internal/buildinfo.BuildType=${ASTER_BUILD_TYPE}" \
     -o /out/asterrouter ./cmd/asterrouter
 
-FROM alpine:3.22
+FROM alpine:3.23
 WORKDIR /app
 RUN adduser -D -H -u 10001 asterrouter
 COPY --from=backend /out/asterrouter /app/asterrouter

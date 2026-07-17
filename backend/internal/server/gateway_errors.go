@@ -1,14 +1,51 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 	"github.com/gin-gonic/gin"
 )
+
+type gatewayUpstreamStatusError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *gatewayUpstreamStatusError) Error() string {
+	return fmt.Sprintf("upstream provider returned HTTP %d: %s", e.StatusCode, e.Message)
+}
+
+func gatewayUpstreamErrorMessage(status int, body []byte) string {
+	var payload struct {
+		Message string `json:"message"`
+		Error   struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &payload)
+	message := strings.TrimSpace(payload.Error.Message)
+	if message == "" {
+		message = strings.TrimSpace(payload.Message)
+	}
+	if message == "" {
+		message = http.StatusText(status)
+	}
+	if message == "" {
+		message = "upstream request failed"
+	}
+	runes := []rune(message)
+	if len(runes) > 1024 {
+		message = string(runes[:1024])
+	}
+	return message
+}
 
 func writeGatewayError(c *gin.Context, err error) {
 	switch {
@@ -95,4 +132,116 @@ func openAIError(c *gin.Context, status int, errorType string, message string) {
 			"type":    errorType,
 		},
 	})
+}
+
+func writeGatewayProtocolError(c *gin.Context, protocol gatewaycore.Protocol, status int, errorType, message string) {
+	if errorType == "upstream_error" && status == http.StatusTooManyRequests {
+		errorType = "rate_limit_error"
+	}
+	switch protocol {
+	case gatewaycore.ProtocolAnthropicMessages:
+		c.JSON(status, gin.H{"type": "error", "error": gin.H{"type": anthropicErrorType(status, errorType), "message": message}})
+	case gatewaycore.ProtocolGeminiGenerate:
+		c.JSON(status, gin.H{"error": gin.H{"code": status, "message": message, "status": geminiErrorStatus(status)}})
+	default:
+		openAIError(c, status, errorType, message)
+	}
+}
+
+func writeGatewayProtocolStreamError(c *gin.Context, protocol gatewaycore.Protocol, message string) error {
+	var payload any
+	eventName := ""
+	switch protocol {
+	case gatewaycore.ProtocolOpenAIResponses:
+		eventName = "error"
+		payload = gin.H{"type": "error", "code": "upstream_error", "message": message, "param": nil}
+	case gatewaycore.ProtocolAnthropicMessages:
+		eventName = "error"
+		payload = gin.H{"type": "error", "error": gin.H{"type": "api_error", "message": message}}
+	case gatewaycore.ProtocolGeminiGenerate:
+		payload = gin.H{"error": gin.H{"code": http.StatusBadGateway, "message": message, "status": "INTERNAL"}}
+	default:
+		payload = gin.H{"error": gin.H{"message": message, "type": "upstream_error"}}
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if eventName != "" {
+		if _, err := c.Writer.Write([]byte("event: " + eventName + "\n")); err != nil {
+			return err
+		}
+	}
+	if _, err := c.Writer.Write(append(append([]byte("data: "), data...), []byte("\n\n")...)); err != nil {
+		return err
+	}
+	c.Writer.Flush()
+	return nil
+}
+
+func writeGatewayProtocolControlError(c *gin.Context, protocol gatewaycore.Protocol, err error) {
+	switch {
+	case errors.Is(err, controlplane.ErrGatewayUnauthorized):
+		writeGatewayProtocolError(c, protocol, http.StatusUnauthorized, "invalid_api_key", "invalid or missing gateway api key")
+	case errors.Is(err, controlplane.ErrGatewayForbidden):
+		writeGatewayProtocolError(c, protocol, http.StatusForbidden, "model_not_allowed", "gateway api key is not allowed to use this model")
+	case errors.Is(err, controlplane.ErrGatewayPolicyForbidden):
+		writeGatewayProtocolError(c, protocol, http.StatusForbidden, "policy_not_allowed", "gateway policy does not allow this request")
+	case errors.Is(err, controlplane.ErrGatewayRouteUnavailable):
+		writeGatewayProtocolError(c, protocol, http.StatusServiceUnavailable, "route_unavailable", "no compatible and schedulable provider account is available for this model")
+	case errors.Is(err, controlplane.ErrGatewayRateLimited):
+		writeGatewayProtocolError(c, protocol, http.StatusTooManyRequests, "rate_limit_exceeded", err.Error())
+	case errors.Is(err, controlplane.ErrGatewayCapacityLimited):
+		writeGatewayProtocolError(c, protocol, http.StatusTooManyRequests, "capacity_limit_exceeded", err.Error())
+	case errors.Is(err, controlplane.ErrGatewayQuotaExceeded):
+		writeGatewayProtocolError(c, protocol, http.StatusTooManyRequests, "insufficient_quota", err.Error())
+	case errors.Is(err, controlplane.ErrGatewayBudgetExceeded):
+		writeGatewayProtocolError(c, protocol, http.StatusTooManyRequests, "budget_exceeded", err.Error())
+	case errors.Is(err, controlplane.ErrBillingHoldBudgetExceeded), errors.Is(err, controlplane.ErrBillingHoldEstimateUnavailable):
+		writeGatewayProtocolError(c, protocol, http.StatusPaymentRequired, "budget_hold_failed", err.Error())
+	case errors.Is(err, controlplane.ErrGatewayIdempotencyConflict):
+		writeGatewayProtocolError(c, protocol, http.StatusConflict, "idempotency_conflict", err.Error())
+	case errors.Is(err, controlplane.ErrGatewayIdempotencyReplay):
+		writeGatewayProtocolError(c, protocol, http.StatusConflict, "idempotency_replay_unavailable", err.Error())
+	case errors.Is(err, gatewaycore.ErrUnsupportedTextFeature):
+		writeGatewayProtocolError(c, protocol, http.StatusBadRequest, "unsupported_feature", err.Error())
+	case errors.Is(err, gatewaycore.ErrInvalidCanonicalRequest):
+		writeGatewayProtocolError(c, protocol, http.StatusBadRequest, "invalid_request_error", err.Error())
+	default:
+		writeGatewayProtocolError(c, protocol, http.StatusInternalServerError, "server_error", err.Error())
+	}
+}
+
+func anthropicErrorType(status int, errorType string) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication_error"
+	case status == http.StatusForbidden:
+		return "permission_error"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status >= http.StatusInternalServerError:
+		return "api_error"
+	default:
+		return "invalid_request_error"
+	}
+}
+
+func geminiErrorStatus(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "INVALID_ARGUMENT"
+	case http.StatusUnauthorized:
+		return "UNAUTHENTICATED"
+	case http.StatusForbidden:
+		return "PERMISSION_DENIED"
+	case http.StatusNotFound:
+		return "NOT_FOUND"
+	case http.StatusTooManyRequests:
+		return "RESOURCE_EXHAUSTED"
+	case http.StatusServiceUnavailable:
+		return "UNAVAILABLE"
+	default:
+		return "INTERNAL"
+	}
 }

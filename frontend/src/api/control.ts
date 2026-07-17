@@ -122,8 +122,6 @@ import type {
   WorkspaceUserRequest
 } from '@/types'
 
-type ProviderConnectionPayload = Omit<ProviderConnection, 'models'> & { models?: string[] | null }
-type ProviderHealthCheckPayload = Omit<ProviderHealthCheck, 'models'> & { models?: string[] | null }
 type ProviderAccountPayload = Omit<ProviderAccount, 'models' | 'group_ids' | 'temp_unschedulable_rules'> & {
   models?: string[] | null
   group_ids?: string[] | null
@@ -142,20 +140,6 @@ type ProviderBillingSourceEvidencePayload = Omit<ProviderBillingSourceEvidence, 
   runs?: ProviderBillingSourceEvidence['runs'] | null
   balances?: ProviderBillingSourceEvidence['balances'] | null
   aggregates?: ProviderBillingSourceEvidence['aggregates'] | null
-}
-
-function normalizeProvider(provider: ProviderConnectionPayload): ProviderConnection {
-  return {
-    ...provider,
-    models: stringListOrEmpty(provider.models)
-  }
-}
-
-function normalizeProviderHealthCheck(check: ProviderHealthCheckPayload): ProviderHealthCheck {
-  return {
-    ...check,
-    models: stringListOrEmpty(check.models)
-  }
 }
 
 function normalizeProviderAccount(account: ProviderAccountPayload): ProviderAccount {
@@ -193,28 +177,28 @@ export async function getDashboard(): Promise<Dashboard> {
 }
 
 export async function getProviders(): Promise<ProviderConnection[]> {
-  const response = await apiClient.get<ProviderConnectionPayload[] | null>('/admin/providers')
-  return listOrEmpty(response.data).map(normalizeProvider)
+  const response = await apiClient.get<ProviderConnection[] | null>('/admin/providers')
+  return listOrEmpty(response.data)
 }
 
 export async function getProviderHealthChecks(): Promise<ProviderHealthCheck[]> {
-  const response = await apiClient.get<ProviderHealthCheckPayload[] | null>('/admin/provider-health-checks')
-  return listOrEmpty(response.data).map(normalizeProviderHealthCheck)
+  const response = await apiClient.get<ProviderHealthCheck[] | null>('/admin/provider-health-checks')
+  return listOrEmpty(response.data)
 }
 
 export async function createProvider(payload: ProviderRequest): Promise<ProviderConnection> {
-  const response = await apiClient.post<ProviderConnectionPayload>('/admin/providers', payload)
-  return normalizeProvider(response.data)
+  const response = await apiClient.post<ProviderConnection>('/admin/providers', payload)
+  return response.data
 }
 
 export async function updateProvider(id: string, payload: ProviderRequest): Promise<ProviderConnection> {
-  const response = await apiClient.put<ProviderConnectionPayload>(`/admin/providers/${id}`, payload)
-  return normalizeProvider(response.data)
+  const response = await apiClient.put<ProviderConnection>(`/admin/providers/${id}`, payload)
+  return response.data
 }
 
 export async function checkProvider(id: string): Promise<ProviderHealthCheck> {
-  const response = await apiClient.post<ProviderHealthCheckPayload>(`/admin/providers/${id}/check`)
-  return normalizeProviderHealthCheck(response.data)
+  const response = await apiClient.post<ProviderHealthCheck>(`/admin/providers/${id}/check`)
+  return response.data
 }
 
 export async function getDepartments(): Promise<Department[]> {
@@ -418,10 +402,12 @@ export async function deleteModelRoute(id: string): Promise<void> {
   await apiClient.delete(`/admin/model-routes/${id}`)
 }
 
-export async function simulateGatewayRouting(model: string, estimatedTokens: number): Promise<GatewaySimulation> {
+export async function simulateGatewayRouting(model: string, estimatedTokens: number, protocol = 'openai_chat_completions', requiredFeatures: string[] = []): Promise<GatewaySimulation> {
   const response = await apiClient.post<GatewaySimulationPayload>('/admin/gateway-simulator', {
     model,
-    estimated_tokens: estimatedTokens
+    estimated_tokens: estimatedTokens,
+    protocol,
+    required_features: requiredFeatures
   })
   return { ...response.data, candidates: listOrEmpty(response.data.candidates) }
 }

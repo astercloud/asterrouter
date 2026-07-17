@@ -245,7 +245,6 @@ func newCacheProbeTestServiceForProtocol(t *testing.T, baseURL string, cooldownS
 	svc := NewService(repo, "/v1", "probe-test-secret")
 	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
 		Name: "probe provider", Type: "openai_compatible", BaseURL: baseURL, Status: ProviderStatusActive,
-		Models: []string{"probe-model"}, APIKey: "provider-secret",
 	})
 	if err != nil {
 		t.Fatal(err)

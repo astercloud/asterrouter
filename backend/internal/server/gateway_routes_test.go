@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 	"github.com/gin-gonic/gin"
 )
 
@@ -167,7 +169,7 @@ func TestGatewayChatCompletionEnforcesWorkspaceKeyBudgetAndRecordsTrace(t *testi
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "budget provider", Type: "openai_compatible", BaseURL: upstream.URL + "/v1",
-		Status: controlplane.ProviderStatusActive, Models: []string{"budget-upstream"}, APIKey: "budget-secret",
+		Status: controlplane.ProviderStatusActive,
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -300,8 +302,6 @@ func TestGatewayChatCompletionForwardsToConfiguredProvider(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: upstream.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"upstream-gpt"},
-		APIKey:  "upstream-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -368,8 +368,6 @@ func TestGatewayChatCompletionRoutesThroughProviderAccountPool(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: upstream.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -481,8 +479,6 @@ func TestGatewayChatCompletionFallsBackToNextAccountAfterUpstreamFailure(t *test
 		Type:    "openai_compatible",
 		BaseURL: failing.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "failing-provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(failing): %v", err)
@@ -492,8 +488,6 @@ func TestGatewayChatCompletionFallsBackToNextAccountAfterUpstreamFailure(t *test
 		Type:    "openai_compatible",
 		BaseURL: healthy.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "healthy-provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(healthy): %v", err)
@@ -598,11 +592,11 @@ func TestGatewayChatCompletionFallsBackAfterRateLimitAndServerError(t *testing.T
 			defer fallback.Close()
 
 			handler, control := newTestRuntime(t, RuntimeConfig{})
-			primaryProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Failing provider", Type: "openai_compatible", BaseURL: failing.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "primary-provider-secret"})
+			primaryProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Failing provider", Type: "openai_compatible", BaseURL: failing.URL + "/v1", Status: controlplane.ProviderStatusActive})
 			if err != nil {
 				t.Fatal(err)
 			}
-			fallbackProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Fallback provider", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "fallback-provider-secret"})
+			fallbackProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Fallback provider", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -648,12 +642,12 @@ func TestGatewayChatCompletionFallsBackAfterPrimaryTimeoutAndReleasesCapacity(t 
 		if stream {
 			return originalClient(true)
 		}
-		return &http.Client{Timeout: 50 * time.Millisecond}
+		return &http.Client{Timeout: 200 * time.Millisecond}
 	}
 	t.Cleanup(func() { gatewayHTTPClient = originalClient })
 
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"too-late"}`))
 	}))
@@ -665,11 +659,11 @@ func TestGatewayChatCompletionFallsBackAfterPrimaryTimeoutAndReleasesCapacity(t 
 	defer fallback.Close()
 
 	handler, control := newTestRuntime(t, RuntimeConfig{})
-	primaryProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Timeout primary", Type: "openai_compatible", BaseURL: primary.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "primary-secret"})
+	primaryProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Timeout primary", Type: "openai_compatible", BaseURL: primary.URL + "/v1", Status: controlplane.ProviderStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fallbackProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Timeout fallback", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "fallback-secret"})
+	fallbackProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Timeout fallback", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -709,6 +703,50 @@ func TestGatewayChatCompletionFallsBackAfterPrimaryTimeoutAndReleasesCapacity(t 
 	release()
 }
 
+func TestGatewayStreamingFallsBackBeforeFirstClientEvent(t *testing.T) {
+	var primaryCalls, fallbackCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: not-json\n\n")
+	}))
+	defer primary.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"fallback-stream\",\"model\":\"model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"fallback-ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer fallback.Close()
+
+	handler, control := newTestRuntime(t, RuntimeConfig{})
+	primaryProvider, _ := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Invalid stream", Type: "openai_compatible", BaseURL: primary.URL + "/v1", Status: controlplane.ProviderStatusActive})
+	fallbackProvider, _ := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Valid stream", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive})
+	primaryAccount := createGatewayTestAccount(t, control, primaryProvider, "model", "primary-secret", 10, 1)
+	fallbackAccount := createGatewayTestAccount(t, control, fallbackProvider, "model", "fallback-secret", 20, 1)
+	createGatewayTestModelAndRoutes(t, control, "stream-bootstrap", "default", []gatewayTestRoute{
+		{account: primaryAccount, upstreamModel: "model", priority: 10},
+		{account: fallbackAccount, upstreamModel: "model", priority: 20},
+	})
+	key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{Name: "Stream bootstrap key", ModelAllowlist: []string{"stream-bootstrap"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"stream-bootstrap","stream":true,"messages":[{"role":"user","content":"stream"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "fallback-ok") || primaryCalls.Load() != 1 || fallbackCalls.Load() != 1 {
+		t.Fatalf("status=%d primary=%d fallback=%d body=%s", rec.Code, primaryCalls.Load(), fallbackCalls.Load(), rec.Body.String())
+	}
+	traces, err := control.ListGatewayTraces(context.Background(), 10)
+	if err != nil || len(traces) != 1 || !strings.Contains(traces[0].RouteAttempts, "stream bootstrap") || !strings.Contains(traces[0].RouteAttempts, `"outcome":"selected"`) {
+		t.Fatalf("traces=%+v err=%v", traces, err)
+	}
+}
+
 func TestGatewayStreamingInterruptionRecordsErrorWithoutUnsafeFailover(t *testing.T) {
 	var fallbackCalls atomic.Int32
 	interrupted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -734,8 +772,8 @@ func TestGatewayStreamingInterruptionRecordsErrorWithoutUnsafeFailover(t *testin
 	defer fallback.Close()
 
 	handler, control := newTestRuntime(t, RuntimeConfig{})
-	primaryProvider, _ := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Interrupted stream", Type: "openai_compatible", BaseURL: interrupted.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "primary-secret"})
-	fallbackProvider, _ := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Stream fallback", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive, Models: []string{"model"}, APIKey: "fallback-secret"})
+	primaryProvider, _ := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Interrupted stream", Type: "openai_compatible", BaseURL: interrupted.URL + "/v1", Status: controlplane.ProviderStatusActive})
+	fallbackProvider, _ := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Stream fallback", Type: "openai_compatible", BaseURL: fallback.URL + "/v1", Status: controlplane.ProviderStatusActive})
 	primaryAccount := createGatewayTestAccount(t, control, primaryProvider, "model", "primary-secret", 10, 1)
 	fallbackAccount := createGatewayTestAccount(t, control, fallbackProvider, "model", "fallback-secret", 20, 1)
 	createGatewayTestModelAndRoutes(t, control, "stream-interruption", "default", []gatewayTestRoute{
@@ -752,7 +790,7 @@ func TestGatewayStreamingInterruptionRecordsErrorWithoutUnsafeFailover(t *testin
 	req.Header.Set("Authorization", "Bearer "+key.Key)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "partial-stream") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "partial-stream") || !strings.Contains(rec.Body.String(), `"type":"upstream_error"`) {
 		t.Fatalf("interrupted stream status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if fallbackCalls.Load() != 0 {
@@ -788,8 +826,6 @@ func TestGatewayChatCompletionSkipsAccountAtConcurrencyCapacity(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: busy.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "busy-provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(busy): %v", err)
@@ -799,8 +835,6 @@ func TestGatewayChatCompletionSkipsAccountAtConcurrencyCapacity(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: free.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "free-provider-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(free): %v", err)
@@ -925,8 +959,6 @@ func TestGatewayChatCompletionPassesThroughUpstreamError(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: upstream.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "upstream-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -977,8 +1009,6 @@ func TestGatewayChatCompletionStreamsConfiguredProvider(t *testing.T) {
 		Type:    "openai_compatible",
 		BaseURL: upstream.URL + "/v1",
 		Status:  "active",
-		Models:  []string{"gpt-4o-mini"},
-		APIKey:  "upstream-secret",
 	})
 	if err != nil {
 		t.Fatalf("CreateProvider(): %v", err)
@@ -1040,7 +1070,7 @@ func TestGatewayChatCompletionRejectsStreamingWithoutProvider(t *testing.T) {
 	}
 }
 
-func TestForwardChatCompletionInjectsVerifiedUpstreamAffinity(t *testing.T) {
+func TestForwardGatewayCanonicalRequestInjectsVerifiedUpstreamAffinity(t *testing.T) {
 	var receivedHeader string
 	var receivedBody map[string]any
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1056,20 +1086,31 @@ func TestForwardChatCompletionInjectsVerifiedUpstreamAffinity(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	requestContext, _ := gin.CreateTestContext(recorder)
 	requestContext.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	provider := controlplane.GatewayProvider{BaseURL: upstream.URL, APIKey: "upstream-secret", UpstreamModel: "upstream-model"}
+	provider := controlplane.GatewayProvider{
+		Type:           controlplane.ProviderTypeOpenAICompatible,
+		BaseURL:        upstream.URL,
+		AuthType:       controlplane.ProviderAuthAPIKey,
+		APIKey:         "upstream-secret",
+		UpstreamModel:  "upstream-model",
+		UpstreamFormat: controlplane.UpstreamFormatOpenAIChat,
+	}
 	affinity := controlplane.GatewayUpstreamAffinity{
 		HeaderName: "X-Session-ID", BodyField: "session_id", Value: "ar_opaque_session", PromptCacheKey: true,
 	}
-	response, err := forwardChatCompletion(requestContext, provider, []byte(`{"model":"public-model","messages":[],"client_field":"preserved"}`), false, affinity)
+	request, err := gatewaycore.CanonicalizeOpenAIChat([]byte(`{"model":"public-model","messages":[{"role":"user","content":"ping"}],"user":"client-user"}`), http.Header{})
 	if err != nil {
-		t.Fatalf("forwardChatCompletion(): %v", err)
+		t.Fatalf("CanonicalizeOpenAIChat(): %v", err)
+	}
+	response, err := forwardGatewayCanonicalRequest(requestContext, provider, request, affinity)
+	if err != nil {
+		t.Fatalf("forwardGatewayCanonicalRequest(): %v", err)
 	}
 	defer response.Body.Close()
 	if receivedHeader != affinity.Value || receivedBody["session_id"] != affinity.Value || receivedBody["prompt_cache_key"] != affinity.Value {
 		t.Fatalf("upstream affinity header=%q body=%+v", receivedHeader, receivedBody)
 	}
-	if receivedBody["model"] != "upstream-model" || receivedBody["client_field"] != "preserved" {
-		t.Fatalf("upstream request rewrite lost fields: %+v", receivedBody)
+	if receivedBody["model"] != "upstream-model" || receivedBody["user"] != "client-user" {
+		t.Fatalf("canonical upstream request lost fields: %+v", receivedBody)
 	}
 }
 
@@ -1107,19 +1148,24 @@ func TestAttemptGatewayCandidatesTracesUnavailableUpstreamAffinity(t *testing.T)
 	requestContext.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	candidate := controlplane.GatewayProvider{
 		ID: "provider-a", AccountID: "account-a", RouteID: "route-a", BaseURL: upstream.URL,
-		APIKey: "upstream-secret", UpstreamModel: "upstream-model", SelectionReason: "priority route",
+		Type: controlplane.ProviderTypeOpenAICompatible, AuthType: controlplane.ProviderAuthAPIKey,
+		APIKey: "upstream-secret", UpstreamModel: "upstream-model", UpstreamFormat: controlplane.UpstreamFormatOpenAIChat,
+		SelectionReason: "priority route",
 	}
-	response, selected, release, attempts, err := attemptGatewayCandidates(
+	request, err := gatewaycore.CanonicalizeOpenAIChat([]byte(`{"model":"public-model","messages":[{"role":"user","content":"ping"}]}`), http.Header{})
+	if err != nil {
+		t.Fatalf("CanonicalizeOpenAIChat(): %v", err)
+	}
+	response, selected, release, attempts, err := attemptGatewayCandidatesForCanonicalRequest(
 		requestContext,
 		control,
 		"operation-affinity-unavailable",
 		controlplane.GatewayAffinityInput{Protocol: "openai_chat_completions", StickyKey: "stable-session"},
 		[]controlplane.GatewayProvider{candidate},
-		[]byte(`{"model":"public-model","messages":[]}`),
-		false,
+		request,
 	)
 	if err != nil {
-		t.Fatalf("attemptGatewayCandidates(): %v", err)
+		t.Fatalf("attemptGatewayCandidatesForCanonicalRequest(): %v", err)
 	}
 	defer response.Body.Close()
 	defer release()
@@ -1165,7 +1211,7 @@ func createGatewayTestModelAndRoutes(t *testing.T, control *controlplane.Service
 	for _, route := range routes {
 		if _, err := control.CreateModelRoute(context.Background(), "tester", controlplane.ModelRouteRequest{
 			GatewayModelID: model.ID, RouteGroup: routeGroup, ProviderAccountID: route.account.ID,
-			UpstreamModel: route.upstreamModel, Priority: route.priority, Weight: 100, Status: controlplane.ModelRouteStatusActive,
+			UpstreamModel: route.upstreamModel, Priority: route.priority, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: "openai_chat",
 		}); err != nil {
 			t.Fatalf("CreateModelRoute(%s, %s): %v", modelID, route.account.ID, err)
 		}

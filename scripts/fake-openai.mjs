@@ -9,9 +9,9 @@ function json(response, status, body) {
 }
 
 function syntheticUsage(value) {
-  if (!value || typeof value !== 'object') return { prompt_tokens: 7, completion_tokens: 11 }
-  const promptTokens = Number(value.prompt_tokens)
-  const completionTokens = Number(value.completion_tokens)
+  const marker = typeof value === 'string' ? value.match(/synthetic\s+(\d+)-token\s+policy\s+request/i) : null
+  const promptTokens = marker ? Number(marker[1]) : Number(value?.prompt_tokens)
+  const completionTokens = marker ? 0 : Number(value?.completion_tokens)
   if (!Number.isSafeInteger(promptTokens) || promptTokens < 0 || !Number.isSafeInteger(completionTokens) || completionTokens < 0) {
     return { prompt_tokens: 7, completion_tokens: 11 }
   }
@@ -64,7 +64,7 @@ const server = createServer(async (request, response) => {
         id: 'e2e-completion',
         object: 'chat.completion',
         choices: [{ index: 0, message: { role: 'assistant', content: 'e2e-ok' }, finish_reason: 'stop' }],
-        usage: syntheticUsage(payload.synthetic_usage)
+        usage: syntheticUsage(payload.messages?.[0]?.content)
       })
       return
     }
