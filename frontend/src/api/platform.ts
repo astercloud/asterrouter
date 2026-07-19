@@ -90,6 +90,10 @@ export async function getPlatformArtifact(id: string): Promise<ArtifactAdminDeta
   return normalizeArtifactAdminDetail(response.data)
 }
 
+export async function getPlatformArtifactContent(id: string): Promise<Blob> {
+  return (await apiClient.get<Blob>(`/platform/artifacts/${encodeURIComponent(id)}/content`, { responseType: 'blob' })).data
+}
+
 export async function getPlatformArtifactRuntimes(): Promise<ArtifactRuntime[]> {
   return listOrEmpty((await apiClient.get<ArtifactRuntime[] | null>('/platform/artifact-runtimes')).data)
 }

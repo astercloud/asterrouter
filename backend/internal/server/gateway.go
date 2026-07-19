@@ -426,6 +426,9 @@ func forwardGatewayCanonicalRequest(c *gin.Context, provider controlplane.Gatewa
 	} else {
 		req.Header.Set("Accept", "application/json")
 	}
+	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
+		return nil, err
+	}
 	return gatewayHTTPClient(request.Stream).Do(req)
 }
 

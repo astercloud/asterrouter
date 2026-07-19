@@ -1,13 +1,34 @@
 .git
+.gitignore
+.gitattributes
+.github/
+.codex/
+.playwright-mcp/
 .DS_Store
+Thumbs.db
 
 backend/bin/
+backend/coverage.out
+backend/**/coverage.out
 dist/
+build/
 frontend/dist/
 frontend/node_modules/
+node_modules/
 frontend/tsconfig.tsbuildinfo
+coverage/
+frontend/coverage/
+frontend/test-results/
+test-results/
+data/
 docs/
 
 .env
 .env.*
 !.env.example
+
+*.log
+logs/
+tmp/
+temp/
+*.tmp

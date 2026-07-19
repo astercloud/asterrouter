@@ -312,6 +312,10 @@ export async function updateProviderAccount(id: string, payload: ProviderAccount
   return normalizeProviderAccount(response.data)
 }
 
+export async function deleteProviderAccount(id: string): Promise<void> {
+  await apiClient.delete(`/admin/provider-accounts/${id}`)
+}
+
 export async function checkProviderAccount(id: string): Promise<ProviderAccountHealthCheck> {
   const response = await apiClient.post<ProviderAccountHealthCheckPayload>(`/admin/provider-accounts/${id}/check`)
   return normalizeProviderAccountHealthCheck(response.data)
@@ -730,6 +734,11 @@ export async function getArtifactSummary(params?: ArtifactListQuery): Promise<Ar
 export async function getArtifact(id: string): Promise<ArtifactAdminDetail> {
   const response = await apiClient.get<ArtifactAdminDetailPayload>(`/admin/artifacts/${id}`)
   return normalizeArtifactAdminDetail(response.data)
+}
+
+export async function getArtifactContent(id: string): Promise<Blob> {
+  const response = await apiClient.get<Blob>(`/admin/artifacts/${encodeURIComponent(id)}/content`, { responseType: 'blob' })
+  return response.data
 }
 
 export async function getArtifactRuntimes(): Promise<ArtifactRuntime[]> {

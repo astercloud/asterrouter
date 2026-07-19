@@ -28,8 +28,10 @@ type directImageAdapterStub struct {
 	reconcileCalls  atomic.Int64
 	supported       bool
 	result          controlplane.ProviderDispatchResult
+	dispatchResults []controlplane.ProviderDispatchResult
 	reconcileResult controlplane.ProviderDispatchResult
 	dispatchErr     error
+	dispatchErrors  []error
 	openErr         error
 	outputs         map[string][]byte
 }
@@ -43,8 +45,16 @@ func (stub *directImageAdapterStub) SelectDirectAIAdapter(_ context.Context, _ c
 }
 
 func (stub *directImageAdapterStub) DispatchDirectAI(_ context.Context, _ controlplane.GatewayProvider, _ controlplane.AIOperation, _ controlplane.AIAttempt, _ gatewaycore.CanonicalRequest, _ controlplane.ProviderDispatchCommand) (controlplane.ProviderDispatchResult, error) {
-	stub.dispatchCalls.Add(1)
-	return stub.result, stub.dispatchErr
+	call := int(stub.dispatchCalls.Add(1)) - 1
+	result := stub.result
+	if call < len(stub.dispatchResults) {
+		result = stub.dispatchResults[call]
+	}
+	dispatchErr := stub.dispatchErr
+	if call < len(stub.dispatchErrors) {
+		dispatchErr = stub.dispatchErrors[call]
+	}
+	return result, dispatchErr
 }
 
 func (stub *directImageAdapterStub) ReconcileDirectAI(_ context.Context, _ controlplane.GatewayProvider, _ controlplane.AIOperation, _ controlplane.AIAttempt, _ controlplane.ProviderDispatchIntent, _ controlplane.ProviderTaskReference) (controlplane.ProviderDispatchResult, error) {
@@ -484,6 +494,45 @@ func TestGatewayImageUnknownSubmissionDoesNotFallbackOrLeakAdapterError(t *testi
 	}
 }
 
+func TestGatewayImageUnknownSubmissionReplaysSameAttemptAndCompletesOperation(t *testing.T) {
+	success := successfulDirectImageAdapter([]byte("replayed-image"))
+	successResult := success.result
+	unknown := controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown, ReconcileAfter: time.Now().UTC().Add(time.Minute)}
+	adapter := success
+	adapter.result = unknown
+	adapter.dispatchResults = []controlplane.ProviderDispatchResult{unknown, successResult}
+	adapter.dispatchErrors = []error{errors.New("transport ended before status"), nil}
+	fixture := newDirectImageHTTPFixture(t, adapter, 1, 2, true)
+	body := `{"model":"public-image","prompt":"synthetic","delivery_mode":"artifact"}`
+	first := performImageGeneration(fixture.handler, fixture.key, "image-unknown-replay", body)
+	if first.Code != http.StatusBadGateway || !strings.Contains(first.Body.String(), "provider_status_unknown") || adapter.dispatched() != 1 {
+		t.Fatalf("first status=%d dispatch=%d body=%s", first.Code, adapter.dispatched(), first.Body.String())
+	}
+	operationID := first.Header().Get("X-AsterRouter-Operation-ID")
+	initialOperation, found, err := fixture.control.AIOperation(context.Background(), operationID)
+	if err != nil || !found || initialOperation.Status != controlplane.AIOperationStatusFailed || initialOperation.ErrorType != "provider_status_unknown" {
+		t.Fatalf("initial operation=%+v found=%t err=%v", initialOperation, found, err)
+	}
+	initialAttempts, err := fixture.control.AIAttemptsForOperation(context.Background(), operationID)
+	if err != nil || len(initialAttempts) != 1 || initialAttempts[0].DispatchState != controlplane.AIAttemptDispatchUnknown {
+		t.Fatalf("initial attempts=%+v err=%v", initialAttempts, err)
+	}
+	dispatchKey := initialAttempts[0].DispatchKey
+
+	second := performImageGeneration(fixture.handler, fixture.key, "image-unknown-replay", body)
+	if second.Code != http.StatusOK || adapter.dispatched() != 2 || !strings.Contains(second.Body.String(), "artifact_id") {
+		t.Fatalf("second status=%d dispatch=%d body=%s", second.Code, adapter.dispatched(), second.Body.String())
+	}
+	finalOperation, found, err := fixture.control.AIOperation(context.Background(), operationID)
+	if err != nil || !found || finalOperation.Status != controlplane.AIOperationStatusSucceeded || finalOperation.ErrorType != "" {
+		t.Fatalf("final operation=%+v found=%t err=%v", finalOperation, found, err)
+	}
+	finalAttempts, err := fixture.control.AIAttemptsForOperation(context.Background(), operationID)
+	if err != nil || len(finalAttempts) != 1 || finalAttempts[0].DispatchKey != dispatchKey || finalAttempts[0].Status != controlplane.AIAttemptStatusSucceeded {
+		t.Fatalf("final attempts=%+v err=%v", finalAttempts, err)
+	}
+}
+
 func TestGatewayImageArtifactFailureDoesNotRegenerateOrLeakReaderError(t *testing.T) {
 	leaked := "reader-secret-must-not-leak"
 	adapter := successfulDirectImageAdapter([]byte("unreadable"))
@@ -616,7 +665,42 @@ func TestGatewayImageUnknownSubmissionReconcilesFinalBilling(t *testing.T) {
 	if !foundFinal {
 		t.Fatalf("reconciled final usage missing: %+v", usage.Recent)
 	}
+	operation, found, err := fixture.control.AIOperation(context.Background(), operationID)
+	if err != nil || !found || operation.Status != controlplane.AIOperationStatusFailed || operation.ErrorType != "failed" {
+		t.Fatalf("reconciled operation=%+v found=%t err=%v", operation, found, err)
+	}
 	if replay, replayErr := fixture.control.RunDirectAIReconcilerOnce(context.Background(), 10, adapter); replayErr != nil || replay.Reconciled != 0 || adapter.reconcileCalls.Load() != 1 {
 		t.Fatalf("replay report=%+v calls=%d err=%v", replay, adapter.reconcileCalls.Load(), replayErr)
+	}
+}
+
+func TestGatewayImageUnknownSubmissionReconcilesSuccessfulOperation(t *testing.T) {
+	adapter := successfulDirectImageAdapter([]byte("recovered-image"))
+	successResult := adapter.result
+	successResult.Task = controlplane.ProviderTaskReference{ProviderTaskID: "recovered-task", ProviderRequestID: "recovered-request", Status: "succeeded"}
+	unknownResult := controlplane.ProviderDispatchResult{
+		Outcome:        controlplane.ProviderDispatchOutcomeUnknown,
+		Task:           controlplane.ProviderTaskReference{ProviderTaskID: "recovered-task", ProviderRequestID: "recovered-request", Status: "unknown"},
+		ReconcileAfter: time.Now().UTC(),
+	}
+	adapter.result = unknownResult
+	adapter.reconcileResult = successResult
+	fixture := newDirectImageHTTPFixture(t, adapter, 1, 2, true)
+	initial := performImageGeneration(fixture.handler, fixture.key, "image-unknown-success-reconcile", `{"model":"public-image","prompt":"synthetic","delivery_mode":"artifact"}`)
+	if initial.Code != http.StatusBadGateway || !strings.Contains(initial.Body.String(), "provider_status_unknown") {
+		t.Fatalf("initial status=%d body=%s", initial.Code, initial.Body.String())
+	}
+	operationID := initial.Header().Get("X-AsterRouter-Operation-ID")
+	report, err := fixture.control.RunDirectAIReconcilerOnce(context.Background(), 10, adapter)
+	if err != nil || report.Reconciled != 1 || report.Completed != 1 {
+		t.Fatalf("reconcile report=%+v err=%v", report, err)
+	}
+	operation, found, err := fixture.control.AIOperation(context.Background(), operationID)
+	if err != nil || !found || operation.Status != controlplane.AIOperationStatusSucceeded || operation.ErrorType != "" {
+		t.Fatalf("reconciled operation=%+v found=%t err=%v", operation, found, err)
+	}
+	attempts, err := fixture.control.AIAttemptsForOperation(context.Background(), operationID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != controlplane.AIAttemptStatusSucceeded {
+		t.Fatalf("reconciled attempts=%+v err=%v", attempts, err)
 	}
 }

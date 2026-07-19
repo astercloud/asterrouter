@@ -6,6 +6,7 @@ dist/
 *.test
 coverage.out
 backend/data/
+/data/
 backend/config/config.yaml
 
 # Frontend
@@ -15,6 +16,7 @@ frontend/tsconfig.tsbuildinfo
 frontend/coverage/
 frontend/playwright-report/
 frontend/test-results/
+/test-results/
 !frontend/package-lock.json
 
 # Local agent notes and product drafts

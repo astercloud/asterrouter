@@ -123,6 +123,7 @@ type Repository interface {
 	SaveRoutingGroup(ctx context.Context, group RoutingGroup) error
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error)
 	SaveProviderAccount(ctx context.Context, account ProviderAccount) error
+	DeleteProviderAccount(ctx context.Context, id string) error
 	ListProviderAccountModels(ctx context.Context, accountID string) ([]ProviderAccountModel, error)
 	SaveProviderAccountWithModels(ctx context.Context, account ProviderAccount, models []ProviderAccountModel) error
 	ListGatewayModels(ctx context.Context) ([]GatewayModel, error)

@@ -1,21 +1,23 @@
 <script setup lang="ts">
-import { computed, ref, watch, type Component } from 'vue'
+import { computed, onMounted, ref, watch, type Component } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import {
   ChevronLeft,
   ChevronRight,
 	ExternalLink,
-  KeyRound,
-  Laptop,
-  Moon,
-  PanelsTopLeft,
-  RadioTower,
+	KeyRound,
+	Laptop,
+	Moon,
+	PanelsTopLeft,
+	Puzzle,
+	RadioTower,
   Sun,
 	UserRound,
   X
 } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import TopBar from '@/components/TopBar.vue'
+import { getPluginCatalog, getPluginFrontendContribution } from '@/api/plugins'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { canAccessSurface } from '@/router/surfaces'
@@ -29,6 +31,14 @@ interface SurfaceNavItem {
 interface SurfaceNavGroup {
   label: string
   items: SurfaceNavItem[]
+}
+
+interface InstalledPluginNavItem {
+  pluginID: string
+  label: string
+  description: string
+  to: string
+  icon: Component
 }
 
 const props = withDefaults(
@@ -53,6 +63,7 @@ const route = useRoute()
 const collapsed = ref(localStorage.getItem(props.storageKey) === 'true')
 const mobileOpen = ref(false)
 const darkMode = ref(document.documentElement.dataset.theme === 'dark')
+const installedPluginLinks = ref<InstalledPluginNavItem[]>([])
 
 const version = computed(() => app.publicSettings?.version || 'Dev')
 const enabledProfiles = computed(() => app.publicSettings?.enabled_profiles || [])
@@ -82,6 +93,35 @@ const surfaceLinks = computed(() => {
 })
 const customMenuItems = computed(() => app.publicSettings?.custom_menu_items || [])
 
+async function loadInstalledPluginLinks() {
+  if (props.surface !== 'personal') return
+  try {
+    const catalog = await getPluginCatalog()
+    const candidates = catalog.plugins.filter((plugin) =>
+      plugin.status === 'enabled' &&
+      plugin.surfaces.includes('personal') &&
+      plugin.packages?.some((pkg) => pkg.install_status === 'installed')
+    )
+    const results = await Promise.allSettled(candidates.map(async (plugin) => {
+      const contribution = await getPluginFrontendContribution(plugin.plugin_id)
+      const surface = contribution.surfaces?.find((item) => item.surface === 'console.plugins')
+      if (!surface) return null
+      return {
+        pluginID: plugin.plugin_id,
+        label: surface.title || plugin.name,
+        description: plugin.description,
+        to: `/console/plugins/${encodeURIComponent(plugin.plugin_id)}/workbench`,
+        icon: Puzzle
+      }
+    }))
+    installedPluginLinks.value = results
+      .flatMap((result) => result.status === 'fulfilled' && result.value ? [result.value as InstalledPluginNavItem] : [])
+      .sort((left, right) => left.label.localeCompare(right.label))
+  } catch {
+    installedPluginLinks.value = []
+  }
+}
+
 function toggleCollapsed() {
   collapsed.value = !collapsed.value
   localStorage.setItem(props.storageKey, String(collapsed.value))
@@ -99,6 +139,10 @@ watch(
     mobileOpen.value = false
   }
 )
+
+onMounted(() => {
+  void loadInstalledPluginLinks()
+})
 </script>
 
 <template>
@@ -119,7 +163,24 @@ watch(
       </div>
 
       <nav class="sidebar-nav" :aria-label="t(navLabel)">
-        <section v-for="group in navGroups" :key="group.label" class="sidebar-section">
+		<template v-for="group in navGroups" :key="group.label">
+		<section v-if="installedPluginLinks.length && props.surface === 'personal' && group.label === 'nav.inference'" class="sidebar-section sidebar-installed-plugins" data-installed-plugin-navigation>
+		  <p class="sidebar-section-title">
+		    <span>{{ t('nav.installedPlugins') }}</span>
+		    <span class="sidebar-plugin-count" aria-hidden="true">{{ installedPluginLinks.length }}</span>
+		  </p>
+		  <RouterLink
+		    v-for="link in installedPluginLinks"
+		    :key="link.pluginID"
+		    class="sidebar-link nav-item sidebar-plugin-link"
+		    :to="link.to"
+		    :title="collapsed ? link.description || link.label : undefined"
+		  >
+		    <component :is="link.icon" :size="19" />
+		    <span>{{ link.label }}</span>
+		  </RouterLink>
+		</section>
+		<section class="sidebar-section">
           <p class="sidebar-section-title">{{ t(group.label) }}</p>
           <RouterLink
             v-for="item in group.items"
@@ -131,8 +192,9 @@ watch(
             <component :is="item.icon" :size="19" />
             <span>{{ t(item.label) }}</span>
           </RouterLink>
-        </section>
-        <section v-if="surfaceLinks.length" class="sidebar-section sidebar-workspaces">
+		</section>
+		</template>
+		<section v-if="surfaceLinks.length" class="sidebar-section sidebar-workspaces">
           <p class="sidebar-section-title">{{ t('nav.workspaces') }}</p>
           <RouterLink
             v-for="link in surfaceLinks"

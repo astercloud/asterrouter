@@ -48,7 +48,45 @@ describe('AdminApiKeysView', () => {
 
     expect(control.createAPIKey).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Dynamic catalog key',
-      model_allowlist: ['gateway-current']
+      model_allowlist: ['gateway-current'],
+      scopes: ['gateway:invoke', 'models:read'],
+      allowed_modalities: ['metadata', 'text'],
+      allowed_operations: ['list_models', 'chat_completion'],
+      artifact_policy: 'proxy_only'
+    }))
+    wrapper.unmount()
+  })
+
+  it('applies the image workbench gateway policy without moving policy ownership into the plugin', async () => {
+    const wrapper = mount(AdminApiKeysView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const createButton = wrapper.findAll('button').find((button) => button.text().includes('New workspace key'))
+    await createButton!.trigger('click')
+    await wrapper.get('[data-policy-preset="image-workbench"]').trigger('click')
+
+    const checkedValues = wrapper.findAll('.token-option-grid input:checked').map((input) => input.attributes('value'))
+    expect(checkedValues).toEqual(expect.arrayContaining([
+      'gateway:invoke',
+      'models:read',
+      'metadata',
+      'image',
+      'list_models',
+      'image_generation'
+    ]))
+    expect(checkedValues).not.toContain('chat_completion')
+    expect((wrapper.get('[data-artifact-policy]').element as HTMLSelectElement).value).toBe('managed')
+
+    await wrapper.get('.modal-body input').setValue('Image workbench key')
+    const saveButton = wrapper.findAll('.modal-footer button').find((button) => button.text().includes('Save'))
+    await saveButton!.trigger('click')
+    await flushPromises()
+
+    expect(control.createAPIKey).toHaveBeenCalledWith(expect.objectContaining({
+      scopes: ['gateway:invoke', 'models:read'],
+      allowed_modalities: ['metadata', 'image'],
+      allowed_operations: ['list_models', 'image_generation'],
+      artifact_policy: 'managed'
     }))
     wrapper.unmount()
   })

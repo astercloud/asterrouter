@@ -96,11 +96,15 @@ Replace `enterprise` with `personal`, `relay_operator`, or `platform` as appropr
 
 ### Docker
 
+Copy the deployment template first so credentials are not kept in the Compose file:
+
 ```bash
-docker compose up --build
+cp .env.example .env
+# edit .env and replace the example password and secret
+docker compose up -d --build
 ```
 
-Open `http://localhost:8080/setup` to choose one deployment role and review its business boundary before completing setup. After installation, AsterRouter clears any browser session left by another deployment role and asks you to sign in again before opening the selected console. Retrying the same installation choice is safe. A system administrator can switch the active role later from Settings; the previous role is hidden but its data is retained. For non-interactive runtime deployment, set `ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE=platform`.
+Open `http://localhost:8080/setup` to choose one deployment role and review its business boundary before completing setup. The bundled Compose file persists PostgreSQL and application data in named volumes, binds to localhost by default, and exposes `/ready` as its container health check. Multi-architecture images can be published separately with the manual `Docker Release` GitHub Actions workflow, so Docker does not block the normal GitHub Release. For an externally managed PostgreSQL, use `deploy/docker-compose.standalone.yml` and set `ASTERROUTER_DATABASE_URL`. For unattended runtime deployment, set `ASTERROUTER_DEPLOYMENT_ROLE=platform` in `.env`.
 
 ## Private deployment and managed delivery
 
@@ -119,6 +123,7 @@ The Core remains usable when official online services are unavailable. Prompts, 
 - [Releases](https://github.com/astercloud/asterrouter/releases)
 - [Build status](https://github.com/astercloud/asterrouter/actions)
 - [Deployment environment template](./deploy/asterrouter.env.example)
+- [Docker deployment guide](./deploy/DOCKER.md)
 - [简体中文说明](./README.zh-CN.md)
 
 <details>

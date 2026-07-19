@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,8 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 )
+
+const adminRouteArtifactPayload = "synthetic-admin-artifact"
 
 func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
@@ -57,8 +61,23 @@ func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 	var detailResponse struct {
 		Data controlplane.ArtifactAdminDetail `json:"data"`
 	}
-	if err := json.Unmarshal(detailRec.Body.Bytes(), &detailResponse); err != nil || detailRec.Code != http.StatusOK || detailResponse.Data.Artifact.ID != artifact.ID || len(detailResponse.Data.Events) != 2 {
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detailResponse); err != nil || detailRec.Code != http.StatusOK || detailResponse.Data.Artifact.ID != artifact.ID || len(detailResponse.Data.Events) < 2 {
 		t.Fatalf("detail status=%d body=%s err=%v", detailRec.Code, detailRec.Body.String(), err)
+	}
+
+	contentReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID+"/content", nil)
+	contentRec := httptest.NewRecorder()
+	handler.ServeHTTP(contentRec, contentReq)
+	if contentRec.Code != http.StatusOK || contentRec.Header().Get("Content-Type") != "image/png" || contentRec.Body.String() != adminRouteArtifactPayload {
+		t.Fatalf("content status=%d type=%q body=%q", contentRec.Code, contentRec.Header().Get("Content-Type"), contentRec.Body.String())
+	}
+
+	rangeReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID+"/content", nil)
+	rangeReq.Header.Set("Range", "bytes=2-7")
+	rangeRec := httptest.NewRecorder()
+	handler.ServeHTTP(rangeRec, rangeReq)
+	if rangeRec.Code != http.StatusPartialContent || rangeRec.Header().Get("Content-Range") != fmt.Sprintf("bytes 2-7/%d", len(adminRouteArtifactPayload)) || rangeRec.Body.String() != adminRouteArtifactPayload[2:8] {
+		t.Fatalf("range status=%d range=%q body=%q", rangeRec.Code, rangeRec.Header().Get("Content-Range"), rangeRec.Body.String())
 	}
 
 	runtimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifact-runtimes", nil)
@@ -81,6 +100,7 @@ func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 
 func TestAdminArtifactRBACSeparatesReadAndRetryAndRequiresGlobalScope(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{AdminToken: "secret"})
+	artifact := createAdminRouteArtifact(t, control)
 	ctx := context.Background()
 	auditor, err := control.CreateWorkspaceUser(ctx, "tester", controlplane.WorkspaceUserRequest{
 		Email: "artifact-auditor@example.test", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleReadOnlyAuditor,
@@ -101,6 +121,14 @@ func TestAdminArtifactRBACSeparatesReadAndRetryAndRequiresGlobalScope(t *testing
 	handler.ServeHTTP(readRec, readReq)
 	if readRec.Code != http.StatusOK {
 		t.Fatalf("auditor read status=%d body=%s", readRec.Code, readRec.Body.String())
+	}
+	contentReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID+"/content", nil)
+	contentReq.Header.Set("Authorization", "Bearer secret")
+	contentReq.Header.Set("X-Actor", auditor.Email)
+	contentRec := httptest.NewRecorder()
+	handler.ServeHTTP(contentRec, contentReq)
+	if contentRec.Code != http.StatusOK || contentRec.Body.String() != adminRouteArtifactPayload {
+		t.Fatalf("auditor content status=%d body=%q", contentRec.Code, contentRec.Body.String())
 	}
 
 	retryReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/artifacts/artifact_missing/retry-delivery", nil)
@@ -135,11 +163,22 @@ func TestAdminArtifactRBACSeparatesReadAndRetryAndRequiresGlobalScope(t *testing
 	if scopedRec.Code != http.StatusForbidden || strings.Contains(scopedRec.Body.String(), "artifact_") {
 		t.Fatalf("department artifact read status=%d body=%s", scopedRec.Code, scopedRec.Body.String())
 	}
+	scopedContentReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID+"/content", nil)
+	scopedContentReq.Header.Set("Authorization", "Bearer secret")
+	scopedContentReq.Header.Set("X-Actor", manager.Email)
+	scopedContentRec := httptest.NewRecorder()
+	handler.ServeHTTP(scopedContentRec, scopedContentReq)
+	if scopedContentRec.Code != http.StatusForbidden || strings.Contains(scopedContentRec.Body.String(), adminRouteArtifactPayload) {
+		t.Fatalf("department artifact content status=%d body=%s", scopedContentRec.Code, scopedContentRec.Body.String())
+	}
 }
 
 func createAdminRouteArtifact(t *testing.T, control *controlplane.Service) controlplane.Artifact {
 	t.Helper()
 	ctx := context.Background()
+	if err := control.SetArtifactStore(controlplane.NewMemoryArtifactStore()); err != nil {
+		t.Fatal(err)
+	}
 	model, err := control.CreateGatewayModel(ctx, "tester", controlplane.GatewayModelRequest{
 		ModelID: "admin-artifact-model", Name: "Admin artifact model", Modality: "image", Status: controlplane.GatewayModelStatusActive,
 	})
@@ -159,10 +198,10 @@ func createAdminRouteArtifact(t *testing.T, control *controlplane.Service) contr
 		t.Fatal(err)
 	}
 	artifact, err := control.CreateArtifactFromReader(ctx, controlplane.ArtifactCreateInput{
-		OperationID: job.OperationID, JobID: job.ID, Role: controlplane.ArtifactRoleMetadata,
-		Policy: controlplane.GatewayArtifactPolicyManaged, MediaType: "application/json",
-		ExternalReference: "provider-secret-reference",
-	}, nil)
+		OperationID: job.OperationID, JobID: job.ID, Role: controlplane.ArtifactRoleFinal,
+		Policy: controlplane.GatewayArtifactPolicyManaged, MediaType: "image/png",
+		StoreDriver: controlplane.ArtifactStoreDriverMemory, ExternalReference: "provider-secret-reference",
+	}, bytes.NewBufferString(adminRouteArtifactPayload))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -891,6 +891,56 @@ func TestAdminProviderAccountClearCooldownEndpoint(t *testing.T) {
 	}
 }
 
+func TestAdminProviderAccountDeleteProtectsModelRoutes(t *testing.T) {
+	handler, control := newTestRuntime(t, RuntimeConfig{})
+	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name:    "Delete provider",
+		Type:    "openai_compatible",
+		BaseURL: "https://provider.example/v1",
+		Status:  controlplane.ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider(): %v", err)
+	}
+	account := createGatewayTestAccount(t, control, provider, "upstream-model", "account-secret", 10, 3)
+	model, err := control.CreateGatewayModel(context.Background(), "tester", controlplane.GatewayModelRequest{
+		ModelID:  "delete-protected-model",
+		Name:     "Delete Protected Model",
+		Modality: "chat",
+		Status:   controlplane.GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("CreateGatewayModel(): %v", err)
+	}
+	if _, err := control.CreateModelRoute(context.Background(), "tester", controlplane.ModelRouteRequest{
+		GatewayModelID:    model.ID,
+		RouteGroup:        controlplane.DefaultModelRouteGroup,
+		ProviderAccountID: account.ID,
+		UpstreamModel:     "upstream-model",
+		UpstreamFormat:    controlplane.UpstreamFormatOpenAIChat,
+		Status:            controlplane.ModelRouteStatusActive,
+	}); err != nil {
+		t.Fatalf("CreateModelRoute(): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/provider-accounts/"+account.ID, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Code != 1554 || !strings.Contains(resp.Message, "referenced by model route") {
+		t.Fatalf("unexpected delete response: %+v", resp)
+	}
+}
+
 func TestAdminSystemCheckUpdatesEndpoint(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 

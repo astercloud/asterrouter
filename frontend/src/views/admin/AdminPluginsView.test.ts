@@ -164,4 +164,50 @@ describe('AdminPluginsView workbench', () => {
 
     wrapper.unmount()
   })
+
+  it('surfaces the installed video generation workbench in navigation and featured workbenches', async () => {
+    const videoPlugin = {
+      ...catalogPlugin,
+      id: 'com.asterrouter.videogen.workbench',
+      plugin_id: 'com.asterrouter.videogen.workbench',
+      name: 'Video generation workbench',
+      description: 'Create videos from cases, storyboards, and prompts.',
+      category: 'content',
+      type: 'remote',
+      tier: 'free_core',
+      version: '0.2.1',
+      vendor: 'AsterCloud',
+      surfaces: ['personal', 'enterprise'],
+      status: 'enabled',
+      packages: [{
+        plugin_id: 'com.asterrouter.videogen.workbench',
+        package_id: 'pkg-video',
+        version: '0.2.1',
+        channel: 'stable',
+        os: 'darwin',
+        arch: 'arm64',
+        sha256: 'sha256:video',
+        size_bytes: 1,
+        required_entitlement: false,
+        revoked: false,
+        revoked_by_advisory: false,
+        compatible: true,
+        install_status: 'installed'
+      }]
+    }
+    vi.mocked(plugins.getPluginCatalog).mockResolvedValue({
+      summary: { total: 2, enabled: 2, free: 2, paid_locked: 0, configurable: 1 },
+      plugins: [{ ...catalogPlugin, status: 'enabled' }, videoPlugin]
+    })
+
+    const wrapper = mount(AdminPluginsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-featured-plugin="videogen"] h2').text()).toBe('Video generation workbench')
+    const videoNavigationItem = wrapper.findAll('.plugin-launcher-item').find((item) => item.text().includes('Video generation workbench'))
+    expect(videoNavigationItem).toBeDefined()
+    expect(videoNavigationItem?.find('button.button').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
 })

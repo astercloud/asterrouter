@@ -8,6 +8,7 @@ import AdminArtifactsView from './AdminArtifactsView.vue'
 
 vi.mock('@/api/control', () => ({
   getArtifact: vi.fn(),
+  getArtifactContent: vi.fn(),
   getArtifactRuntimes: vi.fn(),
   getArtifacts: vi.fn(),
   getArtifactSummary: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('@/api/control', () => ({
 
 vi.mock('@/api/platform', () => ({
   getPlatformArtifact: vi.fn(),
+  getPlatformArtifactContent: vi.fn(),
   getPlatformArtifactRuntimes: vi.fn(),
   getPlatformArtifacts: vi.fn(),
   getPlatformArtifactSummary: vi.fn(),
@@ -53,20 +55,48 @@ const detail: ArtifactAdminDetail = {
   ]
 }
 
+const readyArtifact: ArtifactAdminRecord = {
+  ...artifact,
+  policy: 'managed',
+  status: 'ready',
+  error_type: undefined,
+  store_driver: 'local',
+  sink_id: undefined
+}
+
+const readyDetail: ArtifactAdminDetail = {
+  artifact: readyArtifact,
+  events: detail.events
+}
+
 describe('AdminArtifactsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.history.replaceState({}, '', '/admin/artifacts')
     setLocale('en-US')
     vi.mocked(control.getArtifacts).mockResolvedValue([artifact])
     vi.mocked(control.getArtifactSummary).mockResolvedValue({ total: 1, size_bytes: 2048, by_status: { delivery_failed: 1 } })
     vi.mocked(control.getArtifactRuntimes).mockResolvedValue([{ kind: 'sink', id: 'sink-customer', status: 'registered' }])
     vi.mocked(control.getArtifact).mockResolvedValue(detail)
+    vi.mocked(control.getArtifactContent).mockResolvedValue(new Blob(['image'], { type: 'image/png' }))
     vi.mocked(control.retryArtifactDelivery).mockResolvedValue({ artifact_id: artifact.id, attempt_id: 'attempt-1', status: 'scheduled', scheduled_at: artifact.updated_at })
     vi.mocked(platform.getPlatformArtifacts).mockResolvedValue([artifact])
     vi.mocked(platform.getPlatformArtifactSummary).mockResolvedValue({ total: 1, size_bytes: 2048, by_status: { delivery_failed: 1 } })
     vi.mocked(platform.getPlatformArtifactRuntimes).mockResolvedValue([{ kind: 'sink', id: 'platform-sink', status: 'registered' }])
     vi.mocked(platform.getPlatformArtifact).mockResolvedValue(detail)
+    vi.mocked(platform.getPlatformArtifactContent).mockResolvedValue(new Blob(['image'], { type: 'image/png' }))
     vi.mocked(platform.retryPlatformArtifactDelivery).mockResolvedValue({ artifact_id: artifact.id, attempt_id: 'attempt-1', status: 'scheduled', scheduled_at: artifact.updated_at })
+  })
+
+  it('applies an operation deep-link query on initial load', async () => {
+    window.history.replaceState({}, '', '/admin/artifacts?q=operation-1')
+    const wrapper = mount(AdminArtifactsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    expect(wrapper.get('.search-box input').element).toHaveProperty('value', 'operation-1')
+    expect(control.getArtifacts).toHaveBeenCalledWith(expect.objectContaining({ q: 'operation-1' }))
+    expect(control.getArtifactSummary).toHaveBeenCalledWith(expect.objectContaining({ q: 'operation-1' }))
+    wrapper.unmount()
   })
 
   it('renders delivery evidence and safely schedules a failed delivery retry', async () => {
@@ -98,6 +128,29 @@ describe('AdminArtifactsView', () => {
     wrapper.unmount()
   })
 
+  it('loads ready artifact content into an inline image preview and releases its object URL', async () => {
+    const createObjectURL = vi.fn(() => 'blob:artifact-preview')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    vi.mocked(control.getArtifacts).mockResolvedValue([readyArtifact])
+    vi.mocked(control.getArtifact).mockResolvedValue(readyDetail)
+
+    const wrapper = mount(AdminArtifactsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.get('button[aria-label="Details"]').trigger('click')
+    await flushPromises()
+
+    expect(control.getArtifactContent).toHaveBeenCalledWith(readyArtifact.id)
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(wrapper.get('img.artifact-preview-media').attributes('src')).toBe('blob:artifact-preview')
+    expect(wrapper.get('.artifact-preview').text()).toContain('Preview')
+
+    await wrapper.get('button[aria-label="Close"]').trigger('click')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:artifact-preview')
+    wrapper.unmount()
+  })
+
   it('shows a stable error state when artifact data cannot be loaded', async () => {
     vi.mocked(control.getArtifacts).mockRejectedValueOnce(new Error('artifact service unavailable'))
     const wrapper = mount(AdminArtifactsView, { global: { plugins: [i18n] } })
@@ -121,6 +174,7 @@ describe('AdminArtifactsView', () => {
     await wrapper.get('button[aria-label="Details"]').trigger('click')
     await flushPromises()
     expect(platform.getPlatformArtifact).toHaveBeenCalledWith(artifact.id)
+    expect(platform.getPlatformArtifactContent).not.toHaveBeenCalled()
     expect(control.getArtifact).not.toHaveBeenCalled()
     wrapper.unmount()
   })

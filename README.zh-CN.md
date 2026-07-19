@@ -96,11 +96,15 @@ curl -sSL https://raw.githubusercontent.com/astercloud/asterrouter/main/deploy/i
 
 ### Docker
 
+先复制部署模板，避免把凭据直接写入 Compose 文件：
+
 ```bash
-docker compose up --build
+cp .env.example .env
+# 编辑 .env，替换示例密码和密钥
+docker compose up -d --build
 ```
 
-访问 `http://localhost:8080/setup`，选择一个部署角色并确认其业务边界后完成初始配置。安装完成后，AsterRouter 会清理可能属于其他部署角色的浏览器旧会话，并要求重新登录后再进入所选后台；相同角色的安装请求可以安全重试。系统管理员可以在设置中切换活动形态，旧形态会隐藏但数据会保留。非交互运行时部署设置 `ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE=platform`。
+访问 `http://localhost:8080/setup`，选择一个部署角色并确认其业务边界后完成初始配置。默认 Compose 会将 PostgreSQL 和应用数据保存到命名卷，只绑定本机地址，并使用 `/ready` 作为容器健康检查。amd64/arm64 镜像通过独立的手动 `Docker Release` GitHub Actions 工作流发布，因此 Docker 不会阻断普通 GitHub Release。使用云 PostgreSQL 或其他外部数据库时，改用 `deploy/docker-compose.standalone.yml` 并设置 `ASTERROUTER_DATABASE_URL`。无人值守运行时在 `.env` 中设置 `ASTERROUTER_DEPLOYMENT_ROLE=platform`。
 
 ## 私有化与托管交付
 
@@ -119,6 +123,7 @@ AsterRouter 支持三种交付方式：
 - [版本发布](https://github.com/astercloud/asterrouter/releases)
 - [构建状态](https://github.com/astercloud/asterrouter/actions)
 - [部署环境变量模板](./deploy/asterrouter.env.example)
+- [Docker 部署指南](./deploy/DOCKER.md)
 - [English README](./README.md)
 
 <details>

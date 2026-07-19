@@ -1,0 +1,130 @@
+name: Docker Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to publish, for example v1.2.3'
+        required: true
+        type: string
+      publish_latest:
+        description: 'Also update the latest image tag'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: meta
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${DISPATCH_TAG}"
+          if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: ${TAG}" >&2
+            exit 1
+          fi
+          TAG="v${TAG#v}"
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.meta.outputs.tag }}
+
+      - name: Verify GitHub Release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,url
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Validate release version sources
+        env:
+          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          BACKEND_VERSION="$(tr -d '\r\n' < backend/cmd/asterrouter/VERSION)"
+          FRONTEND_VERSION="$(node -p "require('./frontend/package.json').version")"
+          test "$BACKEND_VERSION" = "$EXPECTED_VERSION"
+          test "$FRONTEND_VERSION" = "$EXPECTED_VERSION"
+
+      - name: Resolve checkout metadata
+        id: source_meta
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release container
+        env:
+          ASTER_TEST_ARTIFACT_DIR: ${{ runner.temp }}/asterrouter-container-evidence
+          ASTER_CONTAINER_TEST_VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/test-container.sh
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Docker image metadata
+        id: docker_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ steps.meta.outputs.version }}
+            type=raw,value=latest,enable=${{ inputs.publish_latest }}
+
+      - name: Build and publish multi-architecture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          build-args: |
+            ASTER_VERSION=${{ steps.meta.outputs.version }}
+            ASTER_COMMIT=${{ steps.source_meta.outputs.commit }}
+            ASTER_DATE=${{ steps.meta.outputs.date }}
+            ASTER_BUILD_TYPE=release
+          cache-from: type=gha,scope=asterrouter-docker-release
+          cache-to: type=gha,mode=max,scope=asterrouter-docker-release
+
+      - name: Verify published manifest
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE"
+
+      - name: Upload container evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: asterrouter-container-${{ steps.meta.outputs.version }}
+          path: ${{ runner.temp }}/asterrouter-container-evidence
+          if-no-files-found: ignore

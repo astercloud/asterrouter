@@ -1,37 +1,63 @@
+name: ${ASTERROUTER_COMPOSE_PROJECT_NAME:-asterrouter}
+
 services:
   asterrouter:
-    build: .
+    build:
+      context: .
+      args:
+        ASTER_BUILD_TYPE: release
+    image: ${ASTERROUTER_IMAGE:-asterrouter:local}
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     environment:
       ASTERROUTER_SERVER_HTTP_LISTEN: ":8080"
-      ASTERROUTER_SERVER_SECURITY_ADMIN_USERNAME: "admin"
-      ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD: "change-me"
-      ASTERROUTER_SERVER_BOOTSTRAP_DEMO_MODE: "${ASTERROUTER_SERVER_BOOTSTRAP_DEMO_MODE:-false}"
-      # Leave the deployment role unset for interactive first-run selection at /setup.
-      # For unattended installation, set ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE to personal,
-      # relay_operator, enterprise, or platform. The role is immutable after first boot.
-      ASTERROUTER_SERVER_SECURITY_SECRET_KEY: "replace-with-a-stable-random-secret"
-      ASTERROUTER_SERVER_STORAGE_DATABASE_URL: "postgres://asterrouter:asterrouter@postgres:5432/asterrouter?sslmode=disable"
+      ASTERROUTER_SERVER_SECURITY_ADMIN_USERNAME: "${ASTERROUTER_ADMIN_USERNAME:-admin}"
+      ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD: "${ASTERROUTER_ADMIN_PASSWORD:-}"
+      ASTERROUTER_SERVER_SECURITY_ADMIN_TOKEN: "${ASTERROUTER_ADMIN_TOKEN:-}"
+      ASTERROUTER_SERVER_SECURITY_SECRET_KEY: "${ASTERROUTER_SECRET_KEY:-}"
+      ASTERROUTER_SERVER_BOOTSTRAP_DEMO_MODE: "${ASTERROUTER_DEMO_MODE:-false}"
+      ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE: "${ASTERROUTER_DEPLOYMENT_ROLE:-}"
+      ASTERROUTER_SERVER_STORAGE_DATABASE_URL: "postgres://${POSTGRES_USER:-asterrouter}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-asterrouter}?sslmode=disable"
+      ASTERROUTER_SERVER_PLUGINS_CACHE_DIR: "/var/lib/asterrouter/plugin-cache"
+      ASTERROUTER_SERVER_PLUGINS_ACTIVE_DIR: "/var/lib/asterrouter/plugin-active"
+      ASTERROUTER_SERVER_ARTIFACTS_LOCAL_ROOT: "/var/lib/asterrouter/artifacts"
+      ASTERROUTER_SERVER_MAINTENANCE_BACKUP_DIR: "/var/lib/asterrouter/backups"
+      ASTERROUTER_SERVER_MAINTENANCE_DIAGNOSTIC_DIR: "/var/lib/asterrouter/diagnostics"
+      TZ: "${TZ:-UTC}"
     ports:
-      - "8080:8080"
+      - "${ASTERROUTER_BIND_ADDRESS:-127.0.0.1}:${ASTERROUTER_PORT:-8080}:8080"
+    volumes:
+      - asterrouter_data:/var/lib/asterrouter
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: asterrouter
-      POSTGRES_USER: asterrouter
-      POSTGRES_PASSWORD: asterrouter
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: "${POSTGRES_DB:-asterrouter}"
+      POSTGRES_USER: "${POSTGRES_USER:-asterrouter}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      PGDATA: /var/lib/postgresql/data
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U asterrouter -d asterrouter"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-asterrouter} -d ${POSTGRES_DB:-asterrouter}"]
       interval: 5s
       timeout: 3s
       retries: 20
 
 volumes:
+  asterrouter_data:
+    driver: local
   postgres_data:
+    driver: local

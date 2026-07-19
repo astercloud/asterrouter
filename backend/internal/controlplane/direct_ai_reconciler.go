@@ -30,15 +30,23 @@ func (s *Service) RunDirectAIReconcilerOnce(ctx context.Context, limit int, adap
 	report := DirectAIReconcileReport{Reconciled: len(attempts)}
 	var runErrs []error
 	for _, attempt := range attempts {
-		if reconcileErr := s.reconcileDirectAIAttempt(ctx, attempt, adapter); reconcileErr != nil {
-			report.Errors++
-			runErrs = append(runErrs, reconcileErr)
-			continue
-		}
+		reconcileErr := s.reconcileDirectAIAttempt(ctx, attempt, adapter)
 		current, found, findErr := s.repo.FindAIAttempt(ctx, attempt.ID)
 		if findErr != nil {
 			report.Errors++
 			runErrs = append(runErrs, findErr)
+			continue
+		}
+		if reconcileErr != nil {
+			// A transport-unknown direct attempt without a provider task cannot be
+			// recovered by the in-process cache. Keep it pending for the same-key
+			// client replay instead of turning an expected state into a runtime error.
+			if found && current.Status == AIAttemptStatusRunning && current.DispatchState == AIAttemptDispatchUnknown {
+				report.Pending++
+				continue
+			}
+			report.Errors++
+			runErrs = append(runErrs, reconcileErr)
 			continue
 		}
 		if !found || current.Status != AIAttemptStatusRunning {
@@ -94,6 +102,9 @@ func (s *Service) reconcileDirectAIAttempt(ctx context.Context, attempt AIAttemp
 	if status == "canceled" || status == "cancelled" {
 		terminalStatus = AIJobStatusCanceled
 		attemptStatus = AIAttemptStatusCanceled
+	} else if status == "succeeded" || status == "completed" {
+		terminalStatus = AIJobStatusSucceeded
+		attemptStatus = AIAttemptStatusSucceeded
 	}
 	if status == "succeeded" || status == "completed" {
 		request := directRequestFromOperation(operation)
@@ -130,7 +141,18 @@ func (s *Service) reconcileDirectAIAttempt(ctx context.Context, attempt AIAttemp
 	if completeErr := s.CompleteAIAttempt(ctx, updatedAttempt.ID, attemptStatus, status); completeErr != nil {
 		return errors.Join(reconcileErr, completeErr)
 	}
-	return reconcileErr
+	operationStatus := AIOperationStatusFailed
+	if terminalStatus == AIJobStatusCanceled {
+		operationStatus = AIOperationStatusCanceled
+	} else if status == "succeeded" || status == "completed" {
+		operationStatus = AIOperationStatusSucceeded
+	}
+	return errors.Join(reconcileErr, s.CompleteAIOperation(ctx, operation.ID, operationStatus, func() string {
+		if operationStatus == AIOperationStatusSucceeded {
+			return ""
+		}
+		return status
+	}()))
 }
 
 type directAIReconcileExecutor struct {

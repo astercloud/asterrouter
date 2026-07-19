@@ -110,6 +110,8 @@ describe('API module contracts', () => {
     expect(client.get).toHaveBeenLastCalledWith('/platform/artifacts/summary', { params: artifactQuery })
     await platform.getPlatformArtifact('artifact / 1')
     expect(client.get).toHaveBeenLastCalledWith('/platform/artifacts/artifact%20%2F%201')
+    await platform.getPlatformArtifactContent('artifact / 1')
+    expect(client.get).toHaveBeenLastCalledWith('/platform/artifacts/artifact%20%2F%201/content', { responseType: 'blob' })
     await platform.getPlatformArtifactRuntimes()
     expect(client.get).toHaveBeenLastCalledWith('/platform/artifact-runtimes')
     await platform.retryPlatformArtifactDelivery('artifact / 1')

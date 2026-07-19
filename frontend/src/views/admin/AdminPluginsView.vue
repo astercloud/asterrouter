@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ArrowRight, CheckCircle2, CircleAlert, Copy, Download, FileClock, KeyRound, LockKeyhole, Plus, RefreshCw, Search, Settings2, ShieldCheck, Trash2, Upload, X, XCircle } from '@lucide/vue'
+import { ArrowRight, CheckCircle2, CircleAlert, Copy, Download, FileClock, KeyRound, LockKeyhole, Plus, Plug, RefreshCw, Search, Settings2, ShieldCheck, Trash2, Upload, X, XCircle } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import ArtifactSinkDestinationsPanel from './ArtifactSinkDestinationsPanel.vue'
 import {
   activateOfficialLicense,
@@ -33,6 +34,7 @@ import {
 import type { OfficialCatalogStatus, OfficialFeedClientInfo, OfficialFeedStatus, OfficialFeedSyncRun, OfficialLicenseStatus, Plugin, PluginAPIToken, PluginCatalog, PluginConfig, PluginDeliveryAttempt, PluginPackage, SidecarRuntimeStatus } from '@/types'
 
 const { t } = useI18n()
+const router = useRouter()
 const artifactSinkPluginID = 'com.asterrouter.artifact.s3-compatible-sink'
 const loading = ref(false)
 const catalogStatusLoading = ref(false)
@@ -214,6 +216,17 @@ const workbenchItems = computed(() => {
 
 const readyItemCount = computed(() => workbenchItems.value.filter((item) => item.ready).length)
 const recentPlugins = computed(() => catalog.value.plugins.slice(0, 5))
+const imageGenPlugin = computed(() => catalog.value.plugins.find((plugin) => plugin.plugin_id === 'com.asterrouter.imagegen.workbench') || null)
+const imageGenInstalled = computed(() => Boolean(imageGenPlugin.value?.packages?.some((pkg) => pkg.install_status === 'installed')))
+const imageGenReady = computed(() => imageGenInstalled.value && imageGenPlugin.value?.status === 'enabled')
+const videoGenPlugin = computed(() => catalog.value.plugins.find((plugin) => plugin.plugin_id === 'com.asterrouter.videogen.workbench') || null)
+const videoGenInstalled = computed(() => Boolean(videoGenPlugin.value?.packages?.some((pkg) => pkg.install_status === 'installed')))
+const videoGenReady = computed(() => videoGenInstalled.value && videoGenPlugin.value?.status === 'enabled')
+const installedPlugins = computed(() => catalog.value.plugins.filter((plugin) => plugin.packages?.some((pkg) => pkg.install_status === 'installed')))
+const frontendWorkbenchPluginIDs = new Set([
+  'com.asterrouter.imagegen.workbench',
+  'com.asterrouter.videogen.workbench'
+])
 
 const filteredPlugins = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -272,6 +285,14 @@ function showTab(tab: PluginCenterTab) {
 function openPlugin(plugin: Plugin) {
   selectedPlugin.value = plugin
   activeTab.value = 'registry'
+}
+
+function openPluginWorkbench(plugin: Plugin) {
+  void router.push(`${window.location.pathname.split('/').slice(0, 2).join('/')}/plugins/${encodeURIComponent(plugin.id)}/workbench`)
+}
+
+function hasFrontendWorkbench(plugin: Plugin) {
+  return frontendWorkbenchPluginIDs.has(plugin.plugin_id)
 }
 
 async function load() {
@@ -886,6 +907,33 @@ onMounted(load)
     </nav>
 
     <section v-if="activeTab === 'workbench'" class="plugin-dashboard" data-section="workbench">
+      <section v-if="installedPlugins.length" class="panel plugin-launcher-panel" data-plugin-navigation>
+        <header class="panel-header split-header">
+          <div>
+            <h2>{{ t('plugins.installedNavigation') }}</h2>
+            <p>{{ t('plugins.installedNavigationHelp') }}</p>
+          </div>
+          <span class="pill status-success">{{ t('plugins.installedCount', { count: installedPlugins.length }) }}</span>
+        </header>
+        <nav class="plugin-launcher-nav" :aria-label="t('plugins.installedNavigation')">
+          <article v-for="plugin in installedPlugins" :key="plugin.id" class="plugin-launcher-item" :class="{ active: hasFrontendWorkbench(plugin) }">
+            <div class="plugin-launcher-icon" aria-hidden="true"><Plug :size="18" /></div>
+            <div class="plugin-launcher-copy">
+              <strong>{{ plugin.name }}</strong>
+              <span>{{ plugin.category }} · v{{ plugin.version }}</span>
+            </div>
+            <span class="pill" :class="statusClass(plugin.status)">{{ plugin.status }}</span>
+            <button v-if="hasFrontendWorkbench(plugin)" class="button tiny-button" type="button" :disabled="plugin.status !== 'enabled'" @click="openPluginWorkbench(plugin)">
+              <ArrowRight :size="14" />
+              {{ t('plugins.openWorkbench') }}
+            </button>
+            <button v-else class="icon-button" type="button" :aria-label="t('plugins.openPlugin', { name: plugin.name })" @click="openPlugin(plugin)">
+              <Settings2 :size="16" />
+            </button>
+          </article>
+        </nav>
+      </section>
+
       <section class="metric-grid plugin-metric-grid">
         <article v-for="metric in metrics" :key="metric.label" class="metric-card">
           <div>
@@ -894,6 +942,54 @@ onMounted(load)
             <small>{{ metric.sub }}</small>
           </div>
         </article>
+      </section>
+
+      <section v-if="imageGenPlugin" class="panel media-featured-panel" data-featured-plugin="imagegen">
+        <div class="media-featured-copy">
+          <span class="media-featured-kicker">{{ t('plugins.featured') }}</span>
+          <h2>{{ t('plugins.imageGenTitle') }}</h2>
+          <p>{{ t('plugins.imageGenDescription') }}</p>
+          <div class="media-featured-meta">
+            <span class="pill" :class="imageGenReady ? 'status-success' : 'status-warning'">
+              {{ imageGenReady ? t('plugins.imageGenReady') : t('plugins.imageGenNeedsEnable') }}
+            </span>
+            <span>{{ t('plugins.versionLabel', { version: imageGenPlugin.version }) }}</span>
+            <span>{{ t('plugins.hostedByAsterRouter') }}</span>
+          </div>
+        </div>
+        <div class="media-featured-actions">
+          <button class="button" type="button" :disabled="!imageGenReady" @click="openPluginWorkbench(imageGenPlugin)">
+            <ArrowRight :size="16" />
+            {{ t('plugins.openWorkbench') }}
+          </button>
+          <button class="button secondary" type="button" @click="openPlugin(imageGenPlugin)">
+            {{ t('plugins.viewDetails') }}
+          </button>
+        </div>
+      </section>
+
+      <section v-if="videoGenPlugin" class="panel media-featured-panel" data-featured-plugin="videogen">
+        <div class="media-featured-copy">
+          <span class="media-featured-kicker">{{ t('plugins.featured') }}</span>
+          <h2>{{ t('plugins.videoGenTitle') }}</h2>
+          <p>{{ t('plugins.videoGenDescription') }}</p>
+          <div class="media-featured-meta">
+            <span class="pill" :class="videoGenReady ? 'status-success' : 'status-warning'">
+              {{ videoGenReady ? t('plugins.videoGenReady') : t('plugins.videoGenNeedsEnable') }}
+            </span>
+            <span>{{ t('plugins.versionLabel', { version: videoGenPlugin.version }) }}</span>
+            <span>{{ t('plugins.hostedByAsterRouter') }}</span>
+          </div>
+        </div>
+        <div class="media-featured-actions">
+          <button class="button" type="button" :disabled="!videoGenReady" @click="openPluginWorkbench(videoGenPlugin)">
+            <ArrowRight :size="16" />
+            {{ t('plugins.openWorkbench') }}
+          </button>
+          <button class="button secondary" type="button" @click="openPlugin(videoGenPlugin)">
+            {{ t('plugins.viewDetails') }}
+          </button>
+        </div>
       </section>
 
       <div class="plugin-dashboard-grid">

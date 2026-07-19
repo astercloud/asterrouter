@@ -34,13 +34,20 @@ jobs:
     steps:
       - name: Resolve tag
         id: meta
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+            TAG="${DISPATCH_TAG}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
+          if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: ${TAG}" >&2
+            exit 1
+          fi
+          TAG="v${TAG#v}"
           VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -55,6 +62,16 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Validate release version sources
+        env:
+          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          BACKEND_VERSION="$(tr -d '\r\n' < backend/cmd/asterrouter/VERSION)"
+          FRONTEND_VERSION="$(node -p "require('./frontend/package.json').version")"
+          test "$BACKEND_VERSION" = "$EXPECTED_VERSION"
+          test "$FRONTEND_VERSION" = "$EXPECTED_VERSION"
 
       - uses: actions/setup-go@v6
         with:

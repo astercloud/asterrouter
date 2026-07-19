@@ -26,6 +26,7 @@ const AdminGatewaySimulatorView = () => import('@/views/admin/AdminGatewaySimula
 const AdminPricingView = () => import('@/views/admin/AdminPricingView.vue')
 const AdminModelRoutesView = () => import('@/views/admin/AdminModelRoutesView.vue')
 const AdminPluginsView = () => import('@/views/admin/AdminPluginsView.vue')
+const PluginFrontendView = () => import('@/views/admin/PluginFrontendView.vue')
 const AdminPoliciesView = () => import('@/views/admin/AdminPoliciesView.vue')
 const AdminProviderAccountsView = () => import('@/views/admin/AdminProviderAccountsView.vue')
 const AdminProvidersView = () => import('@/views/admin/AdminProvidersView.vue')
@@ -123,6 +124,7 @@ const router = createRouter({
         { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
         { path: 'gateway-simulator', component: AdminGatewaySimulatorView, meta: { titleKey: 'admin.gatewaySimulator', descriptionKey: 'gatewaySimulator.subtitle' } },
         { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
+        { path: 'plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
         { path: 'resources', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
         { path: 'keys', component: AdminApiKeysView, meta: { titleKey: 'console.keys', descriptionKey: 'console.keySummary' } },
@@ -154,6 +156,7 @@ const router = createRouter({
         { path: 'resources', component: AdminProviderAccountsView, meta: { titleKey: 'operator.resourceList', descriptionKey: 'operator.resourceSummary' } },
         { path: 'usage', component: OperatorUsageView, meta: { titleKey: 'operator.traffic', descriptionKey: 'operator.trafficHelp' } },
         { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
+        { path: 'plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
 		{ path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
         { path: ':pathMatch(.*)*', redirect: '/operator/overview' }
@@ -186,6 +189,7 @@ const router = createRouter({
         { path: 'ai-jobs', component: AdminAIJobsView, meta: { titleKey: 'admin.aiJobs', descriptionKey: 'aiJobOps.subtitle' } },
         { path: 'exports', component: AdminExportJobsView, meta: { titleKey: 'admin.exports', descriptionKey: 'exports.subtitle' } },
         { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
+        { path: 'plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },
         { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
 		{ path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
@@ -246,6 +250,7 @@ const router = createRouter({
         { path: 'ai-jobs', component: AdminAIJobsView, props: { surface: 'platform' }, meta: { titleKey: 'admin.aiJobs', descriptionKey: 'aiJobOps.subtitle' } },
         { path: 'audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },
         { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
+        { path: 'plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
         { path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
         { path: ':pathMatch(.*)*', redirect: '/platform/overview' }

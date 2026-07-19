@@ -42,6 +42,7 @@ type openAIImageTaskCache struct {
 type openAIImageGenerationResponse struct {
 	Data []struct {
 		B64JSON string `json:"b64_json"`
+		URL     string `json:"url"`
 	} `json:"data"`
 }
 
@@ -72,6 +73,9 @@ func (s *Service) dispatchBuiltinOpenAIImage(ctx context.Context, provider contr
 	request.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", command.Intent.DispatchKey)
+	if err := controlplane.ApplyProviderAccountHeaderOverrides(request, provider.AdapterConfig); err != nil {
+		return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeProvenNotCreated}, err
+	}
 	response, err := s.providerAdapterHTTPClient.Do(request)
 	if err != nil {
 		return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown}, fmt.Errorf("openai-compatible image transport failed")
@@ -95,11 +99,21 @@ func (s *Service) dispatchBuiltinOpenAIImage(ctx context.Context, provider contr
 	outputs := make([]controlplane.ProviderOutputDescriptor, 0, len(decoded.Data))
 	outputData := make(map[string][]byte, len(decoded.Data))
 	for index, item := range decoded.Data {
-		if strings.TrimSpace(item.B64JSON) == "" {
-			return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown}, fmt.Errorf("%w: b64_json output is required for durable delivery", ErrOpenAIImageResponse)
+		var data []byte
+		if strings.TrimSpace(item.B64JSON) != "" {
+			data, err = base64.StdEncoding.DecodeString(item.B64JSON)
+			if err != nil {
+				return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown}, ErrOpenAIImageResponse
+			}
+		} else if strings.TrimSpace(item.URL) != "" {
+			data, err = s.downloadOpenAIImageOutput(requestCtx, item.URL)
+			if err != nil {
+				return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown}, err
+			}
+		} else {
+			return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown}, fmt.Errorf("%w: image output must include b64_json or url", ErrOpenAIImageResponse)
 		}
-		data, decodeErr := base64.StdEncoding.DecodeString(item.B64JSON)
-		if decodeErr != nil || len(data) == 0 {
+		if len(data) == 0 {
 			return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown}, ErrOpenAIImageResponse
 		}
 		outputID := fmt.Sprintf("image-%d", index+1)
@@ -130,6 +144,30 @@ func (s *Service) dispatchBuiltinOpenAIImage(ctx context.Context, provider contr
 		return controlplane.ProviderDispatchResult{Outcome: controlplane.ProviderDispatchOutcomeUnknown}, err
 	}
 	return result, nil
+}
+
+func (s *Service) downloadOpenAIImageOutput(ctx context.Context, rawURL string) ([]byte, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+		return nil, ErrOpenAIImageResponse
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, ErrOpenAIImageResponse
+	}
+	response, err := s.providerAdapterHTTPClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("openai-compatible image output download failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("openai-compatible image output download returned status %d", response.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, openAIImageResponseLimit+1))
+	if err != nil || len(data) == 0 || len(data) > openAIImageResponseLimit {
+		return nil, ErrOpenAIImageResponse
+	}
+	return data, nil
 }
 
 func (s *Service) reconcileBuiltinOpenAIImage(task controlplane.ProviderTaskReference) (controlplane.ProviderDispatchResult, error) {

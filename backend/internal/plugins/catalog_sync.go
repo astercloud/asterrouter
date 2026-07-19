@@ -71,6 +71,7 @@ type remoteCatalogVersion struct {
 	MinCoreVersion      string                 `json:"min_core_version,omitempty"`
 	MaxCoreVersion      string                 `json:"max_core_version,omitempty"`
 	RequiredEntitlement bool                   `json:"required_entitlement"`
+	ManifestSignature   catalogEnvelope        `json:"manifest_signature"`
 	Compatibility       []remoteCompatibility  `json:"compatibility,omitempty"`
 	Packages            []remoteCatalogPackage `json:"packages,omitempty"`
 }

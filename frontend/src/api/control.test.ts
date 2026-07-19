@@ -230,6 +230,7 @@ describe('control API contracts', () => {
       { run: () => control.rotateAPIKey('key-1', 3600), method: 'post', args: ['/admin/api-keys/key-1/rotate', { grace_period_seconds: 3600 }] },
       { run: () => control.disableAPIKey('key-1'), method: 'post', args: ['/admin/api-keys/key-1/disable'] },
       { run: () => control.getArtifact('artifact-1'), method: 'get', args: ['/admin/artifacts/artifact-1'] },
+      { run: () => control.getArtifactContent('artifact / 1'), method: 'get', args: ['/admin/artifacts/artifact%20%2F%201/content', { responseType: 'blob' }] },
       { run: () => control.getArtifactRuntimes(), method: 'get', args: ['/admin/artifact-runtimes'] },
       { run: () => control.retryArtifactDelivery('artifact-1'), method: 'post', args: ['/admin/artifacts/artifact-1/retry-delivery'] },
       { run: () => control.getAIJob('job-1'), method: 'get', args: ['/admin/ai-jobs/job-1'] },

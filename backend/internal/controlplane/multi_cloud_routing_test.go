@@ -16,6 +16,7 @@ func TestProviderAccountAdapterValidationMatrix(t *testing.T) {
 		wantError string
 	}{
 		{name: "OpenAI API key", provider: ProviderTypeOpenAICompatible, auth: ProviderAuthAPIKey, secret: "key"},
+		{name: "OpenAI API key with UI settings", provider: ProviderTypeOpenAICompatible, auth: ProviderAuthAPIKey, config: map[string]string{ProviderAccountAdapterConfigSettings: `{"notes":"managed","pool_mode_enabled":"true"}`}, secret: "key"},
 		{name: "AWS default chain", provider: ProviderTypeAWSBedrock, auth: ProviderAuthAWSDefault, config: map[string]string{"region": "us-east-1"}},
 		{name: "AWS missing region", provider: ProviderTypeAWSBedrock, auth: ProviderAuthAWSDefault, wantError: "adapter_config.region"},
 		{name: "GCP ADC", provider: ProviderTypeGCPVertex, auth: ProviderAuthGCPADC, config: map[string]string{"project": "project", "location": "us-central1"}},

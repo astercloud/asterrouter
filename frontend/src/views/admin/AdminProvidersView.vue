@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Activity, Cloud, Edit3, Plus, RefreshCw, Save, Search, Server, X } from '@lucide/vue'
+import { Activity, Bot, Check, Cloud, Edit3, KeyRound, Plus, RefreshCw, Save, Search, Server, Sparkles, X, Zap } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { checkProvider, createProvider, getProviderHealthChecks, getProviders, updateProvider } from '@/api/control'
 import type { ProviderConnection, ProviderHealthCheck, ProviderRequest } from '@/types'
 
 const { t } = useI18n()
+const router = useRouter()
 const loading = ref(false)
 const saving = ref(false)
 const checkingID = ref('')
@@ -18,6 +20,47 @@ const statusFilter = ref('')
 const typeFilter = ref('')
 const modalOpen = ref(false)
 const editing = ref<ProviderConnection | null>(null)
+
+type ProviderPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok'
+
+const PLATFORM_CONFIG = {
+  anthropic: {
+    label: 'Anthropic',
+    icon: Sparkles,
+    type: 'anthropic_compatible',
+    baseURL: 'https://api.anthropic.com/v1'
+  },
+  openai: {
+    label: 'OpenAI',
+    icon: Zap,
+    type: 'openai_compatible',
+    baseURL: 'https://api.openai.com/v1'
+  },
+  gemini: {
+    label: 'Gemini',
+    icon: Sparkles,
+    type: 'gemini_compatible',
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta'
+  },
+  antigravity: {
+    label: 'Antigravity',
+    icon: Cloud,
+    type: 'openai_compatible',
+    baseURL: 'https://cloudcode-pa.googleapis.com'
+  },
+  grok: {
+    label: 'Grok',
+    icon: Bot,
+    type: 'openai_compatible',
+    baseURL: 'https://api.x.ai/v1'
+  }
+} as const
+
+const platformEntries = Object.entries(PLATFORM_CONFIG) as Array<
+  [ProviderPlatform, (typeof PLATFORM_CONFIG)[ProviderPlatform]]
+>
+const platform = ref<ProviderPlatform>('openai')
+const currentPlatform = computed(() => PLATFORM_CONFIG[platform.value])
 
 const providerTypes = [
   { value: 'openai_compatible', label: 'OpenAI Compatible', baseURL: 'https://api.openai.com/v1' },
@@ -44,6 +87,7 @@ const filteredProviders = computed(() => {
 
 function resetForm() {
   Object.assign(form, { name: '', type: 'openai_compatible', base_url: providerTypes[0].baseURL, status: 'active', priority: 100 })
+  platform.value = 'openai'
 }
 
 function openCreate() {
@@ -54,14 +98,34 @@ function openCreate() {
 
 function openEdit(provider: ProviderConnection) {
   editing.value = provider
+  platform.value = inferPlatform(provider)
   Object.assign(form, { name: provider.name, type: provider.type, base_url: provider.base_url, status: provider.status, priority: provider.priority })
   modalOpen.value = true
 }
 
-function selectProviderType(type: string) {
-  form.type = type
-  const preset = typeByID.get(type as (typeof providerTypes)[number]['value'])
-  if (!editing.value && preset) form.base_url = preset.baseURL
+function inferPlatform(provider: ProviderConnection): ProviderPlatform {
+  const baseURL = provider.base_url.toLowerCase()
+  if (baseURL.includes('api.x.ai') || baseURL.includes('grok')) return 'grok'
+  if (baseURL.includes('cloudcode-pa') || baseURL.includes('antigravity')) return 'antigravity'
+  if (provider.type === 'anthropic_compatible' || baseURL.includes('anthropic')) return 'anthropic'
+  if (provider.type === 'gemini_compatible' || baseURL.includes('generativelanguage')) return 'gemini'
+  return 'openai'
+}
+
+function selectPlatform(nextPlatform: ProviderPlatform) {
+  platform.value = nextPlatform
+  const config = PLATFORM_CONFIG[nextPlatform]
+  form.type = config.type
+  form.base_url = config.baseURL
+}
+
+function updateEnabled(event: Event) {
+  form.status = (event.target as HTMLInputElement).checked ? 'active' : 'disabled'
+}
+
+function openProviderAccounts() {
+  closeModal()
+  void router.push('/admin/provider-accounts')
 }
 
 function closeModal() {
@@ -132,7 +196,10 @@ onMounted(load)
   <main class="content crud-page provider-workbench">
     <section class="page-header">
       <div><h1>{{ t('admin.providers') }}</h1><p>{{ t('providers.subtitle') }}</p></div>
-      <button class="button" type="button" @click="openCreate"><Plus :size="17" />{{ t('providers.newProvider') }}</button>
+      <div class="page-header-actions">
+        <button class="button secondary" type="button" @click="openProviderAccounts"><KeyRound :size="17" />{{ t('providers.configureApiKey') }}</button>
+        <button class="button" type="button" @click="openCreate"><Plus :size="17" />{{ t('providers.newProvider') }}</button>
+      </div>
     </section>
 
     <div class="crud-summary provider-summary">
@@ -180,17 +247,109 @@ onMounted(load)
     </section>
 
     <div v-if="modalOpen" class="modal-backdrop" @click.self="closeModal">
-      <section class="modal-card" role="dialog" aria-modal="true" :aria-label="editing ? t('common.edit') : t('providers.newProvider')">
-        <header class="modal-header"><div><h2>{{ editing ? t('common.edit') : t('providers.newProvider') }}</h2><p>{{ t('providers.subtitle') }}</p></div><button class="icon-button" type="button" :aria-label="t('common.close')" @click="closeModal"><X :size="19" /></button></header>
-        <form @submit.prevent="save">
-          <div class="modal-body form-grid">
-            <div class="field"><label for="provider-name">{{ t('providers.name') }}</label><input id="provider-name" v-model="form.name" required /></div>
-            <div class="field"><label for="provider-type">{{ t('providers.type') }}</label><select id="provider-type" :value="form.type" required @change="selectProviderType(($event.target as HTMLSelectElement).value)"><option v-for="item in providerTypes" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
-            <div class="field form-span-2"><label for="provider-url">{{ t('providers.baseUrl') }}</label><input id="provider-url" v-model="form.base_url" class="provider-mono-input" type="url" required /></div>
-            <div class="field"><label for="provider-status">{{ t('providers.status') }}</label><select id="provider-status" v-model="form.status"><option value="active">active</option><option value="disabled">disabled</option></select></div>
-            <div class="field"><label for="provider-priority">{{ t('providers.priority') }}</label><input id="provider-priority" v-model.number="form.priority" type="number" min="1" required /></div>
+      <section
+        class="modal-card modal-card-wide provider-api-modal"
+        :data-platform="platform"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="editing ? t('providers.editAccount') : t('providers.addAccount')"
+      >
+        <header class="modal-header">
+          <div>
+            <h2>{{ editing ? t('providers.editAccount') : t('providers.addAccount') }}</h2>
+            <p>{{ t('providers.accountModalSubtitle') }}</p>
           </div>
-          <footer class="modal-footer"><button class="button secondary" type="button" @click="closeModal">{{ t('common.cancel') }}</button><button class="button" type="submit" :disabled="saving"><Save :size="17" />{{ saving ? t('common.saving') : t('common.save') }}</button></footer>
+          <button class="icon-button" type="button" :aria-label="t('common.close')" @click="closeModal"><X :size="19" /></button>
+        </header>
+        <form class="provider-modal-form" @submit.prevent="save">
+          <div class="modal-body provider-modal-body">
+            <div class="field">
+              <label for="provider-account-name">{{ t('providers.accountName') }}</label>
+              <input id="provider-account-name" v-model="form.name" required :placeholder="t('providers.accountNamePlaceholder')" />
+            </div>
+
+            <div class="field provider-platform-field">
+              <label>{{ t('providers.platform') }}</label>
+              <div class="provider-platform-tabs" role="tablist" :aria-label="t('providers.platform')">
+                <button
+                  v-for="[platformID, config] in platformEntries"
+                  :key="platformID"
+                  class="provider-platform-tab"
+                  :class="{ active: platform === platformID }"
+                  type="button"
+                  role="tab"
+                  :aria-selected="platform === platformID"
+                  @click="selectPlatform(platformID)"
+                >
+                  <component :is="config.icon" :size="17" />
+                  {{ config.label }}
+                </button>
+              </div>
+            </div>
+
+            <div class="field">
+              <label>{{ t('providers.accountType') }}</label>
+              <div class="provider-account-type-card" aria-current="true">
+                <span class="provider-account-type-icon"><KeyRound :size="18" /></span>
+                <span>
+                  <strong>{{ t('providers.apiKeyTypeLabel') }}</strong>
+                  <small>{{ t('providers.apiOnlyDescription', { platform: currentPlatform.label }) }}</small>
+                </span>
+                <Check class="provider-account-type-check" :size="18" />
+              </div>
+            </div>
+
+            <section class="provider-form-section">
+              <div class="field">
+                <label for="provider-base-url">{{ t('providers.baseUrl') }}</label>
+                <input id="provider-base-url" v-model="form.base_url" required class="provider-mono-input" :placeholder="currentPlatform.baseURL" />
+                <span class="hint">{{ t('providers.baseUrlHint', { platform: currentPlatform.label }) }}</span>
+              </div>
+              <div class="provider-credential-link">
+                <div>
+                  <strong>{{ t('providers.apiKeyTypeLabel') }}</strong>
+                  <span>{{ t('providers.apiKeyAccountHint') }}</span>
+                </div>
+                <button class="button secondary" type="button" @click="openProviderAccounts">
+                  <KeyRound :size="16" />
+                  {{ t('providers.configureApiKey') }}
+                </button>
+              </div>
+            </section>
+
+            <section class="provider-form-section provider-common-section">
+              <div class="provider-section-heading">
+                <div>
+                  <h3>{{ t('providers.commonConfiguration') }}</h3>
+                  <p>{{ t('providers.commonConfigurationHint') }}</p>
+                </div>
+              </div>
+              <div class="provider-config-grid">
+                <div class="provider-toggle-row">
+                  <div>
+                    <strong>{{ t('providers.enabledStatus') }}</strong>
+                    <small>{{ t('providers.enabledStatusHint') }}</small>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" :checked="form.status === 'active'" @change="updateEnabled" />
+                    <span />
+                  </label>
+                </div>
+                <div class="field">
+                  <label for="provider-priority">{{ t('providers.priority') }}</label>
+                  <input id="provider-priority" v-model.number="form.priority" type="number" min="1" required />
+                  <span class="hint">{{ t('providers.priorityHint') }}</span>
+                </div>
+              </div>
+            </section>
+          </div>
+          <footer class="modal-footer">
+            <button class="button secondary" type="button" @click="closeModal">{{ t('common.cancel') }}</button>
+            <button class="button" type="submit" :disabled="saving">
+              <Save :size="17" />
+              {{ saving ? t('common.saving') : editing ? t('providers.updateAccount') : t('providers.createAccount') }}
+            </button>
+          </footer>
         </form>
       </section>
     </div>
@@ -200,6 +359,11 @@ onMounted(load)
 <style scoped>
 .provider-summary span { display: flex; align-items: center; gap: 8px; }
 .provider-endpoint { display: block; max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.provider-credential-link { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); }
+.provider-credential-link > div { display: grid; gap: 4px; min-width: 0; }
+.provider-credential-link strong { color: var(--text); font-size: 12px; }
+.provider-credential-link span { color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.provider-credential-link .button { flex: 0 0 auto; }
 .form-span-2 { grid-column: 1 / -1; }
-@media (max-width: 760px) { .provider-endpoint { max-width: 240px; } .form-span-2 { grid-column: auto; } }
+@media (max-width: 760px) { .provider-endpoint { max-width: 240px; } .provider-credential-link { align-items: stretch; flex-direction: column; } .provider-credential-link .button { width: 100%; } .form-span-2 { grid-column: auto; } }
 </style>

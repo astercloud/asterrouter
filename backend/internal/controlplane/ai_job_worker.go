@@ -458,7 +458,7 @@ func (s *Service) providerForAttempt(ctx context.Context, requestedModel string,
 		return GatewayProvider{}, err
 	}
 	provider, providerFound := providerByIDMap(providers)[attempt.ProviderID]
-	if !providerFound || !validHTTPURL(provider.BaseURL) {
+	if !providerFound || !validHTTPURL(EffectiveProviderAccountBaseURL(account, provider)) {
 		return GatewayProvider{}, fmt.Errorf("provider %q is unavailable for reconciliation", attempt.ProviderID)
 	}
 	secret, err := decryptSecret(s.secretKey, account.SecretCiphertext)
@@ -468,15 +468,19 @@ func (s *Service) providerForAttempt(ctx context.Context, requestedModel string,
 	route := ModelRoute{ID: attempt.RouteID, ProviderAccountID: attempt.ProviderAccountID, UpstreamModel: attempt.UpstreamModel}
 	if routes, listErr := s.repo.ListModelRoutes(ctx); listErr == nil {
 		for _, candidate := range routes {
-			if candidate.ID == attempt.RouteID && candidate.ProviderAccountID == attempt.ProviderAccountID && candidate.UpstreamModel == attempt.UpstreamModel {
+			// The attempt stores the dispatch-facing upstream model, which may be
+			// account-mapped and therefore differ from the route declaration. The
+			// route ID is the durable identity for recovering its format/group.
+			if candidate.ID == attempt.RouteID && candidate.ProviderAccountID == attempt.ProviderAccountID {
 				route = candidate
 				break
 			}
 		}
 	}
 	return GatewayProvider{
-		ID: provider.ID, Name: provider.Name, Type: provider.Type, BaseURL: provider.BaseURL, APIKey: secret,
+		ID: provider.ID, Name: provider.Name, Type: provider.Type, BaseURL: EffectiveProviderAccountBaseURL(account, provider), APIKey: secret,
 		AdapterID: attempt.ProviderAdapterID, AccountID: account.ID, AccountName: account.Name, Concurrency: account.Concurrency,
+		AdapterConfig:  cloneStringMap(account.AdapterConfig),
 		GatewayModelID: route.GatewayModelID, RequestedModel: requestedModel, UpstreamModel: attempt.UpstreamModel,
 		RouteID: attempt.RouteID, RouteGroup: route.RouteGroup, RoutePriority: route.Priority, RouteWeight: route.Weight,
 		AccountWeight: account.Weight, RPMLimit: account.RPMLimit, TPMLimit: account.TPMLimit, CircuitState: account.CircuitState,

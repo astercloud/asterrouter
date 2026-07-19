@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARTIFACT_DIR="${ASTER_TEST_ARTIFACT_DIR:-${TMPDIR:-/tmp}/asterrouter-test-artifacts}"
 PORT="${ASTER_CONTAINER_TEST_PORT:-18080}"
+VERSION="${ASTER_CONTAINER_TEST_VERSION:-container-test}"
 RUN_ID="${GITHUB_RUN_ID:-local}-$$"
 IMAGE="asterrouter:container-test"
 NETWORK="asterrouter-test-${RUN_ID}"
@@ -21,11 +22,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 docker build \
-  --build-arg ASTER_VERSION=container-test \
+  --build-arg ASTER_VERSION="${VERSION}" \
   --build-arg ASTER_BUILD_TYPE=release \
   -t "${IMAGE}" "${ROOT_DIR}"
 
 test "$(docker image inspect "${IMAGE}" --format '{{.Config.User}}')" = "asterrouter"
+docker image inspect "${IMAGE}" --format '{{json .Config.Healthcheck}}' | grep -Fq '/ready'
+docker run --rm "${IMAGE}" --version | grep -Fq "asterrouter ${VERSION}"
 
 docker network create "${NETWORK}" >/dev/null
 docker run -d --name "${POSTGRES_CONTAINER}" --network "${NETWORK}" --network-alias postgres \

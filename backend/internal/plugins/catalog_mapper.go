@@ -34,7 +34,7 @@ func mapRemoteCatalogPlugins(index remoteCatalogIndex, now time.Time) []Plugin {
 			Vendor:            defaultText(item.VendorName, "AsterCloud"),
 			Status:            status,
 			EntitlementStatus: entitlement,
-			Surfaces:          []string{"admin"},
+			Surfaces:          remotePluginSurfaces(item),
 			EntryPoint:        "/admin/plugins",
 			Configurable:      false,
 			CreatedAt:         now,
@@ -43,6 +43,43 @@ func mapRemoteCatalogPlugins(index remoteCatalogIndex, now time.Time) []Plugin {
 	}
 	sortPlugins(out)
 	return out
+}
+
+func remotePluginSurfaces(item remoteCatalogPlugin) []string {
+	for _, version := range item.Versions {
+		if version.Status != "published" && version.Status != "deprecated" {
+			continue
+		}
+		var payload struct {
+			Manifest json.RawMessage `json:"manifest"`
+		}
+		if err := json.Unmarshal(version.ManifestSignature.Payload, &payload); err != nil || len(payload.Manifest) == 0 {
+			continue
+		}
+		var manifest struct {
+			Surfaces []string `json:"surfaces"`
+		}
+		if err := json.Unmarshal(payload.Manifest, &manifest); err != nil {
+			continue
+		}
+		surfaces := make([]string, 0, len(manifest.Surfaces))
+		seen := make(map[string]struct{}, len(manifest.Surfaces))
+		for _, surface := range manifest.Surfaces {
+			surface = strings.TrimSpace(surface)
+			if surface == "" {
+				continue
+			}
+			if _, ok := seen[surface]; ok {
+				continue
+			}
+			seen[surface] = struct{}{}
+			surfaces = append(surfaces, surface)
+		}
+		if len(surfaces) > 0 {
+			return surfaces
+		}
+	}
+	return []string{"admin"}
 }
 
 func mapRemoteCatalogPackages(index remoteCatalogIndex, now time.Time) []packageRecord {
