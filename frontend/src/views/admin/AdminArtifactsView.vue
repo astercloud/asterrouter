@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { Eye, RefreshCw, RotateCcw, Search, X } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { Download, Eye, FileWarning, LoaderCircle, RefreshCw, RotateCcw, Search, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import {
   getArtifact as getAdminArtifact,
+  getArtifactContent as getAdminArtifactContent,
   getArtifactRuntimes as getAdminArtifactRuntimes,
   getArtifacts as getAdminArtifacts,
   getArtifactSummary as getAdminArtifactSummary,
@@ -11,6 +12,7 @@ import {
 } from '@/api/control'
 import {
   getPlatformArtifact,
+  getPlatformArtifactContent,
   getPlatformArtifactRuntimes,
   getPlatformArtifacts,
   getPlatformArtifactSummary,
@@ -29,6 +31,7 @@ const { t } = useI18n()
 const operations = props.surface === 'platform'
   ? {
       getArtifact: getPlatformArtifact,
+      getArtifactContent: getPlatformArtifactContent,
       getRuntimes: getPlatformArtifactRuntimes,
       getArtifacts: getPlatformArtifacts,
       getSummary: getPlatformArtifactSummary,
@@ -36,6 +39,7 @@ const operations = props.surface === 'platform'
     }
   : {
       getArtifact: getAdminArtifact,
+      getArtifactContent: getAdminArtifactContent,
       getRuntimes: getAdminArtifactRuntimes,
       getArtifacts: getAdminArtifacts,
       getSummary: getAdminArtifactSummary,
@@ -47,15 +51,23 @@ const runtimes = ref<ArtifactRuntime[]>([])
 const selected = ref<ArtifactAdminDetail | null>(null)
 const loading = ref(false)
 const detailLoading = ref(false)
+const previewLoading = ref(false)
 const retrying = ref(false)
 const error = ref('')
 const notice = ref('')
-const search = ref('')
+const previewError = ref('')
+const previewKind = ref<'image' | 'video' | 'audio' | 'pdf' | 'text' | 'unsupported'>('unsupported')
+const previewObjectURL = ref('')
+const previewText = ref('')
+const search = ref(new URLSearchParams(window.location.search).get('q')?.trim() || '')
 const policy = ref('')
 const status = ref('')
 const role = ref('')
 const pageSize = ref(25)
 const offset = ref(0)
+let previewRequestVersion = 0
+
+const MAX_TEXT_PREVIEW_CHARS = 200_000
 
 const policyOptions = ['proxy_only', 'temporary', 'managed', 'customer_sink', 'metadata_only']
 const statusOptions = [
@@ -117,15 +129,122 @@ function nextPage() {
 }
 
 async function showDetail(id: string) {
+  const requestVersion = ++previewRequestVersion
+  resetPreview()
   detailLoading.value = true
   error.value = ''
   try {
-    selected.value = await operations.getArtifact(id)
+    const detail = await operations.getArtifact(id)
+    if (requestVersion !== previewRequestVersion) return
+    selected.value = detail
+    await loadArtifactPreview(detail.artifact, requestVersion)
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('common.failed')
+    if (requestVersion === previewRequestVersion) {
+      error.value = err instanceof Error ? err.message : t('common.failed')
+    }
   } finally {
-    detailLoading.value = false
+    if (requestVersion === previewRequestVersion) detailLoading.value = false
   }
+}
+
+function resolvePreviewKind(mediaType: string): typeof previewKind.value {
+  const normalized = mediaType.toLowerCase().split(';', 1)[0]?.trim() || ''
+  if (normalized.startsWith('image/')) return 'image'
+  if (normalized.startsWith('video/')) return 'video'
+  if (normalized.startsWith('audio/')) return 'audio'
+  if (normalized === 'application/pdf') return 'pdf'
+  if (
+    normalized.startsWith('text/') ||
+    normalized === 'application/json' ||
+    normalized.endsWith('+json') ||
+    normalized === 'application/xml' ||
+    normalized.endsWith('+xml') ||
+    normalized === 'application/javascript' ||
+    normalized === 'application/yaml'
+  ) return 'text'
+  return 'unsupported'
+}
+
+function formatTextPreview(value: string, mediaType: string): string {
+  let formatted = value
+  const normalized = mediaType.toLowerCase().split(';', 1)[0]?.trim() || ''
+  if (normalized === 'application/json' || normalized.endsWith('+json')) {
+    try {
+      formatted = JSON.stringify(JSON.parse(value), null, 2)
+    } catch {
+      formatted = value
+    }
+  }
+  if (formatted.length <= MAX_TEXT_PREVIEW_CHARS) return formatted
+  return `${formatted.slice(0, MAX_TEXT_PREVIEW_CHARS)}\n\n${t('artifactOps.previewTruncated')}`
+}
+
+function releasePreviewObjectURL() {
+  if (previewObjectURL.value) URL.revokeObjectURL(previewObjectURL.value)
+  previewObjectURL.value = ''
+}
+
+function resetPreview() {
+  releasePreviewObjectURL()
+  previewLoading.value = false
+  previewError.value = ''
+  previewKind.value = 'unsupported'
+  previewText.value = ''
+}
+
+async function loadArtifactPreview(artifact: ArtifactAdminRecord, requestVersion: number) {
+  if (!['ready', 'delivered'].includes(artifact.status) || artifact.size_bytes <= 0) {
+    previewError.value = artifact.size_bytes <= 0
+      ? t('artifactOps.previewEmpty')
+      : t('artifactOps.previewUnavailable')
+    return
+  }
+  previewLoading.value = true
+  try {
+    const blob = await operations.getArtifactContent(artifact.id)
+    if (requestVersion !== previewRequestVersion) return
+    const mediaType = blob.type || artifact.media_type || 'application/octet-stream'
+    const kind = resolvePreviewKind(mediaType)
+    const text = kind === 'text' ? formatTextPreview(await blob.text(), mediaType) : ''
+    if (requestVersion !== previewRequestVersion) return
+    previewKind.value = kind
+    previewText.value = text
+    previewObjectURL.value = URL.createObjectURL(blob)
+  } catch (err) {
+    if (requestVersion === previewRequestVersion) {
+      const message = err instanceof Error ? err.message : t('common.failed')
+      previewError.value = t('artifactOps.previewFailed', { message })
+    }
+  } finally {
+    if (requestVersion === previewRequestVersion) previewLoading.value = false
+  }
+}
+
+function previewFileName(artifact: ArtifactAdminRecord): string {
+  const mediaType = (artifact.media_type || '').toLowerCase().split(';', 1)[0]?.trim() || ''
+  const extensionByMediaType: Record<string, string> = {
+    'application/json': 'json',
+    'application/pdf': 'pdf',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'video/mp4': 'mp4',
+    'audio/mpeg': 'mp3',
+    'audio/wav': 'wav'
+  }
+  const extension = extensionByMediaType[mediaType] || mediaType.split('/')[1]?.replace(/[^a-z0-9.+-]/g, '') || 'bin'
+  const id = artifact.id.replace(/[^a-zA-Z0-9._-]/g, '_') || 'artifact'
+  return `${id}.${extension}`
+}
+
+function downloadPreview() {
+  if (!selected.value || !previewObjectURL.value) return
+  const link = document.createElement('a')
+  link.href = previewObjectURL.value
+  link.download = previewFileName(selected.value.artifact)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }
 
 async function retryDelivery() {
@@ -147,6 +266,8 @@ async function retryDelivery() {
 }
 
 function closeDetail() {
+  previewRequestVersion += 1
+  resetPreview()
   selected.value = null
 }
 
@@ -172,6 +293,10 @@ function formatBytes(value: number): string {
 }
 
 onMounted(load)
+onBeforeUnmount(() => {
+  previewRequestVersion += 1
+  releasePreviewObjectURL()
+})
 </script>
 
 <template>
@@ -288,6 +413,45 @@ onMounted(load)
           <button class="icon-button" type="button" :aria-label="t('common.close')" @click="closeDetail"><X :size="18" /></button>
         </header>
         <div class="modal-body artifact-detail-body">
+          <section class="artifact-preview" aria-labelledby="artifact-preview-title">
+            <header class="artifact-preview-header">
+              <div>
+                <h3 id="artifact-preview-title">{{ t('artifactOps.preview') }}</h3>
+                <span>{{ selected.artifact.media_type || t('artifactOps.unknownMedia') }} · {{ formatBytes(selected.artifact.size_bytes) }}</span>
+              </div>
+              <button v-if="previewObjectURL" class="button secondary" type="button" @click="downloadPreview">
+                <Download :size="16" />
+                {{ t('common.download') }}
+              </button>
+            </header>
+            <div v-if="previewLoading" class="artifact-preview-state" aria-live="polite">
+              <LoaderCircle class="artifact-preview-spinner" :size="22" />
+              <span>{{ t('artifactOps.previewLoading') }}</span>
+            </div>
+            <div v-else-if="previewError" class="artifact-preview-state artifact-preview-error" role="status">
+              <FileWarning :size="24" />
+              <span>{{ previewError }}</span>
+            </div>
+            <img
+              v-else-if="previewKind === 'image'"
+              class="artifact-preview-media"
+              :src="previewObjectURL"
+              :alt="t('artifactOps.previewAlt', { id: selected.artifact.id })"
+            />
+            <video v-else-if="previewKind === 'video'" class="artifact-preview-media" :src="previewObjectURL" controls preload="metadata" />
+            <audio v-else-if="previewKind === 'audio'" class="artifact-preview-audio" :src="previewObjectURL" controls preload="metadata" />
+            <iframe
+              v-else-if="previewKind === 'pdf'"
+              class="artifact-preview-pdf"
+              :src="previewObjectURL"
+              :title="t('artifactOps.previewAlt', { id: selected.artifact.id })"
+            />
+            <pre v-else-if="previewKind === 'text'" class="artifact-preview-text">{{ previewText }}</pre>
+            <div v-else class="artifact-preview-state">
+              <FileWarning :size="24" />
+              <span>{{ t('artifactOps.previewUnsupported') }}</span>
+            </div>
+          </section>
           <dl class="artifact-detail-grid">
             <div><dt>{{ t('artifactOps.identifiers') }}</dt><dd>{{ selected.artifact.operation_id }}<br />{{ selected.artifact.job_id || '-' }}<br />{{ selected.artifact.attempt_id || '-' }}</dd></div>
             <div><dt>{{ t('artifactOps.media') }}</dt><dd>{{ selected.artifact.media_type || '-' }}<br />{{ humanize(selected.artifact.role) }} · {{ formatBytes(selected.artifact.size_bytes) }}</dd></div>
@@ -371,15 +535,111 @@ onMounted(load)
   width: min(920px, calc(100vw - 32px));
 }
 
+.artifact-detail .modal-header > div {
+  min-width: 0;
+}
+
+.artifact-detail .modal-header h2 {
+  overflow-wrap: anywhere;
+}
+
+.artifact-detail .modal-header .icon-button {
+  flex: 0 0 auto;
+}
+
 .artifact-detail-body {
   display: grid;
   gap: 24px;
+  min-width: 0;
+}
+
+.artifact-preview {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.artifact-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.artifact-preview-header h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.artifact-preview-header span {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.artifact-preview-state {
+  min-height: 220px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px;
+  border: 1px dashed var(--border);
+  background: var(--surface-muted, var(--surface));
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.artifact-preview-error {
+  color: var(--danger);
+}
+
+.artifact-preview-spinner {
+  animation: artifact-preview-spin 0.8s linear infinite;
+}
+
+.artifact-preview-media,
+.artifact-preview-pdf {
+  width: 100%;
+  height: min(460px, 56vh);
+  min-height: 280px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+
+.artifact-preview-pdf { background: #ffffff; }
+
+img.artifact-preview-media,
+video.artifact-preview-media {
+  object-fit: contain;
+}
+
+.artifact-preview-audio {
+  width: 100%;
+  min-height: 54px;
+}
+
+.artifact-preview-text {
+  max-height: min(460px, 56vh);
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: 0.82rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@keyframes artifact-preview-spin {
+  to { transform: rotate(360deg); }
 }
 
 .artifact-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px 24px;
+  min-width: 0;
   margin: 0;
 }
 
@@ -404,7 +664,21 @@ onMounted(load)
   font-size: 1rem;
 }
 
+.artifact-events {
+  min-width: 0;
+}
+
 @media (max-width: 640px) {
+  .artifact-preview-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .artifact-preview-media,
+  .artifact-preview-pdf {
+    min-height: 220px;
+  }
+
   .artifact-detail-grid {
     grid-template-columns: 1fr;
   }

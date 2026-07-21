@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Activity, Edit3, Plus, RefreshCw, RotateCw, Save, Search, ShieldOff, X } from '@lucide/vue'
+import { Activity, Edit3, Images, Plus, RefreshCw, RotateCw, Save, Search, ShieldOff, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import APIKeyRotationDialog from '@/components/APIKeyRotationDialog.vue'
 import GatewayModelPicker from '@/components/model/GatewayModelPicker.vue'
@@ -43,12 +43,19 @@ const gatewayModels = ref<GatewayModel[]>([])
 const query = ref('')
 const statusFilter = ref('')
 const keyStatus = ref('active')
+const scopeOptions = ['gateway:invoke', 'models:read', 'jobs:read', 'artifacts:read']
+const modalityOptions = ['metadata', 'text', 'image', 'video', 'audio']
+const operationOptions = ['list_models', 'chat_completion', 'image_generation', 'video_generation', 'audio_generation']
 const form = reactive<APIKeyCreateRequest>({
   name: '',
   policy_id: '',
   model_allowlist: [],
   qps_limit: 10,
   monthly_token_limit: 1000000,
+  scopes: ['gateway:invoke', 'models:read'],
+  allowed_modalities: ['metadata', 'text'],
+  allowed_operations: ['list_models', 'chat_completion'],
+  artifact_policy: 'proxy_only',
   expires_at: '',
   key_type: 'workspace',
   customer_id: '',
@@ -91,6 +98,10 @@ function openCreate() {
     model_allowlist: defaultGatewayModel.value ? [defaultGatewayModel.value] : [],
     qps_limit: 10,
     monthly_token_limit: 1000000,
+    scopes: ['gateway:invoke', 'models:read'],
+    allowed_modalities: ['metadata', 'text'],
+    allowed_operations: ['list_models', 'chat_completion'],
+    artifact_policy: 'proxy_only',
     expires_at: '',
     key_type: 'workspace',
     customer_id: '',
@@ -108,6 +119,10 @@ function openEdit(key: APIKeyRecord) {
     model_allowlist: [...key.model_allowlist],
     qps_limit: key.qps_limit,
     monthly_token_limit: key.monthly_token_limit,
+    scopes: [...key.scopes],
+    allowed_modalities: [...key.allowed_modalities],
+    allowed_operations: [...key.allowed_operations],
+    artifact_policy: key.artifact_policy || 'proxy_only',
     expires_at: dateInputValue(key.expires_at),
     key_type: key.key_type,
     customer_id: key.customer_id,
@@ -172,6 +187,10 @@ async function save() {
         model_allowlist: [...form.model_allowlist],
         qps_limit: form.qps_limit,
         monthly_token_limit: form.monthly_token_limit,
+        scopes: [...(form.scopes || [])],
+        allowed_modalities: [...(form.allowed_modalities || [])],
+        allowed_operations: [...(form.allowed_operations || [])],
+        artifact_policy: form.artifact_policy,
         expires_at: form.expires_at,
         status: keyStatus.value,
         key_type: form.key_type,
@@ -192,6 +211,13 @@ async function save() {
   } finally {
     saving.value = false
   }
+}
+
+function applyImageWorkbenchPolicy() {
+  form.scopes = ['gateway:invoke', 'models:read']
+  form.allowed_modalities = ['metadata', 'image']
+  form.allowed_operations = ['list_models', 'image_generation']
+  form.artifact_policy = 'managed'
 }
 
 function openRotation(key: APIKeyRecord) {
@@ -369,7 +395,7 @@ onMounted(load)
     </section>
 
     <div v-if="modalOpen" class="modal-backdrop" @click.self="modalOpen = false">
-      <section class="modal-card">
+      <section class="modal-card api-key-modal">
         <header class="modal-header">
           <div>
             <h2>{{ editing ? t('apiKeys.editKey') : t('apiKeys.newKey') }}</h2>
@@ -414,6 +440,50 @@ onMounted(load)
             <label>{{ t('apiKeys.models') }}</label>
             <GatewayModelPicker v-model="form.model_allowlist" :models="gatewayModels" :disabled="saving" />
           </div>
+          <div class="form-span-2 api-key-policy-heading">
+            <div><strong>{{ t('apiKeys.gatewayAccess') }}</strong><span>{{ t('apiKeys.gatewayAccessHelp') }}</span></div>
+            <button class="button secondary tiny-button" type="button" data-policy-preset="image-workbench" @click="applyImageWorkbenchPolicy">
+              <Images :size="15" />
+              {{ t('apiKeys.imageWorkbenchPreset') }}
+            </button>
+          </div>
+          <fieldset class="form-span-2 token-option-group">
+            <legend>{{ t('apiKeys.gatewayScopes') }}</legend>
+            <div class="token-option-grid">
+              <label v-for="scope in scopeOptions" :key="scope" class="checkbox-row">
+                <input v-model="form.scopes" type="checkbox" :value="scope" />
+                <span>{{ scope }}</span>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset class="form-span-2 token-option-group">
+            <legend>{{ t('apiKeys.allowedModalities') }}</legend>
+            <div class="token-option-grid">
+              <label v-for="modality in modalityOptions" :key="modality" class="checkbox-row">
+                <input v-model="form.allowed_modalities" type="checkbox" :value="modality" />
+                <span>{{ modality }}</span>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset class="form-span-2 token-option-group">
+            <legend>{{ t('apiKeys.allowedOperations') }}</legend>
+            <div class="token-option-grid">
+              <label v-for="operation in operationOptions" :key="operation" class="checkbox-row">
+                <input v-model="form.allowed_operations" type="checkbox" :value="operation" />
+                <span>{{ operation }}</span>
+              </label>
+            </div>
+          </fieldset>
+          <div class="field form-span-2">
+            <label for="api-key-artifact-policy">{{ t('apiKeys.artifactPolicy') }}</label>
+            <select id="api-key-artifact-policy" v-model="form.artifact_policy" data-artifact-policy>
+              <option value="proxy_only">proxy_only</option>
+              <option value="temporary">temporary</option>
+              <option value="managed">managed</option>
+              <option value="metadata_only">metadata_only</option>
+            </select>
+            <small>{{ t('apiKeys.artifactPolicyHelp') }}</small>
+          </div>
           <div class="field">
             <label>{{ t('apiKeys.qps') }}</label>
             <input v-model.number="form.qps_limit" type="number" min="0" />
@@ -437,7 +507,7 @@ onMounted(load)
 
         <footer class="modal-footer">
           <button class="button secondary" type="button" @click="modalOpen = false; editing = null">{{ t('common.cancel') }}</button>
-          <button class="button" type="button" :disabled="saving || !form.model_allowlist.length" @click="save">
+          <button class="button" type="button" :disabled="saving || !form.model_allowlist.length || !form.scopes?.length || !form.allowed_modalities?.length || !form.allowed_operations?.length" @click="save">
             <Save :size="17" />
             {{ saving ? t('common.saving') : t('common.save') }}
           </button>

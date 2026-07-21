@@ -127,11 +127,13 @@ func (r *MemoryRepository) MarkAIOperationRunning(_ context.Context, id string, 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	operation, found := r.aiOperations[id]
-	if !found || operation.Status != AIOperationStatusAccepted {
+	if !found || (operation.Status != AIOperationStatusAccepted && !(operation.Status == AIOperationStatusFailed && operation.ErrorType == "provider_status_unknown")) {
 		return false, nil
 	}
 	operation.Status = AIOperationStatusRunning
+	operation.ErrorType = ""
 	operation.UpdatedAt = updatedAt
+	operation.CompletedAt = nil
 	r.aiOperations[id] = operation
 	return true, nil
 }
@@ -140,7 +142,7 @@ func (r *MemoryRepository) CompleteAIOperation(_ context.Context, id, status, er
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	operation, found := r.aiOperations[id]
-	if !found || (operation.Status != AIOperationStatusAccepted && operation.Status != AIOperationStatusRunning) {
+	if !found || (operation.Status != AIOperationStatusAccepted && operation.Status != AIOperationStatusRunning && !(operation.Status == AIOperationStatusFailed && operation.ErrorType == "provider_status_unknown")) {
 		return false, nil
 	}
 	operation.Status = status
@@ -710,7 +712,7 @@ func (r *PostgresRepository) FindAIOperation(ctx context.Context, id string) (AI
 }
 
 func (r *PostgresRepository) MarkAIOperationRunning(ctx context.Context, id string, updatedAt time.Time) (bool, error) {
-	result, err := r.db.ExecContext(ctx, `UPDATE ai_operations SET status=$1, updated_at=$2 WHERE id=$3 AND status=$4`, AIOperationStatusRunning, updatedAt, id, AIOperationStatusAccepted)
+	result, err := r.db.ExecContext(ctx, `UPDATE ai_operations SET status=$1, error_type='', completed_at=NULL, updated_at=$2 WHERE id=$3 AND (status=$4 OR (status=$5 AND error_type=$6))`, AIOperationStatusRunning, updatedAt, id, AIOperationStatusAccepted, AIOperationStatusFailed, "provider_status_unknown")
 	if err != nil {
 		return false, err
 	}
@@ -719,7 +721,7 @@ func (r *PostgresRepository) MarkAIOperationRunning(ctx context.Context, id stri
 }
 
 func (r *PostgresRepository) CompleteAIOperation(ctx context.Context, id, status, errorType string, completedAt time.Time) (bool, error) {
-	result, err := r.db.ExecContext(ctx, `UPDATE ai_operations SET status=$1, error_type=$2, completed_at=$3, updated_at=$3 WHERE id=$4 AND status IN ($5,$6)`, status, errorType, completedAt, id, AIOperationStatusAccepted, AIOperationStatusRunning)
+	result, err := r.db.ExecContext(ctx, `UPDATE ai_operations SET status=$1, error_type=$2, completed_at=$3, updated_at=$3 WHERE id=$4 AND (status IN ($5,$6) OR (status=$7 AND error_type=$8))`, status, errorType, completedAt, id, AIOperationStatusAccepted, AIOperationStatusRunning, AIOperationStatusFailed, "provider_status_unknown")
 	if err != nil {
 		return false, err
 	}

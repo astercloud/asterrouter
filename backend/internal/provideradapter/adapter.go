@@ -93,6 +93,9 @@ func (r *Registry) compatibleRequest(ctx context.Context, provider controlplane.
 			req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 		}
 	}
+	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
+		return nil, err
+	}
 	return req, nil
 }
 
@@ -145,6 +148,9 @@ func (r *Registry) bedrockRequest(ctx context.Context, provider controlplane.Gat
 	if err != nil {
 		return nil, err
 	}
+	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
+		return nil, err
+	}
 	digest := sha256.Sum256(body)
 	payloadHash := hex.EncodeToString(digest[:])
 	if err := awsv4.NewSigner().SignHTTP(ctx, resolved, req, payloadHash, "bedrock", region, r.now().UTC()); err != nil {
@@ -193,6 +199,9 @@ func (r *Registry) vertexRequest(ctx context.Context, provider controlplane.Gate
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
+		return nil, err
+	}
 	return req, nil
 }
 
@@ -245,6 +254,9 @@ func (r *Registry) azureRequest(ctx context.Context, provider controlplane.Gatew
 		req.Header.Set("Authorization", "Bearer "+token)
 	default:
 		return nil, fmt.Errorf("%w: Azure auth_type %q", ErrInvalidConfiguration, provider.AuthType)
+	}
+	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
+		return nil, err
 	}
 	return req, nil
 }

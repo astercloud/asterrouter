@@ -23,8 +23,16 @@ type anthropicModelDiscoveryAdapter struct{}
 
 type geminiModelDiscoveryAdapter struct{}
 
-func (openAICompatibleModelDiscoveryAdapter) Discover(ctx context.Context, provider ProviderConnection, _ ProviderAccount, secret string) ([]string, error) {
-	models, message, err := probeOpenAICompatibleModelsWithKey(ctx, provider.BaseURL, secret, "Provider account")
+func anthropicVersion(adapterConfig map[string]string) string {
+	version := strings.TrimSpace(adapterConfig["anthropic_version"])
+	if version == "" {
+		return "2023-06-01"
+	}
+	return version
+}
+
+func (openAICompatibleModelDiscoveryAdapter) Discover(ctx context.Context, provider ProviderConnection, account ProviderAccount, secret string) ([]string, error) {
+	models, message, err := probeOpenAICompatibleModelsWithKey(ctx, provider.BaseURL, secret, "Provider account", account.AdapterConfig)
 	if err != nil {
 		return nil, errors.New(message)
 	}
@@ -34,7 +42,7 @@ func (openAICompatibleModelDiscoveryAdapter) Discover(ctx context.Context, provi
 	return models, nil
 }
 
-func (anthropicModelDiscoveryAdapter) Discover(ctx context.Context, provider ProviderConnection, _ ProviderAccount, secret string) ([]string, error) {
+func (anthropicModelDiscoveryAdapter) Discover(ctx context.Context, provider ProviderConnection, account ProviderAccount, secret string) ([]string, error) {
 	var models []string
 	afterID := ""
 	for page := 0; page < 100; page++ {
@@ -44,8 +52,8 @@ func (anthropicModelDiscoveryAdapter) Discover(ctx context.Context, provider Pro
 		}
 		body, err := requestModelDiscoveryPage(ctx, endpoint, map[string]string{
 			"x-api-key":         secret,
-			"anthropic-version": "2023-06-01",
-		})
+			"anthropic-version": anthropicVersion(account.AdapterConfig),
+		}, account.AdapterConfig)
 		if err != nil {
 			return nil, fmt.Errorf("Anthropic /models discovery failed: %w", err)
 		}
@@ -73,7 +81,7 @@ func (anthropicModelDiscoveryAdapter) Discover(ctx context.Context, provider Pro
 	return nil, errors.New("Anthropic /models pagination exceeded 100 pages")
 }
 
-func (geminiModelDiscoveryAdapter) Discover(ctx context.Context, provider ProviderConnection, _ ProviderAccount, secret string) ([]string, error) {
+func (geminiModelDiscoveryAdapter) Discover(ctx context.Context, provider ProviderConnection, account ProviderAccount, secret string) ([]string, error) {
 	var models []string
 	pageToken := ""
 	for page := 0; page < 100; page++ {
@@ -81,7 +89,7 @@ func (geminiModelDiscoveryAdapter) Discover(ctx context.Context, provider Provid
 		if err != nil {
 			return nil, err
 		}
-		body, err := requestModelDiscoveryPage(ctx, endpoint, map[string]string{"x-goog-api-key": secret})
+		body, err := requestModelDiscoveryPage(ctx, endpoint, map[string]string{"x-goog-api-key": secret}, account.AdapterConfig)
 		if err != nil {
 			return nil, fmt.Errorf("Gemini /models discovery failed: %w", err)
 		}
@@ -120,7 +128,7 @@ func modelDiscoveryURL(baseURL string, query map[string]string) (string, error) 
 	return endpoint.String(), nil
 }
 
-func requestModelDiscoveryPage(ctx context.Context, endpoint string, headers map[string]string) ([]byte, error) {
+func requestModelDiscoveryPage(ctx context.Context, endpoint string, headers map[string]string, adapterConfigs ...map[string]string) ([]byte, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, providerProbeTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, endpoint, nil)
@@ -130,6 +138,11 @@ func requestModelDiscoveryPage(ctx context.Context, endpoint string, headers map
 	req.Header.Set("Accept", "application/json")
 	for key, value := range headers {
 		req.Header.Set(key, value)
+	}
+	if len(adapterConfigs) > 0 {
+		if err := ApplyProviderAccountHeaderOverrides(req, adapterConfigs[0]); err != nil {
+			return nil, err
+		}
 	}
 	client := &http.Client{
 		Timeout: providerProbeTimeout,
@@ -270,6 +283,7 @@ func (s *Service) discoverProviderAccountModels(ctx context.Context, id string) 
 	if err != nil {
 		return ProviderAccount{}, ProviderConnection{}, nil, err
 	}
+	provider.BaseURL = EffectiveProviderAccountBaseURL(account, provider)
 	if account.AuthType != "api_key" {
 		return ProviderAccount{}, ProviderConnection{}, nil, fmt.Errorf("provider account auth type %s does not support model discovery", account.AuthType)
 	}

@@ -1956,6 +1956,20 @@ export interface PluginCatalog {
   plugins: Plugin[]
 }
 
+export interface PluginFrontendContributionSurface {
+  surface: string
+  slot: string
+  title: string
+  asset: string
+  style?: string
+}
+
+export interface PluginFrontendContribution {
+  schema_version: string
+  plugin_id: string
+  surfaces: PluginFrontendContributionSurface[]
+}
+
 export interface SidecarRuntimeStatus {
   plugin_id: string
   enabled: boolean

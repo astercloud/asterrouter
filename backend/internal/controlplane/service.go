@@ -384,7 +384,7 @@ func (s *Service) checkProviderConfiguration(provider ProviderConnection) (strin
 	return "ok", "Provider endpoint configuration is ready; credentials are validated on provider accounts"
 }
 
-func probeOpenAICompatibleModelsWithKey(ctx context.Context, baseURL string, apiKey string, label string) ([]string, string, error) {
+func probeOpenAICompatibleModelsWithKey(ctx context.Context, baseURL string, apiKey string, label string, adapterConfigs ...map[string]string) ([]string, string, error) {
 	baseURL = strings.TrimSpace(baseURL)
 	apiKey = strings.TrimSpace(apiKey)
 	if label == "" {
@@ -403,6 +403,11 @@ func probeOpenAICompatibleModelsWithKey(ctx context.Context, baseURL string, api
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "application/json")
+	if len(adapterConfigs) > 0 {
+		if err := ApplyProviderAccountHeaderOverrides(req, adapterConfigs[0]); err != nil {
+			return nil, label + " header override is invalid", err
+		}
+	}
 
 	resp, err := (&http.Client{
 		Timeout: providerProbeTimeout,
@@ -612,6 +617,26 @@ func (s *Service) UpdateProviderAccount(ctx context.Context, actor string, id st
 	return account, nil
 }
 
+func (s *Service) DeleteProviderAccount(ctx context.Context, actor string, id string) error {
+	account, err := s.providerAccountByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	routes, err := s.repo.ListModelRoutes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, route := range routes {
+		if route.ProviderAccountID == account.ID {
+			return fmt.Errorf("provider account %q is referenced by model route %q; remove the route before deleting the account", account.Name, route.ID)
+		}
+	}
+	if err := s.repo.DeleteProviderAccount(ctx, account.ID); err != nil {
+		return err
+	}
+	return s.audit(ctx, actor, "delete", "provider_account", account.ID, fmt.Sprintf("Deleted provider account %s", account.Name))
+}
+
 func (s *Service) CheckProviderAccount(ctx context.Context, actor string, id string) (ProviderAccountHealthCheck, error) {
 	account, err := s.providerAccountByID(ctx, id)
 	if err != nil {
@@ -621,6 +646,7 @@ func (s *Service) CheckProviderAccount(ctx context.Context, actor string, id str
 	if err != nil {
 		return ProviderAccountHealthCheck{}, err
 	}
+	provider.BaseURL = EffectiveProviderAccountBaseURL(account, provider)
 
 	started := time.Now()
 	status, message, models := s.checkProviderAccountConfiguration(account, provider)
@@ -1758,11 +1784,12 @@ func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model s
 		if err != nil {
 			return nil, true, err
 		}
+		upstreamModel := ProviderAccountDispatchModel(entry.account, entry.route.UpstreamModel, resolved.RequestedID)
 		routes = append(routes, GatewayProvider{
 			ID:               entry.provider.ID,
 			Name:             entry.provider.Name,
 			Type:             entry.provider.Type,
-			BaseURL:          entry.provider.BaseURL,
+			BaseURL:          EffectiveProviderAccountBaseURL(entry.account, entry.provider),
 			APIKey:           secret,
 			AuthType:         entry.account.AuthType,
 			AdapterConfig:    cloneStringMap(entry.account.AdapterConfig),
@@ -1771,7 +1798,7 @@ func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model s
 			Concurrency:      entry.account.Concurrency,
 			GatewayModelID:   resolved.GatewayModel.ID,
 			RequestedModel:   resolved.RequestedID,
-			UpstreamModel:    entry.route.UpstreamModel,
+			UpstreamModel:    upstreamModel,
 			UpstreamFormat:   entry.route.UpstreamFormat,
 			RouteID:          entry.route.ID,
 			RouteGroup:       resolved.RouteGroup,
@@ -1829,7 +1856,7 @@ func (s *Service) rankedProviderAccountCandidates(ctx context.Context, model str
 			continue
 		}
 		provider, ok := providersByID[account.ProviderID]
-		if !ok || provider.Status == ProviderStatusDisabled || !validHTTPURL(provider.BaseURL) {
+		if !ok || provider.Status == ProviderStatusDisabled || !validHTTPURL(EffectiveProviderAccountBaseURL(account, provider)) {
 			continue
 		}
 		usage := s.providerAccountSlotUsage(account.ID)
@@ -2581,13 +2608,16 @@ func validateProviderAccountAdapter(providerType string, req *ProviderAccountReq
 	req.AuthType = authType
 	req.Platform = providerType
 	req.AdapterConfig = cloneStringMap(req.AdapterConfig)
+	if err := ValidateProviderAccountRuntimeSettings(req.AdapterConfig); err != nil {
+		return err
+	}
 	allowedKeys := map[string][]string{
-		ProviderTypeOpenAICompatible:    {},
-		ProviderTypeAnthropicCompatible: {"anthropic_version"},
-		ProviderTypeGeminiCompatible:    {},
-		ProviderTypeAWSBedrock:          {"region", "endpoint"},
-		ProviderTypeGCPVertex:           {"project", "location", "endpoint"},
-		ProviderTypeAzureOpenAI:         {"api_version", "audience", "managed_identity_client_id"},
+		ProviderTypeOpenAICompatible:    {ProviderAccountAdapterConfigSettings},
+		ProviderTypeAnthropicCompatible: {"anthropic_version", ProviderAccountAdapterConfigSettings},
+		ProviderTypeGeminiCompatible:    {ProviderAccountAdapterConfigSettings},
+		ProviderTypeAWSBedrock:          {"region", "endpoint", ProviderAccountAdapterConfigSettings},
+		ProviderTypeGCPVertex:           {"project", "location", "endpoint", ProviderAccountAdapterConfigSettings},
+		ProviderTypeAzureOpenAI:         {"api_version", "audience", "managed_identity_client_id", ProviderAccountAdapterConfigSettings},
 	}
 	for key := range req.AdapterConfig {
 		if key == "" || !contains(allowedKeys[providerType], key) {

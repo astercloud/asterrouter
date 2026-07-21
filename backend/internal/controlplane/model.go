@@ -110,6 +110,10 @@ const (
 	ProviderAuthGCPADC               = "gcp_adc"
 	ProviderAuthGCPServiceAccount    = "gcp_service_account"
 	ProviderAuthAzureManagedIdentity = "azure_managed_identity"
+
+	// ProviderAccountAdapterConfigSettings stores UI-level account policies that
+	// are intentionally separate from provider-specific adapter credentials.
+	ProviderAccountAdapterConfigSettings = "asterrouter_settings"
 )
 
 type ProviderConnection struct {

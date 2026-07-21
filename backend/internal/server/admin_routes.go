@@ -284,6 +284,13 @@ func registerRoutingAdminRoutes(admin *gin.RouterGroup, control *controlplane.Se
 		}
 		httpx.OK(c, data)
 	})
+	admin.DELETE("/provider-accounts/:id", func(c *gin.Context) {
+		if err := control.DeleteProviderAccount(c.Request.Context(), actor(c), c.Param("id")); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1554, err.Error())
+			return
+		}
+		httpx.OK(c, gin.H{"deleted": true})
+	})
 	admin.GET("/provider-accounts/:id/models", func(c *gin.Context) {
 		data, err := control.GetProviderAccountModelInventory(c.Request.Context(), c.Param("id"))
 		if err != nil {

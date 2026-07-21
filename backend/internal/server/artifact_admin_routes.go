@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -37,6 +38,32 @@ func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.S
 			return
 		}
 		httpx.OK(c, data)
+	})
+	group.GET("/artifacts/:id/content", func(c *gin.Context) {
+		data, err := control.ArtifactAdmin(c.Request.Context(), c.Param("id"))
+		if err == nil && !artifactAdminScopeMatches(data.Artifact, profileScope) {
+			err = controlplane.ErrArtifactNotFound
+		}
+		if err != nil {
+			writeArtifactAdminError(c, err)
+			return
+		}
+		byteRange, err := parseArtifactRange(c.GetHeader("Range"), data.Artifact.SizeBytes)
+		if err != nil {
+			c.Header("Content-Range", fmt.Sprintf("bytes */%d", data.Artifact.SizeBytes))
+			httpx.Error(c, http.StatusRequestedRangeNotSatisfiable, 1568, "artifact byte range is not satisfiable")
+			return
+		}
+		artifact, opened, found, err := control.OpenArtifactAdmin(c.Request.Context(), data.Artifact.ID, profileScope, byteRange)
+		if err == nil && !found {
+			err = controlplane.ErrArtifactNotFound
+		}
+		if err != nil {
+			writeArtifactAdminError(c, err)
+			return
+		}
+		defer opened.Body.Close()
+		writeArtifactContent(c, artifact, opened, byteRange != nil)
 	})
 	group.POST("/artifacts/:id/retry-delivery", func(c *gin.Context) {
 		data, err := control.ArtifactAdmin(c.Request.Context(), c.Param("id"))
@@ -93,6 +120,12 @@ func writeArtifactAdminError(c *gin.Context, err error) {
 		httpx.Error(c, http.StatusConflict, 1562, err.Error())
 	case errors.Is(err, controlplane.ErrArtifactSinkRequired):
 		httpx.Error(c, http.StatusServiceUnavailable, 1563, err.Error())
+	case errors.Is(err, controlplane.ErrArtifactUnavailable):
+		httpx.Error(c, http.StatusGone, 1565, err.Error())
+	case errors.Is(err, controlplane.ErrArtifactStoreRequired), errors.Is(err, controlplane.ErrArtifactProxyRequired):
+		httpx.Error(c, http.StatusServiceUnavailable, 1566, err.Error())
+	case errors.Is(err, controlplane.ErrArtifactIntegrity):
+		httpx.Error(c, http.StatusUnprocessableEntity, 1567, err.Error())
 	default:
 		httpx.Error(c, http.StatusInternalServerError, 1564, err.Error())
 	}

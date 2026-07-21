@@ -55,15 +55,17 @@ AsterRouter 是面向企业团队、AI API 平台和客户产品的 AI Access Ga
 
 首次运行只启用一个部署角色。交互安装会显示初始后台以及该角色包含和排除的业务范围，且不预选任何角色；无人值守运行时使用 `ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE`。该选择在新生产实例中不可切换，避免 Provider、Credential、Usage 和 Audit 跨业务模型混用；需要另一种形态时部署独立实例。完整规则见 [V4 部署角色与安装分流](./roadmap/v4/profile-bundles-and-installation.md)。
 
-## 当前正式接入范围
+## 标准协议与多云接入范围
 
 当前版本采用标准协议优先策略：
 
 | 协议 | 状态 | 说明 |
 | --- | --- | --- |
-| OpenAI Compatible Models / Chat Completions | 正式支持 | 当前已交付，包含 Chat Completions 流式响应 |
-| Responses / Embeddings / Anthropic Messages / Gemini | 路线图 | 通过统一 Protocol Edge 与 Canonical Request 接入 |
-| 图片 / 音频 / 视频 / Realtime / 异步 Job | 路线图 | 使用 Direct/Durable 双通道、Provider Capacity 与 Artifact 生命周期 |
+| OpenAI Compatible Models / Chat Completions / Responses | 正式支持 | 文本请求进入 Canonical Text Pipeline，支持普通与流式响应 |
+| Anthropic Messages / Gemini GenerateContent | 正式支持 | 与 OpenAI 协议共用 Policy、路由、容量、Billing、Usage 和 Trace Core |
+| AWS Bedrock Claude / GCP Vertex Claude / GCP Vertex Gemini / Azure OpenAI | 正式支持 | Provider Adapter 负责官方凭据链、云端点、上游协议和错误分类 |
+| 图片 / 音频 / 视频 / Realtime / 异步 Job | 独立通道 | 使用 Direct/Durable、Provider Capacity 与 Artifact 生命周期，不经过文本 IR |
+| Embeddings | 账号库存可记录，网关端点未交付 | 不用 `native_media` 冒充；待独立 Canonical Embedding Pipeline 和 `/v1/embeddings` 契约完成后开放 Route |
 | 其他公开协议 | 单独评审 | 只有在协议稳定、文档公开且具备长期维护条件时纳入 |
 
 第三方网关或企业自建兼容服务可以作为上游，但必须通过上述标准 API 契约接入。AsterRouter 不依赖其管理 API、内部数据库或私有字段。
@@ -98,7 +100,7 @@ AsterRouter 不实现以下能力：
 
 员工 Portal 只展示本人可见的 Key、模型、额度和用量，不暴露上游账号、渠道或运营信息。
 
-后续路线图会在同一 Core 上增加 API Key Principal 的细粒度 Scope 与分布式并发、OIDC Introspection/撤销事件与其他平台鉴权适配、Responses/Anthropic/Gemini、多模态 Job/Artifact、价格插件、成本感知调度、PostgreSQL + Redis 多模态基础设施，以及可选 Kubernetes 弹性部署。HMAC 与 RS256 JWT/JWKS 平台委托鉴权已经交付；未交付能力不能作为当前产品承诺。
+后续路线图会在同一 Core 上增加 API Key Principal 的细粒度 Scope 与分布式并发、OIDC Introspection/撤销事件与其他平台鉴权适配、更多多模态 Job/Artifact、价格插件、成本感知调度、PostgreSQL + Redis 多模态基础设施，以及可选 Kubernetes 弹性部署。HMAC 与 RS256 JWT/JWKS 平台委托鉴权已经交付；未交付能力不能作为当前产品承诺。
 
 ## 产品原则
 

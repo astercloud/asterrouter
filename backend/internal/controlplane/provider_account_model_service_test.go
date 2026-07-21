@@ -227,7 +227,7 @@ func TestProviderAccountHealthCheckAutoEnablesNewModelsOnlyWhenConfigured(t *tes
 func TestProviderModelDiscoveryAdaptersHandleNativePagination(t *testing.T) {
 	t.Run("anthropic", func(t *testing.T) {
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/v1/models" || r.Header.Get("x-api-key") != "anthropic-secret" || r.Header.Get("anthropic-version") == "" {
+			if r.URL.Path != "/v1/models" || r.Header.Get("x-api-key") != "anthropic-secret" || r.Header.Get("anthropic-version") != "2024-10-22" {
 				t.Fatalf("unexpected Anthropic request: path=%s headers=%v", r.URL.Path, r.Header)
 			}
 			if r.URL.Query().Get("after_id") == "model-a" {
@@ -238,7 +238,7 @@ func TestProviderModelDiscoveryAdaptersHandleNativePagination(t *testing.T) {
 		}))
 		defer upstream.Close()
 
-		models, err := (anthropicModelDiscoveryAdapter{}).Discover(context.Background(), ProviderConnection{BaseURL: upstream.URL + "/v1"}, ProviderAccount{}, "anthropic-secret")
+		models, err := (anthropicModelDiscoveryAdapter{}).Discover(context.Background(), ProviderConnection{BaseURL: upstream.URL + "/v1"}, ProviderAccount{AdapterConfig: map[string]string{"anthropic_version": "2024-10-22"}}, "anthropic-secret")
 		if err != nil || strings.Join(models, ",") != "model-a,model-b" {
 			t.Fatalf("models=%v err=%v", models, err)
 		}

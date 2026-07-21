@@ -148,6 +148,38 @@ func TestBuiltinOpenAIImageAdapterRunsDurableJobToArtifact(t *testing.T) {
 	}
 }
 
+func TestBuiltinOpenAIImageAdapterDownloadsURLOutputs(t *testing.T) {
+	imageBytes := []byte("synthetic-url-image")
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/output.png" {
+			response.Header().Set("Content-Type", "image/png")
+			_, _ = response.Write(imageBytes)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(map[string]any{"data": []map[string]string{{"url": "http://" + request.Host + "/output.png"}}})
+	}))
+	defer upstream.Close()
+
+	service := NewServiceWithOptions(NewMemoryRepository(), ServiceOptions{ProviderAdapterHTTPClient: upstream.Client()})
+	provider := controlplane.GatewayProvider{Type: "openai_compatible", BaseURL: upstream.URL + "/v1", APIKey: "provider-secret", AccountID: "account", UpstreamModel: "image"}
+	result, err := service.dispatchBuiltinOpenAIImage(context.Background(), provider, controlplane.AIJob{Modality: "image", Operation: "image_generation", ArtifactPolicy: controlplane.GatewayArtifactPolicyManaged}, controlplane.AIAttempt{}, controlplane.ProviderDispatchCommand{
+		Intent: controlplane.ProviderDispatchIntent{DispatchKey: "dispatch-url"}, Payload: []byte(`{"input":{"prompt":"synthetic"}}`),
+	})
+	if err != nil || result.Outcome != controlplane.ProviderDispatchOutcomeAccepted || len(result.Outputs) != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	opened, openErr := service.openBuiltinOpenAIImageOutput(result.Task.ProviderTaskID, result.Outputs[0])
+	if openErr != nil {
+		t.Fatalf("open cached URL output: %v", openErr)
+	}
+	defer opened.Close()
+	stored, readErr := io.ReadAll(opened)
+	if readErr != nil || string(stored) != string(imageBytes) {
+		t.Fatalf("stored=%q err=%v", stored, readErr)
+	}
+}
+
 func TestBuiltinOpenAIImageAdapterClassifiesFailuresWithoutLeakingBodies(t *testing.T) {
 	for _, test := range []struct {
 		name        string

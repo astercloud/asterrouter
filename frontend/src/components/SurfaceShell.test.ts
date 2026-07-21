@@ -1,9 +1,10 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { defineComponent } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getCurrentUser } from '@/api/auth'
+import { getPluginCatalog, getPluginFrontendContribution } from '@/api/plugins'
 import i18n, { setLocale } from '@/i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -20,11 +21,16 @@ vi.mock('@/api/customer', () => ({
   markAllCustomerNotificationsRead: vi.fn(),
   markCustomerNotificationRead: vi.fn()
 }))
+vi.mock('@/api/plugins', () => ({
+  getPluginCatalog: vi.fn().mockResolvedValue({ summary: { total: 0, enabled: 0, free: 0, paid_locked: 0, configurable: 0 }, plugins: [] }),
+  getPluginFrontendContribution: vi.fn()
+}))
 
 const icon = defineComponent({ template: '<span aria-hidden="true"></span>' })
 
 describe('SurfaceShell', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     setLocale('en-US')
     vi.mocked(getCurrentUser).mockResolvedValue(makeAuthUser({ role: 'demo_admin' }))
   })
@@ -58,7 +64,10 @@ describe('SurfaceShell', () => {
         homeTo: '/console/overview',
         navLabel: 'nav.console',
         surface: 'personal',
-        navGroups: [{ label: 'nav.overview', items: [{ to: '/console/overview', label: 'console.overview', icon }] }]
+        navGroups: [
+          { label: 'nav.overview', items: [{ to: '/console/overview', label: 'console.overview', icon }] },
+          { label: 'nav.inference', items: [] }
+        ]
       },
       global: { plugins: [pinia, router, i18n] }
     })
@@ -87,6 +96,96 @@ describe('SurfaceShell', () => {
     expect(wrapper.findAll('a').map((link) => link.text()).join(' ')).not.toContain('Admin')
     expect(wrapper.findAll('a').map((link) => link.text()).join(' ')).not.toContain('Platform')
 
+    wrapper.unmount()
+  })
+
+  it('shows installed personal plugin workbenches in their own navigation group', async () => {
+    vi.mocked(getPluginCatalog).mockResolvedValueOnce({
+      summary: { total: 1, enabled: 1, free: 1, paid_locked: 0, configurable: 0 },
+      plugins: [{
+        id: 'imagegen',
+        plugin_id: 'com.asterrouter.imagegen.workbench',
+        name: '图片生成工作台',
+        description: 'Image creation',
+        category: 'content',
+        type: 'remote',
+        tier: 'free_core',
+        version: '0.3.2',
+        vendor: 'AsterCloud',
+        status: 'enabled',
+        entitlement_status: 'free',
+        surfaces: ['personal'],
+        entry_point: '/admin/plugins',
+        configurable: false,
+        packages: [{ install_status: 'installed' } as never],
+        created_at: '',
+        updated_at: ''
+      }]
+    })
+    vi.mocked(getPluginFrontendContribution).mockResolvedValueOnce({
+      schema_version: 'astercloud.plugin-frontend-contribution.v1',
+      plugin_id: 'com.asterrouter.imagegen.workbench',
+      surfaces: [{ surface: 'console.plugins', slot: 'plugin-workbench', title: '图片生成工作台', asset: 'assets/index.js' }]
+    })
+    const { wrapper } = await mountShell()
+    await flushPromises()
+    const pluginNavigation = wrapper.get('[data-installed-plugin-navigation]')
+    expect(pluginNavigation.text()).toContain('图片生成工作台')
+    expect(pluginNavigation.get('.sidebar-plugin-count').text()).toBe('1')
+    expect(pluginNavigation.get('a').attributes('href')).toBe('/console/plugins/com.asterrouter.imagegen.workbench/workbench')
+    wrapper.unmount()
+  })
+
+  it('does not expose disabled or uninstalled plugins as personal launchers', async () => {
+    vi.mocked(getPluginCatalog).mockResolvedValueOnce({
+      summary: { total: 2, enabled: 0, free: 2, paid_locked: 0, configurable: 0 },
+      plugins: [
+        {
+          id: 'disabled-imagegen',
+          plugin_id: 'com.asterrouter.imagegen.disabled',
+          name: 'Disabled workbench',
+          description: '',
+          category: 'content',
+          type: 'remote',
+          tier: 'free_core',
+          version: '0.3.2',
+          vendor: 'AsterCloud',
+          status: 'disabled',
+          entitlement_status: 'free',
+          surfaces: ['personal'],
+          entry_point: '/admin/plugins',
+          configurable: false,
+          packages: [{ install_status: 'installed' } as never],
+          created_at: '',
+          updated_at: ''
+        },
+        {
+          id: 'remote-imagegen',
+          plugin_id: 'com.asterrouter.imagegen.remote',
+          name: 'Remote workbench',
+          description: '',
+          category: 'content',
+          type: 'remote',
+          tier: 'free_core',
+          version: '0.3.2',
+          vendor: 'AsterCloud',
+          status: 'enabled',
+          entitlement_status: 'free',
+          surfaces: ['personal'],
+          entry_point: '/admin/plugins',
+          configurable: false,
+          packages: [{ install_status: 'not_downloaded' } as never],
+          created_at: '',
+          updated_at: ''
+        }
+      ]
+    })
+
+    const { wrapper } = await mountShell()
+    await flushPromises()
+
+    expect(wrapper.find('[data-installed-plugin-navigation]').exists()).toBe(false)
+    expect(getPluginFrontendContribution).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

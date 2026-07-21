@@ -557,19 +557,37 @@ func (s *Service) OpenArtifactForAuth(ctx context.Context, auth gatewaycore.Cano
 	if err != nil || !found {
 		return Artifact{}, ArtifactRead{}, found, err
 	}
+	opened, err := s.openArtifactContent(ctx, artifact, byteRange)
+	return artifact, opened, true, err
+}
+
+// OpenArtifactAdmin opens artifact content inside the authenticated admin or
+// platform surface while preserving the surface's profile boundary.
+func (s *Service) OpenArtifactAdmin(ctx context.Context, id, profileScope string, byteRange *ArtifactByteRange) (Artifact, ArtifactRead, bool, error) {
+	artifact, found, err := s.repo.FindArtifact(ctx, strings.TrimSpace(id))
+	if err != nil || !found {
+		return Artifact{}, ArtifactRead{}, found, err
+	}
+	profileScope = strings.TrimSpace(profileScope)
+	if profileScope != "" && artifact.ProfileScope != profileScope {
+		return Artifact{}, ArtifactRead{}, false, nil
+	}
+	opened, err := s.openArtifactContent(ctx, artifact, byteRange)
+	return artifact, opened, true, err
+}
+
+func (s *Service) openArtifactContent(ctx context.Context, artifact Artifact, byteRange *ArtifactByteRange) (ArtifactRead, error) {
 	if artifact.Policy == GatewayArtifactPolicyProxyOnly {
-		opened, proxyErr := s.openProxiedArtifact(ctx, artifact, byteRange)
-		return artifact, opened, true, proxyErr
+		return s.openProxiedArtifact(ctx, artifact, byteRange)
 	}
 	if !artifactDownloadable(artifact, s.nowUTC()) {
-		return artifact, ArtifactRead{}, true, ErrArtifactUnavailable
+		return ArtifactRead{}, ErrArtifactUnavailable
 	}
 	store, found := s.artifactStore(artifact.StoreDriver)
 	if !found {
-		return artifact, ArtifactRead{}, true, ErrArtifactStoreRequired
+		return ArtifactRead{}, ErrArtifactStoreRequired
 	}
-	opened, err := store.Open(ctx, artifact.StoreKey, byteRange)
-	return artifact, opened, true, err
+	return store.Open(ctx, artifact.StoreKey, byteRange)
 }
 
 func (s *Service) RequestArtifactDeletionForAuth(ctx context.Context, auth gatewaycore.CanonicalAuthContext, id string) (Artifact, bool, error) {

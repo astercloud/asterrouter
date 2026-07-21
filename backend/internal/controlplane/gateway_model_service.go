@@ -483,14 +483,15 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 			continue
 		}
 		account, ok := accountsByID[route.ProviderAccountID]
-		if !ok || !accountEligibleForRouting(account, route.UpstreamModel, now) {
+		dispatchModel := ProviderAccountDispatchModel(account, route.UpstreamModel, resolved.RequestedID)
+		if !ok || !accountEligibleForRouting(account, dispatchModel, now) {
 			continue
 		}
 		if health, found := billingHealthByAccount[account.ID]; found && health.HardBlocked {
 			continue
 		}
 		provider, ok := providersByID[account.ProviderID]
-		if !ok || provider.Status == ProviderStatusDisabled || !validHTTPURL(provider.BaseURL) {
+		if !ok || provider.Status == ProviderStatusDisabled || !validHTTPURL(EffectiveProviderAccountBaseURL(account, provider)) {
 			continue
 		}
 		circuitState, circuitProbe, eligible := effectiveCircuitState(account, now)

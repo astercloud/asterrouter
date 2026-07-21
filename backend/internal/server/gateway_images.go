@@ -197,36 +197,60 @@ func executeDirectMedia(c *gin.Context, control *controlplane.Service, adapter c
 	c.Set(gatewayOperationContextKey, operation.ID)
 	c.Set(gatewayFingerprintContextKey, operation.RequestFingerprint)
 	c.Header("X-AsterRouter-Operation-ID", operation.ID)
+	var replayAttempt *controlplane.AIAttempt
 	if !created {
-		if operation.Status != controlplane.AIOperationStatusSucceeded {
-			writeGatewayError(c, controlplane.ErrGatewayIdempotencyReplay)
-			return
-		}
-		artifacts, replayErr := control.DirectArtifactsForAuth(c.Request.Context(), canonicalAuth, operation.ID)
-		if replayErr != nil || len(artifacts) == 0 {
-			writeGatewayError(c, controlplane.ErrGatewayIdempotencyReplay)
-			return
-		}
-		response, responseErr := buildDirectMediaResponse(c.Request.Context(), control, canonicalAuth, request, operation, artifacts)
-		if responseErr != nil {
-			writeGatewayError(c, responseErr)
-			return
-		}
-		var previews []directMediaResponseItem
-		var previewErr error
-		if request.Stream && request.PreviewMode != "none" {
-			previews, previewErr = buildDirectMediaPreviewItems(c.Request.Context(), control, canonicalAuth, request, artifacts)
-		}
-		if previewErr != nil || request.PreviewMode == "required" && len(previews) == 0 {
-			if previewErr == nil {
-				previewErr = controlplane.ErrProviderOutputsRequired
+		if operation.Status == controlplane.AIOperationStatusFailed && operation.ErrorType == "provider_status_unknown" {
+			attempts, attemptsErr := control.AIAttemptsForOperation(c.Request.Context(), operation.ID)
+			if attemptsErr != nil {
+				writeGatewayError(c, attemptsErr)
+				return
 			}
-			writeGatewayError(c, previewErr)
+			for index := range attempts {
+				candidate := attempts[index]
+				if candidate.Status == controlplane.AIAttemptStatusRunning && candidate.DispatchState == controlplane.AIAttemptDispatchUnknown && candidate.ProviderTaskID == "" {
+					if replayAttempt != nil {
+						writeGatewayError(c, controlplane.ErrGatewayIdempotencyReplay)
+						return
+					}
+					copy := candidate
+					replayAttempt = &copy
+				}
+			}
+			if replayAttempt == nil {
+				writeGatewayError(c, controlplane.ErrGatewayIdempotencyReplay)
+				return
+			}
+		} else if operation.Status != controlplane.AIOperationStatusSucceeded {
+			writeGatewayError(c, controlplane.ErrGatewayIdempotencyReplay)
 			return
 		}
-		c.Header("Idempotent-Replayed", "true")
-		writeDirectMediaResponseWithPreviews(c, request, response, previews)
-		return
+		if replayAttempt == nil {
+			artifacts, replayErr := control.DirectArtifactsForAuth(c.Request.Context(), canonicalAuth, operation.ID)
+			if replayErr != nil || len(artifacts) == 0 {
+				writeGatewayError(c, controlplane.ErrGatewayIdempotencyReplay)
+				return
+			}
+			response, responseErr := buildDirectMediaResponse(c.Request.Context(), control, canonicalAuth, request, operation, artifacts)
+			if responseErr != nil {
+				writeGatewayError(c, responseErr)
+				return
+			}
+			var previews []directMediaResponseItem
+			var previewErr error
+			if request.Stream && request.PreviewMode != "none" {
+				previews, previewErr = buildDirectMediaPreviewItems(c.Request.Context(), control, canonicalAuth, request, artifacts)
+			}
+			if previewErr != nil || request.PreviewMode == "required" && len(previews) == 0 {
+				if previewErr == nil {
+					previewErr = controlplane.ErrProviderOutputsRequired
+				}
+				writeGatewayError(c, previewErr)
+				return
+			}
+			c.Header("Idempotent-Replayed", "true")
+			writeDirectMediaResponseWithPreviews(c, request, response, previews)
+			return
+		}
 	}
 	completed := false
 	complete := func(status, errorType string) {
@@ -268,7 +292,7 @@ func executeDirectMedia(c *gin.Context, control *controlplane.Service, adapter c
 	cohortKey := control.GatewayEffectivePricingCohortKey(affinity)
 	candidates := control.PreferGatewayCandidatesWithAffinity(c.Request.Context(), affinity,
 		control.OrderGatewayCandidatesByEffectivePricing(c.Request.Context(), request.Model, string(request.Protocol), cohortKey, plan.Candidates))
-	execution, err := attemptDirectMediaCandidates(c.Request.Context(), control, adapter, operation, request, candidates)
+	execution, err := attemptDirectMediaCandidatesWithReplay(c.Request.Context(), control, adapter, operation, request, candidates, replayAttempt)
 	routeAttempts := marshalRouteEvidence(plan.Exclusions, execution.Attempts)
 	if execution.Attempt.ID != "" {
 		c.Set(gatewayAttemptContextKey, execution.Attempt.ID)
@@ -320,7 +344,7 @@ func executeDirectMedia(c *gin.Context, control *controlplane.Service, adapter c
 	_ = control.CompleteAIAttempt(c.Request.Context(), execution.Attempt.ID, controlplane.AIAttemptStatusSucceeded, "")
 	usageDimensions := directMediaUsageDimensions(request, len(response.Data), finalArtifactBytes(artifacts))
 	if err := control.RecordDirectAIProviderUsage(c.Request.Context(), operation, execution.Attempt, execution.Result, controlplane.GatewayUsageInput{
-		UsageSource: "gateway_final", Model: request.Model, UpstreamModel: execution.Provider.UpstreamModel,
+		UsageVersion: 2, UsageSource: "gateway_final", Model: request.Model, UpstreamModel: execution.Provider.UpstreamModel,
 		Protocol: string(request.Protocol), ProviderID: execution.Provider.ID, ProviderAccountID: execution.Provider.AccountID,
 		Status: "forwarded", LatencyMS: time.Since(startedAt).Milliseconds(), UsageNormalizationStatus: "normalized_media_outputs",
 		UsageDimensions: usageDimensions, UpstreamRequestID: execution.Result.Task.ProviderRequestID,
@@ -340,6 +364,10 @@ func executeDirectImage(c *gin.Context, control *controlplane.Service, adapter c
 }
 
 func attemptDirectMediaCandidates(ctx context.Context, control *controlplane.Service, adapter controlplane.DirectAIProviderAdapter, operation controlplane.AIOperation, request gatewaycore.CanonicalRequest, candidates []controlplane.GatewayProvider) (directMediaExecution, error) {
+	return attemptDirectMediaCandidatesWithReplay(ctx, control, adapter, operation, request, candidates, nil)
+}
+
+func attemptDirectMediaCandidatesWithReplay(ctx context.Context, control *controlplane.Service, adapter controlplane.DirectAIProviderAdapter, operation controlplane.AIOperation, request gatewaycore.CanonicalRequest, candidates []controlplane.GatewayProvider, replayAttempt *controlplane.AIAttempt) (directMediaExecution, error) {
 	execution := directMediaExecution{Attempts: []gatewayRouteAttempt{}}
 	if adapter == nil {
 		return execution, errDirectImageAdapterUnavailable
@@ -347,6 +375,9 @@ func attemptDirectMediaCandidates(ctx context.Context, control *controlplane.Ser
 	adapterSupported := false
 	capacityDenied := false
 	for index, provider := range candidates {
+		if replayAttempt != nil && (provider.ID != replayAttempt.ProviderID || provider.AccountID != replayAttempt.ProviderAccountID || provider.RouteID != replayAttempt.RouteID) {
+			continue
+		}
 		adapterID, supported, err := adapter.SelectDirectAIAdapter(ctx, provider, request, operation.ArtifactPolicy)
 		if err != nil {
 			return execution, err
@@ -357,9 +388,17 @@ func attemptDirectMediaCandidates(ctx context.Context, control *controlplane.Ser
 		}
 		adapterSupported = true
 		provider.AdapterID = adapterID
-		attempt, err := control.BeginAIAttempt(ctx, operation.ID, index+1, provider)
-		if err != nil {
-			return execution, err
+		var attempt controlplane.AIAttempt
+		if replayAttempt != nil {
+			if strings.TrimSpace(replayAttempt.ProviderAdapterID) != "" && replayAttempt.ProviderAdapterID != adapterID {
+				return execution, controlplane.ErrAIAttemptDispatchConflict
+			}
+			attempt = *replayAttempt
+		} else {
+			attempt, err = control.BeginAIAttempt(ctx, operation.ID, index+1, provider)
+			if err != nil {
+				return execution, err
+			}
 		}
 		permit, reason, acquired, err := control.TryAcquireProviderAccountPermitContext(ctx, provider, estimateGatewayRequestTokens(request.Payload), "provider_lease_"+attempt.ID)
 		if err != nil {
@@ -367,6 +406,10 @@ func attemptDirectMediaCandidates(ctx context.Context, control *controlplane.Ser
 			return execution, err
 		}
 		if !acquired {
+			if replayAttempt != nil {
+				execution.Provider, execution.Attempt = provider, attempt
+				return execution, errDirectImageCapacityUnavailable
+			}
 			capacityDenied = true
 			_ = control.CompleteAIAttempt(ctx, attempt.ID, controlplane.AIAttemptStatusSkipped, reason)
 			execution.Attempts = append(execution.Attempts, gatewayRouteAttempt{AttemptID: attempt.ID, AccountID: provider.AccountID, ProviderID: provider.ID, RouteID: provider.RouteID, Model: provider.UpstreamModel, Outcome: "skipped", Detail: reason})

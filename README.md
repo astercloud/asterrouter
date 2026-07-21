@@ -11,7 +11,7 @@ A private AI gateway for teams, developer platforms, and connected products.
 [![Release](https://img.shields.io/github/v/release/astercloud/asterrouter?style=flat-square)](https://github.com/astercloud/asterrouter/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/astercloud/asterrouter/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/astercloud/asterrouter/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/astercloud/asterrouter?style=flat-square)](./LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square)](./backend/go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square)](./backend/go.mod)
 
 </div>
 
@@ -56,16 +56,17 @@ AI Platform is a separate deployment role, not a relay-customer feature. It has 
 
 ## What is available now
 
-- OpenAI-compatible Models and Chat Completions, including streaming.
+- OpenAI-compatible Models, Chat Completions, Responses, Images, Audio, Realtime, and durable Jobs, including streaming and artifact delivery.
 - Multi-provider routing, fallback, account capacity controls, cooldowns, circuit breaking, and sticky routing.
 - API Key lifecycle, model allowlists, rate limits, token quotas, budgets, usage, cost allocation, alerts, traces, audit, and export.
+- Installed plugin workbenches that reuse host-managed routing, credentials, usage evidence, and artifacts.
 - Enterprise identity and access governance, plus Personal, Relay Operator, Enterprise, and AI Platform consoles.
 - Platform Tenant and Gateway Principal management; direct tenant-bound keys; HMAC and RS256 JWT/JWKS delegated access; signed HTTPS usage delivery with retry, dead letter, and requeue.
 - Private deployment foundations: PostgreSQL, backup and restore, diagnostics, and verified release updates.
 
 ## Where the product is going
 
-The roadmap extends the same Core to price-aware provider selection, browser-assisted price collection, Responses and other public protocols, image/audio/video, long-running jobs, artifact delivery, Redis-backed coordination, and Kubernetes scaling. These are not current product claims.
+The roadmap extends the same Core to broader price-aware provider selection, browser-assisted price collection, Embeddings and other public protocols, additional media adapters, Redis-backed coordination, and Kubernetes scaling. These are not current product claims.
 
 The roadmap is intentionally not a release promise. The public product boundary is kept in this README; private deployment planning is delivered with the engagement.
 
@@ -96,11 +97,15 @@ Replace `enterprise` with `personal`, `relay_operator`, or `platform` as appropr
 
 ### Docker
 
+Copy the deployment template first so credentials are not kept in the Compose file:
+
 ```bash
-docker compose up --build
+cp .env.example .env
+# edit .env and replace the example password and secret
+docker compose up -d --build
 ```
 
-Open `http://localhost:8080/setup` to choose one deployment role and review its business boundary before completing setup. After installation, AsterRouter clears any browser session left by another deployment role and asks you to sign in again before opening the selected console. Retrying the same installation choice is safe. A system administrator can switch the active role later from Settings; the previous role is hidden but its data is retained. For non-interactive runtime deployment, set `ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE=platform`.
+Open `http://localhost:8080/setup` to choose one deployment role and review its business boundary before completing setup. The bundled Compose file persists PostgreSQL and application data in named volumes, binds to localhost by default, and exposes `/ready` as its container health check. Multi-architecture images can be published separately with the manual `Docker Release` GitHub Actions workflow, so Docker does not block the normal GitHub Release. For an externally managed PostgreSQL, use `deploy/docker-compose.standalone.yml` and set `ASTERROUTER_DATABASE_URL`. For unattended runtime deployment, set `ASTERROUTER_DEPLOYMENT_ROLE=platform` in `.env`.
 
 ## Private deployment and managed delivery
 
@@ -119,6 +124,7 @@ The Core remains usable when official online services are unavailable. Prompts, 
 - [Releases](https://github.com/astercloud/asterrouter/releases)
 - [Build status](https://github.com/astercloud/asterrouter/actions)
 - [Deployment environment template](./deploy/asterrouter.env.example)
+- [Docker deployment guide](./deploy/DOCKER.md)
 - [简体中文说明](./README.zh-CN.md)
 
 <details>
@@ -141,7 +147,7 @@ To expose the one-click demo entry on the sign-in page, start the isolated demo 
 bash scripts/dev.sh --demo
 ```
 
-Demo mode enables the built-in demo account and must only be used locally or on an isolated public demo instance. Docker users can enable it with `ASTERROUTER_SERVER_BOOTSTRAP_DEMO_MODE=true docker compose up --build`; production instances should keep it disabled.
+Demo mode enables the built-in demo account and must only be used locally or on an isolated public demo instance. Docker users can enable it with `ASTERROUTER_DEMO_MODE=true docker compose up --build`; production instances should keep it disabled.
 
 Run backend tests:
 

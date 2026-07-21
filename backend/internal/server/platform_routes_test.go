@@ -304,11 +304,15 @@ func TestPlatformOperationsAreProfileScopedAndDoNotDiscloseForeignResources(t *t
 	if detail := request(http.MethodGet, "/api/v1/platform/artifacts/"+platformArtifact.ID); detail.Code != http.StatusOK {
 		t.Fatalf("platform artifact detail status=%d body=%s", detail.Code, detail.Body.String())
 	}
+	if content := request(http.MethodGet, "/api/v1/platform/artifacts/"+platformArtifact.ID+"/content"); content.Code != http.StatusOK || content.Body.String() != "synthetic-artifact-platform" {
+		t.Fatalf("platform artifact content status=%d body=%q", content.Code, content.Body.String())
+	}
 	if runtimes := request(http.MethodGet, "/api/v1/platform/artifact-runtimes"); runtimes.Code != http.StatusOK {
 		t.Fatalf("platform artifact runtimes status=%d body=%s", runtimes.Code, runtimes.Body.String())
 	}
 	for _, result := range []*httptest.ResponseRecorder{
 		request(http.MethodGet, "/api/v1/platform/artifacts/"+foreignArtifact.ID),
+		request(http.MethodGet, "/api/v1/platform/artifacts/"+foreignArtifact.ID+"/content"),
 		request(http.MethodPost, "/api/v1/platform/artifacts/"+foreignArtifact.ID+"/retry-delivery"),
 	} {
 		if result.Code != http.StatusNotFound || strings.Contains(result.Body.String(), foreignArtifact.ID) {

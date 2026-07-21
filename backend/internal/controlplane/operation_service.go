@@ -142,6 +142,29 @@ func (s *Service) PrepareAIAttemptDispatch(ctx context.Context, attemptID string
 	if err != nil {
 		return AIAttempt{}, false, err
 	}
+	if attempt.DispatchState == AIAttemptDispatchUnknown {
+		if attempt.ProviderTaskID != "" {
+			return AIAttempt{}, false, ErrAIAttemptDispatchConflict
+		}
+		requested := attempt
+		requested.DispatchState = AIAttemptDispatchPending
+		requested.DispatchIntentJSON = ""
+		requested.DispatchSubmittedAt = nil
+		requested.ProviderRequestID = ""
+		requested.ProviderTaskStatus = ""
+		requested.ProviderAcceptedAt = nil
+		requested.LastReconciledAt = nil
+		requested.ReconcileAfter = nil
+		requested.UpdatedAt = s.nowUTC()
+		updated, changed, resetErr := s.repo.UpdateAIAttemptDispatch(ctx, requested, attempt.DispatchVersion)
+		if resetErr != nil {
+			return AIAttempt{}, false, resetErr
+		}
+		if !changed {
+			return updated, false, ErrAIAttemptDispatchState
+		}
+		attempt = updated
+	}
 	if attempt.DispatchState != AIAttemptDispatchPending || attempt.DispatchIntentJSON != "" {
 		if attempt.DispatchIntentJSON == string(payload) && attempt.DispatchKey == intent.DispatchKey {
 			return attempt, false, nil
@@ -339,6 +362,10 @@ func (s *Service) ProveAIAttemptNotCreated(ctx context.Context, attemptID string
 
 func (s *Service) AIAttemptsForReconciliation(ctx context.Context, limit int) ([]AIAttempt, error) {
 	return s.repo.ListAIAttemptsForReconciliation(ctx, s.nowUTC(), limit)
+}
+
+func (s *Service) AIAttemptsForOperation(ctx context.Context, operationID string) ([]AIAttempt, error) {
+	return s.repo.ListAIAttemptsByOperationID(ctx, strings.TrimSpace(operationID))
 }
 
 func (s *Service) DirectAIAttemptsForReconciliation(ctx context.Context, limit int) ([]AIAttempt, error) {

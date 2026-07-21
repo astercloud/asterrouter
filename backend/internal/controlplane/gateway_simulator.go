@@ -78,7 +78,7 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 		}
 		result.Candidates = append(result.Candidates, GatewaySimulationCandidate{
 			Rank: index + 1, RouteID: candidate.route.ID, RouteGroup: candidate.route.RouteGroup,
-			ProviderID: candidate.provider.ID, ProviderAccountID: candidate.account.ID, UpstreamModel: candidate.route.UpstreamModel,
+			ProviderID: candidate.provider.ID, ProviderAccountID: candidate.account.ID, UpstreamModel: ProviderAccountDispatchModel(candidate.account, candidate.route.UpstreamModel, resolved.RequestedID),
 			ProviderType: candidate.provider.Type, UpstreamFormat: candidate.route.UpstreamFormat, Adapter: candidate.provider.Type,
 			Headroom: candidate.headroom, RPMLimit: candidate.account.RPMLimit, TPMLimit: candidate.account.TPMLimit,
 			Concurrency: candidate.account.Concurrency, CircuitState: candidate.circuitState,
@@ -138,6 +138,7 @@ func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved Reso
 			out = append(out, candidate)
 			continue
 		}
+		candidate.UpstreamModel = ProviderAccountDispatchModel(account, route.UpstreamModel, resolved.RequestedID)
 		candidate.RPMLimit = account.RPMLimit
 		candidate.TPMLimit = account.TPMLimit
 		candidate.Concurrency = account.Concurrency
@@ -153,7 +154,7 @@ func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved Reso
 			candidate.Reason = "provider_not_found"
 		} else if provider.Status == ProviderStatusDisabled {
 			candidate.Reason = "provider_disabled"
-		} else if !validHTTPURL(provider.BaseURL) {
+		} else if !validHTTPURL(EffectiveProviderAccountBaseURL(account, provider)) {
 			candidate.Reason = "provider_url_invalid"
 		} else if state, _, eligible := effectiveCircuitState(account, now); !eligible {
 			candidate.CircuitState = state

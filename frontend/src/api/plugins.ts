@@ -21,6 +21,7 @@ import type {
   PluginAPITokenCreateRequest,
   PluginAPITokenCreateResult,
   PluginDeliveryAttempt,
+  PluginFrontendContribution,
   PluginPackage,
   PluginPackageInstallation,
   PluginPackageImportRequest,
@@ -198,5 +199,16 @@ export async function uninstallPluginPackage(id: string, packageID: string): Pro
 
 export async function getSidecarRuntimeStatus(id: string): Promise<SidecarRuntimeStatus> {
   const response = await apiClient.get<SidecarRuntimeStatus>(`/admin/plugins/${encodeURIComponent(id)}/runtime/status`)
+  return response.data
+}
+
+export async function getPluginFrontendContribution(id: string): Promise<PluginFrontendContribution> {
+  const response = await apiClient.get<PluginFrontendContribution>(`/admin/plugins/${encodeURIComponent(id)}/frontend/contribution`)
+  return response.data
+}
+
+export async function getPluginFrontendAsset(id: string, assetPath: string, responseType: 'text' | 'arraybuffer' = 'text'): Promise<string | ArrayBuffer> {
+  const path = assetPath.split('/').filter(Boolean).map((segment) => encodeURIComponent(segment)).join('/')
+  const response = await apiClient.get<string | ArrayBuffer>(`/admin/plugins/${encodeURIComponent(id)}/frontend/assets/${path}`, { responseType })
   return response.data
 }
