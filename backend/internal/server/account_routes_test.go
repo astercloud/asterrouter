@@ -293,7 +293,7 @@ func TestLocalAdministratorLoginRequiresTOTP(t *testing.T) {
 	}
 }
 
-func TestSuccessfulPasswordStepDoesNotExhaustLoginPrincipalLimiter(t *testing.T) {
+func TestSuccessfulMFAFlowDoesNotExhaustAuthenticationLimiters(t *testing.T) {
 	handler, control := newAuthTestRuntime(t)
 	setup, err := control.BeginTOTPSetup(t.Context(), "admin", "secret")
 	if err != nil {
@@ -308,9 +308,74 @@ func TestSuccessfulPasswordStepDoesNotExhaustLoginPrincipalLimiter(t *testing.T)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"mfa_required":true`)) {
+		var loginResponse struct {
+			Data struct {
+				MFARequired bool   `json:"mfa_required"`
+				Challenge   string `json:"challenge"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &loginResponse); err != nil || rec.Code != http.StatusOK || !loginResponse.Data.MFARequired {
 			t.Fatalf("attempt %d status=%d body=%s", attempt, rec.Code, rec.Body.String())
 		}
+		code := auth.GenerateTOTPCode(setup.Secret, time.Now().UTC())
+		mfaReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/login", bytes.NewBufferString(`{"challenge":"`+loginResponse.Data.Challenge+`","code":"`+code+`"}`))
+		mfaReq.Header.Set("Content-Type", "application/json")
+		mfaRec := httptest.NewRecorder()
+		handler.ServeHTTP(mfaRec, mfaReq)
+		if mfaRec.Code != http.StatusOK {
+			t.Fatalf("MFA attempt %d status=%d body=%s", attempt, mfaRec.Code, mfaRec.Body.String())
+		}
+	}
+}
+
+func TestIncompleteMFAChallengesAreLimitedPerAccount(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	setup, err := control.BeginTOTPSetup(t.Context(), "admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.ConfirmTOTP(t.Context(), "admin", auth.GenerateTOTPCode(setup.Secret, time.Now().UTC())); err != nil {
+		t.Fatal(err)
+	}
+
+	challenge := ""
+	login := func() *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"secret"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	for attempt := 1; attempt <= 10; attempt++ {
+		rec := login()
+		var response struct {
+			Data struct {
+				Challenge string `json:"challenge"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || rec.Code != http.StatusOK || response.Data.Challenge == "" {
+			t.Fatalf("challenge %d status=%d body=%s", attempt, rec.Code, rec.Body.String())
+		}
+		if challenge == "" {
+			challenge = response.Data.Challenge
+		}
+	}
+	limited := login()
+	if limited.Code != http.StatusTooManyRequests || limited.Header().Get("Retry-After") == "" {
+		t.Fatalf("challenge limit status=%d retry-after=%q body=%s", limited.Code, limited.Header().Get("Retry-After"), limited.Body.String())
+	}
+
+	code := auth.GenerateTOTPCode(setup.Secret, time.Now().UTC())
+	mfaReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/login", bytes.NewBufferString(`{"challenge":"`+challenge+`","code":"`+code+`"}`))
+	mfaReq.Header.Set("Content-Type", "application/json")
+	mfaRec := httptest.NewRecorder()
+	handler.ServeHTTP(mfaRec, mfaReq)
+	if mfaRec.Code != http.StatusOK {
+		t.Fatalf("MFA completion status=%d body=%s", mfaRec.Code, mfaRec.Body.String())
+	}
+	if rec := login(); rec.Code != http.StatusOK {
+		t.Fatalf("challenge limiter did not reset after MFA success: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

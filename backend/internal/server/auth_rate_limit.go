@@ -57,25 +57,27 @@ func (l *authAttemptLimiter) Reset(key string) { l.mu.Lock(); delete(l.attempts,
 // 限流按客户端 IP 计数且保存在进程内：多副本部署时每个副本各自计数，
 // 只作为兜底护栏，边界防护仍依赖入口层（网关/WAF）的全局限流。
 type authEndpointLimiters struct {
-	loginPrincipal     *authAttemptLimiter
-	register           *authAttemptLimiter
-	forgotPassword     *authAttemptLimiter
-	resetPassword      *authAttemptLimiter
-	verifyEmail        *authAttemptLimiter
-	resendVerification *authAttemptLimiter
-	totpLogin          *authAttemptLimiter
-	totpManagement     *authAttemptLimiter
+	loginPrincipal        *authAttemptLimiter
+	mfaChallengePrincipal *authAttemptLimiter
+	register              *authAttemptLimiter
+	forgotPassword        *authAttemptLimiter
+	resetPassword         *authAttemptLimiter
+	verifyEmail           *authAttemptLimiter
+	resendVerification    *authAttemptLimiter
+	totpLogin             *authAttemptLimiter
+	totpManagement        *authAttemptLimiter
 }
 
 func newAuthEndpointLimiters() *authEndpointLimiters {
 	return &authEndpointLimiters{
-		loginPrincipal:     newAuthAttemptLimiter(10, 5*time.Minute),
-		register:           newAuthAttemptLimiter(5, time.Minute),
-		forgotPassword:     newAuthAttemptLimiter(5, time.Minute),
-		resetPassword:      newAuthAttemptLimiter(10, time.Minute),
-		verifyEmail:        newAuthAttemptLimiter(10, time.Minute),
-		resendVerification: newAuthAttemptLimiter(3, time.Minute),
-		totpLogin:          newAuthAttemptLimiter(10, time.Minute),
-		totpManagement:     newAuthAttemptLimiter(5, 15*time.Minute),
+		loginPrincipal:        newAuthAttemptLimiter(10, 5*time.Minute),
+		mfaChallengePrincipal: newAuthAttemptLimiter(10, 5*time.Minute),
+		register:              newAuthAttemptLimiter(5, time.Minute),
+		forgotPassword:        newAuthAttemptLimiter(5, time.Minute),
+		resetPassword:         newAuthAttemptLimiter(10, time.Minute),
+		verifyEmail:           newAuthAttemptLimiter(10, time.Minute),
+		resendVerification:    newAuthAttemptLimiter(3, time.Minute),
+		totpLogin:             newAuthAttemptLimiter(10, time.Minute),
+		totpManagement:        newAuthAttemptLimiter(5, 15*time.Minute),
 	}
 }

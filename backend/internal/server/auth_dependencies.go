@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,7 +15,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const authRequestBodyLimit = 64 * 1024
+const (
+	authRequestBodyLimit     = 64 * 1024
+	authEmailDispatchLimit   = 8
+	authEmailDeliveryTimeout = 15 * time.Second
+)
+
+var errAuthenticationEmailDispatcherBusy = errors.New("authentication email dispatcher is busy")
 
 type HumanVerifier interface {
 	Verify(ctx context.Context, secret, response, remoteIP string) error
@@ -28,6 +37,45 @@ type configuredAuthenticationEmailSender struct {
 
 func (s configuredAuthenticationEmailSender) Send(ctx context.Context, event, recipient, userName, actionURL string) error {
 	return sendConfiguredEmail(ctx, s.settings, event, recipient, userName, actionURL)
+}
+
+type asyncAuthenticationEmailSender struct {
+	delegate AuthenticationEmailSender
+	slots    chan struct{}
+}
+
+func newAsyncAuthenticationEmailSender(delegate AuthenticationEmailSender, limit int) AuthenticationEmailSender {
+	if limit < 1 {
+		limit = authEmailDispatchLimit
+	}
+	return &asyncAuthenticationEmailSender{delegate: delegate, slots: make(chan struct{}, limit)}
+}
+
+func (s *asyncAuthenticationEmailSender) Send(_ context.Context, event, recipient, userName, actionURL string) error {
+	if s == nil || s.delegate == nil {
+		return errors.New("authentication email sender is not configured")
+	}
+	select {
+	case s.slots <- struct{}{}:
+		go s.deliver(event, recipient, userName, actionURL)
+		return nil
+	default:
+		return errAuthenticationEmailDispatcherBusy
+	}
+}
+
+func (s *asyncAuthenticationEmailSender) deliver(event, recipient, userName, actionURL string) {
+	defer func() { <-s.slots }()
+	deliveryCtx, cancel := context.WithTimeout(context.Background(), authEmailDeliveryTimeout)
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("authentication email dispatcher panicked", "event", event, "error", fmt.Sprint(recovered))
+		}
+	}()
+	if err := s.delegate.Send(deliveryCtx, event, recipient, userName, actionURL); err != nil {
+		slog.Error("authentication email delivery failed", "event", event, "error", err)
+	}
 }
 
 func bindAuthJSON(c *gin.Context, value any) error {
@@ -61,5 +109,5 @@ func defaultAuthenticationEmailSender(value AuthenticationEmailSender, service *
 	if value != nil {
 		return value
 	}
-	return configuredAuthenticationEmailSender{settings: service}
+	return newAsyncAuthenticationEmailSender(configuredAuthenticationEmailSender{settings: service}, authEmailDispatchLimit)
 }

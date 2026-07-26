@@ -281,6 +281,9 @@ func New(opts Options) http.Handler {
 		result, err := opts.AuthService.Login(c.Request.Context(), req.Username, req.Password)
 		if err == nil && opts.ControlService != nil && opts.AuthService.IsLocalPrincipal(req.Username) {
 			if profile, profileErr := opts.ControlService.CurrentAccountProfile(c.Request.Context(), req.Username); profileErr == nil && profile.TOTPEnabled {
+				if !allowAuthRequestForKey(c, endpointLimiters.mfaChallengePrincipal, profile.ID, "too many MFA challenges") {
+					return
+				}
 				challenge, expires, challengeErr := opts.AuthService.BeginMFA(profile.ID, profile.Role)
 				if challengeErr != nil {
 					httpx.Error(c, http.StatusInternalServerError, 1315, challengeErr.Error())
@@ -296,6 +299,9 @@ func New(opts Options) http.Handler {
 			if policyErr == nil && opts.ControlService != nil {
 				if user, userErr := opts.ControlService.AuthenticateWorkspaceUser(c.Request.Context(), req.Username, req.Password, policy.EmailVerification); userErr == nil {
 					if user.TOTPEnabled {
+						if !allowAuthRequestForKey(c, endpointLimiters.mfaChallengePrincipal, user.ID, "too many MFA challenges") {
+							return
+						}
 						challenge, expires, challengeErr := opts.AuthService.BeginMFA(user.ID, user.Role)
 						if challengeErr != nil {
 							httpx.Error(c, http.StatusInternalServerError, 1315, challengeErr.Error())
@@ -862,6 +868,8 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusUnauthorized, 1307, err.Error())
 			return
 		}
+		endpointLimiters.mfaChallengePrincipal.Reset(userID)
+		endpointLimiters.totpLogin.Reset(c.ClientIP())
 		c.SetSameSite(http.SameSiteLaxMode)
 		c.SetCookie("asterrouter_session", result.AccessToken, int(time.Until(result.ExpiresAt).Seconds()), "/", "", true, true)
 		httpx.OK(c, enrichLoginResult(c.Request.Context(), opts.ControlService, result))
