@@ -60,6 +60,7 @@ type authEndpointLimiters struct {
 	loginPrincipal        *authAttemptLimiter
 	mfaChallengePrincipal *authAttemptLimiter
 	register              *authAttemptLimiter
+	registerPrincipal     *authAttemptLimiter
 	forgotPassword        *authAttemptLimiter
 	resetPassword         *authAttemptLimiter
 	verifyEmail           *authAttemptLimiter
@@ -72,7 +73,8 @@ func newAuthEndpointLimiters() *authEndpointLimiters {
 	return &authEndpointLimiters{
 		loginPrincipal:        newAuthAttemptLimiter(10, 5*time.Minute),
 		mfaChallengePrincipal: newAuthAttemptLimiter(10, 5*time.Minute),
-		register:              newAuthAttemptLimiter(5, time.Minute),
+		register:              newAuthAttemptLimiter(30, time.Minute),
+		registerPrincipal:     newAuthAttemptLimiter(5, time.Minute),
 		forgotPassword:        newAuthAttemptLimiter(5, time.Minute),
 		resetPassword:         newAuthAttemptLimiter(10, time.Minute),
 		verifyEmail:           newAuthAttemptLimiter(10, time.Minute),

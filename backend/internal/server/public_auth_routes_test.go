@@ -189,6 +189,57 @@ func TestAuthenticationPrincipalRateLimitSpansClientAddresses(t *testing.T) {
 	}
 }
 
+func TestRegistrationRateLimitAllowsDifferentPrincipalsFromSameAddress(t *testing.T) {
+	handler := newPublicAuthTestHandler(t, &recordingAuthEmailSender{})
+	for attempt := 1; attempt <= 6; attempt++ {
+		email := "batch-user-" + strconv.Itoa(attempt) + "@example.test"
+		body := `{"email":"` + email + `","password":"long-password","display_name":"User","turnstile_token":"human-token"}`
+		rec := postAuthJSONFromAddress(t, handler, "192.0.2.10:12345", "/api/v1/auth/register", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("registration %d status=%d body=%s", attempt, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestRegistrationPrincipalRateLimitNormalizesEmail(t *testing.T) {
+	handler := newPublicAuthTestHandler(t, &recordingAuthEmailSender{})
+	emails := []string{
+		"User@example.test",
+		" user@example.test ",
+		"USER@example.test",
+		"user@example.test",
+		"User@Example.Test",
+		"user@example.test",
+	}
+	var rec *httptest.ResponseRecorder
+	for attempt, email := range emails {
+		body := `{"email":"` + email + `","password":"long-password","display_name":"User","turnstile_token":"human-token"}`
+		rec = postAuthJSONFromAddress(t, handler, "192.0.2.20:12345", "/api/v1/auth/register", body)
+		if attempt == 0 && rec.Code != http.StatusOK {
+			t.Fatalf("initial registration status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	if rec == nil || rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("principal rate limit status=%d retry-after=%q body=%s", rec.Code, rec.Header().Get("Retry-After"), rec.Body.String())
+	}
+}
+
+func TestRegistrationRateLimitCapsTotalAttemptsPerAddress(t *testing.T) {
+	handler := newPublicAuthTestHandler(t, &recordingAuthEmailSender{})
+	var rec *httptest.ResponseRecorder
+	for attempt := 1; attempt <= 31; attempt++ {
+		email := "rate-user-" + strconv.Itoa(attempt) + "@example.test"
+		body := `{"email":"` + email + `","password":"long-password","display_name":"User","turnstile_token":"human-token"}`
+		rec = postAuthJSONFromAddress(t, handler, "192.0.2.30:12345", "/api/v1/auth/register", body)
+		if attempt <= 30 && rec.Code != http.StatusOK {
+			t.Fatalf("registration %d status=%d body=%s", attempt, rec.Code, rec.Body.String())
+		}
+	}
+	if rec == nil || rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("address rate limit status=%d retry-after=%q body=%s", rec.Code, rec.Header().Get("Retry-After"), rec.Body.String())
+	}
+}
+
 func TestAuthenticationResponsesDisableReferrerForwarding(t *testing.T) {
 	handler := newPublicAuthTestHandler(t, &recordingAuthEmailSender{})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

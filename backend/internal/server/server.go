@@ -351,6 +351,10 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
+		registerPrincipalKey := c.ClientIP() + "\x00" + strings.ToLower(strings.TrimSpace(req.Email))
+		if !allowAuthRequestForKey(c, endpointLimiters.registerPrincipal, registerPrincipalKey, "too many registration attempts") {
+			return
+		}
 		if !agreementAccepted(c.Request.Context(), opts.SettingsService, req.AgreementAccepted) {
 			httpx.Error(c, http.StatusForbidden, 1328, "login agreement must be accepted")
 			return
