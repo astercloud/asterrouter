@@ -2,11 +2,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { Download, RefreshCw, Search } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { exportGatewayTracesCSV, getGatewayTraces, getGatewayTraceSummary } from '@/api/control'
 import type { GatewayTrace, GatewayTraceSummary, RecordListQuery } from '@/types'
 import { datetimeLocalToISOString } from '@/utils/timeRange'
 
 const { t } = useI18n()
+const route = useRoute()
 const loading = ref(false)
 const error = ref('')
 const traces = ref<GatewayTrace[]>([])
@@ -14,6 +16,12 @@ const summary = ref<GatewayTraceSummary>({ total: 0, routed: 0, errors: 0, token
 const query = ref('')
 const modelFilter = ref('')
 const statusFilter = ref('')
+const apiKeyFilter = ref('')
+const gatewayPrincipalFilter = ref('')
+const providerFilter = ref('')
+const accountFilter = ref('')
+const gatewayModelFilter = ref('')
+const routeGroupFilter = ref('')
 const fromTime = ref('')
 const toTime = ref('')
 const pageSize = ref(25)
@@ -24,8 +32,16 @@ const filteredTraces = computed(() => {
   return traces.value.filter((trace) => {
     if (modelFilter.value && trace.model !== modelFilter.value) return false
     if (statusFilter.value && trace.status !== statusFilter.value) return false
+    if (providerFilter.value && trace.provider_id !== providerFilter.value) return false
+    if (accountFilter.value && trace.provider_account_id !== accountFilter.value) return false
+    if (gatewayModelFilter.value && trace.gateway_model_id !== gatewayModelFilter.value) return false
+    if (routeGroupFilter.value && trace.route_group !== routeGroupFilter.value) return false
+    if (apiKeyFilter.value && trace.api_key_id !== apiKeyFilter.value) return false
+    if (gatewayPrincipalFilter.value && trace.gateway_principal_id !== gatewayPrincipalFilter.value) return false
     if (!keyword) return true
     return [
+		trace.id,
+		trace.operation_id,
       trace.model,
       trace.status,
       trace.error_type,
@@ -74,6 +90,12 @@ function listQuery(): RecordListQuery {
     offset: offset.value,
     q: query.value.trim() || undefined,
     model: modelFilter.value || undefined,
+    api_key_id: apiKeyFilter.value || undefined,
+    gateway_principal_id: gatewayPrincipalFilter.value || undefined,
+    provider_id: providerFilter.value || undefined,
+    provider_account_id: accountFilter.value || undefined,
+    gateway_model_id: gatewayModelFilter.value || undefined,
+    route_group: routeGroupFilter.value || undefined,
     status: statusFilter.value || undefined,
     from: datetimeLocalToISOString(fromTime.value),
     to: datetimeLocalToISOString(toTime.value)
@@ -124,7 +146,36 @@ function formatPolicySource(source: string): string {
   return source ? source.replace(/_/g, ' ') : '-'
 }
 
-onMounted(load)
+function routeQueryValue(key: string): string {
+  const value = route.query[key]
+  return Array.isArray(value) ? value[0] || '' : value || ''
+}
+
+function routeTimeToInput(value: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const offset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+}
+
+function applyRouteEvidenceFilter() {
+	query.value = routeQueryValue('q')
+  modelFilter.value = routeQueryValue('model')
+  apiKeyFilter.value = routeQueryValue('api_key_id')
+  gatewayPrincipalFilter.value = routeQueryValue('gateway_principal_id')
+  providerFilter.value = routeQueryValue('provider_id')
+  accountFilter.value = routeQueryValue('provider_account_id')
+  gatewayModelFilter.value = routeQueryValue('gateway_model_id')
+  routeGroupFilter.value = routeQueryValue('route_group')
+  fromTime.value = routeTimeToInput(routeQueryValue('from'))
+  toTime.value = routeTimeToInput(routeQueryValue('to'))
+}
+
+onMounted(() => {
+  applyRouteEvidenceFilter()
+  void load()
+})
 </script>
 
 <template>

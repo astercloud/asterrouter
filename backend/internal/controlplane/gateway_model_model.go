@@ -11,12 +11,13 @@ const (
 
 	DefaultModelRouteGroup = "default"
 
-	UpstreamFormatOpenAIChat      = "openai_chat"
-	UpstreamFormatOpenAIResponses = "openai_responses"
-	UpstreamFormatAnthropic       = "anthropic_messages"
-	UpstreamFormatGemini          = "gemini_generate_content"
-	UpstreamFormatBedrockConverse = "bedrock_converse"
-	UpstreamFormatNativeMedia     = "native_media"
+	UpstreamFormatOpenAIChat       = "openai_chat"
+	UpstreamFormatOpenAIResponses  = "openai_responses"
+	UpstreamFormatOpenAIEmbeddings = "openai_embeddings"
+	UpstreamFormatAnthropic        = "anthropic_messages"
+	UpstreamFormatGemini           = "gemini_generate_content"
+	UpstreamFormatBedrockConverse  = "bedrock_converse"
+	UpstreamFormatNativeMedia      = "native_media"
 )
 
 type GatewayModel struct {

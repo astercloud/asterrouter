@@ -27,6 +27,7 @@ services:
       ASTERROUTER_SERVER_PLUGINS_CACHE_DIR: "/var/lib/asterrouter/plugin-cache"
       ASTERROUTER_SERVER_PLUGINS_ACTIVE_DIR: "/var/lib/asterrouter/plugin-active"
       ASTERROUTER_SERVER_ARTIFACTS_LOCAL_ROOT: "/var/lib/asterrouter/artifacts"
+      ASTERROUTER_SERVER_OBSERVABILITY_METRICS_TOKEN: "${ASTERROUTER_METRICS_TOKEN:-}"
       ASTERROUTER_SERVER_MAINTENANCE_BACKUP_DIR: "/var/lib/asterrouter/backups"
       ASTERROUTER_SERVER_MAINTENANCE_DIAGNOSTIC_DIR: "/var/lib/asterrouter/diagnostics"
       TZ: "${TZ:-UTC}"

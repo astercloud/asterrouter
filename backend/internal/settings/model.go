@@ -33,11 +33,13 @@ const (
 	KeyDingTalkClientSecret     = "dingtalk_client_secret"
 	KeyRegistrationEnabled      = "registration_enabled"
 	KeyEmailVerifyEnabled       = "email_verify_enabled"
+	KeyPasswordResetEnabled     = "password_reset_enabled"
 	KeyAllowedEmailDomains      = "allowed_email_domains"
 	KeyInvitationRequired       = "invitation_required"
 	KeyInvitationCodes          = "invitation_codes"
 	KeyTOTPEnabled              = "totp_enabled"
 	KeyTrustedProxyHeaders      = "trusted_proxy_headers"
+	KeyTrustedProxyCIDRs        = "trusted_proxy_cidrs"
 	KeyTurnstileEnabled         = "turnstile_enabled"
 	KeyTurnstileSiteKey         = "turnstile_site_key"
 	KeyTurnstileSecretKey       = "turnstile_secret_key"
@@ -50,6 +52,8 @@ const (
 	KeySMTPUsername             = "smtp_username"
 	KeySMTPPassword             = "smtp_password"
 	KeySMTPFrom                 = "smtp_from"
+	KeySMTPFromName             = "smtp_from_name"
+	KeySMTPUseTLS               = "smtp_use_tls"
 	KeyEmailTemplates           = "email_templates"
 	KeyLoginAgreementEnabled    = "login_agreement_enabled"
 	KeyLoginAgreementTitle      = "login_agreement_title"
@@ -118,6 +122,8 @@ type PublicSettings struct {
 	DingTalkEnabled          bool             `json:"dingtalk_enabled"`
 	RegistrationEnabled      bool             `json:"registration_enabled"`
 	EmailVerifyEnabled       bool             `json:"email_verify_enabled"`
+	PasswordResetEnabled     bool             `json:"password_reset_enabled"`
+	AllowedEmailDomains      []string         `json:"allowed_email_domains"`
 	TOTPEnabled              bool             `json:"totp_enabled"`
 	TurnstileEnabled         bool             `json:"turnstile_enabled"`
 	TurnstileSiteKey         string           `json:"turnstile_site_key"`
@@ -162,9 +168,9 @@ type AdminSettings struct {
 	DingTalkClientID              string                       `json:"dingtalk_client_id"`
 	DingTalkClientSecret          string                       `json:"dingtalk_client_secret,omitempty"`
 	DingTalkConfigured            bool                         `json:"dingtalk_configured"`
-	AllowedEmailDomains           []string                     `json:"allowed_email_domains"`
 	InvitationCodes               []string                     `json:"invitation_codes"`
 	TrustedProxyHeaders           bool                         `json:"trusted_proxy_headers"`
+	TrustedProxyCIDRs             []string                     `json:"trusted_proxy_cidrs"`
 	TurnstileSecretKey            string                       `json:"turnstile_secret_key,omitempty"`
 	TurnstileConfigured           bool                         `json:"turnstile_configured"`
 	DefaultBalanceMicros          int64                        `json:"default_balance_micros"`
@@ -176,6 +182,8 @@ type AdminSettings struct {
 	SMTPUsername                  string                       `json:"smtp_username"`
 	SMTPPassword                  string                       `json:"smtp_password,omitempty"`
 	SMTPFrom                      string                       `json:"smtp_from"`
+	SMTPFromName                  string                       `json:"smtp_from_name"`
+	SMTPUseTLS                    bool                         `json:"smtp_use_tls"`
 	SMTPConfigured                bool                         `json:"smtp_configured"`
 	EmailTemplates                []EmailTemplate              `json:"email_templates"`
 	LoginAgreementTitle           string                       `json:"login_agreement_title"`

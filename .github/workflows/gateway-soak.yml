@@ -1,0 +1,54 @@
+name: Gateway Soak
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 18 * * 6'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-soak
+  cancel-in-progress: false
+
+jobs:
+  gateway-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: asterrouter_soak_test
+          POSTGRES_USER: asterrouter
+          POSTGRES_PASSWORD: asterrouter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U asterrouter -d asterrouter_soak_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      ASTER_TEST_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_soak_test?sslmode=disable
+      ASTER_GATEWAY_SOAK: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Run 30-minute dual-service gateway soak
+        working-directory: backend
+        run: |
+          set -o pipefail
+          go test -json -count=1 -timeout=40m -run '^TestGatewayNormalAndStreamingSoak$' ./internal/server \
+            | tee "${{ runner.temp }}/gateway-soak.json"
+      - name: Upload soak evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-soak-evidence
+          path: ${{ runner.temp }}/gateway-soak.json
+          if-no-files-found: error

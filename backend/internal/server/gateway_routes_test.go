@@ -796,6 +796,15 @@ func TestGatewayStreamingInterruptionRecordsErrorWithoutUnsafeFailover(t *testin
 	if fallbackCalls.Load() != 0 {
 		t.Fatalf("stream failover duplicated an already-started response: fallback calls=%d", fallbackCalls.Load())
 	}
+	operationID := rec.Header().Get("X-AsterRouter-Operation-ID")
+	operation, found, err := control.AIOperation(context.Background(), operationID)
+	if err != nil || !found || operation.Status != controlplane.AIOperationStatusFailed || operation.ErrorType != "stream_error" {
+		t.Fatalf("interrupted stream operation=%+v found=%t err=%v", operation, found, err)
+	}
+	attempts, err := control.AIAttemptsForOperation(context.Background(), operationID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != controlplane.AIAttemptStatusFailed || attempts[0].ErrorType != "stream_error" {
+		t.Fatalf("interrupted stream attempts=%+v err=%v", attempts, err)
+	}
 	traces, err := control.ListGatewayTraces(context.Background(), 10)
 	if err != nil || len(traces) != 1 || traces[0].Status != "upstream_error" || traces[0].ErrorType != "stream_error" {
 		t.Fatalf("interrupted stream traces=%+v err=%v", traces, err)

@@ -14,6 +14,13 @@ var (
 	ErrPluginHostPermission   = errors.New("plugin host data feed permission is missing")
 )
 
+type SidecarConfig struct {
+	PluginID  string            `json:"plugin_id"`
+	Settings  map[string]string `json:"settings"`
+	Secrets   map[string]string `json:"secrets"`
+	UpdatedAt string            `json:"updated_at,omitempty"`
+}
+
 // AuthorizeSidecarHost verifies the loopback sidecar runtime token. Provider
 // callback signatures are intentionally not handled here: the adapter must
 // verify vendor-specific signatures before sending this normalized request.
@@ -101,6 +108,31 @@ func (s *Service) SidecarFeedPayload(ctx context.Context, pluginID string, token
 		return nil, ErrPluginHostPermission
 	}
 	return s.OfficialFeedPayload(ctx, serviceKey)
+}
+
+func (s *Service) SidecarConfig(ctx context.Context, pluginID, token string) (SidecarConfig, error) {
+	pluginID = strings.TrimSpace(pluginID)
+	if err := s.AuthorizeSidecarHost(ctx, pluginID, token); err != nil {
+		return SidecarConfig{}, err
+	}
+	record, ok, err := s.repo.FindConfig(ctx, pluginID)
+	if err != nil {
+		return SidecarConfig{}, err
+	}
+	result := SidecarConfig{PluginID: pluginID, Settings: map[string]string{}, Secrets: map[string]string{}}
+	if !ok {
+		return result, nil
+	}
+	result.Settings = cloneStringMap(record.Settings)
+	for key := range record.SecretCiphertexts {
+		value, err := s.decryptConfigSecret(record, key)
+		if err != nil {
+			return SidecarConfig{}, err
+		}
+		result.Secrets[key] = value
+	}
+	result.UpdatedAt = record.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	return result, nil
 }
 
 func manifestAllowsDataFeed(manifest sidecarManifest, serviceKey string) bool {

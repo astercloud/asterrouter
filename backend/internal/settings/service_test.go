@@ -3,6 +3,8 @@ package settings
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -21,6 +23,217 @@ func TestServiceDefaults(t *testing.T) {
 	}
 	if got.GatewayBasePath != "/v1" {
 		t.Fatalf("GatewayBasePath = %q", got.GatewayBasePath)
+	}
+}
+
+func TestAuthenticationSettingsRoundTrip(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory", SecretKey: "settings-test-secret"})
+	current, err := svc.Admin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.PublicBaseURL = "https://router.example.test"
+	current.PasswordResetEnabled = true
+	current.EmailVerifyEnabled = false
+	current.AllowedEmailDomains = []string{"EXAMPLE.COM", "*.corp.example.com"}
+	current.TrustedProxyHeaders = true
+	current.TrustedProxyCIDRs = []string{"10.0.0.0/8", "192.168.1.5"}
+	current.TurnstileEnabled = true
+	current.TurnstileSiteKey = "site-key"
+	current.TurnstileSecretKey = "secret-key"
+	current.SMTPHost = "smtp.example.test"
+	current.SMTPUsername = "mailer"
+	current.SMTPPassword = "smtp-secret"
+	current.SMTPFrom = "noreply@example.test"
+	current.SMTPFromName = "AsterRouter Security"
+	current.SMTPUseTLS = true
+
+	updated, err := svc.Update(t.Context(), current)
+	if err != nil {
+		t.Fatalf("Update(): %v", err)
+	}
+	if !updated.PasswordResetEnabled || updated.EmailVerifyEnabled || !updated.SMTPUseTLS || updated.SMTPFromName != "AsterRouter Security" {
+		t.Fatalf("authentication settings not preserved: %+v", updated)
+	}
+	if len(updated.AllowedEmailDomains) != 2 || updated.AllowedEmailDomains[0] != "example.com" {
+		t.Fatalf("allowed domains = %v", updated.AllowedEmailDomains)
+	}
+	if len(updated.TrustedProxyCIDRs) != 2 || updated.TrustedProxyCIDRs[1] != "192.168.1.5/32" {
+		t.Fatalf("trusted proxy CIDRs = %v", updated.TrustedProxyCIDRs)
+	}
+	raw, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, plaintext := range map[string]string{KeyTurnstileSecretKey: "secret-key", KeySMTPPassword: "smtp-secret"} {
+		if raw[key] == plaintext || !strings.HasPrefix(raw[key], settingCiphertextPrefix) {
+			t.Fatalf("setting %s was stored without encryption", key)
+		}
+	}
+	policy, err := svc.RegistrationPolicy(t.Context())
+	if err != nil || !policy.PasswordReset || policy.EmailVerification {
+		t.Fatalf("RegistrationPolicy() = %+v, %v", policy, err)
+	}
+
+	updated.TurnstileSecretKey = ""
+	updated.SMTPPassword = ""
+	if _, err := svc.Update(t.Context(), updated); err != nil {
+		t.Fatalf("Update() with redacted secrets: %v", err)
+	}
+	security, err := svc.LoginSecurity(t.Context())
+	if err != nil || security.TurnstileSecret != "secret-key" {
+		t.Fatalf("LoginSecurity() = %+v, %v", security, err)
+	}
+	smtp, err := svc.SMTPConfig(t.Context())
+	if err != nil || smtp.Password != "smtp-secret" {
+		t.Fatalf("SMTPConfig() = %+v, %v", smtp, err)
+	}
+}
+
+func TestSensitiveSettingsUpgradeLegacyPlaintextOnUpdate(t *testing.T) {
+	repo := NewMemoryRepository()
+	legacy := map[string]string{
+		KeyFeishuAppSecret:      "feishu-secret",
+		KeyGitHubOAuthSecret:    "github-secret",
+		KeyGoogleOAuthSecret:    "google-secret",
+		KeyDingTalkClientSecret: "dingtalk-secret",
+		KeyTurnstileSecretKey:   "turnstile-secret",
+		KeySMTPPassword:         "smtp-secret",
+		KeyBackupS3SecretKey:    "backup-secret",
+	}
+	if err := repo.SetMultiple(t.Context(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory", SecretKey: "settings-test-secret"})
+
+	if value, err := svc.FeishuSecret(t.Context()); err != nil || value != legacy[KeyFeishuAppSecret] {
+		t.Fatalf("FeishuSecret() = %q, %v", value, err)
+	}
+	github, google, err := svc.SocialOAuthSecrets(t.Context())
+	if err != nil || github != legacy[KeyGitHubOAuthSecret] || google != legacy[KeyGoogleOAuthSecret] {
+		t.Fatalf("SocialOAuthSecrets() = %q, %q, %v", github, google, err)
+	}
+	if value, err := svc.DingTalkSecret(t.Context()); err != nil || value != legacy[KeyDingTalkClientSecret] {
+		t.Fatalf("DingTalkSecret() = %q, %v", value, err)
+	}
+	if security, err := svc.LoginSecurity(t.Context()); err != nil || security.TurnstileSecret != legacy[KeyTurnstileSecretKey] {
+		t.Fatalf("LoginSecurity() = %+v, %v", security, err)
+	}
+	if smtp, err := svc.SMTPConfig(t.Context()); err != nil || smtp.Password != legacy[KeySMTPPassword] {
+		t.Fatalf("SMTPConfig() = %+v, %v", smtp, err)
+	}
+	if backup, err := svc.BackupS3Config(t.Context()); err != nil || backup.SecretKey != legacy[KeyBackupS3SecretKey] {
+		t.Fatalf("BackupS3Config() = %+v, %v", backup, err)
+	}
+
+	current, err := svc.Admin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Update(t.Context(), current); err != nil {
+		t.Fatalf("Update(): %v", err)
+	}
+	raw, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, plaintext := range legacy {
+		if raw[key] == plaintext || !strings.HasPrefix(raw[key], settingCiphertextPrefix) {
+			t.Fatalf("legacy setting %s was not upgraded to ciphertext", key)
+		}
+	}
+}
+
+func TestSensitiveSettingsFailClosedWithWrongKey(t *testing.T) {
+	repo := NewMemoryRepository()
+	ciphertext, err := encryptSettingValue("original-secret", KeyTurnstileSecretKey, "turnstile-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMultiple(t.Context(), map[string]string{KeyTurnstileSecretKey: ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory", SecretKey: "wrong-secret"})
+	if _, err := svc.LoginSecurity(t.Context()); err == nil {
+		t.Fatal("LoginSecurity() accepted ciphertext encrypted with another key")
+	}
+}
+
+func TestSensitiveSettingsCiphertextIsBoundToSettingKey(t *testing.T) {
+	ciphertext, err := encryptSettingValue("settings-test-secret", KeyTurnstileSecretKey, "turnstile-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decryptSettingValue("settings-test-secret", KeySMTPPassword, ciphertext); err == nil {
+		t.Fatal("ciphertext encrypted for one setting was accepted for another setting")
+	}
+}
+
+type failSecondSettingsReadRepository struct {
+	*MemoryRepository
+	reads atomic.Int32
+}
+
+func (r *failSecondSettingsReadRepository) GetAll(ctx context.Context) (map[string]string, error) {
+	if r.reads.Add(1) == 2 {
+		return nil, errors.New("synthetic settings read failure")
+	}
+	return r.MemoryRepository.GetAll(ctx)
+}
+
+func TestSettingsUpdateFailsClosedWhenExistingSecretsCannotBeRead(t *testing.T) {
+	repo := &failSecondSettingsReadRepository{MemoryRepository: NewMemoryRepository()}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory", SecretKey: "settings-test-secret"})
+	current, err := svc.Admin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.reads.Store(0)
+	if _, err := svc.Update(t.Context(), current); err == nil || err.Error() != "synthetic settings read failure" {
+		t.Fatalf("Update() error = %v", err)
+	}
+}
+
+func TestMemoryInvitationCodeConsumptionIsAtomic(t *testing.T) {
+	testInvitationCodeConsumptionIsAtomic(t, NewMemoryRepository())
+}
+
+func testInvitationCodeConsumptionIsAtomic(t *testing.T, repo Repository) {
+	t.Helper()
+	if err := repo.SetMultiple(t.Context(), map[string]string{KeyInvitationCodes: `["single-use"]`}); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 8)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- repo.ConsumeInvitationCode(t.Context(), "single-use")
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	succeeded := 0
+	for err := range results {
+		if err == nil {
+			succeeded++
+		} else if !errors.Is(err, ErrInvitationCodeInvalid) {
+			t.Fatalf("unexpected consume error: %v", err)
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("successful invitation consumptions = %d, want 1", succeeded)
+	}
+	if err := repo.RestoreInvitationCode(t.Context(), "single-use"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ConsumeInvitationCode(t.Context(), "single-use"); err != nil {
+		t.Fatalf("restored invitation code could not be consumed: %v", err)
 	}
 }
 

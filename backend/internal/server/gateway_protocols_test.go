@@ -83,6 +83,168 @@ func newNativeProtocolFixture(t *testing.T) *nativeProtocolFixture {
 	return fixture
 }
 
+type countTokensFixture struct {
+	handler http.Handler
+	control *controlplane.Service
+	key     string
+	mu      sync.Mutex
+	paths   []string
+	headers []http.Header
+	bodies  [][]byte
+}
+
+func newCountTokensFixture(t *testing.T, upstreamStatus int) *countTokensFixture {
+	t.Helper()
+	fixture := &countTokensFixture{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		fixture.mu.Lock()
+		fixture.paths = append(fixture.paths, r.URL.Path)
+		fixture.headers = append(fixture.headers, r.Header.Clone())
+		fixture.bodies = append(fixture.bodies, append([]byte(nil), body...))
+		fixture.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Request-ID", "upstream-count-1")
+		if upstreamStatus != http.StatusOK {
+			w.WriteHeader(upstreamStatus)
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"counting limited"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"input_tokens":37}`)
+	}))
+	t.Cleanup(upstream.Close)
+	handler, control := newTestRuntime(t, RuntimeConfig{})
+	fixture.handler, fixture.control = handler, control
+	provider, err := control.CreateProvider(context.Background(), "test", controlplane.ProviderRequest{
+		Name: "Count provider", Type: controlplane.ProviderTypeAnthropicCompatible, BaseURL: upstream.URL + "/v1", Status: controlplane.ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := control.CreateGatewayModel(context.Background(), "test", controlplane.GatewayModelRequest{
+		ModelID: "count-chat", Name: "Count chat", Modality: "chat", DefaultRouteGroup: "default", Status: controlplane.GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := createGatewayTestAccount(t, control, provider, "claude-count", "provider-secret", 10, 4)
+	if _, err := control.CreateModelRoute(context.Background(), "test", controlplane.ModelRouteRequest{
+		GatewayModelID: model.ID, RouteGroup: "default", ProviderAccountID: account.ID, UpstreamModel: "claude-count", Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatAnthropic,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := control.CreateAPIKey(context.Background(), "test", controlplane.APIKeyCreateRequest{
+		Name: "count caller", ModelAllowlist: []string{"count-chat"}, Scopes: []string{controlplane.GatewayScopeInvoke}, MonthlyTokenLimit: 10000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.key = key.Key
+	return fixture
+}
+
+func TestGatewayAnthropicCountTokensUsesExactUpstreamWithoutUsage(t *testing.T) {
+	fixture := newCountTokensFixture(t, http.StatusOK)
+	before, err := fixture.control.UsageReport(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, credential := range []string{"bearer", "x-api-key"} {
+		t.Run(credential, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewBufferString(`{"model":"count-chat","messages":[{"role":"user","content":"hello"}]}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Request-ID", "count-"+credential)
+			if credential == "bearer" {
+				request.Header.Set("Authorization", "Bearer "+fixture.key)
+			} else {
+				request.Header.Set("X-API-Key", fixture.key)
+			}
+			response := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || response.Body.String() != `{"input_tokens":37}` || response.Header().Get("X-Request-ID") != "count-"+credential {
+				t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+			}
+		})
+	}
+	fixture.mu.Lock()
+	if len(fixture.paths) != 2 {
+		fixture.mu.Unlock()
+		t.Fatalf("upstream calls=%d", len(fixture.paths))
+	}
+	for index := range fixture.paths {
+		if fixture.paths[index] != "/v1/messages/count_tokens" || fixture.headers[index].Get("x-api-key") != "provider-secret" || !bytes.Contains(fixture.bodies[index], []byte(`"model":"claude-count"`)) || bytes.Contains(fixture.bodies[index], []byte(`"max_tokens"`)) {
+			fixture.mu.Unlock()
+			t.Fatalf("path=%s headers=%v body=%s", fixture.paths[index], fixture.headers[index], fixture.bodies[index])
+		}
+	}
+	fixture.mu.Unlock()
+	after, err := fixture.control.UsageReport(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Recent) != len(before.Recent) || after.TotalTokens != before.TotalTokens || after.TotalUsageCostMicros != before.TotalUsageCostMicros {
+		t.Fatalf("counting changed usage before=%+v after=%+v", before, after)
+	}
+	traces, err := fixture.control.ListGatewayTraces(context.Background(), 10)
+	if err != nil || len(traces) != 2 || traces[0].RequestFingerprint == "" || traces[0].InputTokens != 0 || !strings.Contains(traces[0].ResponseSummary, "input_tokens=37") {
+		t.Fatalf("traces=%+v err=%v", traces, err)
+	}
+}
+
+func TestGatewayAnthropicCountTokensRejectsUnauthorizedAndDisallowedModel(t *testing.T) {
+	fixture := newCountTokensFixture(t, http.StatusOK)
+	body := `{"model":"count-chat","messages":[{"role":"user","content":"hello"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewBufferString(body))
+	response := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), `"type":"authentication_error"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	other, err := fixture.control.CreateAPIKey(context.Background(), "test", controlplane.APIKeyCreateRequest{Name: "other", ModelAllowlist: []string{"other-model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewBufferString(body))
+	request.Header.Set("X-API-Key", other.Key)
+	response = httptest.NewRecorder()
+	fixture.handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"type":"permission_error"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if len(fixture.paths) != 0 {
+		t.Fatalf("rejected requests reached upstream %d times", len(fixture.paths))
+	}
+}
+
+func TestGatewayAnthropicCountTokensRejectsIncompatibleRoute(t *testing.T) {
+	fixture := newNativeProtocolFixture(t)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewBufferString(`{"model":"native-chat","messages":[{"role":"user","content":"hello"}]}`))
+	request.Header.Set("X-API-Key", fixture.key)
+	response := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"type":"invalid_request_error"`) || !strings.Contains(response.Body.String(), "exact token counting") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if len(fixture.paths) != 0 {
+		t.Fatalf("incompatible route reached upstream %d times", len(fixture.paths))
+	}
+}
+
+func TestGatewayAnthropicCountTokensPreservesUpstreamErrorContract(t *testing.T) {
+	fixture := newCountTokensFixture(t, http.StatusTooManyRequests)
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewBufferString(`{"model":"count-chat","messages":[{"role":"user","content":"hello"}]}`))
+	request.Header.Set("Authorization", "Bearer "+fixture.key)
+	response := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), `"type":"rate_limit_error"`) || !strings.Contains(response.Body.String(), "counting limited") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestGatewayClientProtocolsTranslateThroughConfiguredUpstreamFormat(t *testing.T) {
 	fixture := newNativeProtocolFixture(t)
 	tests := []struct {

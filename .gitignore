@@ -22,6 +22,10 @@ frontend/test-results/
 # Local agent notes and product drafts
 docs/*
 !docs/product-positioning.md
+!docs/goal/
+!docs/goal/**
+!docs/refactor/
+!docs/refactor/**
 !docs/roadmap/
 docs/roadmap/*
 !docs/roadmap/effectivepricing/
@@ -36,6 +40,8 @@ docs/roadmap/v2/*
 !docs/roadmap/v3/
 docs/roadmap/v3/*
 !docs/roadmap/v3/README.md
+!docs/roadmap/v5/
+!docs/roadmap/v5/**
 !docs/test/
 docs/test/*
 !docs/test/v1/

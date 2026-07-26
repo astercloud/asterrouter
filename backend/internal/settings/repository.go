@@ -2,6 +2,7 @@ package settings
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/astercloud/asterrouter/backend/internal/postgresutil"
 	_ "github.com/lib/pq"
 )
 
@@ -23,6 +25,8 @@ const deploymentProfileAdvisoryLock int64 = 0x6173746572736574
 type Repository interface {
 	GetAll(ctx context.Context) (map[string]string, error)
 	SetMultiple(ctx context.Context, values map[string]string) error
+	ConsumeInvitationCode(ctx context.Context, code string) error
+	RestoreInvitationCode(ctx context.Context, code string) error
 	InitializeDeploymentProfile(ctx context.Context, profile string) error
 	Health(ctx context.Context) error
 	Close() error
@@ -65,6 +69,28 @@ func (r *MemoryRepository) SetMultiple(_ context.Context, values map[string]stri
 	for key, value := range values {
 		r.entries[key] = Entry{Key: key, Value: value, UpdatedAt: now}
 	}
+	return nil
+}
+
+func (r *MemoryRepository) ConsumeInvitationCode(_ context.Context, code string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	next, err := consumeInvitationCodeValue(r.entries[KeyInvitationCodes].Value, code)
+	if err != nil {
+		return err
+	}
+	r.entries[KeyInvitationCodes] = Entry{Key: KeyInvitationCodes, Value: next, UpdatedAt: time.Now().UTC()}
+	return nil
+}
+
+func (r *MemoryRepository) RestoreInvitationCode(_ context.Context, code string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	next, err := restoreInvitationCodeValue(r.entries[KeyInvitationCodes].Value, code)
+	if err != nil {
+		return err
+	}
+	r.entries[KeyInvitationCodes] = Entry{Key: KeyInvitationCodes, Value: next, UpdatedAt: time.Now().UTC()}
 	return nil
 }
 
@@ -120,14 +146,16 @@ func NewPostgresRepository(ctx context.Context, databaseURL string) (*PostgresRe
 }
 
 func (r *PostgresRepository) migrate(ctx context.Context) error {
-	_, err := r.db.ExecContext(ctx, `
+	return postgresutil.WithSchemaMigrationLock(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS settings (
   key VARCHAR(100) PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 `)
-	return err
+		return err
+	})
 }
 
 func (r *PostgresRepository) GetAll(ctx context.Context) (map[string]string, error) {
@@ -167,6 +195,42 @@ func (r *PostgresRepository) SetMultiple(ctx context.Context, values map[string]
 	}
 	err = tx.Commit()
 	return err
+}
+
+func (r *PostgresRepository) ConsumeInvitationCode(ctx context.Context, code string) error {
+	return r.updateInvitationCodes(ctx, code, consumeInvitationCodeValue)
+}
+
+func (r *PostgresRepository) RestoreInvitationCode(ctx context.Context, code string) error {
+	return r.updateInvitationCodes(ctx, code, restoreInvitationCodeValue)
+}
+
+func (r *PostgresRepository) updateInvitationCodes(ctx context.Context, code string, update func(string, string) (string, error)) (err error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var current string
+	err = tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=$1 FOR UPDATE`, KeyInvitationCodes).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		current = "[]"
+		err = nil
+	} else if err != nil {
+		return err
+	}
+	next, err := update(current, code)
+	if err != nil {
+		return err
+	}
+	if err = setMultipleTx(ctx, tx, map[string]string{KeyInvitationCodes: next}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *PostgresRepository) InitializeDeploymentProfile(ctx context.Context, profile string) (err error) {
@@ -237,6 +301,40 @@ ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.upd
 		}
 	}
 	return nil
+}
+
+func consumeInvitationCodeValue(raw, code string) (string, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return "", ErrInvitationCodeRequired
+	}
+	codes := parseStringList(raw, []string{})
+	for index, candidate := range codes {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(code)) != 1 {
+			continue
+		}
+		remaining := append([]string{}, codes[:index]...)
+		remaining = append(remaining, codes[index+1:]...)
+		encoded, err := json.Marshal(remaining)
+		return string(encoded), err
+	}
+	return "", ErrInvitationCodeInvalid
+}
+
+func restoreInvitationCodeValue(raw, code string) (string, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return "", ErrInvitationCodeRequired
+	}
+	codes := parseStringList(raw, []string{})
+	for _, candidate := range codes {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(code)) == 1 {
+			encoded, err := json.Marshal(codes)
+			return string(encoded), err
+		}
+	}
+	encoded, err := json.Marshal(append(codes, code))
+	return string(encoded), err
 }
 
 func deploymentProfileInitialized(values map[string]string) bool {

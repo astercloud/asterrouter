@@ -13,7 +13,9 @@ const (
 	ProtocolOpenAIAudioTranslations   Protocol = "openai_audio_translations"
 	ProtocolOpenAIAudioSpeech         Protocol = "openai_audio_speech"
 	ProtocolOpenAIResponses           Protocol = "openai_responses"
+	ProtocolOpenAIEmbeddings          Protocol = "openai_embeddings"
 	ProtocolAnthropicMessages         Protocol = "anthropic_messages"
+	ProtocolAnthropicCountTokens      Protocol = "anthropic_count_tokens"
 	ProtocolGeminiGenerate            Protocol = "gemini_generate_content"
 	ProtocolRealtime                  Protocol = "realtime"
 	ProtocolAsterJobs                 Protocol = "aster_jobs"
@@ -41,32 +43,33 @@ type CredentialEnvelope struct {
 }
 
 type CanonicalRequest struct {
-	ID                   string                  `json:"id"`
-	ClientRequestID      string                  `json:"client_request_id"`
-	Fingerprint          string                  `json:"fingerprint"`
-	Protocol             Protocol                `json:"protocol"`
-	Operation            string                  `json:"operation"`
-	Modality             string                  `json:"modality"`
-	Lane                 Lane                    `json:"lane"`
-	Model                string                  `json:"model"`
-	Stream               bool                    `json:"stream"`
-	MessageCount         int                     `json:"message_count"`
-	IdempotencyKey       string                  `json:"idempotency_key,omitempty"`
-	StickyKey            string                  `json:"sticky_key,omitempty"`
-	ResponseMode         string                  `json:"response_mode,omitempty"`
-	PreviewMode          string                  `json:"preview_mode,omitempty"`
-	DeliveryMode         string                  `json:"delivery_mode,omitempty"`
-	OutputCount          int                     `json:"output_count,omitempty"`
-	VideoDurationMS      int64                   `json:"video_duration_ms,omitempty"`
-	AudioDurationMS      int64                   `json:"audio_duration_ms,omitempty"`
-	InputAudioDurationMS int64                   `json:"input_audio_duration_ms,omitempty"`
-	InputCharacters      int64                   `json:"input_characters,omitempty"`
-	SourceIP             string                  `json:"-"`
-	Text                 *CanonicalTextRequest   `json:"-"`
-	Payload              json.RawMessage         `json:"-"`
-	TransportBody        []byte                  `json:"-"`
-	TransportContentType string                  `json:"-"`
-	InputArtifact        *CanonicalInputArtifact `json:"-"`
+	ID                   string                     `json:"id"`
+	ClientRequestID      string                     `json:"client_request_id"`
+	Fingerprint          string                     `json:"fingerprint"`
+	Protocol             Protocol                   `json:"protocol"`
+	Operation            string                     `json:"operation"`
+	Modality             string                     `json:"modality"`
+	Lane                 Lane                       `json:"lane"`
+	Model                string                     `json:"model"`
+	Stream               bool                       `json:"stream"`
+	MessageCount         int                        `json:"message_count"`
+	IdempotencyKey       string                     `json:"idempotency_key,omitempty"`
+	StickyKey            string                     `json:"sticky_key,omitempty"`
+	ResponseMode         string                     `json:"response_mode,omitempty"`
+	PreviewMode          string                     `json:"preview_mode,omitempty"`
+	DeliveryMode         string                     `json:"delivery_mode,omitempty"`
+	OutputCount          int                        `json:"output_count,omitempty"`
+	VideoDurationMS      int64                      `json:"video_duration_ms,omitempty"`
+	AudioDurationMS      int64                      `json:"audio_duration_ms,omitempty"`
+	InputAudioDurationMS int64                      `json:"input_audio_duration_ms,omitempty"`
+	InputCharacters      int64                      `json:"input_characters,omitempty"`
+	SourceIP             string                     `json:"-"`
+	Text                 *CanonicalTextRequest      `json:"-"`
+	Embedding            *CanonicalEmbeddingRequest `json:"-"`
+	Payload              json.RawMessage            `json:"-"`
+	TransportBody        []byte                     `json:"-"`
+	TransportContentType string                     `json:"-"`
+	InputArtifact        *CanonicalInputArtifact    `json:"-"`
 }
 
 // CanonicalInputArtifact carries bounded request content only for the lifetime
@@ -85,6 +88,7 @@ type CanonicalLimits struct {
 	RPMLimit                 int   `json:"rpm_limit"`
 	TPMLimit                 int   `json:"tpm_limit"`
 	ConcurrencyLimit         int   `json:"concurrency_limit"`
+	TenantConcurrencyLimit   int   `json:"tenant_concurrency_limit"`
 	MonthlyTokenLimit        int   `json:"monthly_token_limit"`
 	MonthlyBudgetMicros      int64 `json:"monthly_budget_micros"`
 	MonthlyImageLimit        int   `json:"monthly_image_limit"`

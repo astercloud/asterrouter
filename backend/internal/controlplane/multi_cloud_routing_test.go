@@ -73,6 +73,9 @@ func TestModelRouteRequiresProviderCompatibleUpstreamFormat(t *testing.T) {
 		{provider: ProviderTypeOpenAICompatible, auth: ProviderAuthAPIKey, format: UpstreamFormatOpenAIResponses, modality: "multimodal", valid: true},
 		{provider: ProviderTypeOpenAICompatible, auth: ProviderAuthAPIKey, format: UpstreamFormatNativeMedia, modality: "multimodal", valid: true},
 		{provider: ProviderTypeOpenAICompatible, auth: ProviderAuthAPIKey, format: UpstreamFormatNativeMedia, modality: "embedding"},
+		{provider: ProviderTypeOpenAICompatible, auth: ProviderAuthAPIKey, format: UpstreamFormatOpenAIEmbeddings, modality: "embedding", valid: true},
+		{provider: ProviderTypeAzureOpenAI, auth: ProviderAuthAPIKey, config: map[string]string{"api_version": "version"}, format: UpstreamFormatOpenAIEmbeddings, modality: "embedding", valid: true},
+		{provider: ProviderTypeAnthropicCompatible, auth: ProviderAuthAPIKey, format: UpstreamFormatOpenAIEmbeddings, modality: "embedding"},
 	}
 	for _, test := range tests {
 		t.Run(test.provider+"/"+test.format, func(t *testing.T) {

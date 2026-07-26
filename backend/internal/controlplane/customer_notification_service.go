@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	customerErrorRateWindow      = 5 * time.Minute
-	customerErrorRateMinRequests = 5
+	customerErrorRateWindow                 = 5 * time.Minute
+	customerErrorRateMinRequests            = 5
+	customerNotificationEmailDispatchLimit  = 8
+	customerNotificationEmailTimeout        = 15 * time.Second
+	customerNotificationDeliverySaveTimeout = 5 * time.Second
 )
 
 var ErrCustomerNotificationNotFound = errors.New("通知不存在")
@@ -232,19 +235,55 @@ func (s *Service) publishCustomerNotification(ctx context.Context, input custome
 			Channel: CustomerNotificationChannelEmail, Status: CustomerNotificationDeliveryPending, CreatedAt: now, UpdatedAt: now,
 		}
 		_ = s.repo.SaveCustomerNotificationDelivery(ctx, delivery)
-		if s.customerNotificationDispatcher == nil {
+		dispatcher := s.customerNotificationDispatcherValue()
+		if dispatcher == nil {
 			delivery.Status = CustomerNotificationDeliveryFailed
 			delivery.Error = "email dispatcher is not configured"
-		} else if dispatchErr := s.customerNotificationDispatcher.DispatchCustomerNotification(ctx, user, notification); dispatchErr != nil {
+			delivery.UpdatedAt = s.nowUTC()
+			_ = s.repo.SaveCustomerNotificationDelivery(ctx, delivery)
+		} else if !s.enqueueCustomerNotificationEmail(dispatcher, user, notification, delivery) {
 			delivery.Status = CustomerNotificationDeliveryFailed
-			delivery.Error = dispatchErr.Error()
-		} else {
-			delivery.Status = CustomerNotificationDeliverySent
+			delivery.Error = "email dispatcher is busy"
+			delivery.UpdatedAt = s.nowUTC()
+			_ = s.repo.SaveCustomerNotificationDelivery(ctx, delivery)
 		}
-		delivery.UpdatedAt = time.Now().UTC()
-		_ = s.repo.SaveCustomerNotificationDelivery(ctx, delivery)
 	}
 	return nil
+}
+
+func (s *Service) enqueueCustomerNotificationEmail(dispatcher CustomerNotificationDispatcher, user WorkspaceUser, notification CustomerNotification, delivery CustomerNotificationDelivery) bool {
+	select {
+	case s.customerNotificationDispatchSlots <- struct{}{}:
+		go s.dispatchCustomerNotificationEmail(dispatcher, user, notification, delivery)
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) dispatchCustomerNotificationEmail(dispatcher CustomerNotificationDispatcher, user WorkspaceUser, notification CustomerNotification, delivery CustomerNotificationDelivery) {
+	defer func() { <-s.customerNotificationDispatchSlots }()
+	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), customerNotificationEmailTimeout)
+	dispatchErr := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("email dispatcher panic: %v", recovered)
+			}
+		}()
+		return dispatcher.DispatchCustomerNotification(dispatchCtx, user, notification)
+	}()
+	cancelDispatch()
+	if dispatchErr != nil {
+		delivery.Status = CustomerNotificationDeliveryFailed
+		delivery.Error = dispatchErr.Error()
+	} else {
+		delivery.Status = CustomerNotificationDeliverySent
+		delivery.Error = ""
+	}
+	delivery.UpdatedAt = s.nowUTC()
+	saveCtx, cancelSave := context.WithTimeout(context.Background(), customerNotificationDeliverySaveTimeout)
+	defer cancelSave()
+	_ = s.repo.SaveCustomerNotificationDelivery(saveCtx, delivery)
 }
 
 func (s *Service) syncCustomerUsageNotifications(ctx context.Context, auth GatewayAuthContext, record UsageRecord) error {

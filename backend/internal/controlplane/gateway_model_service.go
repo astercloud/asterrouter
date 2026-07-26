@@ -345,12 +345,12 @@ func ProviderSupportsGatewayModelRoute(providerType, modality, upstreamFormat st
 		}
 	}
 	formats := map[string][]string{
-		ProviderTypeOpenAICompatible:    {UpstreamFormatOpenAIChat, UpstreamFormatOpenAIResponses},
+		ProviderTypeOpenAICompatible:    {UpstreamFormatOpenAIChat, UpstreamFormatOpenAIResponses, UpstreamFormatOpenAIEmbeddings},
 		ProviderTypeAnthropicCompatible: {UpstreamFormatAnthropic},
 		ProviderTypeGeminiCompatible:    {UpstreamFormatGemini},
 		ProviderTypeAWSBedrock:          {UpstreamFormatBedrockConverse},
 		ProviderTypeGCPVertex:           {UpstreamFormatAnthropic, UpstreamFormatGemini},
-		ProviderTypeAzureOpenAI:         {UpstreamFormatOpenAIChat, UpstreamFormatOpenAIResponses},
+		ProviderTypeAzureOpenAI:         {UpstreamFormatOpenAIChat, UpstreamFormatOpenAIResponses, UpstreamFormatOpenAIEmbeddings},
 	}
 	return contains(formats[providerType], upstreamFormat)
 }
@@ -363,9 +363,9 @@ func gatewayModelSupportsUpstreamFormat(modality, upstreamFormat string) bool {
 		return true
 	case GatewayModalityImage, GatewayModalityVideo, GatewayModalityAudio:
 		return upstreamFormat == UpstreamFormatNativeMedia
+	case GatewayModalityEmbedding:
+		return upstreamFormat == UpstreamFormatOpenAIEmbeddings
 	default:
-		// Embedding inventory can be recorded on Provider Accounts, but this
-		// release does not expose an executable embedding gateway protocol.
 		return false
 	}
 }

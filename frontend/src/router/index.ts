@@ -9,6 +9,7 @@ const LegalDocumentView = () => import('@/views/LegalDocumentView.vue')
 const AccountProfileView = () => import('@/views/AccountProfileView.vue')
 const SetupView = () => import('@/views/SetupView.vue')
 const AdminShell = () => import('@/views/admin/AdminShell.vue')
+const AdminOnboardingView = () => import('@/views/admin/AdminOnboardingView.vue')
 const AdminApiKeysView = () => import('@/views/admin/AdminApiKeysView.vue')
 const AdminAlertsView = () => import('@/views/admin/AdminAlertsView.vue')
 const AdminArtifactsView = () => import('@/views/admin/AdminArtifactsView.vue')
@@ -18,6 +19,7 @@ const AdminCostAllocationView = () => import('@/views/admin/AdminCostAllocationV
 const AdminDashboardView = () => import('@/views/admin/AdminDashboardView.vue')
 const AdminDepartmentsView = () => import('@/views/admin/AdminDepartmentsView.vue')
 const AdminEffectivePricingView = () => import('@/views/admin/AdminEffectivePricingView.vue')
+const AdminSupplyView = () => import('@/views/admin/AdminSupplyView.vue')
 const AdminOrganizationGroupsView = () => import('@/views/admin/AdminOrganizationGroupsView.vue')
 const AdminExportJobsView = () => import('@/views/admin/AdminExportJobsView.vue')
 const AdminGatewayTracesView = () => import('@/views/admin/AdminGatewayTracesView.vue')
@@ -112,6 +114,11 @@ const router = createRouter({
   routes: [
     { path: '/', component: EntryRedirectView },
     { path: '/login', component: LoginView, meta: { titleKey: 'auth.signIn', descriptionKey: 'auth.signInToAccount' } },
+		{ path: '/register', component: LoginView, meta: { titleKey: 'auth.createAccount', descriptionKey: 'auth.registrationHelp' } },
+		{ path: '/forgot-password', component: LoginView, meta: { titleKey: 'auth.forgotPassword', descriptionKey: 'auth.resetEmailHelp' } },
+		{ path: '/resend-verification', component: LoginView, meta: { titleKey: 'auth.resendVerification', descriptionKey: 'auth.resendVerificationHelp' } },
+		{ path: '/reset-password', component: LoginView, meta: { titleKey: 'auth.resetPassword', descriptionKey: 'auth.resetPasswordHelp' } },
+		{ path: '/verify-email', component: LoginView, meta: { titleKey: 'auth.verifyEmail', descriptionKey: 'auth.verifyEmailHelp' } },
     { path: '/setup', component: SetupView, meta: { titleKey: 'setup.title', descriptionKey: 'setup.subtitle' } },
     {
       path: '/console',
@@ -168,6 +175,7 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/admin/dashboard' },
         { path: 'dashboard', component: AdminDashboardView, meta: { titleKey: 'admin.overview', descriptionKey: 'dashboard.subtitle' } },
+		{ path: 'onboarding', component: AdminOnboardingView, meta: { titleKey: 'admin.onboarding', descriptionKey: 'onboarding.subtitle' } },
         { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
         { path: 'gateway-models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
         { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
@@ -182,6 +190,7 @@ const router = createRouter({
         { path: 'policies', component: AdminPoliciesView, meta: { titleKey: 'admin.policies', descriptionKey: 'policies.subtitle' } },
         { path: 'api-keys', component: AdminApiKeysView, meta: { titleKey: 'admin.apiKeys', descriptionKey: 'apiKeys.subtitle' } },
         { path: 'usage', component: AdminUsageView, meta: { titleKey: 'admin.usage', descriptionKey: 'usage.subtitle' } },
+        { path: 'supply', component: AdminSupplyView, meta: { titleKey: 'admin.supply', descriptionKey: 'supply.subtitle' } },
         { path: 'cost-allocation', component: AdminCostAllocationView, meta: { titleKey: 'admin.costAllocation', descriptionKey: 'costAllocation.subtitle' } },
         { path: 'traces', component: AdminGatewayTracesView, meta: { titleKey: 'admin.traces', descriptionKey: 'traces.subtitle' } },
         { path: 'alerts', component: AdminAlertsView, meta: { titleKey: 'admin.alerts', descriptionKey: 'alerts.subtitle' } },
@@ -268,10 +277,12 @@ router.beforeEach(async (to) => {
   if (to.path === '/') {
     return entry
   }
-  if (to.path === '/login') {
-    if (token && entry !== '/login') return entry
-    return true
-  }
+	const publicAuthPath = ['/login', '/register', '/forgot-password', '/resend-verification', '/reset-password', '/verify-email'].includes(to.path)
+	if (publicAuthPath) {
+		if (!settings?.setup_completed) return '/setup'
+		if (token && ['/login', '/register', '/forgot-password', '/resend-verification'].includes(to.path) && entry !== '/login') return entry
+		return true
+	}
   if (to.path === '/setup') {
     if (settings?.setup_completed) {
       return entry

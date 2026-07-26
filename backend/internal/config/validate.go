@@ -43,8 +43,8 @@ func Validate(cfg Server, buildType string) (Server, error) {
 	if err := validateOfficial(cfg.Official); err != nil {
 		return cfg, err
 	}
-	if cfg.Plugins.CacheDir == "" || cfg.Plugins.ActiveDir == "" || cfg.Plugins.HostURL == "" {
-		return cfg, fmt.Errorf("%w: server.plugins cache-dir, active-dir, and host-url must resolve to non-empty values", ErrInvalidPlugins)
+	if cfg.Plugins.CacheDir == "" || cfg.Plugins.ActiveDir == "" || cfg.Plugins.DataDir == "" || cfg.Plugins.HostURL == "" {
+		return cfg, fmt.Errorf("%w: server.plugins cache-dir, active-dir, data-dir, and host-url must resolve to non-empty values", ErrInvalidPlugins)
 	}
 	if cfg.Maintenance.BackupDir == "" || cfg.Maintenance.DiagnosticDir == "" || cfg.Maintenance.MaxArchiveBytes <= 0 {
 		return cfg, fmt.Errorf("%w: backup-dir, diagnostic-dir, and a positive max-archive-bytes are required", ErrInvalidMaintenance)
@@ -81,6 +81,10 @@ func normalize(cfg *Server) {
 	if cfg.Plugins.ActiveDir == "" && cfg.Plugins.CacheDir != "" {
 		cfg.Plugins.ActiveDir = filepath.Join(filepath.Dir(cfg.Plugins.CacheDir), "plugin-active")
 	}
+	cfg.Plugins.DataDir = strings.TrimSpace(cfg.Plugins.DataDir)
+	if cfg.Plugins.DataDir == "" && cfg.Plugins.CacheDir != "" {
+		cfg.Plugins.DataDir = filepath.Join(filepath.Dir(cfg.Plugins.CacheDir), "plugin-data")
+	}
 	cfg.Plugins.HostURL = strings.TrimSpace(cfg.Plugins.HostURL)
 	if cfg.Plugins.HostURL == "" {
 		cfg.Plugins.HostURL = defaultPluginHostURL(cfg.HTTP.Listen)
@@ -95,6 +99,7 @@ func normalize(cfg *Server) {
 	cfg.Artifacts.S3.Prefix = strings.Trim(strings.TrimSpace(cfg.Artifacts.S3.Prefix), "/")
 	cfg.Artifacts.S3.AccessKey = strings.TrimSpace(cfg.Artifacts.S3.AccessKey)
 	cfg.Artifacts.S3.SecretKey = strings.TrimSpace(cfg.Artifacts.S3.SecretKey)
+	cfg.Observability.MetricsToken = strings.TrimSpace(cfg.Observability.MetricsToken)
 	cfg.Maintenance.BackupDir = strings.TrimSpace(cfg.Maintenance.BackupDir)
 	cfg.Maintenance.DiagnosticDir = strings.TrimSpace(cfg.Maintenance.DiagnosticDir)
 }

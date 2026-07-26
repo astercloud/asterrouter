@@ -44,6 +44,7 @@ const textFormatsByProvider: Record<string, string[]> = {
 }
 
 const nativeMediaProviderTypes = new Set(Object.keys(textFormatsByProvider))
+const embeddingProviderTypes = new Set(['openai_compatible', 'azure_openai'])
 
 const modelById = computed(() => Object.fromEntries(models.value.map((model) => [model.id, model])))
 const activeModels = computed(() => models.value.filter((model) => model.status === 'active'))
@@ -110,6 +111,7 @@ function routeFormats(account?: ProviderAccount, model?: GatewayModel): string[]
   if (model.modality === 'multimodal') return nativeMediaProviderTypes.has(account.platform) ? [...textFormats, 'native_media'] : textFormats
   if (model.modality === 'image' || model.modality === 'video') return nativeMediaProviderTypes.has(account.platform) ? ['native_media'] : []
   if (model.modality === 'audio') return account.platform === 'openai_compatible' ? ['native_media'] : []
+  if (model.modality === 'embedding') return embeddingProviderTypes.has(account.platform) ? ['openai_embeddings'] : []
   return []
 }
 
@@ -127,6 +129,7 @@ function routeCapabilityLabel(route: ModelRoute): string {
     const model = modelById.value[route.gateway_model_id]
     return model?.modality === 'audio' ? t('modelRoutes.builtinDirect') : t('modelRoutes.mediaAdapter')
   }
+	if (route.upstream_format === 'openai_embeddings') return t('modelRoutes.embeddingCore')
   return t('modelRoutes.textCore')
 }
 

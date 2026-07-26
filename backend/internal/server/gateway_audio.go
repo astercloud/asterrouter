@@ -175,6 +175,13 @@ func gatewayAudioProtocol(protocol gatewaycore.Protocol) bool {
 }
 
 func gatewayProtocolRouteSummary(request gatewaycore.CanonicalRequest, provider controlplane.GatewayProvider) string {
+	if request.Protocol == gatewaycore.ProtocolOpenAIEmbeddings {
+		summary := "Forwarded embedding request for model " + request.Model + " to provider " + provider.ID
+		if provider.AccountID != "" {
+			summary += " account " + provider.AccountID
+		}
+		return summary
+	}
 	if !gatewayAudioProtocol(request.Protocol) {
 		return gatewayRouteSummary(request.Model, provider)
 	}
@@ -189,6 +196,16 @@ func gatewayProtocolRouteSummary(request gatewaycore.CanonicalRequest, provider 
 }
 
 func gatewayProtocolRequestSummary(request gatewaycore.CanonicalRequest) string {
+	if request.Protocol == gatewaycore.ProtocolAnthropicCountTokens {
+		return fmt.Sprintf("messages.count_tokens messages=%d", request.MessageCount)
+	}
+	if request.Protocol == gatewaycore.ProtocolOpenAIEmbeddings {
+		encodingFormat := ""
+		if request.Embedding != nil {
+			encodingFormat = request.Embedding.EncodingFormat
+		}
+		return fmt.Sprintf("embeddings inputs=%d encoding_format=%s", request.MessageCount, encodingFormat)
+	}
 	if !gatewayAudioProtocol(request.Protocol) {
 		return fmt.Sprintf("chat.completions stream=%t messages=%d", request.Stream, request.MessageCount)
 	}

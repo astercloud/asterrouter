@@ -56,7 +56,7 @@ func TestCurrentAccountProfileRejectsDeploymentManagedActor(t *testing.T) {
 	}
 }
 
-func TestExternalAccountCanEnableLocalPasswordLogin(t *testing.T) {
+func TestExternalAccountUsesEmailRecoveryToEnableLocalPasswordLogin(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")
 	user, err := svc.ProvisionOIDCUser(ctx, "feishu:cn", "union-1", "user@example.test", "Enterprise User", "")
@@ -67,8 +67,15 @@ func TestExternalAccountCanEnableLocalPasswordLogin(t *testing.T) {
 	if err != nil || profile.PasswordEnabled {
 		t.Fatalf("unexpected initial profile=%+v err=%v", profile, err)
 	}
-	if err := svc.ChangeCurrentAccountPassword(ctx, user.ID, AccountPasswordUpdateRequest{NewPassword: "local-password-value"}); err != nil {
-		t.Fatalf("ChangeCurrentAccountPassword(enable): %v", err)
+	if err := svc.ChangeCurrentAccountPassword(ctx, user.ID, AccountPasswordUpdateRequest{NewPassword: "local-password-value"}); err == nil {
+		t.Fatal("a session without an existing password created a persistent local credential")
+	}
+	_, resetToken, err := svc.BeginPasswordReset(ctx, user.Email)
+	if err != nil {
+		t.Fatalf("BeginPasswordReset(): %v", err)
+	}
+	if err := svc.CompletePasswordReset(ctx, resetToken, "local-password-value"); err != nil {
+		t.Fatalf("CompletePasswordReset(): %v", err)
 	}
 	if _, err := svc.AuthenticateWorkspaceUser(ctx, user.Email, "local-password-value", false); err != nil {
 		t.Fatalf("AuthenticateWorkspaceUser(): %v", err)

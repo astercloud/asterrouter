@@ -7,15 +7,16 @@ type Config struct {
 }
 
 type Server struct {
-	HTTP        HTTP        `json:"http"        desc:"HTTP service configuration"`
-	Bootstrap   Bootstrap   `json:"bootstrap"   desc:"First-run bootstrap configuration"`
-	Security    Security    `json:"security"    desc:"Authentication and encryption configuration"`
-	Storage     Storage     `json:"storage"     desc:"Persistent storage and Redis configuration"`
-	Official    Official    `json:"official"    desc:"Official catalog and license services"`
-	Plugins     Plugins     `json:"plugins"     desc:"Plugin runtime configuration"`
-	Jobs        Jobs        `json:"jobs"        desc:"Durable AI job infrastructure"`
-	Artifacts   Artifacts   `json:"artifacts"   desc:"Artifact storage configuration"`
-	Maintenance Maintenance `json:"maintenance" desc:"Backup, diagnostics, and process management"`
+	HTTP          HTTP          `json:"http"        desc:"HTTP service configuration"`
+	Bootstrap     Bootstrap     `json:"bootstrap"   desc:"First-run bootstrap configuration"`
+	Security      Security      `json:"security"    desc:"Authentication and encryption configuration"`
+	Storage       Storage       `json:"storage"     desc:"Persistent storage and Redis configuration"`
+	Official      Official      `json:"official"    desc:"Official catalog and license services"`
+	Plugins       Plugins       `json:"plugins"     desc:"Plugin runtime configuration"`
+	Jobs          Jobs          `json:"jobs"        desc:"Durable AI job infrastructure"`
+	Artifacts     Artifacts     `json:"artifacts"   desc:"Artifact storage configuration"`
+	Observability Observability `json:"observability" desc:"Operational metrics configuration"`
+	Maintenance   Maintenance   `json:"maintenance" desc:"Backup, diagnostics, and process management"`
 }
 
 type HTTP struct {
@@ -81,6 +82,7 @@ type Instance struct {
 type Plugins struct {
 	CacheDir  string `json:"cache-dir"  desc:"Downloaded plugin package cache"`
 	ActiveDir string `json:"active-dir" desc:"Activated plugin runtime directory; derived from cache-dir when empty"`
+	DataDir   string `json:"data-dir"   desc:"Version-independent Sidecar plugin data directory; derived from cache-dir when empty"`
 	HostURL   string `json:"host-url"   desc:"Plugin host callback URL; derived from http.listen when empty"`
 }
 
@@ -114,6 +116,10 @@ type ArtifactS3 struct {
 	AccessKey string `json:"access-key" desc:"S3 access key"`
 	SecretKey string `json:"secret-key" desc:"S3 secret key"`
 	PathStyle bool   `json:"path-style" desc:"Use path-style S3 addressing"`
+}
+
+type Observability struct {
+	MetricsToken string `json:"metrics-token" desc:"Bearer token required to enable the Prometheus metrics endpoint"`
 }
 
 type Maintenance struct {

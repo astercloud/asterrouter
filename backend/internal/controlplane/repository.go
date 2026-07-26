@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/astercloud/asterrouter/backend/internal/postgresutil"
 	"github.com/astercloud/asterrouter/backend/internal/pricing"
 	_ "github.com/lib/pq"
 )
@@ -28,6 +29,15 @@ type Repository interface {
 	SaveGovernancePolicy(ctx context.Context, policy GovernancePolicy) error
 	ListWorkspaceUsers(ctx context.Context) ([]WorkspaceUser, error)
 	SaveWorkspaceUser(ctx context.Context, user WorkspaceUser) error
+	FindWorkspaceUserByEmail(ctx context.Context, email string) (WorkspaceUser, bool, error)
+	FindWorkspaceUserByEmailNormalized(ctx context.Context, normalized string) (WorkspaceUser, bool, error)
+	FindWorkspaceUserByEmailVerifyHash(ctx context.Context, hash string) (WorkspaceUser, bool, error)
+	FindWorkspaceUserByPasswordResetHash(ctx context.Context, hash string) (WorkspaceUser, bool, error)
+	IssueWorkspaceUserEmailVerification(ctx context.Context, email, hash string, now, expiresAt time.Time, cooldown time.Duration) (WorkspaceUser, bool, error)
+	ConsumeWorkspaceUserEmailVerification(ctx context.Context, hash string, now time.Time) (WorkspaceUser, bool, error)
+	IssueWorkspaceUserPasswordReset(ctx context.Context, email, hash string, now, expiresAt time.Time, cooldown time.Duration) (WorkspaceUser, bool, error)
+	ConsumeWorkspaceUserPasswordReset(ctx context.Context, hash, passwordHash string, now time.Time) (WorkspaceUser, bool, error)
+	ConsumeWorkspaceUserTOTPRecoveryCode(ctx context.Context, userID, hash string, now time.Time) (WorkspaceUser, bool, error)
 	ListPlatformTenants(ctx context.Context) ([]PlatformTenant, error)
 	SavePlatformTenant(ctx context.Context, tenant PlatformTenant) error
 	ListGatewayPrincipals(ctx context.Context) ([]GatewayPrincipal, error)
@@ -133,6 +143,9 @@ type Repository interface {
 	SaveModelRoute(ctx context.Context, route ModelRoute) error
 	SaveModelRoutes(ctx context.Context, routes []ModelRoute) error
 	DeleteModelRoute(ctx context.Context, id string) error
+	CreateOrGetOnboardingSession(ctx context.Context, session OnboardingSession) (OnboardingSession, bool, error)
+	FindOnboardingSession(ctx context.Context, id string) (OnboardingSession, bool, error)
+	UpdateOnboardingSession(ctx context.Context, session OnboardingSession, expectedVersion int64) (OnboardingSession, bool, error)
 	ListLatestProviderAccountHealthChecks(ctx context.Context) ([]ProviderAccountHealthCheck, error)
 	SaveProviderAccountHealthCheck(ctx context.Context, check ProviderAccountHealthCheck) error
 	CreatePricingRule(ctx context.Context, rule PricingRule, draft PricingRuleVersion) error
@@ -254,6 +267,7 @@ type MemoryRepository struct {
 	accountModels                   map[string]map[string]ProviderAccountModel
 	gatewayModels                   map[string]GatewayModel
 	modelRoutes                     map[string]ModelRoute
+	onboardingSessions              map[string]OnboardingSession
 	accountHealthChecks             map[string]ProviderAccountHealthCheck
 	pricingRules                    map[string]PricingRule
 	pricingRuleVersions             map[string]PricingRuleVersion
@@ -322,6 +336,7 @@ func NewMemoryRepository() *MemoryRepository {
 		accountModels:                   map[string]map[string]ProviderAccountModel{},
 		gatewayModels:                   map[string]GatewayModel{},
 		modelRoutes:                     map[string]ModelRoute{},
+		onboardingSessions:              map[string]OnboardingSession{},
 		accountHealthChecks:             map[string]ProviderAccountHealthCheck{},
 		pricingRules:                    map[string]PricingRule{},
 		pricingRuleVersions:             map[string]PricingRuleVersion{},
@@ -895,6 +910,21 @@ func memoryGatewayTraceMatches(trace GatewayTrace, query GatewayTraceQuery) bool
 	if query.Model != "" && trace.Model != query.Model {
 		return false
 	}
+	if query.ProviderID != "" && trace.ProviderID != query.ProviderID {
+		return false
+	}
+	if query.AccountID != "" && trace.ProviderAccountID != query.AccountID {
+		return false
+	}
+	if query.GatewayModelID != "" && trace.GatewayModelID != query.GatewayModelID {
+		return false
+	}
+	if query.RouteID != "" && trace.RouteID != query.RouteID {
+		return false
+	}
+	if query.RouteGroup != "" && trace.RouteGroup != query.RouteGroup {
+		return false
+	}
 	if query.Status != "" && trace.Status != query.Status {
 		return false
 	}
@@ -1022,6 +1052,11 @@ func appendGatewayTraceFilters(clauses *[]string, args *[]any, query GatewayTrac
 	appendExactFilter(clauses, args, "gateway_principal_id", query.GatewayPrincipalID)
 	appendExactFilter(clauses, args, "external_auth_integration_id", query.ExternalAuthIntegrationID)
 	appendExactFilter(clauses, args, "model", query.Model)
+	appendExactFilter(clauses, args, "provider_id", query.ProviderID)
+	appendExactFilter(clauses, args, "provider_account_id", query.AccountID)
+	appendExactFilter(clauses, args, "gateway_model_id", query.GatewayModelID)
+	appendExactFilter(clauses, args, "route_id", query.RouteID)
+	appendExactFilter(clauses, args, "route_group", query.RouteGroup)
 	appendExactFilter(clauses, args, "status", query.Status)
 	appendTimeFilter(clauses, args, "created_at", ">=", query.CreatedFrom)
 	appendTimeFilter(clauses, args, "created_at", "<=", query.CreatedTo)
@@ -1076,7 +1111,8 @@ func NewPostgresRepository(ctx context.Context, databaseURL string) (*PostgresRe
 }
 
 func (r *PostgresRepository) migrate(ctx context.Context) error {
-	_, err := r.db.ExecContext(ctx, `
+	return postgresutil.WithSchemaMigrationLock(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS provider_connections (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -1165,13 +1201,25 @@ ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_hash TEXT NOT NULL
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_verify_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_verify_expires_at TIMESTAMPTZ;
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_verify_sent_at TIMESTAMPTZ;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_reset_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_reset_expires_at TIMESTAMPTZ;
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_reset_sent_at TIMESTAMPTZ;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS balance_micros BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS concurrency_limit INTEGER NOT NULL DEFAULT 5;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS rpm_limit INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS avatar_data_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS session_version BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_normalized TEXT NOT NULL DEFAULT '';
+
+UPDATE workspace_users
+SET email_normalized = CASE
+  WHEN split_part(rtrim(lower(email), '.'), '@', 2) IN ('gmail.com', 'googlemail.com')
+    THEN COALESCE(NULLIF(replace(split_part(split_part(lower(email), '@', 1), '+', 1), '.', ''), ''),
+                  split_part(lower(email), '@', 1)) || '@gmail.com'
+  ELSE split_part(split_part(lower(email), '@', 1), '+', 1) || '@' || rtrim(split_part(lower(email), '@', 2), '.')
+END
+WHERE email_normalized = '' AND position('@' in email) > 1;
 
 DO $$ BEGIN
   ALTER TABLE workspace_users ADD CONSTRAINT workspace_users_avatar_size CHECK (octet_length(avatar_data_url) <= 262144);
@@ -1182,6 +1230,15 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_users_external_identity_unique
   ON workspace_users(external_issuer, external_subject)
   WHERE external_issuer <> '' AND external_subject <> '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_users_email_normalized_unique
+  ON workspace_users(email_normalized) WHERE email_normalized <> '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_users_email_verify_hash_unique
+  ON workspace_users(email_verify_hash) WHERE email_verify_hash <> '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_users_password_reset_hash_unique
+  ON workspace_users(password_reset_hash) WHERE password_reset_hash <> '';
 
 CREATE TABLE IF NOT EXISTS organization_groups (
   id TEXT PRIMARY KEY,
@@ -1629,10 +1686,26 @@ CREATE TABLE IF NOT EXISTS platform_tenants (
   name TEXT NOT NULL,
   slug TEXT NOT NULL UNIQUE,
   entitlement_reference TEXT NOT NULL DEFAULT '',
+  concurrency_limit INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE platform_tenants ADD COLUMN IF NOT EXISTS concurrency_limit INTEGER NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'platform_tenants_concurrency_limit_non_negative'
+      AND conrelid = 'platform_tenants'::regclass
+  ) THEN
+    ALTER TABLE platform_tenants
+      ADD CONSTRAINT platform_tenants_concurrency_limit_non_negative
+      CHECK (concurrency_limit >= 0);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS gateway_principals (
   id TEXT PRIMARY KEY,
@@ -2187,6 +2260,27 @@ CREATE TABLE IF NOT EXISTS gateway_credential_capacity_leases (
 
 CREATE INDEX IF NOT EXISTS gateway_credential_capacity_leases_expiry_idx
   ON gateway_credential_capacity_leases(profile_scope, tenant_id, credential_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS gateway_provider_rate_samples (
+  id TEXT PRIMARY KEY,
+  provider_account_id TEXT NOT NULL,
+  estimated_tokens INTEGER NOT NULL DEFAULT 0 CHECK (estimated_tokens >= 0),
+  occurred_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS gateway_provider_rate_samples_window_idx
+  ON gateway_provider_rate_samples(provider_account_id, occurred_at);
+
+CREATE TABLE IF NOT EXISTS gateway_provider_capacity_leases (
+  id TEXT PRIMARY KEY,
+  provider_account_id TEXT NOT NULL,
+  capacity_units INTEGER NOT NULL CHECK (capacity_units > 0),
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS gateway_provider_capacity_leases_expiry_idx
+  ON gateway_provider_capacity_leases(provider_account_id, expires_at);
 
 CREATE TABLE IF NOT EXISTS transactional_outbox (
   id TEXT PRIMARY KEY,
@@ -2880,15 +2974,56 @@ CREATE TABLE IF NOT EXISTS routing_affinity_bindings (
   expires_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS routing_affinity_bindings_expiry_idx
-  ON routing_affinity_bindings(expires_at);
+	CREATE INDEX IF NOT EXISTS routing_affinity_bindings_expiry_idx
+	  ON routing_affinity_bindings(expires_at);
 
-`)
-	if err != nil {
+	CREATE TABLE IF NOT EXISTS onboarding_sessions (
+	  id TEXT PRIMARY KEY,
+	  actor TEXT NOT NULL,
+	  idempotency_key TEXT NOT NULL,
+	  status TEXT NOT NULL,
+	  current_step TEXT NOT NULL,
+	  provider_id TEXT NOT NULL DEFAULT '',
+	  provider_account_id TEXT NOT NULL DEFAULT '',
+	  provider_health_check_id TEXT NOT NULL DEFAULT '',
+	  gateway_model_id TEXT NOT NULL DEFAULT '',
+	  model_route_id TEXT NOT NULL DEFAULT '',
+	  api_key_id TEXT NOT NULL DEFAULT '',
+	  verification_client TEXT NOT NULL DEFAULT '',
+	  verification_model TEXT NOT NULL DEFAULT '',
+	  verification_operation_id TEXT NOT NULL DEFAULT '',
+	  verification_trace_id TEXT NOT NULL DEFAULT '',
+	  verification_http_status INTEGER NOT NULL DEFAULT 0,
+	  verification_error_code TEXT NOT NULL DEFAULT '',
+	  verification_recovery_action TEXT NOT NULL DEFAULT '',
+	  failure_stage TEXT NOT NULL DEFAULT '',
+	  failure_code TEXT NOT NULL DEFAULT '',
+	  recovery_hint TEXT NOT NULL DEFAULT '',
+	  version BIGINT NOT NULL DEFAULT 1,
+	  created_at TIMESTAMPTZ NOT NULL,
+	  updated_at TIMESTAMPTZ NOT NULL,
+		  expires_at TIMESTAMPTZ NOT NULL,
+		  UNIQUE(actor, idempotency_key),
+		  CHECK (status IN ('in_progress', 'failed', 'completed')),
+		  CHECK (current_step IN ('started', 'model_source', 'published_model', 'api_key', 'verification')),
+		  CHECK (version > 0),
+		  CHECK (verification_http_status >= 0 AND verification_http_status <= 599),
+		  CHECK (expires_at >= created_at)
+		);
+
+	CREATE INDEX IF NOT EXISTS onboarding_sessions_actor_updated_idx
+	  ON onboarding_sessions(actor, updated_at DESC);
+
+	CREATE INDEX IF NOT EXISTS onboarding_sessions_expiry_idx
+	  ON onboarding_sessions(expires_at);
+
+	`)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, pricingSchema)
 		return err
-	}
-	_, err = r.db.ExecContext(ctx, pricingSchema)
-	return err
+	})
 }
 
 func (r *PostgresRepository) ListProviders(ctx context.Context) ([]ProviderConnection, error) {

@@ -454,14 +454,20 @@ func usageQuery(c *gin.Context) controlplane.UsageQuery {
 
 func gatewayTraceQuery(c *gin.Context) controlplane.GatewayTraceQuery {
 	return controlplane.GatewayTraceQuery{
-		Limit:       intQuery(c, "limit", 50),
-		Offset:      intQuery(c, "offset", 0),
-		Search:      strings.TrimSpace(c.Query("q")),
-		APIKeyID:    strings.TrimSpace(c.Query("api_key_id")),
-		Model:       strings.TrimSpace(c.Query("model")),
-		Status:      strings.TrimSpace(c.Query("status")),
-		CreatedFrom: timeQuery(c, "from"),
-		CreatedTo:   timeQuery(c, "to"),
+		Limit:              intQuery(c, "limit", 50),
+		Offset:             intQuery(c, "offset", 0),
+		Search:             strings.TrimSpace(c.Query("q")),
+		APIKeyID:           strings.TrimSpace(c.Query("api_key_id")),
+		GatewayPrincipalID: strings.TrimSpace(c.Query("gateway_principal_id")),
+		Model:              strings.TrimSpace(c.Query("model")),
+		ProviderID:         strings.TrimSpace(c.Query("provider_id")),
+		AccountID:          strings.TrimSpace(c.Query("provider_account_id")),
+		GatewayModelID:     strings.TrimSpace(c.Query("gateway_model_id")),
+		RouteID:            strings.TrimSpace(c.Query("route_id")),
+		RouteGroup:         strings.TrimSpace(c.Query("route_group")),
+		Status:             strings.TrimSpace(c.Query("status")),
+		CreatedFrom:        timeQuery(c, "from"),
+		CreatedTo:          timeQuery(c, "to"),
 	}
 }
 

@@ -18,7 +18,7 @@ const tenants = ref<PlatformTenant[]>([])
 const principals = ref<GatewayPrincipal[]>([])
 
 const tenantForm = reactive<PlatformTenantRequest>({
-  name: '', slug: '', entitlement_reference: '', status: 'active'
+  name: '', slug: '', entitlement_reference: '', concurrency_limit: 0, status: 'active'
 })
 const principalForm = reactive<GatewayPrincipalRequest>({
   tenant_id: '', name: '', principal_type: 'service', external_subject_reference: '', status: 'active'
@@ -28,7 +28,7 @@ const tenantNameByID = computed(() => new Map(tenants.value.map((tenant) => [ten
 const activeTenants = computed(() => tenants.value.filter((tenant) => tenant.status === 'active'))
 
 function resetTenantForm() {
-  Object.assign(tenantForm, { name: '', slug: '', entitlement_reference: '', status: 'active' })
+  Object.assign(tenantForm, { name: '', slug: '', entitlement_reference: '', concurrency_limit: 0, status: 'active' })
 }
 
 function resetPrincipalForm() {
@@ -47,6 +47,7 @@ function openTenantEdit(tenant: PlatformTenant) {
     name: tenant.name,
     slug: tenant.slug,
     entitlement_reference: tenant.entitlement_reference,
+    concurrency_limit: tenant.concurrency_limit,
     status: tenant.status
   })
   tenantModalOpen.value = true
@@ -148,16 +149,17 @@ onMounted(load)
       <div class="panel-header"><UsersRound :size="18" /><h2>{{ t('platform.tenant') }}</h2></div>
       <div class="panel-body table-scroll">
         <table class="data-table crud-table">
-          <thead><tr><th>{{ t('platform.tenantName') }}</th><th>{{ t('platform.tenantSlug') }}</th><th>{{ t('platform.entitlementReference') }}</th><th>{{ t('providers.status') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
+          <thead><tr><th>{{ t('platform.tenantName') }}</th><th>{{ t('platform.tenantSlug') }}</th><th>{{ t('platform.entitlementReference') }}</th><th>{{ t('platform.tenantConcurrencyLimit') }}</th><th>{{ t('providers.status') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
           <tbody>
             <tr v-for="tenant in tenants" :key="tenant.id">
               <td><strong>{{ tenant.name }}</strong><span>{{ tenant.id }}</span></td>
               <td>{{ tenant.slug }}</td>
               <td>{{ tenant.entitlement_reference || '-' }}</td>
+              <td>{{ tenant.concurrency_limit || '-' }}</td>
               <td><span class="pill" :class="tenant.status === 'active' ? 'status-success' : 'status-danger'">{{ tenant.status }}</span></td>
               <td><button class="button secondary" type="button" @click="openTenantEdit(tenant)"><Edit3 :size="15" />{{ t('common.edit') }}</button></td>
             </tr>
-            <tr v-if="!tenants.length"><td colspan="5" class="empty-cell">{{ loading ? t('common.loading') : t('platform.noTenants') }}</td></tr>
+            <tr v-if="!tenants.length"><td colspan="6" class="empty-cell">{{ loading ? t('common.loading') : t('platform.noTenants') }}</td></tr>
           </tbody>
         </table>
       </div>
@@ -190,7 +192,8 @@ onMounted(load)
           <div class="field form-span-2"><label for="platform-tenant-name">{{ t('platform.tenantName') }}</label><input id="platform-tenant-name" v-model="tenantForm.name" /></div>
           <div class="field"><label for="platform-tenant-slug">{{ t('platform.tenantSlug') }}</label><input id="platform-tenant-slug" v-model="tenantForm.slug" :disabled="editingTenant?.id === 'ptn_default'" /></div>
           <div class="field"><label for="platform-tenant-status">{{ t('providers.status') }}</label><select id="platform-tenant-status" v-model="tenantForm.status"><option value="active">active</option><option value="disabled">disabled</option></select></div>
-          <div class="field form-span-2"><label for="platform-tenant-entitlement">{{ t('platform.entitlementReference') }}</label><input id="platform-tenant-entitlement" v-model="tenantForm.entitlement_reference" /></div>
+          <div class="field"><label for="platform-tenant-entitlement">{{ t('platform.entitlementReference') }}</label><input id="platform-tenant-entitlement" v-model="tenantForm.entitlement_reference" /></div>
+          <div class="field"><label for="platform-tenant-concurrency">{{ t('platform.tenantConcurrencyLimit') }}</label><input id="platform-tenant-concurrency" v-model.number="tenantForm.concurrency_limit" type="number" min="0" step="1" inputmode="numeric" /></div>
         </div>
         <footer class="modal-footer"><button class="button secondary" type="button" @click="tenantModalOpen = false">{{ t('common.cancel') }}</button><button class="button" type="button" :disabled="saving" @click="saveTenant">{{ saving ? t('common.saving') : t('common.save') }}</button></footer>
       </section>

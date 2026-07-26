@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
@@ -17,9 +19,19 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
 	"github.com/astercloud/asterrouter/backend/internal/system"
+	"github.com/astercloud/asterrouter/backend/internal/testutil"
 )
 
 type allowDurableAIJobs struct{}
+
+type unhealthySettingsRepository struct {
+	settings.Repository
+	healthErr error
+}
+
+func (r unhealthySettingsRepository) Health(context.Context) error {
+	return r.healthErr
+}
 
 func (allowDurableAIJobs) SupportsDurableAIJob(context.Context, gatewaycore.CanonicalAuthContext, gatewaycore.CanonicalRequest) (bool, error) {
 	return true, nil
@@ -63,8 +75,20 @@ func newAuthTestHandler(t *testing.T) http.Handler {
 }
 
 func newAuthTestRuntime(t *testing.T) (http.Handler, *controlplane.Service) {
+	return newAuthTestRuntimeWithTOTP(t, true)
+}
+
+func newAuthTestRuntimeWithTOTP(t *testing.T, totpEnabled bool) (http.Handler, *controlplane.Service) {
 	t.Helper()
 	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	adminSettings, err := settingsService.Admin(t.Context())
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	adminSettings.TOTPEnabled = totpEnabled
+	if _, err := settingsService.Update(t.Context(), adminSettings); err != nil {
+		t.Fatalf("enable TOTP setting: %v", err)
+	}
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("EnsureSeedData(): %v", err)
@@ -108,6 +132,145 @@ func TestPublicSettingsEndpoint(t *testing.T) {
 	}
 	if resp.Data.SiteName != "AsterRouter" {
 		t.Fatalf("site_name = %q", resp.Data.SiteName)
+	}
+}
+
+func TestReadinessFailsClosedWithoutLeakingDependencyError(t *testing.T) {
+	const sensitiveMarker = "postgres://private-user:private-password@database.internal/asterrouter"
+	repository := unhealthySettingsRepository{
+		Repository: settings.NewMemoryRepository(),
+		healthErr:  errors.New(sensitiveMarker),
+	}
+	handler := New(Options{
+		SettingsService: settings.NewService(repository, settings.ServiceOptions{Version: "test", StorageMode: "postgres"}),
+	})
+
+	healthReq := httptest.NewRequest(http.MethodGet, "/health", nil)
+	healthRec := httptest.NewRecorder()
+	handler.ServeHTTP(healthRec, healthReq)
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", healthRec.Code, healthRec.Body.String())
+	}
+
+	readyReq := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	readyRec := httptest.NewRecorder()
+	handler.ServeHTTP(readyRec, readyReq)
+	if readyRec.Code != http.StatusServiceUnavailable || !strings.Contains(readyRec.Body.String(), `"code":1001`) {
+		t.Fatalf("ready status=%d body=%s", readyRec.Code, readyRec.Body.String())
+	}
+	if strings.Contains(readyRec.Body.String(), sensitiveMarker) || !strings.Contains(readyRec.Body.String(), "service dependency is unavailable") {
+		t.Fatalf("ready response leaked dependency detail: %s", readyRec.Body.String())
+	}
+}
+
+func TestReadinessFailsClosedAfterPostgresRepositoryStops(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	repository, err := settings.NewPostgresRepository(context.Background(), schema.URL)
+	if err != nil {
+		t.Fatalf("NewPostgresRepository(): %v", err)
+	}
+	handler := New(Options{
+		SettingsService: settings.NewService(repository, settings.ServiceOptions{Version: "test", StorageMode: "postgres"}),
+	})
+
+	readyReq := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	readyRec := httptest.NewRecorder()
+	handler.ServeHTTP(readyRec, readyReq)
+	if readyRec.Code != http.StatusOK {
+		t.Fatalf("initial ready status=%d body=%s", readyRec.Code, readyRec.Body.String())
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+
+	failedReq := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	failedRec := httptest.NewRecorder()
+	handler.ServeHTTP(failedRec, failedReq)
+	if failedRec.Code != http.StatusServiceUnavailable || !strings.Contains(failedRec.Body.String(), `"code":1001`) {
+		t.Fatalf("failed ready status=%d body=%s", failedRec.Code, failedRec.Body.String())
+	}
+	if strings.Contains(failedRec.Body.String(), "database is closed") || !strings.Contains(failedRec.Body.String(), "service dependency is unavailable") {
+		t.Fatalf("failed ready response leaked database detail: %s", failedRec.Body.String())
+	}
+}
+
+func TestTwoInstancesRecoverAfterPostgresNetworkInterruption(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	proxy, proxiedURL := testutil.NewTCPProxy(t, schema.URL)
+	repositories := make([]*settings.PostgresRepository, 0, 2)
+	handlers := make([]http.Handler, 0, 2)
+	for index := 0; index < 2; index++ {
+		repository, err := settings.NewPostgresRepository(context.Background(), proxiedURL)
+		if err != nil {
+			t.Fatalf("NewPostgresRepository(instance=%d): %v", index, err)
+		}
+		repositories = append(repositories, repository)
+		handlers = append(handlers, New(Options{
+			Runtime:         RuntimeConfig{MetricsToken: "network-fault-metrics"},
+			SettingsService: settings.NewService(repository, settings.ServiceOptions{Version: "test", StorageMode: "postgres"}),
+		}))
+	}
+	defer func() {
+		for _, repository := range repositories {
+			_ = repository.Close()
+		}
+	}()
+
+	for index, handler := range handlers {
+		if status, body := readinessStatus(handler); status != http.StatusOK {
+			t.Fatalf("initial readiness instance=%d status=%d body=%s", index, status, body)
+		}
+	}
+	proxy.Disable()
+	for index, handler := range handlers {
+		status, body := awaitReadinessStatus(t, handler, http.StatusServiceUnavailable)
+		if status != http.StatusServiceUnavailable || !strings.Contains(body, `"code":1001`) || !strings.Contains(body, "service dependency is unavailable") {
+			t.Fatalf("blocked readiness instance=%d status=%d body=%s", index, status, body)
+		}
+		if strings.Contains(body, schema.Name) || strings.Contains(body, "127.0.0.1") {
+			t.Fatalf("blocked readiness leaked database details instance=%d body=%s", index, body)
+		}
+		healthRequest := httptest.NewRequest(http.MethodGet, "/health", nil)
+		healthResponse := httptest.NewRecorder()
+		handler.ServeHTTP(healthResponse, healthRequest)
+		if healthResponse.Code != http.StatusOK {
+			t.Fatalf("blocked health instance=%d status=%d body=%s", index, healthResponse.Code, healthResponse.Body.String())
+		}
+	}
+
+	proxy.Enable()
+	for index, handler := range handlers {
+		status, body := awaitReadinessStatus(t, handler, http.StatusOK)
+		if status != http.StatusOK {
+			t.Fatalf("recovered readiness instance=%d status=%d body=%s", index, status, body)
+		}
+		metricsRequest := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		metricsRequest.Header.Set("Authorization", "Bearer network-fault-metrics")
+		metricsResponse := httptest.NewRecorder()
+		handler.ServeHTTP(metricsResponse, metricsRequest)
+		metricsBody := metricsResponse.Body.String()
+		if !strings.Contains(metricsBody, `asterrouter_readiness_checks_total{result="unavailable"}`) || !strings.Contains(metricsBody, `asterrouter_readiness_checks_total{result="ready"}`) {
+			t.Fatalf("recovery metrics instance=%d body=%s", index, metricsBody)
+		}
+	}
+}
+
+func readinessStatus(handler http.Handler) (int, string) {
+	request := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response.Code, response.Body.String()
+}
+
+func awaitReadinessStatus(t *testing.T, handler http.Handler, expected int) (int, string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		status, body := readinessStatus(handler)
+		if status == expected || time.Now().After(deadline) {
+			return status, body
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

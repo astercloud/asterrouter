@@ -120,4 +120,15 @@ describe('router guards', () => {
       expect(route?.props.default).toEqual({ surface: 'platform' })
     }
   })
+
+	it('registers the enterprise first-access route with localized metadata', () => {
+		const route = router.getRoutes().find((item) => item.path === '/admin/onboarding')
+		expect(route?.meta).toMatchObject({ titleKey: 'admin.onboarding', descriptionKey: 'onboarding.subtitle' })
+	})
+
+	it('registers every public account workflow as a first-class route', () => {
+		for (const path of ['/login', '/register', '/forgot-password', '/resend-verification', '/reset-password', '/verify-email']) {
+			expect(router.getRoutes().some((route) => route.path === path)).toBe(true)
+		}
+	})
 })

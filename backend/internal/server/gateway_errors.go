@@ -139,7 +139,7 @@ func writeGatewayProtocolError(c *gin.Context, protocol gatewaycore.Protocol, st
 		errorType = "rate_limit_error"
 	}
 	switch protocol {
-	case gatewaycore.ProtocolAnthropicMessages:
+	case gatewaycore.ProtocolAnthropicMessages, gatewaycore.ProtocolAnthropicCountTokens:
 		c.JSON(status, gin.H{"type": "error", "error": gin.H{"type": anthropicErrorType(status, errorType), "message": message}})
 	case gatewaycore.ProtocolGeminiGenerate:
 		c.JSON(status, gin.H{"error": gin.H{"code": status, "message": message, "status": geminiErrorStatus(status)}})

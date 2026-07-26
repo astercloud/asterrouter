@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { completeTOTPLogin, getCurrentUser, login as loginRequest } from '@/api/auth'
-import type { AccountProfile, AuthUser } from '@/types'
+import { completeTOTPLogin, getCurrentUser, login as loginRequest, logout as logoutRequest } from '@/api/auth'
+import type { AccountProfile, AuthUser, LoginSuccessResult } from '@/types'
 
 const TOKEN_KEY = 'asterrouter_admin_token'
 const USER_KEY = 'asterrouter_admin_user'
@@ -19,10 +19,9 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     try {
       const result = await loginRequest(username, password, agreementAccepted, turnstileToken)
-      token.value = result.access_token
-      user.value = result.user
-      localStorage.setItem(TOKEN_KEY, result.access_token)
-      localStorage.setItem(USER_KEY, JSON.stringify(result.user))
+	  if ('mfa_required' in result) return result
+	  applyLoginResult(result)
+	  return null
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Login failed'
       throw err
@@ -55,7 +54,7 @@ export const useAuthStore = defineStore('auth', () => {
 
 		async function completeMFA(challenge: string, code: string) {
 			loading.value = true; error.value = ''
-			try { const result = await completeTOTPLogin(challenge, code); token.value = result.access_token; user.value = result.user; localStorage.setItem(TOKEN_KEY, result.access_token); localStorage.setItem(USER_KEY, JSON.stringify(result.user)) }
+			try { const result = await completeTOTPLogin(challenge, code); applyLoginResult(result) }
 			catch (err) { error.value = err instanceof Error ? err.message : 'MFA failed'; throw err }
 			finally { loading.value = false }
 		}
@@ -86,6 +85,21 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(USER_KEY)
   }
 
+	async function signOut() {
+		try {
+			await logoutRequest()
+		} finally {
+			logout()
+		}
+	}
+
+	function applyLoginResult(result: LoginSuccessResult) {
+		token.value = result.access_token
+		user.value = result.user
+		localStorage.setItem(TOKEN_KEY, result.access_token)
+		localStorage.setItem(USER_KEY, JSON.stringify(result.user))
+	}
+
   return {
     token,
     user,
@@ -98,7 +112,8 @@ export const useAuthStore = defineStore('auth', () => {
 		completeMFA,
 		applyAccountProfile,
 		replaceSessionToken,
-		logout
+		logout,
+		signOut
   }
 })
 

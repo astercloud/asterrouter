@@ -22,7 +22,6 @@ type providerAccountPermitState struct {
 	lost            chan error
 	lostOnce        sync.Once
 	localRelease    func()
-	circuitRelease  func()
 }
 
 func (s *Service) SetProviderCapacityStore(store ProviderCapacityStore) {
@@ -43,68 +42,55 @@ func (s *Service) currentProviderCapacityStore() ProviderCapacityStore {
 func (s *Service) TryAcquireProviderAccountPermitContext(ctx context.Context, provider GatewayProvider, estimatedTokens int, leaseID string) (ProviderAccountPermit, string, bool, error) {
 	provider.AccountID = strings.TrimSpace(provider.AccountID)
 	if provider.AccountID == "" {
+		s.observeCapacityAdmission("provider_account", "provider_account_missing", false, ErrProviderCapacityConfig)
 		return ProviderAccountPermit{}, "provider_account_missing", false, ErrProviderCapacityConfig
 	}
-	circuitRelease, reason, acquired := s.tryAcquireProviderCircuitPermit(provider)
-	if !acquired {
-		return ProviderAccountPermit{}, reason, false, nil
+	if provider.CircuitState == CircuitStateOpen && !provider.CircuitProbe {
+		s.observeCapacityAdmission("provider_account", "circuit_open", false, nil)
+		return ProviderAccountPermit{}, "circuit_open", false, nil
 	}
-	if provider.Concurrency <= 0 && provider.RPMLimit <= 0 && provider.TPMLimit <= 0 {
-		return ProviderAccountPermit{state: &providerAccountPermitState{circuitRelease: circuitRelease}}, "", true, nil
+	concurrencyLimit := provider.Concurrency
+	if provider.CircuitProbe {
+		concurrencyLimit = 1
+	}
+	if concurrencyLimit <= 0 && provider.RPMLimit <= 0 && provider.TPMLimit <= 0 {
+		s.observeCapacityAdmission("provider_account", "", true, nil)
+		return ProviderAccountPermit{state: &providerAccountPermitState{}}, "", true, nil
 	}
 	store := s.currentProviderCapacityStore()
 	if store == nil {
-		circuitRelease()
-		return ProviderAccountPermit{}, "capacity_store_unavailable", false, errors.New("provider capacity store is not available")
+		err := errors.New("provider capacity store is not available")
+		s.observeCapacityAdmission("provider_account", "capacity_store_unavailable", false, err)
+		return ProviderAccountPermit{}, "capacity_store_unavailable", false, err
 	}
 	if strings.TrimSpace(leaseID) == "" {
 		leaseID = "provider_lease_" + randomID(12)
 	}
 	request := ProviderCapacityRequest{
 		LeaseID: strings.TrimSpace(leaseID), ProviderAccountID: provider.AccountID, CapacityUnits: 1,
-		ConcurrencyLimit: provider.Concurrency, RPMLimit: provider.RPMLimit, TPMLimit: provider.TPMLimit,
+		ConcurrencyLimit: concurrencyLimit, RPMLimit: provider.RPMLimit, TPMLimit: provider.TPMLimit,
 		EstimatedTokens: nonNegative(estimatedTokens), LeaseDuration: providerCapacityLeaseTTL,
 	}
 	lease, reason, acquired, err := store.Acquire(ctx, request)
 	if err != nil || !acquired {
-		circuitRelease()
-		if reason == "concurrency_exhausted" {
+		if provider.CircuitProbe && reason == "concurrency_exhausted" {
+			reason = "circuit_half_open_busy"
+		} else if reason == "concurrency_exhausted" {
 			reason = "at_capacity"
 		}
+		s.observeCapacityAdmission("provider_account", reason, acquired, err)
 		return ProviderAccountPermit{}, reason, acquired, err
 	}
+	s.observeCapacityAdmission("provider_account", "", true, nil)
 	localRelease := s.trackProviderAccountSlot(provider.AccountID)
 	if provider.RPMLimit > 0 || provider.TPMLimit > 0 {
 		s.recordProviderCapacitySample(provider.AccountID, request.EstimatedTokens)
 	}
 	state := &providerAccountPermitState{
-		store: store, lease: lease, lost: make(chan error, 1), localRelease: localRelease, circuitRelease: circuitRelease,
+		store: store, lease: lease, lost: make(chan error, 1), localRelease: localRelease,
 	}
 	state.startHeartbeat(providerCapacityLeaseTTL)
 	return ProviderAccountPermit{state: state}, "", true, nil
-}
-
-func (s *Service) tryAcquireProviderCircuitPermit(provider GatewayProvider) (func(), string, bool) {
-	if provider.CircuitState == CircuitStateOpen && !provider.CircuitProbe {
-		return func() {}, "circuit_open", false
-	}
-	if s.scheduler == nil || !provider.CircuitProbe {
-		return func() {}, "", true
-	}
-	s.scheduler.mu.Lock()
-	defer s.scheduler.mu.Unlock()
-	if s.scheduler.halfOpenProbes[provider.AccountID] {
-		return func() {}, "circuit_half_open_busy", false
-	}
-	s.scheduler.halfOpenProbes[provider.AccountID] = true
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			s.scheduler.mu.Lock()
-			defer s.scheduler.mu.Unlock()
-			delete(s.scheduler.halfOpenProbes, provider.AccountID)
-		})
-	}, "", true
 }
 
 func (s *Service) recordProviderCapacitySample(accountID string, estimatedTokens int) {
@@ -255,9 +241,6 @@ func (state *providerAccountPermitState) close(releaseStore bool) {
 func (state *providerAccountPermitState) releaseLocal() {
 	if state.localRelease != nil {
 		state.localRelease()
-	}
-	if state.circuitRelease != nil {
-		state.circuitRelease()
 	}
 }
 

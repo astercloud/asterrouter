@@ -14,9 +14,10 @@ var (
 )
 
 const (
-	providerCapacityRateWindow = time.Minute
-	providerCapacityLeaseTTL   = 2 * time.Minute
-	providerCapacityLeaseGrace = 2 * time.Minute
+	providerCapacityRateWindow       = time.Minute
+	providerCapacityLeaseTTL         = 2 * time.Minute
+	providerCapacityLeaseGrace       = 2 * time.Minute
+	maxProviderCapacityLeaseDuration = 7 * 24 * time.Hour
 )
 
 type ProviderCapacityRequest struct {

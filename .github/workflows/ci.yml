@@ -41,9 +41,24 @@ jobs:
       - name: Vet
         working-directory: backend
         run: go vet ./...
+      - name: Verify PostgreSQL 16 baseline
+        env:
+          PGPASSWORD: asterrouter
+        run: |
+          set -euo pipefail
+          server_version_num="$(psql --host=127.0.0.1 --username=asterrouter --dbname=asterrouter_test --tuples-only --no-align --command='SHOW server_version_num')"
+          test "$((server_version_num / 10000))" -eq 16
+          printf 'postgresql_major=16\n'
       - name: Tests with PostgreSQL and coverage
         working-directory: backend
         run: go test -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Dual-service gateway soak harness
+        working-directory: backend
+        env:
+          ASTER_GATEWAY_SOAK: '1'
+          ASTER_GATEWAY_SOAK_DURATION: 3s
+          ASTER_GATEWAY_SOAK_INTERVAL: 10ms
+        run: go test -count=1 -run '^TestGatewayNormalAndStreamingSoak$' ./internal/server
       - name: Plugin trust-chain journey
         working-directory: backend
         run: |
@@ -106,13 +121,15 @@ jobs:
         run: |
           set -o pipefail
           go test -json -count=1 -run '^TestPostgresBackupRestoreRehearsal$' ./internal/system | tee "${{ runner.temp }}/recovery-test.json"
-      - name: Upgrade v0.3.0 schema fixture with candidate runtime
+          grep -Eq '"Action":"pass".*"Test":"TestPostgresBackupRestoreRehearsal"' "${{ runner.temp }}/recovery-test.json"
+      - name: Upgrade v0.17.0 schema fixture with candidate runtime
         working-directory: backend
         env:
           ASTER_TEST_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_recovery_test?sslmode=disable
         run: |
           set -o pipefail
-          go test -json -count=1 -run '^TestV030LegacySchemaUpgradesWithCandidateRuntime$' ./migrations | tee "${{ runner.temp }}/migration-upgrade-test.json"
+          go test -json -count=1 -run '^TestV017SchemaUpgradesWithCandidateRuntime$' ./migrations | tee "${{ runner.temp }}/migration-upgrade-test.json"
+          grep -Eq '"Action":"pass".*"Test":"TestV017SchemaUpgradesWithCandidateRuntime"' "${{ runner.temp }}/migration-upgrade-test.json"
       - name: Upload recovery evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -230,10 +247,51 @@ jobs:
         env:
           ASTER_TEST_ARTIFACT_DIR: ${{ runner.temp }}/asterrouter-container-evidence
         run: bash scripts/test-container.sh
+      - name: Run HA container failover acceptance
+        env:
+          ASTER_HA_TEST_ARTIFACT_DIR: ${{ runner.temp }}/asterrouter-ha-container-evidence
+        run: |
+          bash scripts/test-ha-container.sh
+          grep -Fxq 'ha_container_acceptance=passed' "${{ runner.temp }}/asterrouter-ha-container-evidence/report.txt"
       - name: Upload container evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: container-evidence
-          path: ${{ runner.temp }}/asterrouter-container-evidence
+          path: |
+            ${{ runner.temp }}/asterrouter-container-evidence
+            ${{ runner.temp }}/asterrouter-ha-container-evidence
           if-no-files-found: ignore
+
+  ha-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate HA Compose expansion
+        env:
+          ASTERROUTER_DATABASE_URL: postgres://example.invalid/asterrouter
+          ASTERROUTER_SECRET_KEY: ci-only-ha-config-secret
+        run: docker compose -f deploy/docker-compose.ha.yml config --quiet
+      - name: Validate Nginx proxy configuration
+        run: |
+          docker run --rm \
+            --add-host asterrouter-a:127.0.0.1 \
+            --add-host asterrouter-b:127.0.0.1 \
+            -v "$PWD/deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v "$PWD/deploy/nginx/asterrouter-ha.conf:/etc/nginx/asterrouter-ha.conf:ro" \
+            nginx:1.29-alpine nginx -t -c /etc/nginx/nginx.conf
+      - name: Validate Prometheus scrape config and alert rules
+        run: |
+          metrics_secret="${RUNNER_TEMP}/asterrouter-metrics-token"
+          printf '%s' 'ci-only-metrics-token' > "${metrics_secret}"
+          docker run --rm \
+            -v "$PWD/deploy/prometheus/prometheus.example.yml:/etc/prometheus/prometheus.yml:ro" \
+            -v "$PWD/deploy/prometheus/alerts.yml:/etc/prometheus/rules/alerts.yml:ro" \
+            -v "${metrics_secret}:/run/secrets/asterrouter_metrics_token:ro" \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
+          docker run --rm \
+            -v "$PWD/deploy/prometheus:/etc/prometheus/rules:ro" \
+            -w /etc/prometheus/rules \
+            --entrypoint /bin/promtool \
+            prom/prometheus:v3.5.0 test rules alerts_test.yml

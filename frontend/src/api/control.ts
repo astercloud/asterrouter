@@ -51,6 +51,7 @@ import type {
   AuditLog,
   AuditLogSummary,
   CacheProbeRequest,
+  CapacityRecommendationReport,
   CostAllocationReport,
   Department,
   DepartmentRequest,
@@ -117,6 +118,7 @@ import type {
   ProcurementPriceRequest,
   RoutingGroup,
   RoutingGroupRequest,
+  SupplyUtilizationReport,
   UsageReport,
   WorkspaceUser,
   WorkspaceUserRequest
@@ -719,6 +721,36 @@ export async function getGatewayTraces(params?: RecordListQuery): Promise<Gatewa
 export async function getGatewayTraceSummary(params?: RecordListQuery): Promise<GatewayTraceSummary> {
   const response = await apiClient.get<GatewayTraceSummary>('/admin/gateway-traces/summary', { params })
   return response.data
+}
+
+export async function getSupplyUtilization(windowHours = 24): Promise<SupplyUtilizationReport> {
+  const response = await apiClient.get<SupplyUtilizationReport>('/supply/utilization', { params: { window_hours: windowHours } })
+  return {
+    ...response.data,
+    rows: listOrEmpty(response.data.rows).map((row) => ({
+      ...row,
+      stranded_reasons: stringListOrEmpty(row.stranded_reasons),
+      costs: listOrEmpty(row.costs),
+      evidence: { ...row.evidence, sources: stringListOrEmpty(row.evidence?.sources) }
+    })),
+    by_dimension: response.data.by_dimension || {}
+  }
+}
+
+export async function getCapacityRecommendations(windowHours = 24): Promise<CapacityRecommendationReport> {
+  const response = await apiClient.get<CapacityRecommendationReport>('/supply/recommendations', { params: { window_hours: windowHours } })
+  return {
+    ...response.data,
+    items: listOrEmpty(response.data.items).map((item) => ({
+      ...item,
+      reason_codes: stringListOrEmpty(item.reason_codes),
+      counter_evidence: stringListOrEmpty(item.counter_evidence),
+      missing_evidence: stringListOrEmpty(item.missing_evidence),
+      affected_applications: stringListOrEmpty(item.affected_applications),
+      affected_models: stringListOrEmpty(item.affected_models),
+      affected_route_groups: stringListOrEmpty(item.affected_route_groups)
+    }))
+  }
 }
 
 export async function getArtifacts(params?: ArtifactListQuery): Promise<ArtifactAdminRecord[]> {

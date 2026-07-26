@@ -104,8 +104,20 @@ func setupGatewayBillingHoldRuntime(t *testing.T, upstreamURL string) (http.Hand
 	}
 	account := createGatewayTestAccount(t, control, provider, "billing-upstream", "billing-account-secret", 10, 1)
 	createGatewayTestModelAndRoutes(t, control, "billing-model", "default", []gatewayTestRoute{{account: account, upstreamModel: "billing-upstream", priority: 10}})
+	publishGatewayOutputTokenPricing(t, control, "Billing usage")
+	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
+		Name: "Billing key", ModelAllowlist: []string{"billing-model"}, MonthlyBudgetMicros: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler, control, created.Key
+}
+
+func publishGatewayOutputTokenPricing(t *testing.T, control *controlplane.Service, name string) {
+	t.Helper()
 	pricing, err := control.CreatePricingRule(context.Background(), "tester", controlplane.PricingRuleCreateRequest{
-		Name: "Billing usage", Purpose: controlplane.PricingPurposeUsageCost, ScopeType: controlplane.PricingScopeGlobal,
+		Name: name, Purpose: controlplane.PricingPurposeUsageCost, ScopeType: controlplane.PricingScopeGlobal,
 		Model: "*", Currency: "USD", AuthoringMode: controlplane.PricingAuthoringRaw,
 		Expression: `v1: unit_line("output", output_tokens, "token", 1)`,
 	})
@@ -115,13 +127,6 @@ func setupGatewayBillingHoldRuntime(t *testing.T, upstreamURL string) (http.Hand
 	if _, err := control.PublishPricingRule(context.Background(), "tester", pricing.Rule.ID, controlplane.PricingPublishRequest{DraftVersionID: pricing.Draft.ID, ExpectedLockVersion: pricing.Rule.LockVersion, ExpressionHash: pricing.Draft.ExpressionHash}); err != nil {
 		t.Fatal(err)
 	}
-	created, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
-		Name: "Billing key", ModelAllowlist: []string{"billing-model"}, MonthlyBudgetMicros: 100,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return handler, control, created.Key
 }
 
 func invokeGatewayBillingHoldRequest(t *testing.T, handler http.Handler, key string) *httptest.ResponseRecorder {

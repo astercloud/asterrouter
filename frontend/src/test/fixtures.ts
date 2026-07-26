@@ -33,6 +33,8 @@ export function makePublicSettings(overrides: Partial<PublicSettings> = {}): Pub
     dingtalk_enabled: false,
     registration_enabled: false,
     email_verify_enabled: false,
+		password_reset_enabled: false,
+		allowed_email_domains: [],
     totp_enabled: true,
     turnstile_enabled: false,
     turnstile_site_key: '',

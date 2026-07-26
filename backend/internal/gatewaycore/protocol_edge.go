@@ -56,7 +56,7 @@ func ExtractCredential(req *http.Request, protocol Protocol) (CredentialEnvelope
 		}
 	}
 	if value := strings.TrimSpace(req.Header.Get("X-API-Key")); value != "" {
-		if protocol != ProtocolAnthropicMessages {
+		if protocol != ProtocolAnthropicMessages && protocol != ProtocolAnthropicCountTokens {
 			return CredentialEnvelope{}, ErrCredentialTransportRejected
 		}
 		candidates = append(candidates, CredentialEnvelope{BearerToken: value, Transport: "anthropic_x_api_key"})
@@ -102,6 +102,10 @@ func CanonicalizeAnthropicMessages(raw []byte, header http.Header) (CanonicalReq
 	return canonicalizeTextProtocol(ProtocolAnthropicMessages, raw, header, "", nil)
 }
 
+func CanonicalizeAnthropicCountTokens(raw []byte, header http.Header) (CanonicalRequest, error) {
+	return canonicalizeTextProtocol(ProtocolAnthropicCountTokens, raw, header, "", nil)
+}
+
 func CanonicalizeGeminiGenerate(raw []byte, header http.Header, model string, stream bool) (CanonicalRequest, error) {
 	return canonicalizeTextProtocol(ProtocolGeminiGenerate, raw, header, model, &stream)
 }
@@ -131,9 +135,13 @@ func canonicalizeTextProtocol(protocol Protocol, raw []byte, header http.Header,
 		stickyKey = stickyKey[:maxStickyKeyBytes]
 	}
 	fingerprint := sha256.Sum256(normalized)
+	operation := "chat_completion"
+	if protocol == ProtocolAnthropicCountTokens {
+		operation = "count_tokens"
+	}
 	return CanonicalRequest{
 		ID: "op_" + requestID, ClientRequestID: requestID, Fingerprint: hex.EncodeToString(fingerprint[:]),
-		Protocol: protocol, Operation: "chat_completion", Modality: "text", Lane: LaneDirect,
+		Protocol: protocol, Operation: operation, Modality: "text", Lane: LaneDirect,
 		Model: text.Model, Stream: text.Stream, MessageCount: len(text.Messages), IdempotencyKey: idempotencyKey,
 		StickyKey: stickyKey, Text: &text, Payload: normalized,
 	}, nil

@@ -173,8 +173,11 @@ func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved Reso
 
 func simulationProtocolReason(protocol string, features []string, upstreamFormat string) string {
 	protocol = strings.TrimSpace(protocol)
-	if protocol != "" && !oneOf(protocol, "openai_chat_completions", "openai_responses", "anthropic_messages", "gemini_generate_content") {
+	if protocol != "" && !oneOf(protocol, "openai_chat_completions", "openai_responses", "openai_embeddings", "anthropic_messages", "gemini_generate_content") {
 		return "client_protocol_unsupported"
+	}
+	if protocol == "openai_embeddings" && upstreamFormat != UpstreamFormatOpenAIEmbeddings {
+		return "protocol_incompatible:openai_embeddings"
 	}
 	if protocol != "" && upstreamFormat == UpstreamFormatNativeMedia {
 		return "protocol_incompatible:native_media"

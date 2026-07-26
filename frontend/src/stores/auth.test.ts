@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { completeTOTPLogin, getCurrentUser, login as loginRequest } from '@/api/auth'
+import { completeTOTPLogin, getCurrentUser, login as loginRequest, logout as logoutRequest } from '@/api/auth'
 import { makeAuthUser } from '@/test/fixtures'
 import type { AccountProfile } from '@/types'
 import { useAuthStore } from './auth'
@@ -8,12 +8,14 @@ import { useAuthStore } from './auth'
 vi.mock('@/api/auth', () => ({
   completeTOTPLogin: vi.fn(),
   getCurrentUser: vi.fn(),
-  login: vi.fn()
+	login: vi.fn(),
+	logout: vi.fn()
 }))
 
 const loginMock = vi.mocked(loginRequest)
 const currentUserMock = vi.mocked(getCurrentUser)
 const completeTOTPMock = vi.mocked(completeTOTPLogin)
+const logoutMock = vi.mocked(logoutRequest)
 
 describe('auth store', () => {
   beforeEach(() => {
@@ -34,6 +36,29 @@ describe('auth store', () => {
     expect(localStorage.getItem('asterrouter_admin_token')).toBe('token-1')
     expect(JSON.parse(localStorage.getItem('asterrouter_admin_user') || '{}')).toEqual(user)
   })
+
+	it('keeps an MFA challenge separate from the authenticated session', async () => {
+		loginMock.mockResolvedValue({ mfa_required: true, challenge: 'challenge-1', expires_at: '2099-01-01T00:00:00Z' })
+		const store = useAuthStore()
+
+		const challenge = await store.login('user@example.com', 'secret')
+
+		expect(challenge?.challenge).toBe('challenge-1')
+		expect(store.token).toBe('')
+		expect(store.user).toBeNull()
+	})
+
+	it('revokes the server session before clearing local state', async () => {
+		localStorage.setItem('asterrouter_admin_token', 'token-1')
+		const store = useAuthStore()
+		logoutMock.mockResolvedValue()
+
+		await store.signOut()
+
+		expect(logoutMock).toHaveBeenCalledOnce()
+		expect(store.token).toBe('')
+		expect(localStorage.getItem('asterrouter_admin_token')).toBeNull()
+	})
 
   it('exposes login failure and always clears loading state', async () => {
     loginMock.mockRejectedValue(new Error('invalid credentials'))

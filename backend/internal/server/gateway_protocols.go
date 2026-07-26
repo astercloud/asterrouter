@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -35,6 +36,17 @@ func registerGatewayProtocolRoutes(r *gin.Engine, control *controlplane.Service)
 			return
 		}
 		handleGatewayProtocolRequest(c, control, gatewaycore.ProtocolAnthropicMessages, request)
+	})
+
+	r.POST("/v1/messages/count_tokens", func(c *gin.Context) {
+		request, err := readGatewayProtocolBody(c, func(raw []byte, header http.Header) (gatewaycore.CanonicalRequest, error) {
+			return gatewaycore.CanonicalizeAnthropicCountTokens(raw, header)
+		})
+		if err != nil {
+			writeGatewayProtocolParseError(c, gatewaycore.ProtocolAnthropicCountTokens, err, "invalid Anthropic count tokens payload")
+			return
+		}
+		handleGatewayCountTokensRequest(c, control, request)
 	})
 
 	// Gemini puts the operation suffix after the model path segment. Gin keeps
@@ -90,6 +102,10 @@ func writeGatewayProtocolParseError(c *gin.Context, protocol gatewaycore.Protoco
 		return
 	}
 	if errors.Is(err, gatewaycore.ErrUnsupportedTextFeature) {
+		writeGatewayProtocolError(c, protocol, http.StatusBadRequest, "unsupported_feature", err.Error())
+		return
+	}
+	if errors.Is(err, gatewaycore.ErrUnsupportedEmbeddingFeature) {
 		writeGatewayProtocolError(c, protocol, http.StatusBadRequest, "unsupported_feature", err.Error())
 		return
 	}
@@ -366,6 +382,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		return
 	}
 	usage := parseGatewayUsage(upstreamBody)
+	embeddingDimensions := 0
 	if request.Text != nil && status == "forwarded" {
 		translatedBody, canonicalUsage, translationErr := translateGatewayTextResponse(request, provider, upstreamBody)
 		if translationErr != nil {
@@ -379,6 +396,20 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		upstreamBody = translatedBody
 		contentType = "application/json"
 		usage = canonicalUsage
+	}
+	if request.Embedding != nil && status == "forwarded" {
+		translatedBody, dimensions, translationErr := translateGatewayEmbeddingResponse(request, upstreamBody)
+		if translationErr != nil {
+			_ = control.DisputeBillingHold(c.Request.Context(), operation.ID, "provider_response_translation_failed")
+			_ = control.CompleteAIAttempt(c.Request.Context(), provider.AttemptID, controlplane.AIAttemptStatusFailed, "response_translation_error")
+			_ = complete(controlplane.AIOperationStatusFailed, "response_translation_error")
+			recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, "error", http.StatusBadGateway, "response_translation_error", time.Since(startedAt).Milliseconds(), 0, 0, translationErr.Error(), routeAttempts))
+			writeGatewayProtocolError(c, request.Protocol, http.StatusBadGateway, "upstream_error", "upstream embedding response is invalid")
+			return
+		}
+		upstreamBody = translatedBody
+		contentType = "application/json"
+		embeddingDimensions = dimensions
 	}
 	usageSource := "gateway_final"
 	if gatewayAttemptsBillingUncertain(attempts) || !gatewayUsageObservationFinal(usage) {
@@ -408,8 +439,12 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		return
 	}
 	_ = complete(operationStatus, errorType)
-	recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, status, resp.StatusCode, errorType, time.Since(startedAt).Milliseconds(), usage.InputTokens, usage.OutputTokens, upstreamResponseSummary(resp.StatusCode, upstreamBody), routeAttempts))
-	if request.Text != nil && status == "upstream_error" {
+	responseSummary := upstreamResponseSummary(resp.StatusCode, upstreamBody)
+	if embeddingDimensions > 0 {
+		responseSummary += fmt.Sprintf(" dimensions=%d inputs=%d", embeddingDimensions, request.MessageCount)
+	}
+	recordGatewayTrace(control, c, auth, gatewayTraceInput(request, provider, status, resp.StatusCode, errorType, time.Since(startedAt).Milliseconds(), usage.InputTokens, usage.OutputTokens, responseSummary, routeAttempts))
+	if (request.Text != nil || request.Embedding != nil) && status == "upstream_error" {
 		writeGatewayProtocolError(c, request.Protocol, resp.StatusCode, "upstream_error", gatewayUpstreamErrorMessage(resp.StatusCode, upstreamBody))
 		return
 	}

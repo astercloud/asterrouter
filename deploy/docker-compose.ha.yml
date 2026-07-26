@@ -1,0 +1,83 @@
+# Two AsterRouter instances behind a local Nginx proxy.
+# PostgreSQL is intentionally external and must be shared by both instances.
+x-asterrouter-common: &asterrouter-common
+  build:
+    context: ..
+    args:
+      ASTER_BUILD_TYPE: release
+  image: ${ASTERROUTER_IMAGE:-asterrouter:local}
+  restart: unless-stopped
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  expose:
+    - "8080"
+  environment: &asterrouter-environment
+    ASTERROUTER_SERVER_HTTP_LISTEN: ":8080"
+    ASTERROUTER_SERVER_HTTP_FRONTEND_DIR: "/app/frontend/dist"
+    ASTERROUTER_SERVER_SECURITY_ADMIN_USERNAME: "${ASTERROUTER_ADMIN_USERNAME:-admin}"
+    ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD: "${ASTERROUTER_ADMIN_PASSWORD:-}"
+    ASTERROUTER_SERVER_SECURITY_ADMIN_TOKEN: "${ASTERROUTER_ADMIN_TOKEN:-}"
+    ASTERROUTER_SERVER_SECURITY_SECRET_KEY: "${ASTERROUTER_SECRET_KEY:-}"
+    ASTERROUTER_SERVER_BOOTSTRAP_DEMO_MODE: "${ASTERROUTER_DEMO_MODE:-false}"
+    ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE: "${ASTERROUTER_DEPLOYMENT_ROLE:-enterprise}"
+    ASTERROUTER_SERVER_STORAGE_DATABASE_URL: "${ASTERROUTER_DATABASE_URL:?ASTERROUTER_DATABASE_URL is required}"
+    ASTERROUTER_SERVER_STORAGE_REDIS_URL: "${ASTERROUTER_REDIS_URL:-}"
+    ASTERROUTER_SERVER_STORAGE_REDIS_NAMESPACE: "${ASTERROUTER_REDIS_NAMESPACE:-asterrouter-ha}"
+    ASTERROUTER_SERVER_JOBS_QUEUE_DRIVER: "${ASTERROUTER_JOBS_QUEUE_DRIVER:-memory}"
+    ASTERROUTER_SERVER_JOBS_ROUTING_AFFINITY_DRIVER: "${ASTERROUTER_ROUTING_AFFINITY_DRIVER:-repository}"
+    ASTERROUTER_SERVER_PLUGINS_ACTIVE_DIR: "/var/lib/asterrouter/plugin-active"
+    ASTERROUTER_SERVER_ARTIFACTS_LOCAL_ROOT: "/var/lib/asterrouter/artifacts"
+    ASTERROUTER_SERVER_OBSERVABILITY_METRICS_TOKEN: "${ASTERROUTER_METRICS_TOKEN:-}"
+    ASTERROUTER_SERVER_MAINTENANCE_BACKUP_DIR: "/var/lib/asterrouter/backups"
+    ASTERROUTER_SERVER_MAINTENANCE_DIAGNOSTIC_DIR: "/var/lib/asterrouter/diagnostics"
+    TZ: "${TZ:-UTC}"
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+    interval: 10s
+    timeout: 5s
+    retries: 12
+    start_period: 30s
+
+services:
+  asterrouter-a:
+    <<: *asterrouter-common
+    environment:
+      <<: *asterrouter-environment
+      ASTERROUTER_SERVER_PLUGINS_CACHE_DIR: "/var/lib/asterrouter/plugin-cache-a"
+    volumes:
+      - asterrouter_a_data:/var/lib/asterrouter
+
+  asterrouter-b:
+    <<: *asterrouter-common
+    environment:
+      <<: *asterrouter-environment
+      ASTERROUTER_SERVER_PLUGINS_CACHE_DIR: "/var/lib/asterrouter/plugin-cache-b"
+    volumes:
+      - asterrouter_b_data:/var/lib/asterrouter
+
+  proxy:
+    image: ${ASTERROUTER_PROXY_IMAGE:-nginx:1.29-alpine}
+    restart: unless-stopped
+    depends_on:
+      asterrouter-a:
+        condition: service_healthy
+      asterrouter-b:
+        condition: service_healthy
+    ports:
+      - "${ASTERROUTER_HA_BIND_ADDRESS:-127.0.0.1}:${ASTERROUTER_HA_PORT:-8080}:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/asterrouter-ha.conf:/etc/nginx/asterrouter-ha.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:8080/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  asterrouter_a_data:
+    driver: local
+  asterrouter_b_data:
+    driver: local

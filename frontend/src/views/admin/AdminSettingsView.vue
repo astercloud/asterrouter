@@ -131,6 +131,7 @@ const form = reactive<AdminSettings>({
 	dingtalk_enabled: false,
 	registration_enabled: false,
 	email_verify_enabled: false,
+	password_reset_enabled: false,
 	totp_enabled: false,
 	turnstile_enabled: false,
   service_center_mode: 'disabled',
@@ -171,6 +172,7 @@ const form = reactive<AdminSettings>({
 	backup_s3_enabled: false,
 	invitation_codes: [],
 	trusted_proxy_headers: false,
+	trusted_proxy_cidrs: [],
 	turnstile_site_key: '',
 	turnstile_secret_key: '',
 	turnstile_configured: false,
@@ -183,6 +185,8 @@ const form = reactive<AdminSettings>({
 	smtp_username: '',
 	smtp_password: '',
 	smtp_from: '',
+	smtp_from_name: '',
+	smtp_use_tls: false,
 	smtp_configured: false,
 	email_templates: [],
 	login_agreement_title: 'Terms of Service',
@@ -214,8 +218,24 @@ const gatewayBaseUrl = computed(() => {
   const base = form.public_base_url || window.location.origin
   return `${base.replace(/\/$/, '')}${form.gateway_base_path}`
 })
+const allowedEmailDomainsText = computed({
+	get: () => form.allowed_email_domains.join('\n'),
+	set: (value: string) => { form.allowed_email_domains = parseSettingsList(value) }
+})
+const invitationCodesText = computed({
+	get: () => form.invitation_codes.join('\n'),
+	set: (value: string) => { form.invitation_codes = parseSettingsList(value) }
+})
+const trustedProxyCIDRsText = computed({
+	get: () => form.trusted_proxy_cidrs.join('\n'),
+	set: (value: string) => { form.trusted_proxy_cidrs = parseSettingsList(value) }
+})
 const feishuCallbackUrl = computed(() => `${(form.public_base_url || window.location.origin).replace(/\/$/, '')}/api/v1/auth/feishu/callback`)
 function socialCallbackUrl(provider: string): string { return `${(form.public_base_url || window.location.origin).replace(/\/$/, '')}/api/v1/auth/oauth/${provider}/callback` }
+
+function parseSettingsList(value: string): string[] {
+	return [...new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))]
+}
 
 function profileLabel(profile: string): string {
   if (profile === 'personal') return t('setup.personal')
@@ -263,6 +283,9 @@ const updateSourceLabel = computed(() => {
 
 function assignSettings(data: AdminSettings) {
 	Object.assign(form, data)
+	form.allowed_email_domains ||= []
+	form.invitation_codes ||= []
+	form.trusted_proxy_cidrs ||= []
 	for (const source of ['local','oidc','feishu','dingtalk','github','google']) form.auth_source_defaults[source] ||= { enabled: false, balance_micros: 0, concurrency: 5, rpm: 0 }
 }
 
@@ -631,7 +654,9 @@ onMounted(async () => {
 
       <div v-if="activeSettingsTab === 'terms'" class="panel"><div class="panel-header"><FileText :size="18"/><h2>{{ t('settings.loginTerms') }}</h2></div><div class="panel-body auth-provider-list"><div class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ t('settings.enableLoginTerms') }}</strong><p>{{ t('settings.loginTermsHelp') }}</p></div><label class="switch"><input v-model="form.login_agreement_enabled" type="checkbox"/><span></span></label></div><div v-if="form.login_agreement_enabled" class="auth-provider-config"><div class="auth-credential-grid"><div class="field"><label>展示模式</label><div class="segmented-control"><button type="button" :class="{active:form.login_agreement_mode==='modal'}" @click="form.login_agreement_mode='modal'">Modal</button><button type="button" :class="{active:form.login_agreement_mode==='checkbox'}" @click="form.login_agreement_mode='checkbox'">Checkbox</button></div></div><div class="field"><label>更新日期</label><input v-model="form.login_agreement_updated_at" type="date"/></div></div></div></div><section v-for="(document,index) in form.legal_documents" :key="document.id" class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ document.name || `文档 ${index+1}` }}</strong><p>/legal/{{ document.slug }}</p></div><button class="button danger" type="button" @click="removeLegalDocument(index)">删除</button></div><div class="auth-provider-config"><div class="auth-credential-grid"><div class="field"><label>文档名称</label><input v-model="document.name"/></div><div class="field"><label>URL Slug</label><input v-model="document.slug" pattern="[a-z0-9-]+"/></div></div><div class="field"><label>Markdown 内容</label><textarea v-model="document.content" rows="12"/></div></div></section><button class="button secondary" type="button" @click="addLegalDocument">添加文档</button></div></div>
 
-      <div v-if="activeSettingsTab === 'features'" class="panel"><div class="panel-header"><ToggleLeft :size="18"/><h2>{{ t('settings.featureFlags') }}</h2></div><div class="panel-body auth-provider-list"><section v-for="item in [{label:'settings.registrationEnabled',help:'settings.registrationHelp',value:form.registration_enabled,set:(v:boolean)=>form.registration_enabled=v},{label:'settings.emailVerifyEnabled',help:'settings.emailVerifyHelp',value:form.email_verify_enabled,set:(v:boolean)=>form.email_verify_enabled=v},{label:'settings.invitationRequired',help:'settings.invitationHelp',value:form.invitation_required,set:(v:boolean)=>form.invitation_required=v},{label:'settings.totpEnabled',help:'settings.totpHelp',value:form.totp_enabled,set:(v:boolean)=>form.totp_enabled=v}]" :key="item.label" class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ t(item.label) }}</strong><p>{{ t(item.help) }}</p></div><label class="switch"><input :checked="item.value" type="checkbox" @change="item.set(($event.target as HTMLInputElement).checked)"/><span></span></label></div></section></div></div>
+      <div v-if="activeSettingsTab === 'features'" class="panel"><div class="panel-header"><ToggleLeft :size="18"/><h2>{{ t('settings.featureFlags') }}</h2></div><div class="panel-body auth-provider-list"><section v-for="item in [{label:'settings.registrationEnabled',help:'settings.registrationHelp',value:form.registration_enabled,set:(v:boolean)=>form.registration_enabled=v},{label:'settings.emailVerifyEnabled',help:'settings.emailVerifyHelp',value:form.email_verify_enabled,set:(v:boolean)=>form.email_verify_enabled=v},{label:'settings.passwordResetEnabled',help:'settings.passwordResetHelp',value:form.password_reset_enabled,set:(v:boolean)=>form.password_reset_enabled=v},{label:'settings.invitationRequired',help:'settings.invitationHelp',value:form.invitation_required,set:(v:boolean)=>form.invitation_required=v},{label:'settings.totpEnabled',help:'settings.totpHelp',value:form.totp_enabled,set:(v:boolean)=>form.totp_enabled=v}]" :key="item.label" class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ t(item.label) }}</strong><p>{{ t(item.help) }}</p></div><label class="switch"><input :checked="item.value" type="checkbox" @change="item.set(($event.target as HTMLInputElement).checked)"/><span></span></label></div></section></div></div>
+
+			<div v-if="activeSettingsTab === 'features'" class="panel"><div class="panel-header"><Mail :size="18"/><h2>{{ t('settings.registrationPolicy') }}</h2></div><div class="panel-body"><div class="field"><label>{{ t('settings.allowedEmailDomains') }}</label><textarea v-model="allowedEmailDomainsText" rows="5" placeholder="example.com&#10;*.corp.example.com"/><span class="hint">{{ t('settings.allowedEmailDomainsHelp') }}</span></div><div v-if="form.invitation_required" class="field"><label>{{ t('settings.invitationCodes') }}</label><textarea v-model="invitationCodesText" rows="7" autocomplete="off"/><span class="hint">{{ t('settings.invitationCodesHelp') }}</span></div></div></div>
 
       <div v-if="activeSettingsTab === 'features'" class="panel"><div class="panel-header"><ShieldCheck :size="18"/><h2>网关运行能力</h2></div><div class="panel-body auth-provider-list"><section class="auth-provider-card"><div class="auth-provider-header"><div><strong>渠道监控</strong><p>定期探测稳定 API 上游的连通性与响应状态。</p></div><label class="switch"><input v-model="form.channel_monitor_enabled" type="checkbox"/><span></span></label></div><div v-if="form.channel_monitor_enabled" class="auth-provider-config"><div class="field"><label>检测间隔（秒）</label><input v-model.number="form.channel_monitor_interval_seconds" type="number" min="30" max="86400"/></div></div></section><section class="auth-provider-card"><div class="auth-provider-header"><div><strong>可用渠道</strong><p>向授权用户展示当前可用的模型与 API 渠道。</p></div><label class="switch"><input v-model="form.available_channels_enabled" type="checkbox"/><span></span></label></div></section><section class="auth-provider-card"><div class="auth-provider-header"><div><strong>风险控制中心</strong><p>启用网关异常行为识别与处置策略。</p></div><label class="switch"><input v-model="form.risk_control_enabled" type="checkbox"/><span></span></label></div><div v-if="form.risk_control_enabled" class="auth-provider-config"><div class="auth-provider-header"><div><strong>异常会话自动屏蔽</strong><p>临时屏蔽触发风险规则的会话。</p></div><label class="switch"><input v-model="form.cyber_session_block_enabled" type="checkbox"/><span></span></label></div><div v-if="form.cyber_session_block_enabled" class="field"><label>屏蔽时长（秒）</label><input v-model.number="form.cyber_session_block_ttl_seconds" type="number" min="60" max="2592000"/></div></div></section></div></div>
 
@@ -639,7 +664,7 @@ onMounted(async () => {
 
       <div v-if="activeSettingsTab === 'defaults'" class="panel"><div class="panel-header"><ShieldCheck :size="18"/><h2>按认证来源默认值</h2></div><div class="panel-body auth-provider-list"><section v-for="source in ['local','oidc','feishu','dingtalk','github','google']" :key="source" class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ source }}</strong><p>覆盖该身份源首次创建用户时的全局默认值。</p></div><label class="switch"><input v-model="form.auth_source_defaults[source].enabled" type="checkbox"/><span></span></label></div><div v-if="form.auth_source_defaults[source].enabled" class="auth-provider-config auth-credential-grid"><div class="field"><label>余额（微美元）</label><input v-model.number="form.auth_source_defaults[source].balance_micros" type="number" min="0"/></div><div class="field"><label>并发</label><input v-model.number="form.auth_source_defaults[source].concurrency" type="number" min="0"/></div><div class="field"><label>RPM</label><input v-model.number="form.auth_source_defaults[source].rpm" type="number" min="0"/></div></div></section></div></div>
 
-      <div v-if="activeSettingsTab === 'email'" class="panel"><div class="panel-header"><Mail :size="18"/><h2>{{ t('settings.emailSettings') }}</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>SMTP Host</label><input v-model="form.smtp_host"/></div><div class="field"><label>SMTP Port</label><input v-model.number="form.smtp_port" type="number" min="1" max="65535"/></div><div class="field"><label>{{ t('auth.username') }}</label><input v-model="form.smtp_username"/></div><div class="field"><label>{{ t('auth.password') }}</label><input v-model="form.smtp_password" type="password" :placeholder="form.smtp_configured?t('plugins.keepSecret'):''"/></div><div class="field auth-config-span"><label>{{ t('settings.smtpFrom') }}</label><input v-model="form.smtp_from" type="email"/></div></div><div class="auth-provider-config"><div class="field"><label>测试收件邮箱</label><input v-model="smtpTestRecipient" type="email" placeholder="admin@example.com"/></div><button class="button secondary" type="button" :disabled="smtpTesting || !smtpTestRecipient" @click="runSMTPTest">{{ smtpTesting ? '正在测试' : '发送测试邮件' }}</button></div></div></div>
+      <div v-if="activeSettingsTab === 'email'" class="panel"><div class="panel-header"><Mail :size="18"/><h2>{{ t('settings.emailSettings') }}</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>SMTP Host</label><input v-model="form.smtp_host"/></div><div class="field"><label>SMTP Port</label><input v-model.number="form.smtp_port" type="number" min="1" max="65535"/></div><div class="field"><label>{{ t('auth.username') }}</label><input v-model="form.smtp_username"/></div><div class="field"><label>{{ t('auth.password') }}</label><input v-model="form.smtp_password" type="password" :placeholder="form.smtp_configured?t('plugins.keepSecret'):''"/></div><div class="field"><label>{{ t('settings.smtpFrom') }}</label><input v-model="form.smtp_from" type="email"/></div><div class="field"><label>{{ t('settings.smtpFromName') }}</label><input v-model="form.smtp_from_name"/></div></div><div class="auth-provider-header"><div><strong>{{ t('settings.smtpImplicitTLS') }}</strong><p>{{ t('settings.smtpImplicitTLSHelp') }}</p></div><label class="switch"><input v-model="form.smtp_use_tls" type="checkbox"/><span></span></label></div><div class="auth-provider-config"><div class="field"><label>{{ t('settings.smtpTestRecipient') }}</label><input v-model="smtpTestRecipient" type="email" placeholder="admin@example.com"/></div><button class="button secondary" type="button" :disabled="smtpTesting || !smtpTestRecipient" @click="runSMTPTest">{{ smtpTesting ? t('common.loading') : t('settings.smtpSendTest') }}</button></div></div></div>
 
       <div v-if="activeSettingsTab === 'email' && form.email_templates.length" class="panel"><div class="panel-header"><FileText :size="18"/><h2>邮件通知模板</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>事件与语言</label><select v-model.number="selectedEmailTemplate" @change="runEmailPreview"><option v-for="(item,index) in form.email_templates" :key="item.event+item.locale" :value="index">{{ item.event }} / {{ item.locale }}</option></select></div><div class="field"><label>测试收件邮箱</label><input v-model="emailTemplateRecipient" type="email"/></div></div><div v-if="form.email_templates[selectedEmailTemplate]" class="email-template-grid"><div><div class="field"><label>主题</label><input v-model="form.email_templates[selectedEmailTemplate].subject"/></div><div class="field"><label>HTML 模板</label><textarea v-model="form.email_templates[selectedEmailTemplate].html" rows="18" class="code-input"/></div><div class="hint">可用变量：<code v-pre>{{.SiteName}}</code> <code v-pre>{{.UserName}}</code> <code v-pre>{{.ActionURL}}</code> <code v-pre>{{.Amount}}</code> <code v-pre>{{.Limit}}</code> <code v-pre>{{.Period}}</code> <code v-pre>{{.Message}}</code></div><div class="status-line"><button class="button secondary" type="button" @click="runEmailPreview">预览</button><button class="button secondary" type="button" @click="restoreEmailTemplate">恢复官方模板</button><button class="button" type="button" :disabled="!emailTemplateRecipient" @click="runEmailTemplateTest">测试发送</button></div></div><div class="email-preview"><strong>{{ emailPreview.subject || '邮件预览' }}</strong><iframe sandbox="" :srcdoc="emailPreview.html" title="邮件预览"></iframe></div></div></div></div>
 
@@ -787,6 +812,8 @@ onMounted(async () => {
           </div>
         </div>
       </div>
+
+			<div v-if="activeSettingsTab === 'security'" class="panel"><div class="panel-header"><ShieldCheck :size="18"/><h2>{{ t('settings.loginProtection') }}</h2></div><div class="panel-body auth-provider-list"><section class="auth-provider-card"><div class="auth-provider-header"><div><strong>Cloudflare Turnstile</strong><p>{{ t('settings.turnstileHelp') }}</p></div><label class="switch"><input v-model="form.turnstile_enabled" type="checkbox"/><span></span></label></div><div v-if="form.turnstile_enabled" class="auth-provider-config auth-credential-grid"><div class="field"><label>Site Key</label><input v-model="form.turnstile_site_key" autocomplete="off"/></div><div class="field"><label>Secret Key</label><input v-model="form.turnstile_secret_key" type="password" autocomplete="new-password" :placeholder="form.turnstile_configured?t('plugins.keepSecret'):''"/></div></div></section><section class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ t('settings.trustedProxyHeaders') }}</strong><p>{{ t('settings.trustedProxyHeadersHelp') }}</p></div><label class="switch"><input v-model="form.trusted_proxy_headers" type="checkbox"/><span></span></label></div><div v-if="form.trusted_proxy_headers" class="auth-provider-config"><div class="field"><label>{{ t('settings.trustedProxyCIDRs') }}</label><textarea v-model="trustedProxyCIDRsText" rows="5" placeholder="10.0.0.0/8&#10;192.168.0.0/16"/></div></div></section></div></div>
 
       <div v-if="activeSettingsTab === 'security'" class="panel">
         <div class="panel-header">

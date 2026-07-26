@@ -244,7 +244,7 @@ func TestPasswordResetImmediatelyRevokesExistingBearerToken(t *testing.T) {
 
 func TestLocalAdministratorLoginRequiresTOTP(t *testing.T) {
 	handler, control := newAuthTestRuntime(t)
-	setup, err := control.BeginTOTPSetup(t.Context(), "admin")
+	setup, err := control.BeginTOTPSetup(t.Context(), "admin", "secret")
 	if err != nil {
 		t.Fatalf("BeginTOTPSetup(): %v", err)
 	}
@@ -272,6 +272,17 @@ func TestLocalAdministratorLoginRequiresTOTP(t *testing.T) {
 	if !loginResp.Data.MFARequired || loginResp.Data.Challenge == "" {
 		t.Fatalf("login did not require MFA: %s", loginRec.Body.String())
 	}
+	wrongCode := "000000"
+	if wrongCode == code {
+		wrongCode = "111111"
+	}
+	wrongReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/login", bytes.NewBufferString(`{"challenge":"`+loginResp.Data.Challenge+`","code":"`+wrongCode+`"}`))
+	wrongReq.Header.Set("Content-Type", "application/json")
+	wrongRec := httptest.NewRecorder()
+	handler.ServeHTTP(wrongRec, wrongReq)
+	if wrongRec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong MFA code status=%d body=%s", wrongRec.Code, wrongRec.Body.String())
+	}
 
 	mfaReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/login", bytes.NewBufferString(`{"challenge":"`+loginResp.Data.Challenge+`","code":"`+code+`"}`))
 	mfaReq.Header.Set("Content-Type", "application/json")
@@ -279,6 +290,27 @@ func TestLocalAdministratorLoginRequiresTOTP(t *testing.T) {
 	handler.ServeHTTP(mfaRec, mfaReq)
 	if mfaRec.Code != http.StatusOK {
 		t.Fatalf("MFA login status=%d body=%s", mfaRec.Code, mfaRec.Body.String())
+	}
+}
+
+func TestSuccessfulPasswordStepDoesNotExhaustLoginPrincipalLimiter(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	setup, err := control.BeginTOTPSetup(t.Context(), "admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.ConfirmTOTP(t.Context(), "admin", auth.GenerateTOTPCode(setup.Secret, time.Now().UTC())); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 1; attempt <= 11; attempt++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"secret"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"mfa_required":true`)) {
+			t.Fatalf("attempt %d status=%d body=%s", attempt, rec.Code, rec.Body.String())
+		}
 	}
 }
 
@@ -344,7 +376,11 @@ func TestTOTPChangesImmediatelyRevokeExistingBearerTokens(t *testing.T) {
 	}
 
 	token := login("")
-	setupRec := postWithToken("/api/v1/auth/totp/setup", `{}`, token)
+	wrongSetupRec := postWithToken("/api/v1/auth/totp/setup", `{"current_password":"wrong-password"}`, token)
+	if wrongSetupRec.Code != http.StatusBadRequest {
+		t.Fatalf("wrong-password setup status=%d body=%s", wrongSetupRec.Code, wrongSetupRec.Body.String())
+	}
+	setupRec := postWithToken("/api/v1/auth/totp/setup", `{"current_password":"current-password"}`, token)
 	var setupResponse struct {
 		Data controlplane.TOTPSetup `json:"data"`
 	}
@@ -359,7 +395,11 @@ func TestTOTPChangesImmediatelyRevokeExistingBearerTokens(t *testing.T) {
 	assertRevoked(token)
 
 	token = login(code)
-	recoveryRec := postWithToken("/api/v1/auth/totp/recovery-codes", `{}`, token)
+	wrongRecoveryRec := postWithToken("/api/v1/auth/totp/recovery-codes", `{"code":"000000"}`, token)
+	if wrongRecoveryRec.Code != http.StatusBadRequest {
+		t.Fatalf("wrong-code recovery status=%d body=%s", wrongRecoveryRec.Code, wrongRecoveryRec.Body.String())
+	}
+	recoveryRec := postWithToken("/api/v1/auth/totp/recovery-codes", `{"code":"`+code+`"}`, token)
 	if recoveryRec.Code != http.StatusOK {
 		t.Fatalf("recovery status=%d body=%s", recoveryRec.Code, recoveryRec.Body.String())
 	}
@@ -373,6 +413,100 @@ func TestTOTPChangesImmediatelyRevokeExistingBearerTokens(t *testing.T) {
 	assertRevoked(token)
 	if finalToken := login(""); finalToken == "" {
 		t.Fatal("password login did not recover after TOTP disable")
+	}
+}
+
+func TestTOTPManagementAttemptsAreLimitedPerAccountAcrossRoutes(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	_, _, err := control.RegisterWorkspaceUser(t.Context(), "totp-limit@example.test", "current-password", "TOTP Limit User", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"totp-limit@example.test","password":"current-password"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	var loginResponse struct {
+		Data auth.LoginResult `json:"data"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &loginResponse); err != nil || loginResponse.Data.AccessToken == "" {
+		t.Fatalf("login status=%d body=%s err=%v", loginRec.Code, loginRec.Body.String(), err)
+	}
+
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		req.Header.Set("Authorization", "Bearer "+loginResponse.Data.AccessToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	wrongSetup := request(http.MethodPost, "/api/v1/account/totp/setup", `{"current_password":"wrong-password"}`)
+	if wrongSetup.Code != http.StatusBadRequest {
+		t.Fatalf("wrong setup status=%d body=%s", wrongSetup.Code, wrongSetup.Body.String())
+	}
+	setupRec := request(http.MethodPost, "/api/v1/auth/totp/setup", `{"current_password":"current-password"}`)
+	var setupResponse struct {
+		Data controlplane.TOTPSetup `json:"data"`
+	}
+	if err := json.Unmarshal(setupRec.Body.Bytes(), &setupResponse); err != nil || setupRec.Code != http.StatusOK || setupResponse.Data.Secret == "" {
+		t.Fatalf("setup status=%d body=%s err=%v", setupRec.Code, setupRec.Body.String(), err)
+	}
+
+	code := auth.GenerateTOTPCode(setupResponse.Data.Secret, time.Now().UTC())
+	wrongCode := "000000"
+	if wrongCode == code {
+		wrongCode = "111111"
+	}
+	attempts := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/account/totp/confirm"},
+		{http.MethodPost, "/api/v1/auth/totp/confirm"},
+		{http.MethodPost, "/api/v1/account/totp/recovery-codes"},
+		{http.MethodPost, "/api/v1/auth/totp/recovery-codes"},
+		{http.MethodDelete, "/api/v1/account/totp"},
+	}
+	for i, attempt := range attempts {
+		rec := request(attempt.method, attempt.path, `{"code":"`+wrongCode+`"}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("attempt %d status=%d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	limited := request(http.MethodPost, "/api/v1/account/totp/confirm", `{"code":"`+code+`"}`)
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("limited confirm status=%d body=%s", limited.Code, limited.Body.String())
+	}
+	if limited.Header().Get("Retry-After") == "" {
+		t.Fatal("limited confirm did not include Retry-After")
+	}
+}
+
+func TestLegacyTOTPSetupRouteHonorsAdministratorFeatureFlag(t *testing.T) {
+	handler, _ := newAuthTestRuntimeWithTOTP(t, false)
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"secret"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	var loginResponse struct {
+		Data auth.LoginResult `json:"data"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &loginResponse); err != nil || loginResponse.Data.AccessToken == "" {
+		t.Fatalf("login status=%d body=%s err=%v", loginRec.Code, loginRec.Body.String(), err)
+	}
+
+	setupReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/setup", bytes.NewBufferString(`{"current_password":"secret"}`))
+	setupReq.Header.Set("Authorization", "Bearer "+loginResponse.Data.AccessToken)
+	setupReq.Header.Set("Content-Type", "application/json")
+	setupRec := httptest.NewRecorder()
+	handler.ServeHTTP(setupRec, setupReq)
+	if setupRec.Code != http.StatusForbidden {
+		t.Fatalf("disabled TOTP setup status=%d body=%s", setupRec.Code, setupRec.Body.String())
 	}
 }
 

@@ -229,9 +229,13 @@ func resourceForRequest(c *gin.Context) string {
 		return controlplane.RBACResourceRouting
 	case strings.HasPrefix(path, "/providers"), strings.HasPrefix(path, "/provider-"):
 		return controlplane.RBACResourceProviders
+	case strings.HasPrefix(path, "/onboarding"):
+		return controlplane.RBACResourceProviders
 	case strings.HasPrefix(path, "/api-keys"):
 		return controlplane.RBACResourceAPIKeys
 	case strings.HasPrefix(path, "/usage"), strings.HasPrefix(path, "/cost-allocation"), strings.HasPrefix(path, "/pricing-rules"), strings.HasPrefix(path, "/pricing-evaluations"):
+		return controlplane.RBACResourceUsage
+	case strings.HasPrefix(path, "/supply"):
 		return controlplane.RBACResourceUsage
 	case strings.HasPrefix(path, "/gateway-traces"):
 		return controlplane.RBACResourceTraces
@@ -300,8 +304,14 @@ func permissionForRequest(c *gin.Context) string {
 
 func controlPath(c *gin.Context) string {
 	for _, value := range []string{c.FullPath(), c.Request.URL.Path} {
-		for _, prefix := range []string{"/api/v1/admin", "/api/v1/platform"} {
+		for _, prefix := range []string{"/api/v1/admin", "/api/v1/platform", "/api/v1/supply", "/api/v1/onboarding"} {
 			if strings.HasPrefix(value, prefix) {
+				if prefix == "/api/v1/supply" {
+					return "/supply" + strings.TrimPrefix(value, prefix)
+				}
+				if prefix == "/api/v1/onboarding" {
+					return "/onboarding" + strings.TrimPrefix(value, prefix)
+				}
 				return strings.TrimPrefix(value, prefix)
 			}
 		}

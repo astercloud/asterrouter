@@ -100,6 +100,17 @@ func registerGatewayRoutes(r *gin.Engine, control *controlplane.Service, durable
 		}
 		handleGatewayProtocolRequest(c, control, gatewaycore.ProtocolOpenAIChat, request)
 	})
+
+	r.POST("/v1/embeddings", func(c *gin.Context) {
+		request, err := readGatewayProtocolBody(c, func(raw []byte, header http.Header) (gatewaycore.CanonicalRequest, error) {
+			return gatewaycore.CanonicalizeOpenAIEmbedding(raw, header)
+		})
+		if err != nil {
+			writeGatewayProtocolParseError(c, gatewaycore.ProtocolOpenAIEmbeddings, err, "invalid embeddings payload")
+			return
+		}
+		handleGatewayProtocolRequest(c, control, gatewaycore.ProtocolOpenAIEmbeddings, request)
+	})
 }
 
 func parseCanonicalChatCompletionRequest(c *gin.Context) (gatewaycore.CanonicalRequest, error) {
@@ -216,6 +227,14 @@ func attemptGatewayCandidatesForCanonicalRequest(c *gin.Context, control *contro
 				transportErr = errors.Join(transportErr, compatibilityErr)
 				continue
 			}
+		} else if request.Embedding != nil && !controlplane.ProviderSupportsGatewayModelRoute(candidate.Type, controlplane.GatewayModalityEmbedding, candidate.UpstreamFormat) {
+			if err := control.CompleteAIAttempt(c.Request.Context(), attempt.ID, controlplane.AIAttemptStatusSkipped, "provider_capability_incompatible"); err != nil {
+				return nil, candidate, nil, attempts, err
+			}
+			capabilityErr := fmt.Errorf("%w: provider type %q cannot execute %s", errGatewayProviderCapability, candidate.Type, request.Operation)
+			attempts = append(attempts, gatewayRouteAttempt{AttemptID: attempt.ID, AccountID: candidate.AccountID, ProviderID: candidate.ID, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup, Model: candidate.UpstreamModel, Outcome: "skipped", Detail: "provider_capability_incompatible"})
+			transportErr = errors.Join(transportErr, capabilityErr)
+			continue
 		} else if gatewayAudioProtocol(request.Protocol) && !controlplane.ProviderSupportsGatewayModelRoute(candidate.Type, controlplane.GatewayModalityAudio, candidate.UpstreamFormat) {
 			if err := control.CompleteAIAttempt(c.Request.Context(), attempt.ID, controlplane.AIAttemptStatusSkipped, "provider_capability_incompatible"); err != nil {
 				return nil, candidate, nil, attempts, err
@@ -383,6 +402,20 @@ func forwardGatewayCanonicalRequest(c *gin.Context, provider controlplane.Gatewa
 			upstreamRequest.Header.Set(affinity.HeaderName, affinity.Value)
 		}
 		return gatewayHTTPClient(request.Stream).Do(upstreamRequest)
+	}
+	if request.Embedding != nil {
+		if !controlplane.ProviderSupportsGatewayModelRoute(provider.Type, controlplane.GatewayModalityEmbedding, provider.UpstreamFormat) {
+			return nil, fmt.Errorf("%w: provider type %q cannot execute %s", errGatewayProviderCapability, provider.Type, request.Operation)
+		}
+		upstreamBody, err := gatewaycore.EncodeOpenAIEmbeddingRequest(*request.Embedding, provider.UpstreamModel)
+		if err != nil {
+			return nil, err
+		}
+		upstreamRequest, err := gatewayProviderAdapters.BuildEmbeddingRequest(c.Request.Context(), provider, upstreamBody)
+		if err != nil {
+			return nil, err
+		}
+		return gatewayHTTPClient(false).Do(upstreamRequest)
 	}
 	if gatewayAudioProtocol(request.Protocol) && !controlplane.ProviderSupportsGatewayModelRoute(provider.Type, controlplane.GatewayModalityAudio, provider.UpstreamFormat) {
 		return nil, fmt.Errorf("%w: provider type %q cannot execute %s", errGatewayProviderCapability, provider.Type, request.Operation)

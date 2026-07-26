@@ -17,6 +17,9 @@ func TestAuthAttemptLimiterBlocksAndResets(t *testing.T) {
 	if l.Allow("ip", now) {
 		t.Fatal("limiter allowed an attempt above the threshold")
 	}
+	if allowed, retryAfter := l.AllowWithRetry("ip", now); allowed || retryAfter != time.Minute {
+		t.Fatalf("AllowWithRetry() = (%v, %v), want (false, 1m)", allowed, retryAfter)
+	}
 	l.Reset("ip")
 	if !l.Allow("ip", now) {
 		t.Fatal("reset did not clear attempts")

@@ -74,7 +74,9 @@ export default {
   auth: {
     totpCode: 'Authentication code',
     verifyAndSignIn: 'Verify and sign in',
-    email: 'Email', displayName: 'Display name', confirmPassword: 'Confirm password', passwordMismatch: 'Passwords do not match', registrationAccepted: 'Registration accepted. Check your email if verification is required.', resetEmailAccepted: 'If the account exists, a reset email has been sent.', passwordResetComplete: 'Password reset complete.', emailVerified: 'Email verified. You can now sign in.', createAccount: 'Create account', sendResetEmail: 'Send reset email', resetPassword: 'Reset password', backToLogin: 'Back to sign in', forgotPassword: 'Forgot password?',
+		mfaTitle: 'Two-factor verification', mfaHelp: 'Enter the code from your authenticator or a one-time recovery code.',
+    email: 'Email', displayName: 'Display name', confirmPassword: 'Confirm password', passwordMismatch: 'Passwords do not match', registrationAccepted: 'Your account has been created.', registrationVerifyEmail: 'Your account has been created. Check your email to verify it before signing in.', verificationDeliveryFailed: 'Your account was created, but the verification email could not be delivered. Request another email below.', verificationEmailAccepted: 'If the account is awaiting verification, another email has been sent.', resetEmailAccepted: 'If the account exists, a reset email has been sent.', passwordResetComplete: 'Password reset complete. You can now sign in.', emailVerified: 'Email verified. You can now sign in.', createAccount: 'Create account', sendResetEmail: 'Send reset email', resetPassword: 'Reset password', backToLogin: 'Back to sign in', forgotPassword: 'Forgot password?', forgotPasswordTitle: 'Recover your account',
+		registrationHelp: 'Create an account with an approved email address.', resetEmailHelp: 'Request a time-limited password reset link.', resetPasswordHelp: 'Choose a new password for this account.', verifyEmail: 'Verify email', verifyEmailHelp: 'Confirm the email address linked to this account.', invalidVerificationLink: 'The email verification link is invalid or expired.', invalidResetLink: 'The password reset link is invalid or expired.', resendVerification: 'Resend verification email', resendVerificationTitle: 'Request another verification email', resendVerificationHelp: 'Send a new time-limited verification link to an account awaiting confirmation.', allowedEmailDomains: 'Allowed domains: {domains}', passwordRule: 'Use 10 or more characters and no more than 72 bytes.', agreementPrefix: 'I have read and accept',
     invitationCode: 'Invitation code',
     welcomeBack: 'Welcome back',
     signInToAccount: 'Sign in to manage your AI gateway control plane.',
@@ -177,6 +179,7 @@ export default {
     tenantName: 'Tenant name',
     tenantSlug: 'Tenant slug',
     entitlementReference: 'Entitlement reference',
+    tenantConcurrencyLimit: 'Tenant concurrency limit',
     principals: 'Gateway principals',
     principal: 'Gateway principal',
     principalName: 'Principal name',
@@ -247,6 +250,7 @@ export default {
     title: 'Admin Console',
     subtitle: 'Governance, settings, providers, plugins, audit, and operations.',
     overview: 'Overview',
+		onboarding: 'First Access',
     settings: 'System Settings',
     providers: 'Provider Connections',
     gatewayModels: 'Gateway Models',
@@ -260,6 +264,7 @@ export default {
     policies: 'Policies & Quotas',
     apiKeys: 'API Keys',
     usage: 'Usage & Cost',
+    supply: 'Supply Utilization',
     costAllocation: 'Cost Allocation',
     traces: 'Gateway Trace',
     alerts: 'Alerts',
@@ -269,6 +274,39 @@ export default {
     plugins: 'Plugin Center',
     audit: 'Audit Logs'
   },
+	onboarding: {
+		title: 'First Access',
+		subtitle: 'Connect a model source, publish a team model, create an application, and complete one governed verification.',
+		progress: 'First access progress',
+		session: 'Session {id}',
+		newSession: 'New access session',
+		expired: 'Access session expired',
+		expiredAction: 'Start a new session to continue. Existing objects remain available in administration.',
+		failedAt: '{step} did not complete',
+		steps: { source: 'Model source', model: 'Publish model', application: 'Create application', verify: 'Client verification' },
+		source: {
+			title: 'Connect model source', subtitle: 'Save the connection and check the upstream model catalog.', type: 'Protocol type', name: 'Source name', baseURL: 'Base URL', account: 'Resource name', authType: 'Authentication', upstreamModel: 'Upstream model', secret: 'Access credential', concurrency: 'Concurrency limit', connect: 'Connect and check', checking: 'Checking'
+		},
+		model: {
+			title: 'Publish team model', subtitle: 'Expose a stable model identifier to clients.', id: 'Model identifier', name: 'Display name', routeGroup: 'Route group', defaultRoute: 'Default', description: 'Description', publish: 'Publish model'
+		},
+		application: {
+			title: 'Create application', subtitle: 'Establish minimum invocation permissions and an independent usage boundary.', name: 'Application name', concurrency: 'Concurrency limit', monthlyTokens: 'Monthly Token limit', create: 'Create application and credential'
+		},
+		verify: {
+			title: 'Configure and verify client', subtitle: 'Configuration is generated from the current application, model, and public gateway address.', client: 'Target client', credential: 'Application credential', credentialWindow: 'Recoverable only within this 24-hour access session and never written to browser storage.', copyCredential: 'Copy application credential', configuration: 'Client configuration', copyConfig: 'Copy client configuration', run: 'Run real verification', running: 'Verifying', success: 'Verification succeeded', failed: 'Verification failed', operation: 'Operation', openTrace: 'Open Trace'
+		},
+		compatibility: {
+			title: 'Compatibility evidence', subtitle: 'Loading versioned verification records.', router: 'AsterRouter {version}', revision: 'Record {revision}', runtimeVerified: 'Client runtime verified', protocolVerified: 'Protocol verified', pending: 'Pending confirmation', unavailable: 'Compatibility records are currently unavailable.', empty: 'No compatibility records are available for this client.', validUntil: 'Evidence valid until {date}', confirmBeforeUse: 'Reconfirmation required before use',
+			release: { current: 'Current version', previous: 'Previous support line' },
+			languages: { cli: 'CLI', javascript: 'JavaScript', python: 'Python' },
+			limitations: { official_client_runtime_not_executed: 'Official client runtime was not executed; only the protocol path was verified.', streaming_not_covered: 'Current evidence does not cover streaming requests.' }
+		},
+		clients: { codex: 'Codex', claude_code: 'Claude Code', openai_sdk: 'OpenAI SDK', anthropic_sdk: 'Anthropic SDK' },
+		recovery: {
+			check_base_url_credentials_and_upstream_model: 'Check the base URL, access credential, and upstream model.', choose_a_model_returned_by_provider_discovery: 'Choose a model returned by source discovery.', check_model_protocol_and_source_mapping: 'Check the model protocol and source mapping.', use_the_onboarding_credential: 'Use the current application credential and retry.', check_api_key_model_and_policy_scope: 'Check the application model and policy scope.', check_api_key_and_provider_capacity: 'Check application limits and source capacity.', check_route_and_provider_health: 'Check route and source health.', check_client_protocol_compatibility: 'Check the client protocol configuration.', inspect_trace_and_retry: 'Inspect the Trace and retry.'
+		}
+	},
   artifactOps: {
     title: 'Artifacts',
     subtitle: 'Generated media and customer delivery across image, video, and audio workloads.',
@@ -614,7 +652,7 @@ export default {
     selected: 'selected', unmatched: 'unmatched', existing: 'existing',
     toggleBulkRoute: 'Select a route for upstream model {model}', gatewayModelFor: 'Gateway model for upstream model {model}',
     noMatch: 'Select a gateway model', alreadyExists: 'Route exists', ready: 'Ready', needsMatch: 'Needs match', noAccountModels: 'This account has no enabled models.',
-    unsupportedPair: 'This provider and gateway model do not have an executable route format.', capabilityMismatch: 'Capability mismatch', textCore: 'Text Core', mediaAdapter: 'Media adapter', builtinDirect: 'Built-in direct',
+    unsupportedPair: 'This provider and gateway model do not have an executable route format.', capabilityMismatch: 'Capability mismatch', textCore: 'Text Core', embeddingCore: 'Embedding Core', mediaAdapter: 'Media adapter', builtinDirect: 'Built-in direct',
     bulkAtomicHint: 'All selected routes are validated first, then written in one transaction.', createSelected: 'Create {count} routes', bulkCreated: 'Created {count} model routes',
     created: 'Model route created', updated: 'Model route updated', deleted: 'Model route deleted', delete: 'Delete model route', deleteConfirm: 'Delete this model route?', empty: ''
   },
@@ -1156,6 +1194,37 @@ export default {
     records: 'Records',
     other: 'Other'
   },
+  supply: {
+    title: 'Supply Utilization',
+    subtitle: 'Observed demand, configured capacity, route availability, and evidence-backed capacity decisions.',
+    windowLabel: 'Observation window',
+    dimensionLabel: 'Utilization dimension',
+    windows: { day: '24h', week: '7d', month: '30d' },
+    dimensions: { providerAccount: 'Provider accounts', routeGroup: 'Route groups', publishedModel: 'Published models', application: 'Applications' },
+    metrics: { requests: 'Requests', window: 'Last {hours} hours', capacityRejected: 'Capacity rejections', rejectedSub: 'Requests affected by a capacity gate', attention: 'Supply attention', attentionSub: 'Saturated, degraded, or stranded', recommendations: 'Actionable recommendations' },
+    states: { available: 'Available', degraded: 'Degraded', saturated: 'Saturated', idle: 'Idle', stranded: 'Stranded', unknown: 'Unknown capacity', noEvidence: 'No evidence' },
+    evidence: { known: 'Known', unknown: 'Unknown', notApplicable: 'Not applicable', notComparable: 'Not comparable' },
+    constraints: { concurrency: 'Concurrency', rpm: 'RPM', tpm: 'TPM', health: 'Health', routing: 'Routing', unknown: 'Unknown' },
+    table: { resource: 'Resource', state: 'State', demand: 'Demand', reliability: 'Reliability', usage: 'Usage', capacity: 'Capacity', evidence: 'Evidence', success: 'success', fallback: 'fallback', upstreamErrors: 'upstream errors', tokens: 'tokens', health: 'health', traces: '{count} traces' },
+    windowObserved: '{from} to {to}',
+    truncated: 'Window sample truncated',
+    empty: 'No supply evidence in this window.',
+    confidence: { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' },
+    recommendations: {
+      title: 'Capacity Recommendations', mode: 'Mode: {mode}', actionable: 'Actionable', inconclusive: 'Inconclusive', empty: 'No provider-account recommendation is available.',
+      increaseCapacity: 'Increase capacity', deferExpansion: 'Defer expansion', reviewStrandedCapacity: 'Review stranded capacity',
+      samples: '{count} samples', peak: 'Peak {value}', capacityRejected: '{count} capacity rejections', health: '{value} health coverage'
+    },
+    reasons: {
+      accountInactive: 'Account is inactive', accountUnschedulable: 'Account is not schedulable', cooldownActive: 'Account cooldown is active', circuitOpen: 'Circuit is open',
+      noActiveRoute: 'No active route', noConfiguredRoute: 'No configured route', allRouteCapacityStranded: 'All route capacity is stranded', evidenceGateNotMet: 'Evidence gate not met',
+      sustainedCapacityPressure: 'Sustained capacity pressure', capacityRejectionObserved: 'Capacity rejection observed', headroomObserved: 'Headroom observed', noCapacityRejectionObserved: 'No capacity rejection observed',
+      noStableCapacitySignal: 'No stable capacity signal', windowTruncated: 'Observation window is truncated', insufficientSamples: 'Insufficient samples', unknownCapacity: 'Configured capacity is unknown',
+      unclassifiedFailures: 'Unclassified failures are present', providerFailuresRequireClassification: 'Provider failures need classification', healthEvidenceIncomplete: 'Health evidence is incomplete',
+      policyLimitIsPrimary: 'Policy limit is the primary constraint', additionalObservationWindowRequired: 'Another observation window is required', fallbackCapacityObserved: 'Fallback capacity was observed',
+      peakBelowExpansionThreshold: 'Peak is below the expansion threshold', healthCoverageComplete: 'Health coverage is complete'
+    }
+  },
   costAllocation: {
     subtitle: 'Allocate AI gateway cost by workspace key, user, department, and model.',
     dimension: 'Allocation dimension',
@@ -1604,8 +1673,8 @@ export default {
 		retentionCleanupConfirm: 'Permanently delete usage, traces, resolved alerts, and audit logs older than {days} days? This cannot be undone.',
 		retentionCleanupDone: 'Data cleanup completed. {count} records were deleted.',
 		restartRequiredHelp: 'Settings are saved, but this process still uses the previous authentication providers. Restart the service during a maintenance window.',
-		restartReasons: { public_base_url: 'Public base URL or authentication callback URLs changed', oidc: 'OIDC provider configuration changed', feishu: 'Feishu/Lark provider configuration changed', dingtalk: 'DingTalk provider configuration changed', github: 'GitHub OAuth configuration changed', google: 'Google OAuth configuration changed', feishu_secret: 'Feishu/Lark secret was updated', dingtalk_secret: 'DingTalk secret was updated', github_secret: 'GitHub OAuth secret was updated', google_secret: 'Google OAuth secret was updated' },
-    loginTerms: 'Login terms', featureFlags: 'Feature flags', securityAndAuth: 'Security & authentication', userDefaults: 'User defaults', gatewayServices: 'Deployment & gateway', emailSettings: 'Email settings', dataBackup: 'Data backup', enableLoginTerms: 'Require login agreement', loginTermsHelp: 'Require users to accept the configured terms before authentication.', termsTitle: 'Document title', termsContent: 'Terms content', registrationEnabled: 'Open registration', registrationHelp: 'Allow new users to create accounts.', emailVerifyEnabled: 'Email verification', emailVerifyHelp: 'Require new users to verify their email address.', invitationRequired: 'Invitation required', invitationHelp: 'Require a single-use invitation code during registration.', totpEnabled: 'Two-factor authentication', totpHelp: 'Allow users to protect their account with TOTP.', defaultBalance: 'Default balance (micros)', defaultConcurrency: 'Default concurrency', defaultRpm: 'Default RPM', smtpFrom: 'Sender address',
+		restartReasons: { public_base_url: 'Public base URL or authentication callback URLs changed', oidc: 'OIDC provider configuration changed', feishu: 'Feishu/Lark provider configuration changed', dingtalk: 'DingTalk provider configuration changed', github: 'GitHub OAuth configuration changed', google: 'Google OAuth configuration changed', trusted_proxy_headers: 'Trusted proxy header configuration changed', feishu_secret: 'Feishu/Lark secret was updated', dingtalk_secret: 'DingTalk secret was updated', github_secret: 'GitHub OAuth secret was updated', google_secret: 'Google OAuth secret was updated' },
+		loginTerms: 'Login terms', featureFlags: 'Feature flags', securityAndAuth: 'Security & authentication', userDefaults: 'User defaults', gatewayServices: 'Deployment & gateway', emailSettings: 'Email settings', dataBackup: 'Data backup', enableLoginTerms: 'Require login agreement', loginTermsHelp: 'Require users to accept the configured terms before authentication.', termsTitle: 'Document title', termsContent: 'Terms content', registrationEnabled: 'Open registration', registrationHelp: 'Allow new users to create accounts.', emailVerifyEnabled: 'Email verification', emailVerifyHelp: 'Require new users to verify their email address.', passwordResetEnabled: 'Password recovery', passwordResetHelp: 'Allow local accounts to request password reset email.', invitationRequired: 'Invitation required', invitationHelp: 'Require a single-use invitation code during registration.', totpEnabled: 'Two-factor authentication', totpHelp: 'Allow users to protect their account with TOTP.', registrationPolicy: 'Registration policy', allowedEmailDomains: 'Allowed email domains', allowedEmailDomainsHelp: 'One domain per line. Leave empty to accept every valid domain; wildcard entries also match subdomains.', invitationCodes: 'Invitation codes', invitationCodesHelp: 'One single-use code per line. Consumed codes are removed atomically.', loginProtection: 'Login protection', turnstileHelp: 'Require human verification for password login and public email workflows.', trustedProxyHeaders: 'Trust proxy client IP headers', trustedProxyHeadersHelp: 'Enable only behind known reverse proxies. A restart is required.', trustedProxyCIDRs: 'Trusted proxy CIDRs', defaultBalance: 'Default balance (micros)', defaultConcurrency: 'Default concurrency', defaultRpm: 'Default RPM', smtpFrom: 'Sender address', smtpFromName: 'Sender name', smtpImplicitTLS: 'Implicit TLS', smtpImplicitTLSHelp: 'Enable for SMTPS endpoints such as port 465. Port 587 uses STARTTLS when offered.', smtpTestRecipient: 'Test recipient', smtpSendTest: 'Send test email',
     general: 'General',
     deployment: 'Deployment',
     identity: 'Identity',
@@ -1744,6 +1813,9 @@ export default {
     passwordNotConfigured: 'No local password is configured. Keep at least one sign-in method available.',
     changePassword: 'Change password', setPassword: 'Set local password',
     passwordHelp: 'Update the email sign-in password for this account. External identity credentials remain managed by the provider.',
+    passwordSetupByEmail: 'Verify by email',
+    passwordSetupByEmailHelp: 'A verified email link is required before creating the first local password.',
+    sendPasswordSetupEmail: 'Send setup email',
     currentPassword: 'Current password',
     newPassword: 'New password',
     confirmPassword: 'Confirm new password',
@@ -1834,8 +1906,8 @@ export default {
     importTarget: 'CC Switch import target',
     importActionHelp: 'Import the current key into CC Switch with one click. Copy the import link if the app does not open.',
     importHelp: 'The current gateway can directly configure OpenCode through its OpenAI-compatible Chat Completions provider.',
-    protocolWarning: 'Current Codex requires the Responses API, while Claude Code and Gemini CLI use other protocols. Those protocols are not exposed by this gateway, so unusable configuration is not generated.',
-    protocolSupported: 'Chat Completions supported',
+    protocolWarning: 'Chat Completions, Responses, Anthropic Messages, and Gemini-compatible endpoints are available. The selected key and routes determine model availability.',
+    protocolSupported: 'Primary text protocols available',
     protocolResponsesRequired: 'Requires Responses API',
     protocolAnthropicRequired: 'Requires Anthropic API',
     protocolGeminiRequired: 'Requires Gemini API',
@@ -1888,9 +1960,9 @@ export default {
     generateHelp: 'Select a target to generate its configuration, request script, or SDK example.',
     configTarget: 'Configuration target',
     environmentVariable: 'Environment variable',
-    responsesRequired: 'This configuration requires the gateway Responses API. Confirm that protocol support is enabled before calling it.',
-    anthropicRequired: 'This configuration requires the gateway Anthropic Messages API. Confirm that protocol support is enabled before calling it.',
-    geminiRequired: 'This configuration requires a Gemini-compatible gateway endpoint. Confirm that protocol support is enabled before calling it.',
+    responsesRequired: 'This configuration uses the available Responses API. The selected key and routes determine model availability.',
+    anthropicRequired: 'This configuration uses the available Anthropic Messages and exact token-counting endpoints. The selected key and routes determine model availability.',
+    geminiRequired: 'This configuration uses the available Gemini-compatible endpoint. The selected key and routes determine model availability.',
     generateGate: 'Select a model and enter the full API key first.'
   },
   portalKeys: {

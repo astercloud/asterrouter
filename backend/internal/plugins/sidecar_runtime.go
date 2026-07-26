@@ -206,12 +206,17 @@ func (s *Service) startSidecar(ctx context.Context, installation packageInstalla
 		return nil, err
 	}
 	token := randomToken()
+	dataDir, err := s.sidecarDataDir(installation.PluginID)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(context.Background(), entrypoint)
 	cmd.Dir = filepath.Dir(entrypoint)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(sidecarBaseEnvironment(os.Environ()),
 		"ASTER_PLUGIN_ID="+installation.PluginID,
 		"ASTER_PLUGIN_ADDR="+addr,
 		"ASTER_PLUGIN_TOKEN="+token,
+		"ASTER_PLUGIN_DATA_DIR="+dataDir,
 	)
 	if s.pluginHostURL != "" {
 		cmd.Env = append(cmd.Env, "ASTER_PLUGIN_HOST_URL="+s.pluginHostURL)
@@ -235,6 +240,43 @@ func (s *Service) startSidecar(ctx context.Context, installation packageInstalla
 		return nil, err
 	}
 	return proc, nil
+}
+
+func (s *Service) sidecarDataDir(pluginID string) (string, error) {
+	pluginID = strings.TrimSpace(pluginID)
+	if !packagePathSegmentPattern.MatchString(pluginID) || !filepath.IsLocal(pluginID) {
+		return "", fmt.Errorf("plugin data path is invalid")
+	}
+	root, err := filepath.Abs(s.pluginDataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve plugin data directory: %w", err)
+	}
+	dir := filepath.Join(root, pluginID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create plugin data directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return "", fmt.Errorf("protect plugin data directory: %w", err)
+	}
+	return dir, nil
+}
+
+func sidecarBaseEnvironment(inherited []string) []string {
+	allowed := map[string]struct{}{
+		"HOME": {}, "LANG": {}, "LC_ALL": {}, "PATH": {}, "SSL_CERT_DIR": {}, "SSL_CERT_FILE": {},
+		"SYSTEMROOT": {}, "TEMP": {}, "TMP": {}, "TMPDIR": {}, "TZ": {},
+	}
+	out := make([]string, 0, len(allowed))
+	for _, entry := range inherited {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, keep := allowed[strings.ToUpper(strings.TrimSpace(key))]; keep {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func (s *Service) stopSidecar(ctx context.Context, pluginID string) error {

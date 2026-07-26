@@ -18,17 +18,18 @@ const (
 )
 
 type CredentialCapacityRequest struct {
-	LeaseID          string
-	ProfileScope     string
-	TenantID         string
-	CredentialID     string
-	QPSLimit         int
-	RPMLimit         int
-	TPMLimit         int
-	ConcurrencyLimit int
-	EstimatedTokens  int
-	Now              time.Time
-	LeaseUntil       time.Time
+	LeaseID                string
+	ProfileScope           string
+	TenantID               string
+	CredentialID           string
+	QPSLimit               int
+	RPMLimit               int
+	TPMLimit               int
+	ConcurrencyLimit       int
+	TenantConcurrencyLimit int
+	EstimatedTokens        int
+	Now                    time.Time
+	LeaseUntil             time.Time
 }
 
 type CredentialCapacityLease struct {
@@ -95,12 +96,18 @@ func (s *Service) TryAcquireGatewayCredentialPermit(ctx context.Context, auth ga
 	if strings.TrimSpace(auth.CredentialID) == "" {
 		return nil, "credential_missing", false, ErrGatewayUnauthorized
 	}
-	if auth.Limits.QPSLimit <= 0 && auth.Limits.RPMLimit <= 0 && auth.Limits.TPMLimit <= 0 && auth.Limits.ConcurrencyLimit <= 0 {
+	if auth.Limits.QPSLimit <= 0 && auth.Limits.RPMLimit <= 0 && auth.Limits.TPMLimit <= 0 && auth.Limits.ConcurrencyLimit <= 0 && auth.Limits.TenantConcurrencyLimit <= 0 {
 		return &GatewayCredentialPermit{}, "", true, nil
 	}
+	limits := gatewayCredentialCapacityLimits{
+		qps: auth.Limits.QPSLimit, rpm: auth.Limits.RPMLimit, tpm: auth.Limits.TPMLimit,
+		concurrency: auth.Limits.ConcurrencyLimit, tenantConcurrency: auth.Limits.TenantConcurrencyLimit,
+	}
 	if s.credentialCapacityStore == nil {
-		if auth.Limits.QPSLimit > 0 || auth.Limits.RPMLimit > 0 || auth.Limits.TPMLimit > 0 || auth.Limits.ConcurrencyLimit > 0 {
-			return nil, "capacity_store_unavailable", false, errors.New("gateway credential capacity store is not available")
+		if auth.Limits.QPSLimit > 0 || auth.Limits.RPMLimit > 0 || auth.Limits.TPMLimit > 0 || auth.Limits.ConcurrencyLimit > 0 || auth.Limits.TenantConcurrencyLimit > 0 {
+			err := errors.New("gateway credential capacity store is not available")
+			s.observeCredentialCapacityAdmission(limits, "capacity_store_unavailable", false, err)
+			return nil, "capacity_store_unavailable", false, err
 		}
 		return &GatewayCredentialPermit{}, "", true, nil
 	}
@@ -108,9 +115,11 @@ func (s *Service) TryAcquireGatewayCredentialPermit(ctx context.Context, auth ga
 	request := CredentialCapacityRequest{
 		LeaseID: "credential_lease_" + randomID(12), ProfileScope: auth.ProfileScope, TenantID: auth.TenantID,
 		CredentialID: auth.CredentialID, QPSLimit: auth.Limits.QPSLimit, RPMLimit: auth.Limits.RPMLimit, TPMLimit: auth.Limits.TPMLimit,
-		ConcurrencyLimit: auth.Limits.ConcurrencyLimit, EstimatedTokens: nonNegative(estimatedTokens), Now: now, LeaseUntil: now.Add(gatewayCredentialLeaseTTL),
+		ConcurrencyLimit: auth.Limits.ConcurrencyLimit, TenantConcurrencyLimit: auth.Limits.TenantConcurrencyLimit,
+		EstimatedTokens: nonNegative(estimatedTokens), Now: now, LeaseUntil: now.Add(gatewayCredentialLeaseTTL),
 	}
 	lease, reason, acquired, err := s.credentialCapacityStore.AcquireCredentialCapacity(ctx, request)
+	s.observeCredentialCapacityAdmission(limits, reason, acquired, err)
 	if err != nil || !acquired {
 		return nil, reason, acquired, err
 	}
@@ -211,12 +220,21 @@ func credentialCapacityKey(profileScope, tenantID, credentialID string) string {
 	return strconv.Itoa(len(profileScope)) + ":" + profileScope + strconv.Itoa(len(tenantID)) + ":" + tenantID + strconv.Itoa(len(credentialID)) + ":" + credentialID
 }
 
+func credentialTenantCapacityKey(profileScope, tenantID string) string {
+	profileScope = strings.TrimSpace(profileScope)
+	tenantID = strings.TrimSpace(tenantID)
+	return strconv.Itoa(len(profileScope)) + ":" + profileScope + strconv.Itoa(len(tenantID)) + ":" + tenantID
+}
+
 func validateCredentialCapacityRequest(request CredentialCapacityRequest) error {
 	if strings.TrimSpace(request.LeaseID) == "" || strings.TrimSpace(request.CredentialID) == "" || request.Now.IsZero() || !request.LeaseUntil.After(request.Now) {
 		return errors.New("invalid credential capacity request")
 	}
-	if request.QPSLimit < 0 || request.RPMLimit < 0 || request.TPMLimit < 0 || request.ConcurrencyLimit < 0 || request.EstimatedTokens < 0 {
+	if request.QPSLimit < 0 || request.RPMLimit < 0 || request.TPMLimit < 0 || request.ConcurrencyLimit < 0 || request.TenantConcurrencyLimit < 0 || request.EstimatedTokens < 0 {
 		return errors.New("credential capacity limits must be non-negative")
+	}
+	if request.TenantConcurrencyLimit > 0 && strings.TrimSpace(request.TenantID) == "" {
+		return errors.New("tenant_id is required for tenant concurrency limits")
 	}
 	return nil
 }
@@ -244,10 +262,15 @@ func (r *MemoryRepository) AcquireCredentialCapacity(_ context.Context, request 
 	}
 	r.credentialRateSamples[key] = keptSamples
 	concurrency := 0
+	tenantConcurrency := 0
+	tenantKey := credentialTenantCapacityKey(request.ProfileScope, request.TenantID)
 	for id, lease := range r.credentialCapacityLeases {
 		if !lease.ExpiresAt.After(request.Now) {
 			delete(r.credentialCapacityLeases, id)
 			continue
+		}
+		if credentialTenantCapacityKey(lease.ProfileScope, lease.TenantID) == tenantKey {
+			tenantConcurrency++
 		}
 		if credentialCapacityKey(lease.ProfileScope, lease.TenantID, lease.CredentialID) == key {
 			concurrency++
@@ -255,6 +278,9 @@ func (r *MemoryRepository) AcquireCredentialCapacity(_ context.Context, request 
 	}
 	if request.ConcurrencyLimit > 0 && concurrency >= request.ConcurrencyLimit {
 		return CredentialCapacityLease{}, "concurrency_exhausted", false, nil
+	}
+	if request.TenantConcurrencyLimit > 0 && tenantConcurrency >= request.TenantConcurrencyLimit {
+		return CredentialCapacityLease{}, "tenant_concurrency_exhausted", false, nil
 	}
 	if request.QPSLimit > 0 && qpsCount >= request.QPSLimit {
 		return CredentialCapacityLease{}, "qps_exhausted", false, nil
@@ -305,6 +331,12 @@ func (r *PostgresRepository) AcquireCredentialCapacity(ctx context.Context, requ
 	}
 	defer func() { _ = tx.Rollback() }()
 	key := credentialCapacityKey(request.ProfileScope, request.TenantID, request.CredentialID)
+	if request.TenantConcurrencyLimit > 0 {
+		tenantKey := credentialTenantCapacityKey(request.ProfileScope, request.TenantID)
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantKey); err != nil {
+			return CredentialCapacityLease{}, "", false, err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
 		return CredentialCapacityLease{}, "", false, err
 	}
@@ -314,9 +346,14 @@ func (r *PostgresRepository) AcquireCredentialCapacity(ctx context.Context, requ
 	if _, err := tx.ExecContext(ctx, `DELETE FROM gateway_credential_rate_samples WHERE profile_scope=$1 AND tenant_id=$2 AND credential_id=$3 AND occurred_at<=$4`, request.ProfileScope, request.TenantID, request.CredentialID, request.Now.Add(-gatewayCredentialRateWindow)); err != nil {
 		return CredentialCapacityLease{}, "", false, err
 	}
-	var concurrency, qps, rpm, tokens int
+	var concurrency, tenantConcurrency, qps, rpm, tokens int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM gateway_credential_capacity_leases WHERE profile_scope=$1 AND tenant_id=$2 AND credential_id=$3 AND expires_at>$4`, request.ProfileScope, request.TenantID, request.CredentialID, request.Now).Scan(&concurrency); err != nil {
 		return CredentialCapacityLease{}, "", false, err
+	}
+	if request.TenantConcurrencyLimit > 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM gateway_credential_capacity_leases WHERE profile_scope=$1 AND tenant_id=$2 AND expires_at>$3`, request.ProfileScope, request.TenantID, request.Now).Scan(&tenantConcurrency); err != nil {
+			return CredentialCapacityLease{}, "", false, err
+		}
 	}
 	if err := tx.QueryRowContext(ctx, `
 SELECT COUNT(*) FILTER (WHERE occurred_at>$4), COUNT(*), COALESCE(SUM(estimated_tokens), 0)
@@ -329,6 +366,8 @@ WHERE profile_scope=$1 AND tenant_id=$2 AND credential_id=$3 AND occurred_at>$5
 	switch {
 	case request.ConcurrencyLimit > 0 && concurrency >= request.ConcurrencyLimit:
 		reason = "concurrency_exhausted"
+	case request.TenantConcurrencyLimit > 0 && tenantConcurrency >= request.TenantConcurrencyLimit:
+		reason = "tenant_concurrency_exhausted"
 	case request.QPSLimit > 0 && qps >= request.QPSLimit:
 		reason = "qps_exhausted"
 	case request.RPMLimit > 0 && rpm >= request.RPMLimit:

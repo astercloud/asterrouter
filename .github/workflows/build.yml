@@ -80,7 +80,9 @@ jobs:
         env:
           ASTER_RELEASE_RUNTIME_DIR: ${{ runner.temp }}/asterrouter-release-runtime
           ASTER_RELEASE_TEST_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_release_test?sslmode=disable
-        run: bash scripts/test-release-runtime.sh "${{ steps.version.outputs.version }}"
+        run: |
+          bash scripts/test-release-runtime.sh "${{ steps.version.outputs.version }}"
+          grep -Fxq 'release_runtime_acceptance=passed' "${{ runner.temp }}/asterrouter-release-runtime/report.txt"
 
       - name: Install Chromium for candidate browser journeys
         working-directory: frontend
@@ -100,12 +102,16 @@ jobs:
         env:
           ASTER_RELEASE_JOURNEY_DIR: ${{ runner.temp }}/asterrouter-release-journeys
           ASTER_RELEASE_TEST_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_release_test_journey?sslmode=disable
-        run: bash scripts/test-release-browser-journeys.sh "${{ steps.version.outputs.version }}"
+        run: |
+          bash scripts/test-release-browser-journeys.sh "${{ steps.version.outputs.version }}"
+          grep -Fxq 'release_browser_journeys=passed' "${{ runner.temp }}/asterrouter-release-journeys/report.txt"
 
       - name: Validate Linux install, upgrade, and rollback
         env:
           ASTER_INSTALLER_TEST_DIR: ${{ runner.temp }}/asterrouter-installer-test
-        run: sudo --preserve-env=ASTER_INSTALLER_TEST_DIR bash scripts/test-installer.sh
+        run: |
+          sudo --preserve-env=ASTER_INSTALLER_TEST_DIR bash scripts/test-installer.sh
+          grep -Fxq 'installer_acceptance=passed' "${{ runner.temp }}/asterrouter-installer-test/report.txt"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7

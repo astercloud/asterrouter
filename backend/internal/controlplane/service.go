@@ -42,43 +42,47 @@ var (
 )
 
 type Service struct {
-	repo                           Repository
-	gatewayPath                    string
-	secretKey                      string
-	now                            func() time.Time
-	alertDispatcher                AlertDispatcher
-	customerNotificationDispatcher CustomerNotificationDispatcher
-	pricingEngine                  *pricing.Engine
-	customerPricingResolver        CustomerPricingContextResolver
-	credentialCapacityStore        CredentialCapacityStore
-	providerCapacityMu             sync.RWMutex
-	providerCapacityStore          ProviderCapacityStore
-	routingAffinityMu              sync.RWMutex
-	routingAffinityCoordinator     RoutingAffinityCoordinator
-	aiJobRuntimeMu                 sync.RWMutex
-	aiJobReadyIndex                AIJobReadyIndex
-	aiJobAdmissionLimits           AIJobAdmissionLimits
-	artifactStoreMu                sync.RWMutex
-	artifactStores                 map[string]ArtifactStore
-	artifactPrimaryDriver          string
-	artifactSinkMu                 sync.RWMutex
-	artifactSinks                  map[string]ArtifactSink
-	artifactProxyMu                sync.RWMutex
-	artifactProxies                map[string]ArtifactProxy
-	outboxPublisherMu              sync.RWMutex
-	outboxPublisher                TransactionalOutboxPublisher
-	rateMu                         sync.Mutex
-	rateWindows                    map[string][]time.Time
-	jwksMu                         sync.Mutex
-	externalAuthJWKSFetcher        externalAuthJWKSFetcher
-	externalAuthJWKSCache          map[string]externalAuthJWKSCacheEntry
-	platformUsageHTTPClient        *http.Client
-	providerCacheProbeHTTPClient   *http.Client
-	providerBillingHTTPClient      *http.Client
-	providerBillingAdapters        *ProviderBillingAdapterRegistry
-	slotMu                         sync.Mutex
-	accountSlots                   map[string]int
-	scheduler                      *gatewayScheduler
+	repo                              Repository
+	gatewayPath                       string
+	secretKey                         string
+	now                               func() time.Time
+	alertDispatcher                   AlertDispatcher
+	customerNotificationDispatcherMu  sync.RWMutex
+	customerNotificationDispatcher    CustomerNotificationDispatcher
+	customerNotificationDispatchSlots chan struct{}
+	pricingEngine                     *pricing.Engine
+	customerPricingResolver           CustomerPricingContextResolver
+	credentialCapacityStore           CredentialCapacityStore
+	capacityAdmissionObserverMu       sync.RWMutex
+	capacityAdmissionObserver         CapacityAdmissionObserver
+	providerCapacityMu                sync.RWMutex
+	providerCapacityStore             ProviderCapacityStore
+	routingAffinityMu                 sync.RWMutex
+	routingAffinityCoordinator        RoutingAffinityCoordinator
+	aiJobRuntimeMu                    sync.RWMutex
+	aiJobReadyIndex                   AIJobReadyIndex
+	aiJobAdmissionLimits              AIJobAdmissionLimits
+	artifactStoreMu                   sync.RWMutex
+	artifactStores                    map[string]ArtifactStore
+	artifactPrimaryDriver             string
+	artifactSinkMu                    sync.RWMutex
+	artifactSinks                     map[string]ArtifactSink
+	artifactProxyMu                   sync.RWMutex
+	artifactProxies                   map[string]ArtifactProxy
+	outboxPublisherMu                 sync.RWMutex
+	outboxPublisher                   TransactionalOutboxPublisher
+	rateMu                            sync.Mutex
+	rateWindows                       map[string][]time.Time
+	jwksMu                            sync.Mutex
+	externalAuthJWKSFetcher           externalAuthJWKSFetcher
+	externalAuthJWKSCache             map[string]externalAuthJWKSCacheEntry
+	platformUsageHTTPClient           *http.Client
+	providerCacheProbeHTTPClient      *http.Client
+	providerBillingHTTPClient         *http.Client
+	providerBillingAdapters           *ProviderBillingAdapterRegistry
+	slotMu                            sync.Mutex
+	accountSlots                      map[string]int
+	scheduler                         *gatewayScheduler
 }
 
 func (s *Service) SetCustomerPricingContextResolver(resolver CustomerPricingContextResolver) {
@@ -102,13 +106,17 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 		key = strings.TrimSpace(secretKey[0])
 	}
 	capacityStore, _ := repo.(CredentialCapacityStore)
-	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, now: time.Now, pricingEngine: pricing.NewEngine(), rateWindows: map[string][]time.Time{}, credentialCapacityStore: capacityStore, externalAuthJWKSFetcher: fetchExternalAuthJWKS, externalAuthJWKSCache: map[string]externalAuthJWKSCacheEntry{}, platformUsageHTTPClient: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+	providerCapacityStore := ProviderCapacityStore(NewMemoryProviderCapacityStore())
+	if persistentProviderCapacityStore, ok := repo.(ProviderCapacityStore); ok {
+		providerCapacityStore = persistentProviderCapacityStore
+	}
+	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, now: time.Now, pricingEngine: pricing.NewEngine(), rateWindows: map[string][]time.Time{}, credentialCapacityStore: capacityStore, customerNotificationDispatchSlots: make(chan struct{}, customerNotificationEmailDispatchLimit), externalAuthJWKSFetcher: fetchExternalAuthJWKS, externalAuthJWKSCache: map[string]externalAuthJWKSCacheEntry{}, platformUsageHTTPClient: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("platform usage sink redirects are not allowed")
 	}}, providerCacheProbeHTTPClient: &http.Client{Timeout: providerProbeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider cache probe redirects are not allowed")
 	}}, providerBillingHTTPClient: &http.Client{Timeout: providerBillingRequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider billing redirects are not allowed")
-	}}, providerBillingAdapters: NewProviderBillingAdapterRegistry(), accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: NewMemoryProviderCapacityStore(), artifactStores: map[string]ArtifactStore{}, artifactSinks: map[string]ArtifactSink{}, artifactProxies: map[string]ArtifactProxy{}}
+	}}, providerBillingAdapters: NewProviderBillingAdapterRegistry(), accountSlots: map[string]int{}, scheduler: newGatewayScheduler(), providerCapacityStore: providerCapacityStore, artifactStores: map[string]ArtifactStore{}, artifactSinks: map[string]ArtifactSink{}, artifactProxies: map[string]ArtifactProxy{}}
 }
 
 func (s *Service) nowUTC() time.Time {
@@ -167,7 +175,15 @@ func (s *Service) SetAlertDispatcher(dispatcher AlertDispatcher) {
 }
 
 func (s *Service) SetCustomerNotificationDispatcher(dispatcher CustomerNotificationDispatcher) {
+	s.customerNotificationDispatcherMu.Lock()
+	defer s.customerNotificationDispatcherMu.Unlock()
 	s.customerNotificationDispatcher = dispatcher
+}
+
+func (s *Service) customerNotificationDispatcherValue() CustomerNotificationDispatcher {
+	s.customerNotificationDispatcherMu.RLock()
+	defer s.customerNotificationDispatcherMu.RUnlock()
+	return s.customerNotificationDispatcher
 }
 
 func (s *Service) SetRoutingAffinityCoordinator(coordinator RoutingAffinityCoordinator) {
@@ -757,38 +773,61 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCrea
 }
 
 func (s *Service) createAPIKey(ctx context.Context, actor string, req APIKeyCreateRequest, platformIdentity *platformCredentialIdentity) (APIKeyCreateResponse, error) {
+	rawKey := "ar_" + randomToken(32)
+	record, err := s.buildAPIKeyRecord(ctx, req, platformIdentity, "key_"+randomID(10), rawKey, "", s.nowUTC())
+	if err != nil {
+		return APIKeyCreateResponse{}, err
+	}
+	if err := s.repo.SaveAPIKey(ctx, record); err != nil {
+		return APIKeyCreateResponse{}, err
+	}
+	if platformIdentity != nil {
+		if err := s.auditPlatform(ctx, actor, "create", "api_key", record.ID, fmt.Sprintf("Created platform API key %s", record.Name), &platformIdentity.tenant, &platformIdentity.principal); err != nil {
+			return APIKeyCreateResponse{}, err
+		}
+		return APIKeyCreateResponse{Record: record, Key: rawKey}, nil
+	}
+	if err := s.audit(ctx, actor, "create", "api_key", record.ID, fmt.Sprintf("Created API key %s", record.Name)); err != nil {
+		return APIKeyCreateResponse{}, err
+	}
+	return APIKeyCreateResponse{Record: record, Key: rawKey}, nil
+}
+
+func (s *Service) buildAPIKeyRecord(ctx context.Context, req APIKeyCreateRequest, platformIdentity *platformCredentialIdentity, id, rawKey, rotationFamilyID string, now time.Time) (APIKeyRecord, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		return APIKeyCreateResponse{}, errors.New("name is required")
+		return APIKeyRecord{}, errors.New("name is required")
 	}
 	models := cleanStringList(req.ModelAllowlist)
 	if len(models) == 0 {
-		return APIKeyCreateResponse{}, errors.New("model_allowlist must not be empty")
+		return APIKeyRecord{}, errors.New("model_allowlist must not be empty")
 	}
 	keyPolicy, err := normalizeAPIKeyPolicy(apiKeyPolicyFromCreateRequest(req))
 	if err != nil {
-		return APIKeyCreateResponse{}, err
+		return APIKeyRecord{}, err
 	}
 	if err := s.validateGovernancePolicyReference(ctx, req.PolicyID); err != nil {
-		return APIKeyCreateResponse{}, err
+		return APIKeyRecord{}, err
 	}
 	expiresAt, err := parseOptionalDate(req.ExpiresAt)
 	if err != nil {
-		return APIKeyCreateResponse{}, err
+		return APIKeyRecord{}, err
 	}
 	keyType, customerID, ownerUserID, err := normalizeAPIKeyOwnership(req.KeyType, req.CustomerID, req.OwnerUserID)
 	if err != nil {
-		return APIKeyCreateResponse{}, err
+		return APIKeyRecord{}, err
 	}
 	if err := s.validateAPIKeyOwner(ctx, keyType, ownerUserID); err != nil {
-		return APIKeyCreateResponse{}, err
+		return APIKeyRecord{}, err
 	}
-
-	rawKey := "ar_" + randomToken(32)
+	id = strings.TrimSpace(id)
+	rawKey = strings.TrimSpace(rawKey)
+	if id == "" || rawKey == "" {
+		return APIKeyRecord{}, errors.New("api key id and key material are required")
+	}
 	hash := hashAPIKey(rawKey)
-	now := time.Now().UTC()
 	record := APIKeyRecord{
-		ID:             "key_" + randomID(10),
+		ID:             id,
 		Name:           name,
 		KeyHash:        hash,
 		Fingerprint:    fingerprint(hash),
@@ -804,21 +843,10 @@ func (s *Service) createAPIKey(ctx context.Context, actor string, req APIKeyCrea
 		UpdatedAt:      now,
 	}
 	record.LifecycleStatus = APIKeyLifecycleActive
+	record.RotationFamilyID = strings.TrimSpace(rotationFamilyID)
 	applyAPIKeyPolicy(&record, keyPolicy)
 	applyAPIKeyPrincipal(&record, platformIdentity)
-	if err := s.repo.SaveAPIKey(ctx, record); err != nil {
-		return APIKeyCreateResponse{}, err
-	}
-	if platformIdentity != nil {
-		if err := s.auditPlatform(ctx, actor, "create", "api_key", record.ID, fmt.Sprintf("Created platform API key %s", record.Name), &platformIdentity.tenant, &platformIdentity.principal); err != nil {
-			return APIKeyCreateResponse{}, err
-		}
-		return APIKeyCreateResponse{Record: record, Key: rawKey}, nil
-	}
-	if err := s.audit(ctx, actor, "create", "api_key", record.ID, fmt.Sprintf("Created API key %s", record.Name)); err != nil {
-		return APIKeyCreateResponse{}, err
-	}
-	return APIKeyCreateResponse{Record: record, Key: rawKey}, nil
+	return record, nil
 }
 
 func (s *Service) UpdateAPIKey(ctx context.Context, actor string, id string, req APIKeyUpdateRequest) (APIKeyRecord, error) {

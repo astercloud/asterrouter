@@ -333,6 +333,39 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if sharedRec.Code != http.StatusForbidden {
 		t.Fatalf("department administrator created shared key status=%d body=%s", sharedRec.Code, sharedRec.Body.String())
 	}
+	onboardingReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/sessions", nil)
+	onboardingReq.Header.Set("Authorization", "Bearer secret")
+	onboardingReq.Header.Set("X-Actor", manager.Email)
+	onboardingReq.Header.Set("Idempotency-Key", "department-onboarding")
+	onboardingRec := httptest.NewRecorder()
+	handler.ServeHTTP(onboardingRec, onboardingReq)
+	if onboardingRec.Code != http.StatusForbidden {
+		t.Fatalf("department administrator started global onboarding status=%d body=%s", onboardingRec.Code, onboardingRec.Body.String())
+	}
+	compatibilityReq := httptest.NewRequest(http.MethodGet, "/api/v1/onboarding/compatibility-records", nil)
+	compatibilityReq.Header.Set("Authorization", "Bearer secret")
+	compatibilityReq.Header.Set("X-Actor", manager.Email)
+	compatibilityRec := httptest.NewRecorder()
+	handler.ServeHTTP(compatibilityRec, compatibilityReq)
+	if compatibilityRec.Code != http.StatusForbidden {
+		t.Fatalf("department administrator read global compatibility records status=%d body=%s", compatibilityRec.Code, compatibilityRec.Body.String())
+	}
+	for _, item := range []struct {
+		key  controlplane.APIKeyRecord
+		want int
+	}{
+		{key: engKey.Record, want: http.StatusOK},
+		{key: finKey.Record, want: http.StatusNotFound},
+	} {
+		configReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/api-keys/"+item.key.ID+"/client-config?client=openai_sdk&model=model", nil)
+		configReq.Header.Set("Authorization", "Bearer secret")
+		configReq.Header.Set("X-Actor", manager.Email)
+		configRec := httptest.NewRecorder()
+		handler.ServeHTTP(configRec, configReq)
+		if configRec.Code != item.want {
+			t.Fatalf("department API key %s status=%d want=%d body=%s", item.key.ID, configRec.Code, item.want, configRec.Body.String())
+		}
+	}
 }
 
 func TestSurfaceBindingExplicitlyGrantsOperatorAccess(t *testing.T) {
@@ -360,21 +393,24 @@ func TestSurfaceBindingExplicitlyGrantsOperatorAccess(t *testing.T) {
 
 func TestAdminRoutesResolveResourceDomains(t *testing.T) {
 	tests := map[string]string{
-		"/api/v1/admin/dashboard":           controlplane.RBACResourceDashboard,
-		"/api/v1/admin/model-routes":        controlplane.RBACResourceRouting,
-		"/api/v1/admin/provider-accounts":   controlplane.RBACResourceProviders,
-		"/api/v1/admin/api-keys":            controlplane.RBACResourceAPIKeys,
-		"/api/v1/admin/pricing-rules":       controlplane.RBACResourceUsage,
-		"/api/v1/admin/gateway-traces":      controlplane.RBACResourceTraces,
-		"/api/v1/admin/alerts":              controlplane.RBACResourceAlerts,
-		"/api/v1/admin/role-bindings":       controlplane.RBACResourceIdentity,
-		"/api/v1/admin/organization-groups": controlplane.RBACResourceIdentity,
-		"/api/v1/admin/policies":            controlplane.RBACResourcePolicies,
-		"/api/v1/admin/audit-logs":          controlplane.RBACResourceAudit,
-		"/api/v1/admin/export-jobs":         controlplane.RBACResourceExports,
-		"/api/v1/admin/plugins":             controlplane.RBACResourcePlugins,
-		"/api/v1/admin/settings/smtp/test":  controlplane.RBACResourceSettings,
-		"/api/v1/admin/system/update":       controlplane.RBACResourceSystem,
+		"/api/v1/admin/dashboard":                  controlplane.RBACResourceDashboard,
+		"/api/v1/admin/model-routes":               controlplane.RBACResourceRouting,
+		"/api/v1/admin/provider-accounts":          controlplane.RBACResourceProviders,
+		"/api/v1/admin/api-keys":                   controlplane.RBACResourceAPIKeys,
+		"/api/v1/onboarding/sessions":              controlplane.RBACResourceProviders,
+		"/api/v1/onboarding/compatibility-records": controlplane.RBACResourceProviders,
+		"/api/v1/admin/api-keys/key/client-config": controlplane.RBACResourceAPIKeys,
+		"/api/v1/admin/pricing-rules":              controlplane.RBACResourceUsage,
+		"/api/v1/admin/gateway-traces":             controlplane.RBACResourceTraces,
+		"/api/v1/admin/alerts":                     controlplane.RBACResourceAlerts,
+		"/api/v1/admin/role-bindings":              controlplane.RBACResourceIdentity,
+		"/api/v1/admin/organization-groups":        controlplane.RBACResourceIdentity,
+		"/api/v1/admin/policies":                   controlplane.RBACResourcePolicies,
+		"/api/v1/admin/audit-logs":                 controlplane.RBACResourceAudit,
+		"/api/v1/admin/export-jobs":                controlplane.RBACResourceExports,
+		"/api/v1/admin/plugins":                    controlplane.RBACResourcePlugins,
+		"/api/v1/admin/settings/smtp/test":         controlplane.RBACResourceSettings,
+		"/api/v1/admin/system/update":              controlplane.RBACResourceSystem,
 	}
 	for path, want := range tests {
 		context, _ := gin.CreateTestContext(httptest.NewRecorder())

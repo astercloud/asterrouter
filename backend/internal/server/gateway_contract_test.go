@@ -357,6 +357,11 @@ func gatewayContractRuntime(t *testing.T, upstream *testutil.FakeOpenAI) (http.H
 func gatewayContractRuntimeWithKeyRequest(t *testing.T, upstream *testutil.FakeOpenAI, keyRequest controlplane.APIKeyCreateRequest) (http.Handler, *controlplane.Service, string) {
 	t.Helper()
 	handler, control := newTestRuntime(t, RuntimeConfig{})
+	return configureGatewayContractRuntime(t, handler, control, upstream, keyRequest)
+}
+
+func configureGatewayContractRuntime(t *testing.T, handler http.Handler, control *controlplane.Service, upstream *testutil.FakeOpenAI, keyRequest controlplane.APIKeyCreateRequest) (http.Handler, *controlplane.Service, string) {
+	t.Helper()
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
 		Name: "contract provider", Type: "openai_compatible", BaseURL: upstream.BaseURL(),
 		Status: controlplane.ProviderStatusActive,

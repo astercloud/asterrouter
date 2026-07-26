@@ -20,14 +20,18 @@ import {
   Server,
   ShieldCheck,
   UsersRound,
-  WalletCards
+  WalletCards,
+  Workflow
 } from '@lucide/vue'
 import SurfaceShell from '@/components/SurfaceShell.vue'
 
 const navGroups = [
   {
     label: 'nav.overview',
-    items: [{ to: '/admin/dashboard', label: 'admin.overview', icon: Gauge }]
+    items: [
+      { to: '/admin/dashboard', label: 'admin.overview', icon: Gauge },
+      { to: '/admin/onboarding', label: 'admin.onboarding', icon: Workflow }
+    ]
   },
   {
     label: 'nav.inference',
@@ -56,6 +60,7 @@ const navGroups = [
     label: 'nav.analytics',
     items: [
       { to: '/admin/usage', label: 'admin.usage', icon: WalletCards },
+      { to: '/admin/supply', label: 'admin.supply', icon: Gauge },
       { to: '/admin/cost-allocation', label: 'admin.costAllocation', icon: PieChart },
       { to: '/admin/traces', label: 'admin.traces', icon: Activity },
       { to: '/admin/alerts', label: 'admin.alerts', icon: BellRing },

@@ -22,6 +22,11 @@ func mapRemoteCatalogPlugins(index remoteCatalogIndex, now time.Time) []Plugin {
 			continue
 		}
 		tier, entitlement, status := remoteTier(item.Tier, requiresEntitlement)
+		manifestMetadata := remotePluginManifestMetadata(item)
+		surfaces := manifestMetadata.Surfaces
+		if len(surfaces) == 0 {
+			surfaces = []string{"admin"}
+		}
 		out = append(out, Plugin{
 			ID:                pluginID,
 			PluginID:          pluginID,
@@ -34,9 +39,9 @@ func mapRemoteCatalogPlugins(index remoteCatalogIndex, now time.Time) []Plugin {
 			Vendor:            defaultText(item.VendorName, "AsterCloud"),
 			Status:            status,
 			EntitlementStatus: entitlement,
-			Surfaces:          remotePluginSurfaces(item),
+			Surfaces:          surfaces,
 			EntryPoint:        "/admin/plugins",
-			Configurable:      false,
+			Configurable:      manifestMetadata.Configurable,
 			CreatedAt:         now,
 			UpdatedAt:         now,
 		})
@@ -46,6 +51,19 @@ func mapRemoteCatalogPlugins(index remoteCatalogIndex, now time.Time) []Plugin {
 }
 
 func remotePluginSurfaces(item remoteCatalogPlugin) []string {
+	metadata := remotePluginManifestMetadata(item)
+	if len(metadata.Surfaces) > 0 {
+		return metadata.Surfaces
+	}
+	return []string{"admin"}
+}
+
+type remotePluginManifest struct {
+	Surfaces     []string `json:"surfaces"`
+	Configurable bool     `json:"configurable"`
+}
+
+func remotePluginManifestMetadata(item remoteCatalogPlugin) remotePluginManifest {
 	for _, version := range item.Versions {
 		if version.Status != "published" && version.Status != "deprecated" {
 			continue
@@ -56,9 +74,7 @@ func remotePluginSurfaces(item remoteCatalogPlugin) []string {
 		if err := json.Unmarshal(version.ManifestSignature.Payload, &payload); err != nil || len(payload.Manifest) == 0 {
 			continue
 		}
-		var manifest struct {
-			Surfaces []string `json:"surfaces"`
-		}
+		var manifest remotePluginManifest
 		if err := json.Unmarshal(payload.Manifest, &manifest); err != nil {
 			continue
 		}
@@ -75,11 +91,10 @@ func remotePluginSurfaces(item remoteCatalogPlugin) []string {
 			seen[surface] = struct{}{}
 			surfaces = append(surfaces, surface)
 		}
-		if len(surfaces) > 0 {
-			return surfaces
-		}
+		manifest.Surfaces = surfaces
+		return manifest
 	}
-	return []string{"admin"}
+	return remotePluginManifest{}
 }
 
 func mapRemoteCatalogPackages(index remoteCatalogIndex, now time.Time) []packageRecord {

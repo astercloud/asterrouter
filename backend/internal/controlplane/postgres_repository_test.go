@@ -53,6 +53,40 @@ func TestPostgresRepositoryEmptyListContracts(t *testing.T) {
 	assertEmptyList(t, "ListAuditLogs", func() ([]AuditLog, error) { return repo.ListAuditLogs(ctx, 100) })
 }
 
+func TestPostgresRepositorySerializesConcurrentMigrations(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	ctx := context.Background()
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	repositories := make(chan *PostgresRepository, 2)
+	var wait sync.WaitGroup
+	for index := 0; index < 2; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			repo, err := NewPostgresRepository(ctx, schema.URL)
+			if err != nil {
+				errs <- err
+				return
+			}
+			repositories <- repo
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	close(repositories)
+	for err := range errs {
+		t.Fatalf("NewPostgresRepository() concurrent migration: %v", err)
+	}
+	for repo := range repositories {
+		if err := repo.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	}
+}
+
 func TestListParsersNormalizeJSONNull(t *testing.T) {
 	if values := parseStringList("null"); values == nil || len(values) != 0 {
 		t.Fatalf("parseStringList(null) = %#v, want []", values)
@@ -135,6 +169,92 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	}
 	if len(users) != 1 || users[0].ID != user.ID || users[0].SessionVersion != 7 {
 		t.Fatalf("persisted session version users=%#v", users)
+	}
+}
+
+func TestPostgresServicesShareAPIKeyPolicyUsageAndRevocation(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	ctx := context.Background()
+	firstRepo, err := NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstRepo.Close()
+	secondRepo, err := NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondRepo.Close()
+
+	first := NewService(firstRepo, "/v1", "shared-ha-test-secret")
+	second := NewService(secondRepo, "/v1", "shared-ha-test-secret")
+	if err := first.EnsureSeedData(ctx); err != nil {
+		t.Fatalf("EnsureSeedData(): %v", err)
+	}
+	created, err := first.CreateAPIKey(ctx, "admin", APIKeyCreateRequest{
+		Name:              "Shared HA key",
+		ModelAllowlist:    []string{"model-a"},
+		Scopes:            []string{GatewayScopeInvoke},
+		AllowedModalities: []string{GatewayModalityText},
+		AllowedOperations: []string{GatewayOperationChatCompletion},
+		KeyType:           APIKeyTypeWorkspace,
+	})
+	if err != nil {
+		t.Fatalf("CreateAPIKey(): %v", err)
+	}
+	if _, err := second.AuthorizeGatewayModel(ctx, created.Key, "model-a"); err != nil {
+		t.Fatalf("second AuthorizeGatewayModel(model-a): %v", err)
+	}
+
+	if _, err := first.UpdateAPIKey(ctx, "admin", created.Record.ID, APIKeyUpdateRequest{
+		Name:           created.Record.Name,
+		ModelAllowlist: []string{"model-b"},
+	}); err != nil {
+		t.Fatalf("UpdateAPIKey(): %v", err)
+	}
+	if _, err := second.AuthorizeGatewayModel(ctx, created.Key, "model-a"); !errors.Is(err, ErrGatewayForbidden) {
+		t.Fatalf("stale model authorization error=%v, want ErrGatewayForbidden", err)
+	}
+	authorized, err := second.AuthorizeGatewayModel(ctx, created.Key, "model-b")
+	if err != nil {
+		t.Fatalf("second AuthorizeGatewayModel(model-b): %v", err)
+	}
+	if err := second.RecordGatewayUsage(ctx, authorized, GatewayUsageInput{
+		RequestFingerprint: "synthetic-ha-shared", Model: "model-b", Status: "forwarded",
+		InputTokens: 11, OutputTokens: 7,
+		SkipProcurementCostEstimate: true,
+	}); err != nil {
+		t.Fatalf("second RecordGatewayUsage(): %v", err)
+	}
+	report, err := first.UsageReport(ctx, 10)
+	if err != nil {
+		t.Fatalf("first UsageReport(): %v", err)
+	}
+	if report.TotalRequests != 1 || len(report.Recent) != 1 || report.Recent[0].APIKeyID != created.Record.ID || report.Recent[0].InputTokens != 11 || report.Recent[0].OutputTokens != 7 {
+		t.Fatalf("shared usage report=%#v", report)
+	}
+
+	if err := first.DisableAPIKey(ctx, "admin", created.Record.ID); err != nil {
+		t.Fatalf("DisableAPIKey(): %v", err)
+	}
+	if _, err := second.AuthenticateGatewayKey(ctx, created.Key); !errors.Is(err, ErrGatewayUnauthorized) {
+		t.Fatalf("second AuthenticateGatewayKey() after disable error=%v, want ErrGatewayUnauthorized", err)
+	}
+	audits, err := second.ListAuditLogs(ctx, 20)
+	if err != nil {
+		t.Fatalf("second ListAuditLogs(): %v", err)
+	}
+	seenUpdate := false
+	seenDisable := false
+	for _, audit := range audits {
+		if audit.ResourceID != created.Record.ID {
+			continue
+		}
+		seenUpdate = seenUpdate || audit.Action == "update"
+		seenDisable = seenDisable || audit.Action == "disable"
+	}
+	if !seenUpdate || !seenDisable {
+		t.Fatalf("shared audits update=%t disable=%t audits=%#v", seenUpdate, seenDisable, audits)
 	}
 }
 

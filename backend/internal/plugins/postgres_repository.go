@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/astercloud/asterrouter/backend/internal/postgresutil"
 	_ "github.com/lib/pq"
 )
 
@@ -32,7 +33,8 @@ func NewPostgresRepository(ctx context.Context, databaseURL string) (*PostgresRe
 }
 
 func (r *PostgresRepository) migrate(ctx context.Context) error {
-	_, err := r.db.ExecContext(ctx, `
+	return postgresutil.WithSchemaMigrationLock(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS plugins (
   id TEXT PRIMARY KEY,
   plugin_id TEXT NOT NULL UNIQUE,
@@ -280,7 +282,8 @@ CREATE TABLE IF NOT EXISTS official_feed_sync_runs (
 CREATE INDEX IF NOT EXISTS official_feed_sync_runs_service_idx
   ON official_feed_sync_runs(service_key, started_at DESC);
 `)
-	return err
+		return err
+	})
 }
 
 func (r *PostgresRepository) ListPlugins(ctx context.Context) ([]Plugin, error) {
@@ -307,25 +310,27 @@ ORDER BY category ASC, tier ASC, name ASC
 
 func (r *PostgresRepository) SavePlugin(ctx context.Context, plugin Plugin) error {
 	surfaces := marshalStringList(plugin.Surfaces)
-	_, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO plugins(id, plugin_id, name, description, category, type, tier, version, vendor, status, entitlement_status, surfaces, entry_point, configurable, created_at, updated_at)
 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-ON CONFLICT(id) DO UPDATE SET
-  plugin_id = EXCLUDED.plugin_id,
-  name = EXCLUDED.name,
-  description = EXCLUDED.description,
-  category = EXCLUDED.category,
-  type = EXCLUDED.type,
-  tier = EXCLUDED.tier,
-  version = EXCLUDED.version,
-  vendor = EXCLUDED.vendor,
-  entitlement_status = EXCLUDED.entitlement_status,
-  surfaces = EXCLUDED.surfaces,
-  entry_point = EXCLUDED.entry_point,
-  configurable = EXCLUDED.configurable,
-  updated_at = EXCLUDED.updated_at
-`, plugin.ID, plugin.PluginID, plugin.Name, plugin.Description, plugin.Category, plugin.Type, plugin.Tier, plugin.Version, plugin.Vendor, plugin.Status, plugin.EntitlementStatus, surfaces, plugin.EntryPoint, plugin.Configurable, plugin.CreatedAt, plugin.UpdatedAt)
-	return err
+ON CONFLICT DO NOTHING
+`, plugin.ID, plugin.PluginID, plugin.Name, plugin.Description, plugin.Category, plugin.Type, plugin.Tier, plugin.Version, plugin.Vendor, plugin.Status, plugin.EntitlementStatus, surfaces, plugin.EntryPoint, plugin.Configurable, plugin.CreatedAt, plugin.UpdatedAt); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE plugins SET
+  plugin_id=$2, name=$3, description=$4, category=$5, type=$6, tier=$7, version=$8, vendor=$9,
+  entitlement_status=$10, surfaces=$11, entry_point=$12, configurable=$13, updated_at=$14
+WHERE id=$1 OR plugin_id=$2
+`, plugin.ID, plugin.PluginID, plugin.Name, plugin.Description, plugin.Category, plugin.Type, plugin.Tier, plugin.Version, plugin.Vendor, plugin.EntitlementStatus, surfaces, plugin.EntryPoint, plugin.Configurable, plugin.UpdatedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *PostgresRepository) FindPlugin(ctx context.Context, id string) (Plugin, bool, error) {

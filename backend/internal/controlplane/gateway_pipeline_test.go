@@ -145,6 +145,17 @@ func TestCanonicalAuthContextKeepsExternalSubjectsCredentialScoped(t *testing.T)
 	}
 }
 
+func TestCanonicalAuthContextIncludesPlatformTenantConcurrencyLimit(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	canonical := svc.canonicalAuthContext(GatewayAuthContext{
+		APIKey:         APIKeyRecord{ID: "application-1", ProfileScope: ProfileScopePlatform, ConcurrencyLimit: 2},
+		PlatformTenant: &PlatformTenant{ID: "tenant-1", ConcurrencyLimit: 5},
+	})
+	if canonical.TenantID != "tenant-1" || canonical.Limits.ConcurrencyLimit != 2 || canonical.Limits.TenantConcurrencyLimit != 5 {
+		t.Fatalf("canonical capacity limits=%+v tenant_id=%q", canonical.Limits, canonical.TenantID)
+	}
+}
+
 func TestPlanCanonicalGatewayRequestRecordsCandidateExclusions(t *testing.T) {
 	tests := []struct {
 		name           string

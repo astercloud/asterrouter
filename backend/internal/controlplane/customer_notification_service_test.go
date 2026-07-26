@@ -2,9 +2,22 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
+
+type blockingCustomerNotificationDispatcher struct {
+	started chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (d *blockingCustomerNotificationDispatcher) DispatchCustomerNotification(context.Context, WorkspaceUser, CustomerNotification) error {
+	close(d.started)
+	<-d.release
+	return d.err
+}
 
 func TestCustomerNotificationSettingsDefaultsValidationAndIsolation(t *testing.T) {
 	ctx := context.Background()
@@ -107,6 +120,64 @@ func TestCustomerNotificationsAreIsolatedAndReadable(t *testing.T) {
 	firstList, err = svc.CustomerNotifications(ctx, first.Email, CustomerNotificationQuery{Limit: 20})
 	if err != nil || firstList.Unread != 0 {
 		t.Fatalf("unread after mark all = %d err=%v", firstList.Unread, err)
+	}
+}
+
+func TestCustomerNotificationEmailDispatchDoesNotBlockSecurityOperation(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1")
+	user, _, err := svc.RegisterWorkspaceUser(ctx, "security-email@example.test", "long-password", "Security Email", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &blockingCustomerNotificationDispatcher{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		err:     errors.New("synthetic SMTP failure"),
+	}
+	svc.SetCustomerNotificationDispatcher(dispatcher)
+
+	completed := make(chan error, 1)
+	go func() {
+		completed <- svc.publishAccountSecurityNotification(ctx, user, "Security change", "A security setting changed.", "test")
+	}()
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("security operation waited for email delivery")
+	}
+	select {
+	case <-dispatcher.started:
+	case <-time.After(time.Second):
+		t.Fatal("email delivery was not started asynchronously")
+	}
+	close(dispatcher.release)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		repo.mu.RLock()
+		var delivery CustomerNotificationDelivery
+		for _, candidate := range repo.customerNotificationDeliveries {
+			if candidate.Channel == CustomerNotificationChannelEmail {
+				delivery = candidate
+				break
+			}
+		}
+		repo.mu.RUnlock()
+		if delivery.Status == CustomerNotificationDeliveryFailed {
+			if delivery.Error != "synthetic SMTP failure" {
+				t.Fatalf("delivery error = %q", delivery.Error)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("email delivery status was not updated: %+v", delivery)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

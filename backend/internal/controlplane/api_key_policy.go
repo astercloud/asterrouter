@@ -92,11 +92,11 @@ func normalizeAPIKeyPolicy(fields apiKeyPolicyFields) (apiKeyPolicyFields, error
 	if err != nil {
 		return apiKeyPolicyFields{}, err
 	}
-	fields.allowedModalities, err = normalizeGatewayPolicyTokens(fields.allowedModalities, []string{GatewayModalityMetadata, GatewayModalityText})
+	fields.allowedModalities, err = normalizeGatewayPolicyTokens(fields.allowedModalities, []string{GatewayModalityMetadata, GatewayModalityText, GatewayModalityEmbedding})
 	if err != nil {
 		return apiKeyPolicyFields{}, err
 	}
-	fields.allowedOperations, err = normalizeGatewayPolicyTokens(fields.allowedOperations, []string{GatewayOperationListModels, GatewayOperationChatCompletion})
+	fields.allowedOperations, err = normalizeGatewayPolicyTokens(fields.allowedOperations, []string{GatewayOperationListModels, GatewayOperationChatCompletion, GatewayOperationCountTokens, GatewayOperationEmbedding})
 	if err != nil {
 		return apiKeyPolicyFields{}, err
 	}
@@ -252,7 +252,11 @@ func apiKeyAllowsCanonicalRequest(record APIKeyRecord, request gatewaycore.Canon
 	if request.Operation == GatewayOperationListModels {
 		requiredScope = GatewayScopeModelsRead
 	}
-	if !contains(policy.scopes, requiredScope) || !contains(policy.allowedOperations, request.Operation) || !contains(policy.allowedModalities, request.Modality) {
+	operationAllowed := contains(policy.allowedOperations, request.Operation)
+	if request.Operation == GatewayOperationCountTokens && contains(policy.allowedOperations, GatewayOperationChatCompletion) {
+		operationAllowed = true
+	}
+	if !contains(policy.scopes, requiredScope) || !operationAllowed || !contains(policy.allowedModalities, request.Modality) {
 		return false
 	}
 	switch request.Lane {

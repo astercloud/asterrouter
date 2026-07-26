@@ -22,16 +22,16 @@ export async function changeAccountPassword(currentPassword: string, newPassword
 	return (await apiClient.put<AccountSecurityUpdate>('/account/password', { current_password: currentPassword, new_password: newPassword })).data
 }
 
-export async function beginTOTPSetup(): Promise<TOTPSetup> {
-	return (await apiClient.post<TOTPSetup>('/account/totp/setup')).data
+export async function beginTOTPSetup(currentPassword: string): Promise<TOTPSetup> {
+	return (await apiClient.post<TOTPSetup>('/account/totp/setup', { current_password: currentPassword })).data
 }
 
 export async function confirmTOTP(code: string): Promise<AccountSecurityUpdate> {
 	return (await apiClient.post<AccountSecurityUpdate>('/account/totp/confirm', { code })).data
 }
 
-export async function generateTOTPRecoveryCodes(): Promise<AccountSecurityUpdate> {
-	return (await apiClient.post<AccountSecurityUpdate>('/account/totp/recovery-codes')).data
+export async function generateTOTPRecoveryCodes(code: string): Promise<AccountSecurityUpdate> {
+	return (await apiClient.post<AccountSecurityUpdate>('/account/totp/recovery-codes', { code })).data
 }
 
 export async function disableTOTP(code: string): Promise<AccountSecurityUpdate> {
