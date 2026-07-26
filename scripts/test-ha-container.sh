@@ -39,13 +39,24 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 wait_for_postgres() {
+  local consecutive_successes=0
+  local detected_version=""
   for _ in $(seq 1 60); do
-    if docker exec "${POSTGRES_CONTAINER}" pg_isready --username=asterrouter --dbname=asterrouter_ha_test >/dev/null 2>&1; then
-      return 0
+    if detected_version="$(docker exec "${POSTGRES_CONTAINER}" \
+      psql --username=asterrouter --dbname=asterrouter_ha_test \
+      --tuples-only --no-align --command='SHOW server_version' 2>/dev/null)"; then
+      consecutive_successes=$((consecutive_successes + 1))
+      if [ "${consecutive_successes}" -ge 3 ]; then
+        POSTGRES_VERSION="${detected_version}"
+        return 0
+      fi
+    else
+      consecutive_successes=0
     fi
     sleep 1
   done
-  docker exec "${POSTGRES_CONTAINER}" pg_isready --username=asterrouter --dbname=asterrouter_ha_test
+  docker logs "${POSTGRES_CONTAINER}" >&2 || true
+  return 1
 }
 
 wait_for_healthy_service() {
@@ -106,7 +117,6 @@ docker run --detach --name "${POSTGRES_CONTAINER}" --network "${NETWORK}" --netw
   --env POSTGRES_PASSWORD=asterrouter \
   postgres:16-alpine >/dev/null
 wait_for_postgres
-POSTGRES_VERSION="$(docker exec "${POSTGRES_CONTAINER}" psql --username=asterrouter --dbname=asterrouter_ha_test --tuples-only --no-align --command='SHOW server_version')"
 case "${POSTGRES_VERSION}" in
   16.*) ;;
   *)
