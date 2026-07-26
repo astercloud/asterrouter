@@ -91,6 +91,37 @@ func TestAuthenticationSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAuthenticationSettingsRequireSecurePublicBaseURL(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		baseURL string
+		wantErr bool
+	}{
+		{name: "https", baseURL: "https://router.example.test"},
+		{name: "localhost", baseURL: "http://localhost:5173"},
+		{name: "ipv4 loopback", baseURL: "http://127.0.0.1:5173"},
+		{name: "ipv6 loopback", baseURL: "http://[::1]:5173"},
+		{name: "remote http", baseURL: "http://router.example.test", wantErr: true},
+		{name: "userinfo", baseURL: "https://user:password@router.example.test", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc := NewService(NewMemoryRepository(), ServiceOptions{Version: "test", StorageMode: "memory"})
+			current, err := svc.Admin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			current.PublicBaseURL = test.baseURL
+			current.PasswordResetEnabled = true
+			current.SMTPHost = "smtp.example.test"
+			current.SMTPFrom = "noreply@example.test"
+			_, err = svc.Update(t.Context(), current)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Update() error = %v, wantErr=%v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestSensitiveSettingsUpgradeLegacyPlaintextOnUpdate(t *testing.T) {
 	repo := NewMemoryRepository()
 	legacy := map[string]string{

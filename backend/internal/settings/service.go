@@ -578,6 +578,11 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 			return nil, errors.New("SMTP host and sender are required when authentication email is enabled")
 		}
 	}
+	if in.EmailVerifyEnabled || in.PasswordResetEnabled || in.OIDCEnabled || in.FeishuEnabled || in.GitHubOAuthEnabled || in.GoogleOAuthEnabled || in.DingTalkEnabled {
+		if err := validateSecureAuthenticationBaseURL(in.PublicBaseURL); err != nil {
+			return nil, err
+		}
+	}
 	if strings.TrimSpace(in.SMTPFrom) != "" {
 		address, err := mail.ParseAddress(strings.TrimSpace(in.SMTPFrom))
 		if err != nil || address.Address != strings.TrimSpace(in.SMTPFrom) {
@@ -950,6 +955,27 @@ func validateOptionalHTTPURL(field, value string) error {
 		return fmt.Errorf("%s must be an http or https URL", field)
 	}
 	return nil
+}
+
+func validateSecureAuthenticationBaseURL(value string) error {
+	value = strings.TrimSpace(value)
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return errors.New("public_base_url must be a valid URL without user credentials")
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	hostname := strings.TrimSpace(parsed.Hostname())
+	if parsed.Scheme == "http" && (strings.EqualFold(hostname, "localhost") || isLoopbackHost(hostname)) {
+		return nil
+	}
+	return errors.New("public_base_url must use https when authentication email or external login is enabled")
+}
+
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func parseProfileList(value string) []string {
