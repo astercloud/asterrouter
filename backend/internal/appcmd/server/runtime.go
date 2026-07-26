@@ -81,6 +81,9 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 	if err = rt.settingsService.BootstrapProfile(ctx); err != nil {
 		return nil, fmt.Errorf("bootstrap profile: %w", err)
 	}
+	if err = rt.settingsService.MigrateLegacySensitiveSettings(ctx); err != nil {
+		return nil, fmt.Errorf("migrate sensitive settings: %w", err)
+	}
 	adminSettings, err := rt.settingsService.Admin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)

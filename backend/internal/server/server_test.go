@@ -29,6 +29,15 @@ type unhealthySettingsRepository struct {
 	healthErr error
 }
 
+type failingSessionStateRepository struct {
+	controlplane.Repository
+	err error
+}
+
+func (r failingSessionStateRepository) FindWorkspaceUserByID(context.Context, string) (controlplane.WorkspaceUser, bool, error) {
+	return controlplane.WorkspaceUser{}, false, r.err
+}
+
 func (r unhealthySettingsRepository) Health(context.Context) error {
 	return r.healthErr
 }
@@ -132,6 +141,71 @@ func TestPublicSettingsEndpoint(t *testing.T) {
 	}
 	if resp.Data.SiteName != "AsterRouter" {
 		t.Fatalf("site_name = %q", resp.Data.SiteName)
+	}
+}
+
+func TestDemoSessionVersionResolverAllowsExplicitDemoPrincipal(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
+	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	handler := New(Options{
+		Runtime:         RuntimeConfig{DemoMode: true},
+		AuthService:     auth.NewService(auth.Config{Username: "admin", Password: "secret", SecretKey: "test-secret", DemoMode: true}),
+		SettingsService: settingsService,
+		ControlService:  controlService,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"demo","password":"demo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("demo login status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDemoLoginRequiresDemoModeAtHTTPBoundary(t *testing.T) {
+	handler := New(Options{
+		Runtime:         RuntimeConfig{DemoMode: false},
+		AuthService:     auth.NewService(auth.Config{Username: "admin", Password: "secret", SecretKey: "test-secret"}),
+		SettingsService: settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"}),
+		ControlService:  controlplane.NewService(controlplane.NewMemoryRepository(), "/v1"),
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"demo","password":"demo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("demo login status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "access_token") {
+		t.Fatalf("demo login issued a session while demo mode was disabled: %s", rec.Body.String())
+	}
+}
+
+func TestSessionStateRepositoryFailureReturnsServiceUnavailable(t *testing.T) {
+	const sensitiveMarker = "postgres://private-user:private-password@database.internal/asterrouter"
+	authService := auth.NewService(auth.Config{Username: "admin", Password: "secret", SecretKey: "test-secret"})
+	session, err := authService.Login(t.Context(), "admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := failingSessionStateRepository{Repository: controlplane.NewMemoryRepository(), err: errors.New(sensitiveMarker)}
+	handler := New(Options{
+		AuthService:     authService,
+		SettingsService: settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"}),
+		ControlService:  controlplane.NewService(repository, "/v1"),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "authentication service is unavailable") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), sensitiveMarker) || strings.Contains(rec.Body.String(), "private-password") {
+		t.Fatalf("session state error leaked internal detail: %s", rec.Body.String())
 	}
 }
 
@@ -376,6 +450,107 @@ func TestAuthenticationResponsesExposeServerDerivedAllowedSurfaces(t *testing.T)
 	}
 }
 
+func TestCookieBackedLogoutRevokesTheServerSession(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	if _, _, err := control.RegisterWorkspaceUser(t.Context(), "external@example.test", "synthetic-password-123", "External User", false); err != nil {
+		t.Fatal(err)
+	}
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"external@example.test","password":"synthetic-password-123","session_mode":"cookie"}`))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginResponse := httptest.NewRecorder()
+	handler.ServeHTTP(loginResponse, loginRequest)
+	var login struct {
+		Data auth.LoginResult `json:"data"`
+	}
+	if err := json.Unmarshal(loginResponse.Body.Bytes(), &login); err != nil || loginResponse.Code != http.StatusOK || login.Data.AccessToken != cookieSessionTokenMarker {
+		t.Fatalf("login status=%d body=%s err=%v", loginResponse.Code, loginResponse.Body.String(), err)
+	}
+	sessionCookie := responseCookie(t, loginResponse, sessionCookieName)
+	csrfCookie := responseCookie(t, loginResponse, csrfCookieName)
+	if !sessionCookie.HttpOnly || !sessionCookie.Secure || csrfCookie.HttpOnly || !csrfCookie.Secure {
+		t.Fatalf("cookie attributes: session=%#v csrf=%#v", sessionCookie, csrfCookie)
+	}
+	if strings.Contains(loginResponse.Body.String(), sessionCookie.Value) {
+		t.Fatal("HttpOnly session token leaked into login response body")
+	}
+	profileBody := `{"display_name":"External Updated","avatar_data_url":""}`
+	missingProfileCSRF := httptest.NewRequest(http.MethodPut, "/api/v1/account/profile", bytes.NewBufferString(profileBody))
+	missingProfileCSRF.Header.Set("Content-Type", "application/json")
+	missingProfileCSRF.Header.Set("Authorization", "Bearer "+cookieSessionTokenMarker)
+	missingProfileCSRF.AddCookie(sessionCookie)
+	missingProfileCSRF.AddCookie(csrfCookie)
+	missingProfileCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingProfileCSRFResponse, missingProfileCSRF)
+	if missingProfileCSRFResponse.Code != http.StatusForbidden {
+		t.Fatalf("profile update without CSRF status=%d body=%s", missingProfileCSRFResponse.Code, missingProfileCSRFResponse.Body.String())
+	}
+
+	crossSiteProfile := httptest.NewRequest(http.MethodPut, "/api/v1/account/profile", bytes.NewBufferString(profileBody))
+	crossSiteProfile.Header.Set("Content-Type", "application/json")
+	crossSiteProfile.Header.Set("Authorization", "Bearer "+cookieSessionTokenMarker)
+	crossSiteProfile.Header.Set(csrfHeaderName, csrfCookie.Value)
+	crossSiteProfile.Header.Set("Sec-Fetch-Site", "cross-site")
+	crossSiteProfile.AddCookie(sessionCookie)
+	crossSiteProfile.AddCookie(csrfCookie)
+	crossSiteProfileResponse := httptest.NewRecorder()
+	handler.ServeHTTP(crossSiteProfileResponse, crossSiteProfile)
+	if crossSiteProfileResponse.Code != http.StatusForbidden {
+		t.Fatalf("cross-site profile update status=%d body=%s", crossSiteProfileResponse.Code, crossSiteProfileResponse.Body.String())
+	}
+
+	profileRequest := httptest.NewRequest(http.MethodPut, "/api/v1/account/profile", bytes.NewBufferString(profileBody))
+	profileRequest.Header.Set("Content-Type", "application/json")
+	profileRequest.Header.Set("Authorization", "Bearer "+cookieSessionTokenMarker)
+	profileRequest.Header.Set(csrfHeaderName, csrfCookie.Value)
+	profileRequest.AddCookie(sessionCookie)
+	profileRequest.AddCookie(csrfCookie)
+	profileResponse := httptest.NewRecorder()
+	handler.ServeHTTP(profileResponse, profileRequest)
+	if profileResponse.Code != http.StatusOK {
+		t.Fatalf("profile update with CSRF status=%d body=%s", profileResponse.Code, profileResponse.Body.String())
+	}
+
+	missingCSRFRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	missingCSRFRequest.Header.Set("Authorization", "Bearer "+cookieSessionTokenMarker)
+	missingCSRFRequest.AddCookie(sessionCookie)
+	missingCSRFRequest.AddCookie(csrfCookie)
+	missingCSRFResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRFResponse, missingCSRFRequest)
+	if missingCSRFResponse.Code != http.StatusForbidden {
+		t.Fatalf("logout without CSRF status=%d body=%s", missingCSRFResponse.Code, missingCSRFResponse.Body.String())
+	}
+
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	logoutRequest.Header.Set("Authorization", "Bearer "+cookieSessionTokenMarker)
+	logoutRequest.Header.Set(csrfHeaderName, csrfCookie.Value)
+	logoutRequest.AddCookie(sessionCookie)
+	logoutRequest.AddCookie(csrfCookie)
+	logoutResponse := httptest.NewRecorder()
+	handler.ServeHTTP(logoutResponse, logoutRequest)
+	if logoutResponse.Code != http.StatusOK {
+		t.Fatalf("logout status=%d body=%s", logoutResponse.Code, logoutResponse.Body.String())
+	}
+
+	meRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	meRequest.Header.Set("Authorization", "Bearer "+sessionCookie.Value)
+	meResponse := httptest.NewRecorder()
+	handler.ServeHTTP(meResponse, meRequest)
+	if meResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("session remained valid after logout: status=%d body=%s", meResponse.Code, meResponse.Body.String())
+	}
+}
+
+func responseCookie(t *testing.T, recorder *httptest.ResponseRecorder, name string) *http.Cookie {
+	t.Helper()
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == name {
+			return cookie
+		}
+	}
+	t.Fatalf("response cookie %q was not set", name)
+	return nil
+}
+
 func containsSurface(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -396,10 +571,15 @@ func TestLoginAgreementIsEnforcedAfterPayloadBinding(t *testing.T) {
 	if _, err := settingsService.Update(context.Background(), current); err != nil {
 		t.Fatalf("Update(): %v", err)
 	}
+	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
+	localAdmin, err := controlService.EnsureLocalAdmin(t.Context(), "admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := New(Options{
-		AuthService:     auth.NewService(auth.Config{Username: "admin", Password: "secret", SecretKey: "test-secret"}),
+		AuthService:     auth.NewService(auth.Config{Username: "admin", Password: "secret", PasswordHash: localAdmin.PasswordHash, SecretKey: "test-secret"}),
 		SettingsService: settingsService,
-		ControlService:  controlplane.NewService(controlplane.NewMemoryRepository(), "/v1"),
+		ControlService:  controlService,
 		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
 	})
 

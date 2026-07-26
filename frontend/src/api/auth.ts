@@ -2,7 +2,7 @@ import { apiClient } from './client'
 import type { AuthUser, LoginResult, LoginSuccessResult } from '@/types'
 
 export async function login(username: string, password: string, agreementAccepted = false, turnstileToken = ''): Promise<LoginResult> {
-  const response = await apiClient.post<LoginResult>('/auth/login', { username, password, agreement_accepted: agreementAccepted, turnstile_token: turnstileToken })
+  const response = await apiClient.post<LoginResult>('/auth/login', { username, password, agreement_accepted: agreementAccepted, turnstile_token: turnstileToken, session_mode: 'cookie' })
   return response.data
 }
 
@@ -12,7 +12,7 @@ export async function getCurrentUser(): Promise<AuthUser> {
 }
 
 export async function completeTOTPLogin(challenge: string, code: string): Promise<LoginSuccessResult> {
-	const response = await apiClient.post<LoginSuccessResult>('/auth/totp/login', { challenge, code })
+	const response = await apiClient.post<LoginSuccessResult>('/auth/totp/login', { challenge, code, session_mode: 'cookie' })
 	return response.data
 }
 

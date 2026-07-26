@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +15,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var ErrInvalidCredentials = errors.New("invalid username or password")
+var (
+	ErrInvalidCredentials      = errors.New("invalid username or password")
+	ErrMFAChallengeCapacity    = errors.New("too many pending MFA challenges")
+	ErrSessionStateUnavailable = errors.New("session state is unavailable")
+)
 
 type Config struct {
 	Username         string
@@ -36,7 +41,8 @@ type Service struct {
 	demoMode         bool
 	mfaMu            sync.Mutex
 	mfaChallenges    map[string]mfaChallenge
-	sessionVersion   func(string) (int64, bool)
+	maxMFAChallenges int
+	sessionVersion   func(string) (int64, bool, error)
 }
 
 type mfaChallenge struct {
@@ -45,7 +51,10 @@ type mfaChallenge struct {
 	FailedAttempts int
 }
 
-const maxMFAChallengeAttempts = 5
+const (
+	maxMFAChallengeAttempts = 5
+	defaultMaxMFAChallenges = 10000
+)
 
 type Principal struct {
 	Subject        string `json:"sub"`
@@ -54,7 +63,7 @@ type Principal struct {
 	SessionVersion int64  `json:"sv,omitempty"`
 }
 
-func (s *Service) SetSessionVersionResolver(resolver func(string) (int64, bool)) {
+func (s *Service) SetSessionVersionResolver(resolver func(string) (int64, bool, error)) {
 	s.mfaMu.Lock()
 	s.sessionVersion = resolver
 	s.mfaMu.Unlock()
@@ -102,6 +111,7 @@ func NewService(cfg Config) *Service {
 		tokenTTL:         ttl,
 		demoMode:         cfg.DemoMode,
 		mfaChallenges:    map[string]mfaChallenge{},
+		maxMFAChallenges: defaultMaxMFAChallenges,
 	}
 }
 
@@ -113,15 +123,19 @@ func (s *Service) BeginMFA(subject, role string) (string, time.Time, error) {
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	expires := time.Now().UTC().Add(5 * time.Minute)
+	now := time.Now().UTC()
+	expires := now.Add(5 * time.Minute)
 	s.mfaMu.Lock()
-	s.mfaChallenges[token] = mfaChallenge{Subject: subject, Role: role, ExpiresAt: expires}
+	defer s.mfaMu.Unlock()
 	for key, challenge := range s.mfaChallenges {
-		if time.Now().UTC().After(challenge.ExpiresAt) {
+		if now.After(challenge.ExpiresAt) {
 			delete(s.mfaChallenges, key)
 		}
 	}
-	s.mfaMu.Unlock()
+	if len(s.mfaChallenges) >= s.maxMFAChallenges {
+		return "", time.Time{}, ErrMFAChallengeCapacity
+	}
+	s.mfaChallenges[token] = mfaChallenge{Subject: subject, Role: role, ExpiresAt: expires}
 	return token, expires, nil
 }
 
@@ -223,9 +237,14 @@ func (s *Service) loginFor(username string, subject string, role string) (LoginR
 	resolver := s.sessionVersion
 	s.mfaMu.Unlock()
 	if resolver != nil {
-		if current, ok := resolver(subject); ok {
-			version = current
+		current, ok, err := resolver(subject)
+		if err != nil {
+			return LoginResult{}, fmt.Errorf("%w: %v", ErrSessionStateUnavailable, err)
 		}
+		if !ok {
+			return LoginResult{}, ErrInvalidCredentials
+		}
+		version = current
 	}
 	token, err := s.sign(Principal{Subject: subject, Role: user.Role, Expires: expiresAt.Unix(), SessionVersion: version})
 	if err != nil {
@@ -240,41 +259,50 @@ func (s *Service) loginFor(username string, subject string, role string) (LoginR
 }
 
 func (s *Service) Verify(token string) (Principal, bool) {
+	principal, err := s.VerifyWithError(token)
+	return principal, err == nil
+}
+
+func (s *Service) VerifyWithError(token string) (Principal, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return Principal{}, false
+		return Principal{}, ErrInvalidCredentials
 	}
 	if s.legacyAdminToken != "" && constantTimeEqual(token, s.legacyAdminToken) {
-		return Principal{Subject: s.username, Role: "super_admin", Expires: time.Now().UTC().Add(s.tokenTTL).Unix()}, true
+		return Principal{Subject: s.username, Role: "super_admin", Expires: time.Now().UTC().Add(s.tokenTTL).Unix()}, nil
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
-		return Principal{}, false
+		return Principal{}, ErrInvalidCredentials
 	}
 	payloadRaw, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return Principal{}, false
+		return Principal{}, ErrInvalidCredentials
 	}
 	wantSig := s.signature(parts[0])
 	if !constantTimeEqual(parts[1], wantSig) {
-		return Principal{}, false
+		return Principal{}, ErrInvalidCredentials
 	}
 	var principal Principal
 	if err := json.Unmarshal(payloadRaw, &principal); err != nil {
-		return Principal{}, false
+		return Principal{}, ErrInvalidCredentials
 	}
 	if principal.Expires <= time.Now().UTC().Unix() {
-		return Principal{}, false
+		return Principal{}, ErrInvalidCredentials
 	}
 	s.mfaMu.Lock()
 	resolver := s.sessionVersion
 	s.mfaMu.Unlock()
 	if resolver != nil {
-		if current, exists := resolver(principal.Subject); exists && current != principal.SessionVersion {
-			return Principal{}, false
+		current, exists, err := resolver(principal.Subject)
+		if err != nil {
+			return Principal{}, fmt.Errorf("%w: %v", ErrSessionStateUnavailable, err)
+		}
+		if !exists || current != principal.SessionVersion {
+			return Principal{}, ErrInvalidCredentials
 		}
 	}
-	return principal, true
+	return principal, nil
 }
 
 func (s *Service) IsLocalPrincipal(subject string) bool {

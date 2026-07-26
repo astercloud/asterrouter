@@ -5,12 +5,40 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
+	"github.com/gin-gonic/gin"
 )
+
+func TestReplacementAccountSessionUsesCurrentRole(t *testing.T) {
+	control := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1", "test-secret")
+	user, _, err := control.RegisterWorkspaceUser(t.Context(), "replacement-role@example.test", "long-password", "Replacement", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authService := auth.NewService(auth.Config{SecretKey: "test-secret"})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/account/sessions/revoke-others", nil)
+	c.Set("actor", user.ID)
+	c.Set("role", controlplane.RoleSuperAdmin)
+
+	response, err := replacementAccountSession(c, Options{AuthService: authService, ControlService: control})
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := authService.VerifyWithError(response.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal.Subject != user.ID || principal.Role != controlplane.RoleDeveloper {
+		t.Fatalf("replacement principal = %+v, want current developer role", principal)
+	}
+}
 
 func TestWorkspaceAccountProfileEndpoints(t *testing.T) {
 	handler, control := newAuthTestRuntime(t)
@@ -242,6 +270,36 @@ func TestPasswordResetImmediatelyRevokesExistingBearerToken(t *testing.T) {
 	}
 }
 
+func TestLocalAdministratorPasswordResetRefreshesRuntimeCredentials(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	_, resetToken, err := control.BeginPasswordReset(t.Context(), "admin@local.invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/reset-password", bytes.NewBufferString(`{"token":"`+resetToken+`","password":"updated-admin-password"}`))
+	resetReq.Header.Set("Content-Type", "application/json")
+	resetRec := httptest.NewRecorder()
+	handler.ServeHTTP(resetRec, resetReq)
+	if resetRec.Code != http.StatusOK {
+		t.Fatalf("reset status=%d body=%s", resetRec.Code, resetRec.Body.String())
+	}
+
+	login := func(password string) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"`+password+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if status := login("secret"); status != http.StatusUnauthorized {
+		t.Fatalf("old administrator password remained valid: status=%d", status)
+	}
+	if status := login("updated-admin-password"); status != http.StatusOK {
+		t.Fatalf("new administrator password was not usable immediately: status=%d", status)
+	}
+}
+
 func TestLocalAdministratorLoginRequiresTOTP(t *testing.T) {
 	handler, control := newAuthTestRuntime(t)
 	setup, err := control.BeginTOTPSetup(t.Context(), "admin", "secret")
@@ -291,6 +349,71 @@ func TestLocalAdministratorLoginRequiresTOTP(t *testing.T) {
 	if mfaRec.Code != http.StatusOK {
 		t.Fatalf("MFA login status=%d body=%s", mfaRec.Code, mfaRec.Body.String())
 	}
+}
+
+func TestTOTPLoginAcceptsAndClearsBrowserChallengeCookie(t *testing.T) {
+	handler, control := newAuthTestRuntime(t)
+	setup, err := control.BeginTOTPSetup(t.Context(), "admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.ConfirmTOTP(t.Context(), "admin", auth.GenerateTOTPCode(setup.Secret, time.Now().UTC())); err != nil {
+		t.Fatal(err)
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"secret","session_mode":"cookie"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	var loginResponse struct {
+		Data struct {
+			Challenge string `json:"challenge"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &loginResponse); err != nil || loginResponse.Data.Challenge != "" {
+		t.Fatalf("login status=%d body=%s err=%v", loginRec.Code, loginRec.Body.String(), err)
+	}
+	challengeCookie := responseCookie(t, loginRec, externalMFAChallengeCookie)
+	if challengeCookie.Value == "" || !challengeCookie.HttpOnly || !challengeCookie.Secure || challengeCookie.Path != externalMFAChallengePath {
+		t.Fatalf("challenge cookie attributes = %#v", challengeCookie)
+	}
+
+	mfaReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/login", bytes.NewBufferString(`{"code":"`+auth.GenerateTOTPCode(setup.Secret, time.Now().UTC())+`"}`))
+	mfaReq.Header.Set("Content-Type", "application/json")
+	mfaReq.AddCookie(challengeCookie)
+	mfaRec := httptest.NewRecorder()
+	handler.ServeHTTP(mfaRec, mfaReq)
+	if mfaRec.Code != http.StatusOK {
+		t.Fatalf("MFA login status=%d body=%s", mfaRec.Code, mfaRec.Body.String())
+	}
+	assertExternalMFAChallengeCookieCleared(t, mfaRec)
+}
+
+func TestTOTPLoginClearsInvalidExternalChallengeCookie(t *testing.T) {
+	handler := newAuthTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/login", bytes.NewBufferString(`{"code":"000000"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: externalMFAChallengeCookie, Value: "invalid-challenge"})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "MFA challenge is invalid or expired") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertExternalMFAChallengeCookieCleared(t, rec)
+}
+
+func assertExternalMFAChallengeCookieCleared(t *testing.T, recorder *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == externalMFAChallengeCookie {
+			if cookie.MaxAge >= 0 || cookie.Value != "" || !cookie.HttpOnly || !cookie.Secure || cookie.Path != externalMFAChallengePath {
+				t.Fatalf("challenge cookie was not securely cleared: %#v", cookie)
+			}
+			return
+		}
+	}
+	t.Fatal("challenge cookie deletion was not returned")
 }
 
 func TestSuccessfulMFAFlowDoesNotExhaustAuthenticationLimiters(t *testing.T) {

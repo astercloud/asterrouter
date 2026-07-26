@@ -11,9 +11,13 @@ import (
 
 func newIdentityServices(ctx context.Context, service *settings.Service, current settings.AdminSettings) (*auth.OIDCService, *auth.FeishuService, *auth.SocialOAuthService, *auth.SocialOAuthService, *auth.DingTalkService, error) {
 	baseURL := strings.TrimRight(current.PublicBaseURL, "/")
+	oidcSecret, err := service.OIDCSecret(ctx)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("load OIDC secret: %w", err)
+	}
 	oidcService, err := auth.NewOIDCService(auth.OIDCConfig{
 		Enabled: current.OIDCEnabled, RequireVerifiedEmail: current.OIDCRequireVerifiedEmail,
-		IssuerURL: current.OIDCIssuerURL, ClientID: current.OIDCClientID,
+		IssuerURL: current.OIDCIssuerURL, ClientID: current.OIDCClientID, ClientSecret: oidcSecret,
 		RedirectURL: baseURL + "/api/v1/auth/oidc/callback",
 	})
 	if err != nil {

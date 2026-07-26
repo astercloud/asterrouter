@@ -20,16 +20,21 @@ var (
 	ErrOIDCDisabled       = errors.New("oidc is disabled")
 	ErrOIDCInvalidConfig  = errors.New("invalid oidc configuration")
 	ErrOIDCInvalidState   = errors.New("invalid oidc state")
+	ErrOIDCStateCapacity  = errors.New("too many pending oidc states")
 	ErrOIDCInvalidProfile = errors.New("oidc profile is missing a subject")
 )
+
+const defaultOIDCMaxPendingStates = 10000
 
 type OIDCConfig struct {
 	Enabled              bool
 	RequireVerifiedEmail bool
 	IssuerURL            string
 	ClientID             string
+	ClientSecret         string
 	RedirectURL          string
 	StateTTL             time.Duration
+	MaxPendingStates     int
 }
 
 type OIDCState struct {
@@ -41,10 +46,11 @@ type OIDCState struct {
 }
 
 type OIDCProfile struct {
-	Subject     string
-	Email       string
-	DisplayName string
-	Department  string
+	Subject       string
+	Email         string
+	EmailVerified bool
+	DisplayName   string
+	Department    string
 }
 
 type OIDCService struct {
@@ -65,7 +71,7 @@ func (s *OIDCService) Initialize(ctx context.Context) error {
 		return fmt.Errorf("oidc discovery: %w", err)
 	}
 	s.provider = provider
-	s.oauthConfig = &oauth2.Config{ClientID: s.config.ClientID, Endpoint: provider.Endpoint(), RedirectURL: s.config.RedirectURL, Scopes: []string{oidc.ScopeOpenID, "profile", "email"}}
+	s.oauthConfig = &oauth2.Config{ClientID: s.config.ClientID, ClientSecret: s.config.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: s.config.RedirectURL, Scopes: []string{oidc.ScopeOpenID, "profile", "email"}}
 	s.verifier = provider.Verifier(&oidc.Config{ClientID: s.config.ClientID})
 	return nil
 }
@@ -106,12 +112,18 @@ func (s *OIDCService) VerifyIDToken(ctx context.Context, raw string, nonce strin
 	if err := token.Claims(&claims); err != nil {
 		return OIDCProfile{}, fmt.Errorf("decode oidc claims: %w", err)
 	}
-	if s.config.RequireVerifiedEmail {
-		if !oidcEmailVerified(claims) {
-			return OIDCProfile{}, errors.New("oidc email must be verified")
-		}
+	verified := oidcEmailVerified(claims)
+	if s.config.RequireVerifiedEmail && !verified {
+		return OIDCProfile{}, errors.New("oidc email must be verified")
 	}
-	return MapOIDCProfile(claims)
+	profile, err := MapOIDCProfile(claims)
+	if err != nil {
+		return OIDCProfile{}, err
+	}
+	// Only an administrator-enabled verified-email policy promotes the provider
+	// claim into AsterRouter's local email-verification state.
+	profile.EmailVerified = trustedOIDCEmailVerified(s.config.RequireVerifiedEmail, claims)
+	return profile, nil
 }
 
 func oidcEmailVerified(claims map[string]any) bool {
@@ -119,9 +131,16 @@ func oidcEmailVerified(claims map[string]any) bool {
 	return ok && verified
 }
 
+func trustedOIDCEmailVerified(requireVerifiedEmail bool, claims map[string]any) bool {
+	return requireVerifiedEmail && oidcEmailVerified(claims)
+}
+
 func NewOIDCService(cfg OIDCConfig) (*OIDCService, error) {
 	if cfg.StateTTL <= 0 {
 		cfg.StateTTL = 10 * time.Minute
+	}
+	if cfg.MaxPendingStates <= 0 {
+		cfg.MaxPendingStates = defaultOIDCMaxPendingStates
 	}
 	if cfg.Enabled {
 		issuer, err := url.Parse(strings.TrimSpace(cfg.IssuerURL))
@@ -157,8 +176,12 @@ func (s *OIDCService) Begin(now time.Time) (OIDCState, error) {
 	}
 	entry := OIDCState{Value: state, Verifier: verifier, Nonce: nonce, CreatedAt: now.UTC(), RedirectURL: s.config.RedirectURL}
 	s.mu.Lock()
-	s.states[state] = entry
 	s.pruneLocked(now.UTC())
+	if len(s.states) >= s.config.MaxPendingStates {
+		s.mu.Unlock()
+		return OIDCState{}, ErrOIDCStateCapacity
+	}
+	s.states[state] = entry
 	s.mu.Unlock()
 	return entry, nil
 }

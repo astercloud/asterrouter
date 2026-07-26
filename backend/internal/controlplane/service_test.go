@@ -444,7 +444,7 @@ func TestCostAllocationReportAggregatesByUserAndDepartment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := svc.ProvisionOIDCUser(ctx, "https://id.example.test", "subject", "engineer@example.test", "Engineer", "eng")
+	user, err := svc.ProvisionOIDCUser(ctx, "https://id.example.test", "subject", "engineer@example.test", "Engineer", "eng", false)
 	if err != nil {
 		t.Fatal(err)
 	}

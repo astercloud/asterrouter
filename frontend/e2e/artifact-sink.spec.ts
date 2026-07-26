@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test'
-import { captureBrowserErrors, envelope, expectNoHorizontalOverflow, loginDemo } from './fixtures'
+import { captureBrowserErrors, envelope, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
 
 test('@artifact-sink manages customer-owned object storage without exposing credentials', async ({ page }, testInfo) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
   const pluginID = 'com.asterrouter.artifact.s3-compatible-sink'
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   const artifactSinkURL = `/api/v1/console/plugins/${encodeURIComponent(pluginID)}/artifact-sinks`
   const existing = await envelope<Array<{ id: string }>>(await page.request.get(artifactSinkURL, {
     headers: { Authorization: `Bearer ${token}` }

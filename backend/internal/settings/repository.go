@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,14 +18,21 @@ import (
 
 var (
 	ErrDeploymentProfileInitialized = errors.New("setup is already completed; create a separate instance for a different business model")
+	ErrSettingsChanged              = errors.New("settings changed concurrently")
 	ErrUnsupportedDeploymentProfile = errors.New("unsupported deployment profile")
 )
 
 const deploymentProfileAdvisoryLock int64 = 0x6173746572736574
 
+type ValueReplacement struct {
+	Expected string
+	Value    string
+}
+
 type Repository interface {
 	GetAll(ctx context.Context) (map[string]string, error)
 	SetMultiple(ctx context.Context, values map[string]string) error
+	ReplaceIfUnchanged(ctx context.Context, replacements map[string]ValueReplacement) error
 	ConsumeInvitationCode(ctx context.Context, code string) error
 	RestoreInvitationCode(ctx context.Context, code string) error
 	InitializeDeploymentProfile(ctx context.Context, profile string) error
@@ -68,6 +76,25 @@ func (r *MemoryRepository) SetMultiple(_ context.Context, values map[string]stri
 	now := time.Now().UTC()
 	for key, value := range values {
 		r.entries[key] = Entry{Key: key, Value: value, UpdatedAt: now}
+	}
+	return nil
+}
+
+func (r *MemoryRepository) ReplaceIfUnchanged(_ context.Context, replacements map[string]ValueReplacement) error {
+	if len(replacements) == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, replacement := range replacements {
+		entry, exists := r.entries[key]
+		if !exists || entry.Value != replacement.Expected {
+			return ErrSettingsChanged
+		}
+	}
+	now := time.Now().UTC()
+	for key, replacement := range replacements {
+		r.entries[key] = Entry{Key: key, Value: replacement.Value, UpdatedAt: now}
 	}
 	return nil
 }
@@ -195,6 +222,51 @@ func (r *PostgresRepository) SetMultiple(ctx context.Context, values map[string]
 	}
 	err = tx.Commit()
 	return err
+}
+
+func (r *PostgresRepository) ReplaceIfUnchanged(ctx context.Context, replacements map[string]ValueReplacement) (err error) {
+	if len(replacements) == 0 {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	stmt, err := tx.PrepareContext(ctx, `
+UPDATE settings
+SET value=$2, updated_at=now()
+WHERE key=$1 AND value=$3
+`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	keys := make([]string, 0, len(replacements))
+	for key := range replacements {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		replacement := replacements[key]
+		result, execErr := stmt.ExecContext(ctx, key, replacement.Value, replacement.Expected)
+		if execErr != nil {
+			return execErr
+		}
+		updated, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return rowsErr
+		}
+		if updated != 1 {
+			return ErrSettingsChanged
+		}
+	}
+	return tx.Commit()
 }
 
 func (r *PostgresRepository) ConsumeInvitationCode(ctx context.Context, code string) error {

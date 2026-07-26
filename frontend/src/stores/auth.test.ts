@@ -22,28 +22,28 @@ describe('auth store', () => {
     setActivePinia(createPinia())
   })
 
-  it('logs in and persists the access token and user', async () => {
-    const user = makeAuthUser()
-    loginMock.mockResolvedValue({ access_token: 'token-1', token_type: 'Bearer', expires_at: '2099-01-01T00:00:00Z', user })
+	it('persists only the cookie-session marker and user', async () => {
+		const user = makeAuthUser()
+		loginMock.mockResolvedValue({ access_token: 'oidc-cookie', token_type: 'Bearer', expires_at: '2099-01-01T00:00:00Z', user })
     const store = useAuthStore()
 
     await store.login('admin', 'secret', true, 'turnstile-token')
 
     expect(loginMock).toHaveBeenCalledWith('admin', 'secret', true, 'turnstile-token')
-    expect(store.token).toBe('token-1')
+		expect(store.token).toBe('oidc-cookie')
     expect(store.user).toEqual(user)
     expect(store.isAuthenticated).toBe(true)
-    expect(localStorage.getItem('asterrouter_admin_token')).toBe('token-1')
+		expect(localStorage.getItem('asterrouter_admin_token')).toBe('oidc-cookie')
     expect(JSON.parse(localStorage.getItem('asterrouter_admin_user') || '{}')).toEqual(user)
   })
 
-	it('keeps an MFA challenge separate from the authenticated session', async () => {
-		loginMock.mockResolvedValue({ mfa_required: true, challenge: 'challenge-1', expires_at: '2099-01-01T00:00:00Z' })
+	it('accepts a browser MFA response without exposing the challenge', async () => {
+		loginMock.mockResolvedValue({ mfa_required: true, expires_at: '2099-01-01T00:00:00Z' })
 		const store = useAuthStore()
 
 		const challenge = await store.login('user@example.com', 'secret')
 
-		expect(challenge?.challenge).toBe('challenge-1')
+		expect(challenge?.challenge).toBeUndefined()
 		expect(store.token).toBe('')
 		expect(store.user).toBeNull()
 	})
@@ -56,6 +56,17 @@ describe('auth store', () => {
 		await store.signOut()
 
 		expect(logoutMock).toHaveBeenCalledOnce()
+		expect(store.token).toBe('')
+		expect(localStorage.getItem('asterrouter_admin_token')).toBeNull()
+	})
+
+	it('clears local state but propagates a server revocation failure', async () => {
+		localStorage.setItem('asterrouter_admin_token', 'token-1')
+		const store = useAuthStore()
+		logoutMock.mockRejectedValue(new Error('session revocation failed'))
+
+		await expect(store.signOut()).rejects.toThrow('session revocation failed')
+
 		expect(store.token).toBe('')
 		expect(localStorage.getItem('asterrouter_admin_token')).toBeNull()
 	})
@@ -87,7 +98,7 @@ describe('auth store', () => {
 
   it('completes MFA and updates an existing account profile', async () => {
     const user = makeAuthUser({ role: 'developer' })
-    completeTOTPMock.mockResolvedValue({ access_token: 'mfa-token', token_type: 'Bearer', expires_at: '2099-01-01T00:00:00Z', user })
+		completeTOTPMock.mockResolvedValue({ access_token: 'oidc-cookie', token_type: 'Bearer', expires_at: '2099-01-01T00:00:00Z', user })
     const store = useAuthStore()
 
     await store.completeMFA('challenge-1', '123456')
@@ -113,7 +124,7 @@ describe('auth store', () => {
     } satisfies AccountProfile)
 
     expect(completeTOTPMock).toHaveBeenCalledWith('challenge-1', '123456')
-    expect(store.token).toBe('mfa-token')
+    expect(store.token).toBe('oidc-cookie')
     expect(store.user?.display_name).toBe('Updated User')
     expect(store.user?.email).toBe('updated@example.com')
   })

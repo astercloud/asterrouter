@@ -21,7 +21,8 @@ const showPassword = ref(false)
 const form = reactive({ username: 'admin', password: '' })
 const accountForm = reactive({ email: '', displayName: '', password: '', confirmPassword: '', invitationCode: '' })
 const mfaCode = ref('')
-const mfaChallenge = ref(typeof route.query.mfa === 'string' ? route.query.mfa : '')
+const mfaRequired = ref(route.query.mfa === 'required')
+const mfaChallenge = ref('')
 const actionMessage = ref('')
 const registrationComplete = ref(false)
 const pendingVerificationEmail = ref('')
@@ -37,8 +38,8 @@ const authMode = computed<AuthMode>(() => {
 	if (route.path === '/verify-email' || typeof route.query.verify === 'string') return 'verify'
 	return 'login'
 })
-const resetToken = computed(() => typeof route.query.token === 'string' ? route.query.token : typeof route.query.reset === 'string' ? route.query.reset : '')
-const verificationToken = computed(() => typeof route.query.token === 'string' ? route.query.token : typeof route.query.verify === 'string' ? route.query.verify : '')
+const resetToken = ref(typeof route.query.token === 'string' ? route.query.token : typeof route.query.reset === 'string' ? route.query.reset : '')
+const verificationToken = ref(typeof route.query.token === 'string' ? route.query.token : typeof route.query.verify === 'string' ? route.query.verify : '')
 const redirectTo = computed(() => {
   const value = route.query.redirect
   if (typeof value === 'string' && value.startsWith('/')) return value
@@ -48,16 +49,25 @@ const demoMode = computed(() => Boolean(app.publicSettings?.demo_mode))
 const turnstileRequired = computed(() => Boolean(app.publicSettings?.turnstile_enabled && app.publicSettings.turnstile_site_key))
 const allowedDomains = computed(() => app.publicSettings?.allowed_email_domains || [])
 const modeTitle = computed(() => {
-	if (mfaChallenge.value) return t('auth.mfaTitle')
+	if (mfaRequired.value) return t('auth.mfaTitle')
 	return t({ login: 'auth.welcomeBack', register: 'auth.createAccount', forgot: 'auth.forgotPasswordTitle', reset: 'auth.resetPassword', verify: 'auth.verifyEmail', resend: 'auth.resendVerificationTitle' }[authMode.value])
 })
 const modeSubtitle = computed(() => {
-	if (mfaChallenge.value) return t('auth.mfaHelp')
+	if (mfaRequired.value) return t('auth.mfaHelp')
 	return t({ login: 'auth.signInToAccount', register: 'auth.registrationHelp', forgot: 'auth.resetEmailHelp', reset: 'auth.resetPasswordHelp', verify: 'auth.verifyEmailHelp', resend: 'auth.resendVerificationHelp' }[authMode.value])
 })
 
 onMounted(async () => {
 	if (typeof route.query.email === 'string') accountForm.email = route.query.email.trim()
+	if (authMode.value === 'reset' || authMode.value === 'verify') await clearSensitiveAuthQuery()
+	if (route.query.external === 'error') {
+		auth.error = t('auth.externalLoginFailed')
+		return
+	}
+	if (route.query.logout === 'failed') {
+		auth.error = t('auth.logoutRevokeFailed')
+		return
+	}
 	if (authMode.value === 'verify') {
 		if (!verificationToken.value) {
 			auth.error = t('auth.invalidVerificationLink')
@@ -71,7 +81,7 @@ onMounted(async () => {
 		}
 		return
 	}
-	if (route.query.oidc !== 'success' && route.query.provider !== 'feishu') return
+	if (!isExternalLoginCallback()) return
 	try {
 		await auth.completeOIDCLogin()
 		await router.replace(defaultEntry())
@@ -79,6 +89,22 @@ onMounted(async () => {
 		// The store exposes the translated API error on the form.
 	}
 })
+
+async function clearSensitiveAuthQuery() {
+	const query = { ...route.query }
+	const hasSensitiveQuery = ['token', 'reset', 'verify'].some((key) => key in query)
+	if (!hasSensitiveQuery) return
+	delete query.token
+	delete query.reset
+	delete query.verify
+	await router.replace({ path: route.path, query, hash: route.hash })
+}
+
+function isExternalLoginCallback(): boolean {
+	if (route.query.oidc === 'success') return true
+	if (route.query.provider === 'feishu' || route.query.provider === 'dingtalk') return true
+	return route.query.status === 'success' && (route.query.oauth === 'github' || route.query.oauth === 'google')
+}
 
 function loginWithOIDC() {
   window.location.assign(`/api/v1/auth/oidc?agreement_accepted=${agreementAccepted.value}`)
@@ -92,7 +118,8 @@ async function submit() {
 	try {
 		const challenge = await auth.login(form.username, form.password, agreementAccepted.value, turnstileToken.value)
 		if (challenge) {
-			mfaChallenge.value = challenge.challenge
+			mfaChallenge.value = challenge.challenge || ''
+			mfaRequired.value = true
 			mfaCode.value = ''
 			return
 		}
@@ -171,6 +198,7 @@ async function goTo(path: string) {
 	auth.error = ''
 	actionMessage.value = ''
 	registrationComplete.value = false
+	mfaRequired.value = false
 	mfaChallenge.value = ''
 	resetHumanVerification()
 	await router.push(path)
@@ -214,7 +242,7 @@ function changeLocale(event: Event) {
           <p>{{ modeSubtitle }}</p>
         </div>
 
-        <section v-if="demoMode && authMode === 'login' && !mfaChallenge" class="demo-experience" aria-labelledby="demo-experience-title">
+        <section v-if="demoMode && authMode === 'login' && !mfaRequired" class="demo-experience" aria-labelledby="demo-experience-title">
           <div class="demo-experience-copy">
             <span class="demo-experience-label">{{ t('auth.demoMode') }}</span>
             <strong id="demo-experience-title">{{ t('auth.demoModeTitle') }}</strong>
@@ -226,7 +254,7 @@ function changeLocale(event: Event) {
           </button>
         </section>
 
-        <div v-if="demoMode && authMode === 'login' && !mfaChallenge" class="auth-divider"><span>{{ t('auth.accountSignIn') }}</span></div>
+        <div v-if="demoMode && authMode === 'login' && !mfaRequired" class="auth-divider"><span>{{ t('auth.accountSignIn') }}</span></div>
         <div v-if="actionMessage" class="notice success">{{ actionMessage }}</div>
         <div v-if="auth.error" class="notice">{{ auth.error }}</div>
 
@@ -242,7 +270,7 @@ function changeLocale(event: Event) {
           <button class="button secondary auth-submit" type="button" @click="goTo('/login')">{{ t('auth.backToLogin') }}</button>
         </form>
 
-        <form v-else-if="mfaChallenge" class="auth-form" @submit.prevent="submitMFA">
+        <form v-else-if="mfaRequired" class="auth-form" @submit.prevent="submitMFA">
           <div class="field">
             <label for="mfa-code">{{ t('auth.totpCode') }}</label>
 			<div class="input-with-icon"><Lock :size="18" /><input id="mfa-code" v-model="mfaCode" inputmode="text" maxlength="13" autocomplete="one-time-code" required /></div>

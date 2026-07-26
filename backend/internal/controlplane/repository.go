@@ -29,13 +29,18 @@ type Repository interface {
 	SaveGovernancePolicy(ctx context.Context, policy GovernancePolicy) error
 	ListWorkspaceUsers(ctx context.Context) ([]WorkspaceUser, error)
 	SaveWorkspaceUser(ctx context.Context, user WorkspaceUser) error
+	SaveProvisionedWorkspaceUser(ctx context.Context, user WorkspaceUser, identity AuthIdentity) error
+	FindWorkspaceUserByID(ctx context.Context, id string) (WorkspaceUser, bool, error)
 	FindWorkspaceUserByEmail(ctx context.Context, email string) (WorkspaceUser, bool, error)
 	FindWorkspaceUserByEmailNormalized(ctx context.Context, normalized string) (WorkspaceUser, bool, error)
+	FindWorkspaceUserByExternalIdentity(ctx context.Context, issuer, subject string) (WorkspaceUser, bool, error)
 	FindWorkspaceUserByEmailVerifyHash(ctx context.Context, hash string) (WorkspaceUser, bool, error)
 	FindWorkspaceUserByPasswordResetHash(ctx context.Context, hash string) (WorkspaceUser, bool, error)
 	IssueWorkspaceUserEmailVerification(ctx context.Context, email, hash string, now, expiresAt time.Time, cooldown time.Duration) (WorkspaceUser, bool, error)
+	CancelWorkspaceUserEmailVerification(ctx context.Context, userID, hash string, now time.Time) (bool, error)
 	ConsumeWorkspaceUserEmailVerification(ctx context.Context, hash string, now time.Time) (WorkspaceUser, bool, error)
 	IssueWorkspaceUserPasswordReset(ctx context.Context, email, hash string, now, expiresAt time.Time, cooldown time.Duration) (WorkspaceUser, bool, error)
+	CancelWorkspaceUserPasswordReset(ctx context.Context, userID, hash string, now time.Time) (bool, error)
 	ConsumeWorkspaceUserPasswordReset(ctx context.Context, hash, passwordHash string, now time.Time) (WorkspaceUser, bool, error)
 	ConsumeWorkspaceUserTOTPRecoveryCode(ctx context.Context, userID, hash string, now time.Time) (WorkspaceUser, bool, error)
 	ListPlatformTenants(ctx context.Context) ([]PlatformTenant, error)
@@ -124,6 +129,7 @@ type Repository interface {
 	SaveCustomerNotificationDelivery(ctx context.Context, delivery CustomerNotificationDelivery) error
 	ListAuthIdentities(ctx context.Context, userID string) ([]AuthIdentity, error)
 	FindAuthIdentity(ctx context.Context, issuer, subject string) (AuthIdentity, bool, error)
+	BindAuthIdentity(ctx context.Context, identity AuthIdentity, verifyEmail bool) error
 	SaveAuthIdentity(ctx context.Context, identity AuthIdentity) error
 	DeleteAuthIdentity(ctx context.Context, id string) error
 	ListRoleBindings(ctx context.Context) ([]RoleBinding, error)

@@ -15,11 +15,13 @@ import (
 )
 
 const (
-	settingCiphertextPrefix = "enc:v1:"
-	settingCipherPurpose    = "asterrouter:settings:secret-encryption:v1"
+	settingCiphertextPrefix         = "enc:v1:"
+	settingCipherPurpose            = "asterrouter:settings:secret-encryption:v1"
+	legacySecretMigrationMaxRetries = 5
 )
 
 var encryptedSettingKeys = map[string]struct{}{
+	KeyOIDCClientSecret:     {},
 	KeyFeishuAppSecret:      {},
 	KeyGitHubOAuthSecret:    {},
 	KeyGoogleOAuthSecret:    {},
@@ -27,6 +29,45 @@ var encryptedSettingKeys = map[string]struct{}{
 	KeyTurnstileSecretKey:   {},
 	KeySMTPPassword:         {},
 	KeyBackupS3SecretKey:    {},
+}
+
+func (s *Service) MigrateLegacySensitiveSettings(ctx context.Context) error {
+	for attempt := 0; attempt < legacySecretMigrationMaxRetries; attempt++ {
+		raw, err := s.repo.GetAll(ctx)
+		if err != nil {
+			return err
+		}
+		replacements := make(map[string]ValueReplacement)
+		for key := range encryptedSettingKeys {
+			stored := raw[key]
+			trimmed := strings.TrimSpace(stored)
+			if trimmed == "" {
+				continue
+			}
+			if strings.HasPrefix(trimmed, settingCiphertextPrefix) {
+				if _, err := decryptSettingValue(s.secretKey, key, stored); err != nil {
+					return fmt.Errorf("decrypt setting %s: %w", key, err)
+				}
+				continue
+			}
+			ciphertext, err := encryptSettingValue(s.secretKey, key, stored)
+			if err != nil {
+				return fmt.Errorf("encrypt setting %s: %w", key, err)
+			}
+			replacements[key] = ValueReplacement{Expected: stored, Value: ciphertext}
+		}
+		if len(replacements) == 0 {
+			return nil
+		}
+		if err := s.repo.ReplaceIfUnchanged(ctx, replacements); err != nil {
+			if errors.Is(err, ErrSettingsChanged) {
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("migrate legacy sensitive settings: %w", ErrSettingsChanged)
 }
 
 func (s *Service) readValues(ctx context.Context) (map[string]string, error) {

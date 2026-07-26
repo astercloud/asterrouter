@@ -140,8 +140,10 @@ const form = reactive<AdminSettings>({
   server_utc_offset: '',
   storage_mode: '',
   demo_mode: false,
-  oidc_issuer_url: '',
-  oidc_client_id: '',
+	oidc_issuer_url: '',
+	oidc_client_id: '',
+	oidc_client_secret: '',
+	oidc_client_secret_configured: false,
 	feishu_app_id: '',
 	feishu_app_secret: '',
 	feishu_configured: false,
@@ -283,6 +285,14 @@ const updateSourceLabel = computed(() => {
 
 function assignSettings(data: AdminSettings) {
 	Object.assign(form, data)
+	form.oidc_client_secret = ''
+	form.feishu_app_secret = ''
+	form.github_oauth_client_secret = ''
+	form.google_oauth_client_secret = ''
+	form.dingtalk_client_secret = ''
+	form.turnstile_secret_key = ''
+	form.smtp_password = ''
+	form.backup_s3_secret_key = ''
 	form.allowed_email_domains ||= []
 	form.invitation_codes ||= []
 	form.trusted_proxy_cidrs ||= []
@@ -840,7 +850,8 @@ onMounted(async () => {
             </div>
             <div v-if="form.oidc_enabled" class="auth-provider-config auth-credential-grid">
               <div class="field"><label>{{ t('settings.oidcProviderName') }}</label><input v-model="form.oidc_provider_name" /></div>
-              <div class="field"><label>{{ t('settings.oidcClientId') }}</label><input v-model="form.oidc_client_id" /></div>
+								<div class="field"><label>{{ t('settings.oidcClientId') }}</label><input v-model="form.oidc_client_id" /></div>
+								<div class="field"><label>{{ t('settings.oidcClientSecret') }}</label><input v-model="form.oidc_client_secret" type="password" :placeholder="form.oidc_client_secret_configured?t('plugins.keepSecret'):''" /></div>
               <div class="field auth-config-span"><label>{{ t('settings.oidcIssuerUrl') }}</label><input v-model="form.oidc_issuer_url" placeholder="https://idp.example.com" /></div>
 				<div class="auth-provider-header auth-config-span"><div><strong>要求已验证邮箱</strong><p>仅接受 <code>email_verified=true</code> 的身份声明。内部 IdP 不提供该声明时才应关闭。</p></div><label class="switch"><input v-model="form.oidc_require_verified_email" type="checkbox"/><span></span></label></div>
             </div>

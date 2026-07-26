@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"github.com/astercloud/asterrouter/backend/internal/buildinfo"
 )
 
@@ -122,6 +123,9 @@ func (s *Service) Update(ctx context.Context, in AdminSettings) (AdminSettings, 
 	}
 	if strings.TrimSpace(in.FeishuAppSecret) == "" && existing[KeyFeishuAppSecret] != "" {
 		values[KeyFeishuAppSecret] = existing[KeyFeishuAppSecret]
+	}
+	if strings.TrimSpace(in.OIDCClientSecret) == "" && existing[KeyOIDCClientSecret] != "" {
+		values[KeyOIDCClientSecret] = existing[KeyOIDCClientSecret]
 	}
 	if strings.TrimSpace(in.TurnstileSecretKey) == "" && existing[KeyTurnstileSecretKey] != "" {
 		values[KeyTurnstileSecretKey] = existing[KeyTurnstileSecretKey]
@@ -276,6 +280,14 @@ func (s *Service) FeishuSecret(ctx context.Context) (string, error) {
 	return values[KeyFeishuAppSecret], nil
 }
 
+func (s *Service) OIDCSecret(ctx context.Context) (string, error) {
+	values, err := s.readValues(ctx)
+	if err != nil {
+		return "", err
+	}
+	return values[KeyOIDCClientSecret], nil
+}
+
 func (s *Service) SocialOAuthSecrets(ctx context.Context) (github, google string, err error) {
 	values, err := s.readValues(ctx)
 	if err != nil {
@@ -424,11 +436,12 @@ func (s *Service) parse(values map[string]string) AdminSettings {
 			StorageMode:     s.storageMode,
 			DemoMode:        s.demoMode,
 		},
-		OIDCIssuerURL:       values[KeyOIDCIssuerURL],
-		OIDCClientID:        values[KeyOIDCClientID],
-		FeishuAppID:         values[KeyFeishuAppID],
-		FeishuConfigured:    strings.TrimSpace(values[KeyFeishuAppSecret]) != "",
-		GitHubOAuthClientID: values[KeyGitHubOAuthClientID], GitHubOAuthConfigured: strings.TrimSpace(values[KeyGitHubOAuthSecret]) != "", GoogleOAuthClientID: values[KeyGoogleOAuthClientID], GoogleOAuthConfigured: strings.TrimSpace(values[KeyGoogleOAuthSecret]) != "",
+		OIDCIssuerURL:              values[KeyOIDCIssuerURL],
+		OIDCClientID:               values[KeyOIDCClientID],
+		OIDCClientSecretConfigured: strings.TrimSpace(values[KeyOIDCClientSecret]) != "",
+		FeishuAppID:                values[KeyFeishuAppID],
+		FeishuConfigured:           strings.TrimSpace(values[KeyFeishuAppSecret]) != "",
+		GitHubOAuthClientID:        values[KeyGitHubOAuthClientID], GitHubOAuthConfigured: strings.TrimSpace(values[KeyGitHubOAuthSecret]) != "", GoogleOAuthClientID: values[KeyGoogleOAuthClientID], GoogleOAuthConfigured: strings.TrimSpace(values[KeyGoogleOAuthSecret]) != "",
 		DingTalkClientID: values[KeyDingTalkClientID], DingTalkConfigured: strings.TrimSpace(values[KeyDingTalkClientSecret]) != "",
 		InvitationCodes:      parseStringList(values[KeyInvitationCodes], []string{}),
 		TrustedProxyHeaders:  parseBool(values[KeyTrustedProxyHeaders]),
@@ -481,6 +494,7 @@ func defaults() map[string]string {
 		KeyOIDCProviderName:         "OIDC",
 		KeyOIDCIssuerURL:            "",
 		KeyOIDCClientID:             "",
+		KeyOIDCClientSecret:         "",
 		KeyOIDCRequireVerifiedEmail: "true",
 		KeyFeishuEnabled:            "false",
 		KeyFeishuRegion:             "cn",
@@ -543,8 +557,20 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 	if !oneOf(strings.TrimSpace(in.FeishuRegion), "cn", "global") {
 		return nil, errors.New("feishu_region must be cn or global")
 	}
+	if in.OIDCEnabled {
+		if strings.TrimSpace(in.OIDCClientID) == "" {
+			return nil, errors.New("oidc_client_id is required when OIDC login is enabled")
+		}
+		issuer, err := url.Parse(strings.TrimSpace(in.OIDCIssuerURL))
+		if err != nil || issuer.Scheme != "https" || issuer.Host == "" || issuer.User != nil {
+			return nil, errors.New("oidc_issuer_url must be an https URL when OIDC login is enabled")
+		}
+	}
 	if in.FeishuEnabled && strings.TrimSpace(in.FeishuAppID) == "" {
 		return nil, errors.New("feishu_app_id is required when feishu login is enabled")
+	}
+	if in.FeishuEnabled && !in.FeishuConfigured && strings.TrimSpace(in.FeishuAppSecret) == "" {
+		return nil, errors.New("feishu_app_secret is required when feishu login is enabled")
 	}
 	if in.GitHubOAuthEnabled && strings.TrimSpace(in.GitHubOAuthClientID) == "" {
 		return nil, errors.New("github_oauth_client_id is required")
@@ -560,6 +586,9 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 	}
 	if in.DingTalkEnabled && strings.TrimSpace(in.DingTalkClientID) == "" {
 		return nil, errors.New("dingtalk_client_id is required")
+	}
+	if in.DingTalkEnabled && !in.DingTalkConfigured && strings.TrimSpace(in.DingTalkClientSecret) == "" {
+		return nil, errors.New("dingtalk_client_secret is required")
 	}
 	if in.DefaultBalanceMicros < 0 || in.DefaultConcurrency < 0 || in.DefaultRPM < 0 {
 		return nil, errors.New("default user limits cannot be negative")
@@ -687,6 +716,7 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 		KeyOIDCProviderName:         strings.TrimSpace(in.OIDCProviderName),
 		KeyOIDCIssuerURL:            strings.TrimSpace(in.OIDCIssuerURL),
 		KeyOIDCClientID:             strings.TrimSpace(in.OIDCClientID),
+		KeyOIDCClientSecret:         strings.TrimSpace(in.OIDCClientSecret),
 		KeyOIDCRequireVerifiedEmail: strconv.FormatBool(in.OIDCRequireVerifiedEmail),
 		KeyFeishuEnabled:            strconv.FormatBool(in.FeishuEnabled),
 		KeyFeishuRegion:             strings.TrimSpace(in.FeishuRegion),
@@ -842,7 +872,7 @@ func validateCustomNavigation(endpoints []CustomEndpoint, items []CustomMenuItem
 }
 
 func validateAndMarshalEmailTemplates(templates []EmailTemplate) ([]byte, error) {
-	allowedEvents := map[string]bool{"email_verification": true, "password_reset": true, "balance_low": true, "quota_limit": true, "subscription_expiry": true}
+	allowedEvents := map[string]bool{"email_verification": true, "password_reset": true, "balance_low": true, "quota_limit": true, "subscription_expiry": true, "customer_notification": true}
 	seen := map[string]bool{}
 	for _, item := range templates {
 		key := item.Event + ":" + item.Locale
@@ -851,6 +881,9 @@ func validateAndMarshalEmailTemplates(templates []EmailTemplate) ([]byte, error)
 		}
 		if seen[key] {
 			return nil, fmt.Errorf("duplicate email template %q", key)
+		}
+		if _, _, err := auth.RenderEmailTemplate(item.Subject, item.HTML, auth.EmailTemplateData{}); err != nil {
+			return nil, fmt.Errorf("invalid email template %q: %w", key, err)
 		}
 		seen[key] = true
 	}
@@ -960,8 +993,8 @@ func validateOptionalHTTPURL(field, value string) error {
 func validateSecureAuthenticationBaseURL(value string) error {
 	value = strings.TrimSpace(value)
 	parsed, err := url.ParseRequestURI(value)
-	if err != nil || parsed.Host == "" || parsed.User != nil {
-		return errors.New("public_base_url must be a valid URL without user credentials")
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawFragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return errors.New("public_base_url must be an origin URL without a path, query, fragment, or user credentials")
 	}
 	if parsed.Scheme == "https" {
 		return nil
@@ -971,6 +1004,12 @@ func validateSecureAuthenticationBaseURL(value string) error {
 		return nil
 	}
 	return errors.New("public_base_url must use https when authentication email or external login is enabled")
+}
+
+// ValidateSecureAuthenticationBaseURL applies the same trust-boundary check
+// when authentication links are generated from persisted settings.
+func ValidateSecureAuthenticationBaseURL(value string) error {
+	return validateSecureAuthenticationBaseURL(value)
 }
 
 func isLoopbackHost(host string) bool {

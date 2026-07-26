@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { adminPost, createGatewayFixture, createPublishedPricingRule, envelope, loginDemo, loginUser, registerUsers } from './fixtures'
+import { adminPost, createGatewayFixture, createPublishedPricingRule, envelope, loginDemo, loginTestPrincipal, loginUser, registerUsers } from './fixtures'
 
 async function operatorPost<T>(page: Page, token: string, path: string, data: unknown): Promise<T> {
   return envelope<T>(await page.request.post(`/api/v1/operator${path}`, {
@@ -24,7 +24,7 @@ test('@smoke @j06 operator allocation and customer billing notifications stay at
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The billing workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
-  const adminToken = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const adminToken = await loginTestPrincipal(page)
   const runID = `${testInfo.project.name}-${Date.now()}`
   const password = 'synthetic-password-123'
   const [lowBalanceUser, fundedUser] = await registerUsers(page, adminToken, [

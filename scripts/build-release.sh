@@ -16,6 +16,11 @@ if [ -z "$COMMIT" ] && command -v git >/dev/null 2>&1; then
 fi
 COMMIT="${COMMIT:-unknown}"
 BUILD_DATE="${BUILD_DATE:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}"
+RELEASE_NOTES="${ASTER_RELEASE_NOTES:-}"
+if [ -z "$RELEASE_NOTES" ] && command -v git >/dev/null 2>&1 && git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+  RELEASE_NOTES="$(git -C "$ROOT_DIR" tag -l --format='%(contents:body)' "$TAG_NAME")"
+fi
+RELEASE_NOTES="${RELEASE_NOTES:-AsterRouter ${VERSION}.}"
 DIST_DIR="${ASTER_DIST_DIR:-${ROOT_DIR}/dist}"
 PACKAGE_DIR="${DIST_DIR}/packages"
 
@@ -91,13 +96,13 @@ echo "==> Writing checksums"
 )
 
 echo "==> Writing update manifest"
-python3 - "$DIST_DIR" "$VERSION" "$TAG_NAME" "$REPOSITORY" "$BUILD_DATE" <<'PY'
+python3 - "$DIST_DIR" "$VERSION" "$TAG_NAME" "$REPOSITORY" "$BUILD_DATE" "$RELEASE_NOTES" <<'PY'
 import hashlib
 import json
 import os
 import sys
 
-dist_dir, version, tag_name, repository, build_date = sys.argv[1:]
+dist_dir, version, tag_name, repository, build_date, release_notes = sys.argv[1:]
 base_url = f"https://github.com/{repository}/releases/download/{tag_name}"
 html_url = f"https://github.com/{repository}/releases/tag/{tag_name}"
 assets = []
@@ -120,7 +125,7 @@ release = {
     "version": version,
     "channel": "stable",
     "name": f"AsterRouter {version}",
-    "notes": "Adds durable AI job admission and ready queues, provider capacity and billing hold controls, effective pricing decision safeguards, and expanded admin usability for users, usage, plugins, and account profile workflows.",
+    "notes": release_notes,
     "published_at": build_date,
     "html_url": html_url,
     "assets": assets,

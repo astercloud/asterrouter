@@ -87,10 +87,11 @@ func (m SMTPMailer) send(ctx context.Context, to, subject, contentType, body str
 	defer client.Close()
 	if !cfg.UseTLS {
 		ok, _ := client.Extension("STARTTLS")
-		if ok {
-			if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
-				return err
-			}
+		if !ok {
+			return errors.New("SMTP server does not support STARTTLS")
+		}
+		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
+			return err
 		}
 	}
 	if cfg.Username != "" {

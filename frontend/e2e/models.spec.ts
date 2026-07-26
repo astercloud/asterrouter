@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { adminPost, captureBrowserErrors, controlAPI, envelope, expectNoHorizontalOverflow, loginDemo } from './fixtures'
+import { adminPost, captureBrowserErrors, controlAPI, envelope, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
 
 function modelPaths(): { providers: string; accounts: string; routes: string } {
   switch (process.env.ASTER_E2E_EXPECT_PROFILE) {
@@ -17,7 +17,7 @@ test('new provider account persists empty before automatic discovery and explici
 
   const browserErrors = captureBrowserErrors(page)
   await loginDemo(page)
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   const runID = `${testInfo.project.name}-${Date.now()}`
   const upstreamPort = process.env.ASTER_E2E_UPSTREAM_PORT || '19000'
   const provider = await adminPost<{ id: string }>(page, token, '/providers', {
@@ -33,10 +33,7 @@ test('new provider account persists empty before automatic discovery and explici
   const createDialog = page.getByRole('dialog', { name: 'New route resource' })
   await createDialog.locator('.field').filter({ hasText: 'Provider connection' }).getByRole('combobox').selectOption(provider.id)
   await createDialog.locator('.field').filter({ hasText: 'Resource name' }).getByRole('textbox').fill(`Empty inventory account ${runID}`)
-  await createDialog.getByRole('button', { name: 'Next' }).click()
-  await createDialog.locator('.field').filter({ hasText: 'Resource credential' }).getByRole('textbox').fill('synthetic-account-secret')
-  await createDialog.getByRole('button', { name: 'Next' }).click()
-  await createDialog.getByRole('button', { name: 'Next' }).click()
+  await createDialog.getByRole('textbox', { name: 'API key', exact: true }).fill('synthetic-account-secret')
   await createDialog.getByRole('button', { name: 'Save' }).click()
 
   const editDialog = page.getByRole('dialog', { name: 'Edit route resource' })
@@ -76,7 +73,7 @@ test('model inventory and bulk routes stay auditable across responsive surfaces'
   await expectNoHorizontalOverflow(page)
   await providerDialog.getByRole('button', { name: 'Close' }).click()
 
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   const runID = `${testInfo.project.name}-${Date.now()}`
   const upstreamPort = process.env.ASTER_E2E_UPSTREAM_PORT || '19000'
   const exactUpstream = `exact-upstream-${runID}`
@@ -140,7 +137,6 @@ test('model inventory and bulk routes stay auditable across responsive surfaces'
   await accountRow.getByRole('button', { name: 'Edit' }).click()
   const accountDialog = page.getByRole('dialog', { name: 'Edit route resource' })
   await expect(accountDialog).toBeVisible()
-  await accountDialog.locator('.wizard-steps').getByRole('button', { name: /Upstream model inventory/ }).click()
   await expect(accountDialog.getByText('Upstream model inventory')).toBeVisible()
   await accountDialog.getByRole('button', { name: 'Discover models' }).click()
   await expect(accountDialog.getByText(/Discovery complete/)).toBeVisible()
@@ -172,7 +168,6 @@ test('model inventory and bulk routes stay auditable across responsive surfaces'
   const zhAccountRow = page.getByRole('row').filter({ hasText: `Model inventory account ${runID}` })
   await zhAccountRow.getByRole('button', { name: '编辑' }).click()
   const darkAccountDialog = page.getByRole('dialog', { name: '编辑路由资源' })
-  await darkAccountDialog.locator('.wizard-steps').getByRole('button', { name: /上游模型库存/ }).click()
   await expect(darkAccountDialog.getByText('上游模型库存')).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('model-inventory-dark-zh.png'), fullPage: true })
   await darkAccountDialog.getByRole('button', { name: '关闭' }).click()

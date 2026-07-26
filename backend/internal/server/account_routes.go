@@ -44,14 +44,52 @@ type totpVerificationRequest struct {
 	Code string `json:"code"`
 }
 
-func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *authAttemptLimiter) {
+var accountPublicErrors = []error{
+	controlplane.ErrDeploymentManagedAccount,
+	controlplane.ErrAccountDisplayNameRequired,
+	controlplane.ErrAccountDisplayNameTooLong,
+	controlplane.ErrAccountAvatarTooLarge,
+	controlplane.ErrAccountAvatarFormatInvalid,
+	controlplane.ErrAccountAvatarBase64Invalid,
+	controlplane.ErrAccountAvatarTypeInvalid,
+	controlplane.ErrPasswordTooWeak,
+	controlplane.ErrPasswordTooLong,
+	controlplane.ErrPasswordRecoveryRequired,
+	controlplane.ErrCurrentPasswordIncorrect,
+	controlplane.ErrPasswordUnchanged,
+	controlplane.ErrWorkspaceUserDisabled,
+	controlplane.ErrTOTPAlreadyEnabled,
+	controlplane.ErrTOTPEnrollmentNotStarted,
+	controlplane.ErrTOTPEnrollmentExpired,
+	controlplane.ErrTOTPInvalidCode,
+	controlplane.ErrTOTPNotEnabled,
+	controlplane.ErrAuthIdentityNotBound,
+	controlplane.ErrLastLoginMethod,
+}
+
+func writeAccountServiceError(c *gin.Context, code int, err error) {
+	for _, publicErr := range accountPublicErrors {
+		if errors.Is(err, publicErr) {
+			httpx.Error(c, http.StatusBadRequest, code, publicErr.Error())
+			return
+		}
+	}
+	writeAccountInternalError(c, code, err, "account operation could not be completed")
+}
+
+func writeAccountInternalError(c *gin.Context, code int, err error, message string) {
+	_ = c.Error(err)
+	httpx.Error(c, http.StatusInternalServerError, code, message)
+}
+
+func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter, bindingLimiter *authAttemptLimiter) {
 	account := api.Group("/account")
 	account.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
 
 	account.GET("/profile", func(c *gin.Context) {
 		data, err := currentAccountProfile(c, opts)
 		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			writeAccountInternalError(c, 1330, err, "account data is unavailable")
 			return
 		}
 		httpx.OK(c, data)
@@ -63,12 +101,12 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 			return
 		}
 		if _, err := opts.ControlService.UpdateCurrentAccountProfile(c.Request.Context(), actor(c), req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1331, err.Error())
+			writeAccountServiceError(c, 1331, err)
 			return
 		}
 		data, err := currentAccountProfile(c, opts)
 		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			writeAccountInternalError(c, 1330, err, "account data is unavailable")
 			return
 		}
 		httpx.OK(c, data)
@@ -80,20 +118,20 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 			return
 		}
 		if err := opts.ControlService.ChangeCurrentAccountPassword(c.Request.Context(), actor(c), req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1332, err.Error())
+			writeAccountServiceError(c, 1332, err)
 			return
 		}
 		if opts.AuthService != nil && opts.AuthService.IsLocalPrincipal(actor(c)) {
 			passwordHash, err := opts.ControlService.CurrentAccountPasswordHash(c.Request.Context(), actor(c))
 			if err != nil {
-				httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+				writeAccountInternalError(c, 1330, err, "account session could not be refreshed")
 				return
 			}
 			opts.AuthService.SetPasswordHash(passwordHash)
 		}
 		response, err := replacementAccountSession(c, opts)
 		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			writeAccountInternalError(c, 1330, err, "account session could not be refreshed")
 			return
 		}
 		response.Changed = true
@@ -101,17 +139,20 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 	})
 	account.DELETE("/identities/:provider", func(c *gin.Context) {
 		if err := opts.ControlService.UnbindCurrentAuthIdentity(c.Request.Context(), actor(c), c.Param("provider")); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1335, err.Error())
+			writeAccountServiceError(c, 1335, err)
 			return
 		}
 		data, err := currentAccountProfile(c, opts)
 		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			writeAccountInternalError(c, 1330, err, "account data is unavailable")
 			return
 		}
 		httpx.OK(c, data)
 	})
 	account.POST("/identities/:provider/bind", func(c *gin.Context) {
+		if !allowAuthRequestForKey(c, bindingLimiter, actor(c)+"\x00"+c.ClientIP(), "too many account binding attempts") {
+			return
+		}
 		var req struct {
 			ReturnPath string `json:"return_path"`
 		}
@@ -127,8 +168,8 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 		switch provider {
 		case "oidc":
 			if opts.OIDCService == nil {
-				err = errors.New("oidc is not configured")
-				break
+				httpx.Error(c, http.StatusBadRequest, 1336, "oidc is not configured")
+				return
 			}
 			state, err = opts.OIDCService.Begin(now)
 			if err == nil {
@@ -136,8 +177,8 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 			}
 		case "feishu":
 			if opts.FeishuService == nil {
-				err = errors.New("feishu is not configured")
-				break
+				httpx.Error(c, http.StatusBadRequest, 1336, "feishu is not configured")
+				return
 			}
 			state, err = opts.FeishuService.Begin(now)
 			if err == nil {
@@ -145,8 +186,8 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 			}
 		case "dingtalk":
 			if opts.DingTalkService == nil {
-				err = errors.New("DingTalk is not configured")
-				break
+				httpx.Error(c, http.StatusBadRequest, 1336, "DingTalk is not configured")
+				return
 			}
 			state, err = opts.DingTalkService.Begin(now)
 			if err == nil {
@@ -158,24 +199,28 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 				social = opts.GoogleOAuthService
 			}
 			if social == nil {
-				err = errors.New(provider + " is not configured")
-				break
+				httpx.Error(c, http.StatusBadRequest, 1336, provider+" is not configured")
+				return
 			}
 			state, err = social.Begin(now)
 			if err == nil {
 				authorizationURL = social.AuthorizationURL(state)
 			}
 		default:
-			err = errors.New("unsupported authentication provider")
+			httpx.Error(c, http.StatusBadRequest, 1336, "unsupported authentication provider")
+			return
 		}
 		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1336, err.Error())
+			_ = c.Error(err)
+			httpx.Error(c, http.StatusServiceUnavailable, 1336, "account binding provider is unavailable")
 			return
 		}
 		if err := opts.authBindingStore.Save(state.Value, actor(c), provider, req.ReturnPath, now); err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1337, err.Error())
+			_ = c.Error(err)
+			httpx.Error(c, http.StatusServiceUnavailable, 1337, "account binding could not be started")
 			return
 		}
+		setExternalOAuthStateCookie(c, provider, state.Value)
 		httpx.OK(c, gin.H{"authorization_url": authorizationURL})
 	})
 	account.POST("/totp/setup", func(c *gin.Context) { beginAccountTOTPSetup(c, opts, totpLimiter) })
@@ -184,12 +229,12 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 	account.DELETE("/totp", func(c *gin.Context) { disableAccountTOTP(c, opts, totpLimiter) })
 	account.POST("/sessions/revoke-others", func(c *gin.Context) {
 		if err := opts.ControlService.RevokeAccountSessions(c.Request.Context(), actor(c)); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1338, err.Error())
+			writeAccountServiceError(c, 1338, err)
 			return
 		}
 		response, err := replacementAccountSession(c, opts)
 		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+			writeAccountInternalError(c, 1330, err, "account session could not be refreshed")
 			return
 		}
 		response.Changed = true
@@ -198,6 +243,7 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *auth
 }
 
 func beginAccountTOTPSetup(c *gin.Context, opts Options, limiter *authAttemptLimiter) {
+	c.Header("Cache-Control", "no-store")
 	public, err := opts.SettingsService.Public(c.Request.Context())
 	if err != nil {
 		httpx.Error(c, http.StatusServiceUnavailable, 1002, "authentication settings are unavailable")
@@ -217,7 +263,7 @@ func beginAccountTOTPSetup(c *gin.Context, opts Options, limiter *authAttemptLim
 	}
 	data, err := opts.ControlService.BeginTOTPSetup(c.Request.Context(), actor(c), req.CurrentPassword)
 	if err != nil {
-		httpx.Error(c, http.StatusBadRequest, 1312, err.Error())
+		writeAccountServiceError(c, 1312, err)
 		return
 	}
 	resetTOTPManagementLimiter(c, limiter)
@@ -225,6 +271,7 @@ func beginAccountTOTPSetup(c *gin.Context, opts Options, limiter *authAttemptLim
 }
 
 func confirmAccountTOTP(c *gin.Context, opts Options, limiter *authAttemptLimiter) {
+	c.Header("Cache-Control", "no-store")
 	if !allowTOTPManagementRequest(c, limiter) {
 		return
 	}
@@ -235,13 +282,13 @@ func confirmAccountTOTP(c *gin.Context, opts Options, limiter *authAttemptLimite
 	}
 	codes, err := opts.ControlService.ConfirmTOTPWithRecoveryCodes(c.Request.Context(), actor(c), req.Code)
 	if err != nil {
-		httpx.Error(c, http.StatusBadRequest, 1313, err.Error())
+		writeAccountServiceError(c, 1313, err)
 		return
 	}
 	resetTOTPManagementLimiter(c, limiter)
 	response, err := replacementAccountSession(c, opts)
 	if err != nil {
-		httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+		writeAccountInternalError(c, 1330, err, "account session could not be refreshed")
 		return
 	}
 	enabled := true
@@ -251,6 +298,7 @@ func confirmAccountTOTP(c *gin.Context, opts Options, limiter *authAttemptLimite
 }
 
 func regenerateAccountTOTPRecoveryCodes(c *gin.Context, opts Options, limiter *authAttemptLimiter) {
+	c.Header("Cache-Control", "no-store")
 	if !allowTOTPManagementRequest(c, limiter) {
 		return
 	}
@@ -261,13 +309,13 @@ func regenerateAccountTOTPRecoveryCodes(c *gin.Context, opts Options, limiter *a
 	}
 	codes, err := opts.ControlService.GenerateTOTPRecoveryCodes(c.Request.Context(), actor(c), req.Code)
 	if err != nil {
-		httpx.Error(c, http.StatusBadRequest, 1318, "invalid TOTP code")
+		writeAccountServiceError(c, 1318, err)
 		return
 	}
 	resetTOTPManagementLimiter(c, limiter)
 	response, err := replacementAccountSession(c, opts)
 	if err != nil {
-		httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+		writeAccountInternalError(c, 1330, err, "account session could not be refreshed")
 		return
 	}
 	response.Codes = codes
@@ -275,6 +323,7 @@ func regenerateAccountTOTPRecoveryCodes(c *gin.Context, opts Options, limiter *a
 }
 
 func disableAccountTOTP(c *gin.Context, opts Options, limiter *authAttemptLimiter) {
+	c.Header("Cache-Control", "no-store")
 	if !allowTOTPManagementRequest(c, limiter) {
 		return
 	}
@@ -284,13 +333,13 @@ func disableAccountTOTP(c *gin.Context, opts Options, limiter *authAttemptLimite
 		return
 	}
 	if err := opts.ControlService.DisableTOTP(c.Request.Context(), actor(c), req.Code); err != nil {
-		httpx.Error(c, http.StatusBadRequest, 1314, err.Error())
+		writeAccountServiceError(c, 1314, err)
 		return
 	}
 	resetTOTPManagementLimiter(c, limiter)
 	response, err := replacementAccountSession(c, opts)
 	if err != nil {
-		httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+		writeAccountInternalError(c, 1330, err, "account session could not be refreshed")
 		return
 	}
 	enabled := false
@@ -307,12 +356,23 @@ func resetTOTPManagementLimiter(c *gin.Context, limiter *authAttemptLimiter) {
 }
 
 func replacementAccountSession(c *gin.Context, opts Options) (accountSecurityResponse, error) {
+	c.Header("Cache-Control", "no-store")
 	if opts.AuthService == nil {
 		return accountSecurityResponse{}, nil
 	}
-	result, err := opts.AuthService.LoginOIDC(actor(c), role(c))
+	state, err := opts.ControlService.CurrentAccountAuthenticationState(c.Request.Context(), actor(c))
 	if err != nil {
 		return accountSecurityResponse{}, err
+	}
+	result, err := opts.AuthService.LoginOIDC(state.UserID, state.Role)
+	if err != nil {
+		return accountSecurityResponse{}, err
+	}
+	if usesCookieSession(c) {
+		result, err = setCookieSession(c, result)
+		if err != nil {
+			return accountSecurityResponse{}, err
+		}
 	}
 	return accountSecurityResponse{AccessToken: result.AccessToken, ExpiresAt: result.ExpiresAt}, nil
 }

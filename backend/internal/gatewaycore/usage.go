@@ -30,6 +30,9 @@ type NormalizedUsage struct {
 }
 
 func NormalizeUsage(body []byte) NormalizedUsage {
+	if usage, ok := normalizeSimpleOpenAIUsage(body); ok {
+		return usage
+	}
 	var root map[string]json.RawMessage
 	if len(bytes.TrimSpace(body)) == 0 || json.Unmarshal(body, &root) != nil {
 		return NormalizedUsage{UsageNormalizationStatus: UsageNormalizationInvalid}
@@ -39,6 +42,179 @@ func NormalizeUsage(body []byte) NormalizedUsage {
 		return NormalizedUsage{UsageNormalizationStatus: UsageNormalizationMissing}
 	}
 	return normalizeUsageObject(usage)
+}
+
+func normalizeSimpleOpenAIUsage(body []byte) (NormalizedUsage, bool) {
+	if bytes.Contains(body, []byte(`"cache`)) || bytes.Contains(body, []byte(`tokens_details"`)) {
+		return NormalizedUsage{}, false
+	}
+	if !json.Valid(body) {
+		return NormalizedUsage{}, false
+	}
+	usageObject, found := simpleJSONObjectField(body, []byte("usage"))
+	if !found {
+		return NormalizedUsage{}, false
+	}
+	inputTokens, outputTokens, found := simpleOpenAITokenCounts(usageObject)
+	if !found {
+		return NormalizedUsage{}, false
+	}
+	uncachedInputTokens := inputTokens
+	return NormalizedUsage{
+		InputTokens: inputTokens, OutputTokens: outputTokens,
+		TotalInputTokens: &inputTokens, UncachedInputTokens: &uncachedInputTokens,
+		inputTokensPresent: true, outputTokensPresent: true, UsageNormalizationStatus: UsageNormalizationOpenAI,
+	}, true
+}
+
+func simpleJSONObjectField(object, wanted []byte) ([]byte, bool) {
+	var result []byte
+	ok := visitSimpleJSONObject(object, func(key, value []byte, escaped bool) {
+		if !escaped && bytes.Equal(key, wanted) {
+			result = value
+		}
+	})
+	return result, ok && len(result) > 0
+}
+
+func simpleOpenAITokenCounts(object []byte) (int, int, bool) {
+	inputTokens, outputTokens := 0, 0
+	inputPresent, outputPresent, supported := false, false, true
+	ok := visitSimpleJSONObject(object, func(key, value []byte, escaped bool) {
+		if escaped {
+			supported = false
+			return
+		}
+		switch {
+		case bytes.Equal(key, []byte("prompt_tokens")):
+			inputTokens, inputPresent = parseNonNegativeJSONInt(value)
+		case bytes.Equal(key, []byte("completion_tokens")):
+			outputTokens, outputPresent = parseNonNegativeJSONInt(value)
+		}
+	})
+	return inputTokens, outputTokens, ok && supported && inputPresent && outputPresent
+}
+
+func visitSimpleJSONObject(object []byte, visit func(key, value []byte, escaped bool)) bool {
+	index := skipJSONWhitespace(object, 0)
+	if index >= len(object) || object[index] != '{' {
+		return false
+	}
+	index++
+	for {
+		index = skipJSONWhitespace(object, index)
+		if index < len(object) && object[index] == '}' {
+			return true
+		}
+		keyStart, keyEnd, next, escaped, ok := scanJSONString(object, index)
+		if !ok {
+			return false
+		}
+		index = skipJSONWhitespace(object, next)
+		if index >= len(object) || object[index] != ':' {
+			return false
+		}
+		valueStart := skipJSONWhitespace(object, index+1)
+		valueEnd, ok := scanJSONValue(object, valueStart)
+		if !ok {
+			return false
+		}
+		visit(object[keyStart:keyEnd], bytes.TrimSpace(object[valueStart:valueEnd]), escaped)
+		index = skipJSONWhitespace(object, valueEnd)
+		if index >= len(object) {
+			return false
+		}
+		switch object[index] {
+		case ',':
+			index++
+		case '}':
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+func scanJSONString(data []byte, index int) (int, int, int, bool, bool) {
+	if index >= len(data) || data[index] != '"' {
+		return 0, 0, 0, false, false
+	}
+	start, escaped := index+1, false
+	for index = start; index < len(data); index++ {
+		switch data[index] {
+		case '\\':
+			escaped = true
+			index++
+		case '"':
+			return start, index, index + 1, escaped, true
+		}
+	}
+	return 0, 0, 0, false, false
+}
+
+func scanJSONValue(data []byte, index int) (int, bool) {
+	if index >= len(data) {
+		return 0, false
+	}
+	if data[index] == '"' {
+		_, _, next, _, ok := scanJSONString(data, index)
+		return next, ok
+	}
+	if data[index] != '{' && data[index] != '[' {
+		for current := index; current < len(data); current++ {
+			if data[current] == ',' || data[current] == '}' {
+				return current, current > index
+			}
+		}
+		return 0, false
+	}
+	depth := 0
+	for current := index; current < len(data); current++ {
+		switch data[current] {
+		case '"':
+			_, _, next, _, ok := scanJSONString(data, current)
+			if !ok {
+				return 0, false
+			}
+			current = next - 1
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				return current + 1, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func parseNonNegativeJSONInt(data []byte) (int, bool) {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return 0, false
+	}
+	value := 0
+	maxInt := int(^uint(0) >> 1)
+	for _, digit := range data {
+		if digit < '0' || digit > '9' || value > (maxInt-int(digit-'0'))/10 {
+			return 0, false
+		}
+		value = value*10 + int(digit-'0')
+	}
+	return value, true
+}
+
+func skipJSONWhitespace(data []byte, index int) int {
+	for index < len(data) {
+		switch data[index] {
+		case ' ', '\t', '\r', '\n':
+			index++
+		default:
+			return index
+		}
+	}
+	return index
 }
 
 func MergeNormalizedUsage(current, next NormalizedUsage) NormalizedUsage {

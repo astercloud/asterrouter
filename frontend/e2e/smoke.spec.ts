@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './fixtures'
+import { captureBrowserErrors, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
 
 // Candidate-package journeys use one external origin instead of the local dev
 // server. Keep health assertions on that same origin.
@@ -80,7 +80,7 @@ test('@smoke @surface-smoke settings can switch between all product modes', asyn
 
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   const headers = { Authorization: `Bearer ${token}` }
   const allProfiles = ['enterprise', 'personal', 'relay_operator', 'platform']
   const originalProfile = expectedProfile || 'personal'

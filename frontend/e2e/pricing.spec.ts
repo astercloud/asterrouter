@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test'
-import { adminPost, captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './fixtures'
+import { adminPost, captureBrowserErrors, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
 
 test('@pricing expression pricing lifecycle remains usable across viewports', async ({ page }, testInfo) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   const suffix = `${testInfo.project.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${Date.now().toString(36)}`
   const model = `pricing-e2e-${suffix}`
   await adminPost(page, token, '/gateway-models', {

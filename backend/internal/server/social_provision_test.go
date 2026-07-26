@@ -16,7 +16,7 @@ func TestAuthorizeSocialProvisionHonorsRegistrationPolicyForNewIdentities(t *tes
 	if err := authorizeSocialProvision(ctx, settingsService, control, "github", "new-subject", "dev@example.com"); err == nil {
 		t.Fatal("new social identity must be rejected when registration is disabled")
 	}
-	if _, err := control.ProvisionOIDCUser(ctx, "github", "existing-subject", "existing@example.com", "Existing", ""); err != nil {
+	if _, err := control.ProvisionOIDCUser(ctx, "github", "existing-subject", "existing@example.com", "Existing", "", true); err != nil {
 		t.Fatalf("ProvisionOIDCUser(): %v", err)
 	}
 	if err := authorizeSocialProvision(ctx, settingsService, control, "github", "existing-subject", "existing@example.com"); err != nil {

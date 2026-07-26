@@ -26,6 +26,12 @@ type TOTPSetup struct {
 	ExpiresAt       time.Time `json:"expires_at"`
 }
 
+type AccountAuthenticationState struct {
+	UserID      string
+	Role        string
+	TOTPEnabled bool
+}
+
 const totpSetupTTL = 10 * time.Minute
 
 type totpSecretEnvelope struct {
@@ -50,6 +56,8 @@ var ErrDeploymentManagedAccount = errors.New("personal account is managed by dep
 
 var ErrUserEmailExists = errors.New("user email already exists")
 
+var ErrInvalidWorkspaceEmail = errors.New("valid email is required")
+
 // ErrPasswordTooWeak 表示密码不满足强度要求。该原因可以安全地回给调用方——
 // 它描述的是用户自己提交的输入，不泄漏任何账号是否存在的信息。
 var ErrPasswordTooWeak = fmt.Errorf("password must contain at least %d characters", MinPasswordLength)
@@ -62,6 +70,41 @@ var ErrResetTokenInvalid = errors.New("password reset token is invalid or expire
 
 // ErrVerificationTokenInvalid 表示邮箱验证凭据不可用，同样合并了不存在/过期/已使用。
 var ErrVerificationTokenInvalid = errors.New("email verification token is invalid or expired")
+
+// ErrEmailVerificationUnavailable intentionally merges unknown, already
+// verified, and cooldown cases so public resend endpoints cannot enumerate users.
+var ErrEmailVerificationUnavailable = errors.New("email verification is not available")
+
+// ErrPasswordResetUnavailable intentionally merges unknown, inactive, and
+// cooldown cases so public reset-request endpoints can return a uniform result.
+var ErrPasswordResetUnavailable = errors.New("password reset is not available")
+
+// ErrInvalidWorkspaceCredentials intentionally merges unknown users, disabled
+// users, unverified email addresses, and invalid passwords for local login.
+var ErrInvalidWorkspaceCredentials = errors.New("invalid email or password")
+
+var (
+	ErrAccountDisplayNameRequired = errors.New("display name is required")
+	ErrAccountDisplayNameTooLong  = errors.New("display name must contain at most 80 characters")
+	ErrAccountAvatarTooLarge      = errors.New("avatar must not exceed 256 KiB")
+	ErrAccountAvatarFormatInvalid = errors.New("avatar must be a PNG, JPEG, WebP, or GIF data URL")
+	ErrAccountAvatarBase64Invalid = errors.New("avatar contains invalid base64 data")
+	ErrAccountAvatarTypeInvalid   = errors.New("avatar content does not match a supported image type")
+
+	ErrPasswordRecoveryRequired = errors.New("use password recovery to set a local password")
+	ErrCurrentPasswordIncorrect = errors.New("current password is incorrect")
+	ErrPasswordUnchanged        = errors.New("new password must be different from the current password")
+
+	ErrWorkspaceUserDisabled    = errors.New("workspace user is disabled")
+	ErrTOTPAlreadyEnabled       = errors.New("TOTP is already enabled")
+	ErrTOTPEnrollmentNotStarted = errors.New("TOTP enrollment has not been started")
+	ErrTOTPEnrollmentExpired    = errors.New("TOTP enrollment has expired; start again")
+	ErrTOTPInvalidCode          = errors.New("invalid TOTP code")
+	ErrTOTPNotEnabled           = errors.New("TOTP is not enabled")
+
+	ErrAuthIdentityNotBound = errors.New("authentication identity is not bound")
+	ErrLastLoginMethod      = errors.New("cannot remove the last available login method")
+)
 
 func validatePasswordStrength(password string) error {
 	if utf8.RuneCountInString(password) < MinPasswordLength {
@@ -81,15 +124,15 @@ func ValidatePasswordStrength(password string) error {
 func normalizeWorkspaceUserEmail(value string) (string, error) {
 	email := strings.ToLower(strings.TrimSpace(value))
 	if email == "" || len(email) > 254 || strings.Count(email, "@") != 1 {
-		return "", errors.New("valid email is required")
+		return "", ErrInvalidWorkspaceEmail
 	}
 	address, err := mail.ParseAddress(email)
 	if err != nil || address.Address != email {
-		return "", errors.New("valid email is required")
+		return "", ErrInvalidWorkspaceEmail
 	}
 	local, domain, ok := strings.Cut(email, "@")
 	if !ok || local == "" || domain == "" || len(local) > 64 {
-		return "", errors.New("valid email is required")
+		return "", ErrInvalidWorkspaceEmail
 	}
 	return email, nil
 }
@@ -177,6 +220,14 @@ func (s *Service) CurrentAccountProfile(ctx context.Context, actor string) (Acco
 	return profile, err
 }
 
+func (s *Service) CurrentAccountAuthenticationState(ctx context.Context, actor string) (AccountAuthenticationState, error) {
+	user, err := s.workspaceUserForActor(ctx, actor)
+	if err != nil {
+		return AccountAuthenticationState{}, err
+	}
+	return AccountAuthenticationState{UserID: user.ID, Role: user.Role, TOTPEnabled: user.TOTPEnabled}, nil
+}
+
 func (s *Service) UpdateCurrentAccountProfile(ctx context.Context, actor string, req AccountProfileUpdateRequest) (AccountProfile, error) {
 	user, err := s.workspaceUserForActor(ctx, actor)
 	if err != nil {
@@ -184,10 +235,10 @@ func (s *Service) UpdateCurrentAccountProfile(ctx context.Context, actor string,
 	}
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
-		return AccountProfile{}, errors.New("display name is required")
+		return AccountProfile{}, ErrAccountDisplayNameRequired
 	}
 	if len([]rune(displayName)) > 80 {
-		return AccountProfile{}, errors.New("display name must contain at most 80 characters")
+		return AccountProfile{}, ErrAccountDisplayNameTooLong
 	}
 	if err := validateAvatarDataURL(req.AvatarDataURL); err != nil {
 		return AccountProfile{}, err
@@ -213,13 +264,13 @@ func (s *Service) ChangeCurrentAccountPassword(ctx context.Context, actor string
 		return err
 	}
 	if user.PasswordHash == "" {
-		return errors.New("use password recovery to set a local password")
+		return ErrPasswordRecoveryRequired
 	}
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)) != nil {
-		return errors.New("current password is incorrect")
+		return ErrCurrentPasswordIncorrect
 	}
 	if req.CurrentPassword == req.NewPassword {
-		return errors.New("new password must be different from the current password")
+		return ErrPasswordUnchanged
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
@@ -269,19 +320,19 @@ func validateAvatarDataURL(value string) error {
 		return nil
 	}
 	if len(value) > maxAvatarDataURLBytes {
-		return errors.New("avatar must not exceed 256 KiB")
+		return ErrAccountAvatarTooLarge
 	}
 	header, payload, ok := strings.Cut(value, ",")
 	if !ok || !strings.HasSuffix(header, ";base64") || !oneOf(strings.TrimSuffix(header, ";base64"), "data:image/png", "data:image/jpeg", "data:image/webp", "data:image/gif") {
-		return errors.New("avatar must be a PNG, JPEG, WebP, or GIF data URL")
+		return ErrAccountAvatarFormatInvalid
 	}
 	decoded, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		return errors.New("avatar contains invalid base64 data")
+		return ErrAccountAvatarBase64Invalid
 	}
 	detected := http.DetectContentType(decoded)
 	if !oneOf(detected, "image/png", "image/jpeg", "image/webp", "image/gif") {
-		return errors.New("avatar content does not match a supported image type")
+		return ErrAccountAvatarTypeInvalid
 	}
 	return nil
 }
@@ -302,7 +353,7 @@ func (s *Service) RegisterWorkspaceUser(ctx context.Context, email, password, di
 	if err != nil {
 		return WorkspaceUser{}, "", err
 	}
-	now := time.Now().UTC()
+	now := s.nowUTC()
 	user := WorkspaceUser{ID: "usr_" + randomID(10), Email: email, DisplayName: strings.TrimSpace(displayName), Status: WorkspaceUserStatusActive, Role: RoleDeveloper, PasswordHash: string(hash), EmailVerified: !requireVerification, CreatedAt: now, UpdatedAt: now}
 	applyWorkspaceUserDefaults(&user, defaults)
 	verificationToken := ""
@@ -314,6 +365,7 @@ func (s *Service) RegisterWorkspaceUser(ctx context.Context, email, password, di
 		user.EmailVerifyHash = recoveryCodeHash(verificationToken)
 		expires := now.Add(emailVerificationTokenLifetime)
 		user.EmailVerifyExpiresAt = &expires
+		user.EmailVerifySentAt = &now
 	}
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return WorkspaceUser{}, "", err
@@ -338,25 +390,37 @@ func (s *Service) VerifyWorkspaceUserEmail(ctx context.Context, token string) er
 
 func (s *Service) RenewEmailVerification(ctx context.Context, email string) (WorkspaceUser, string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
+	user, found, err := s.findWorkspaceUserByLoginEmail(ctx, email)
+	if err != nil {
+		return WorkspaceUser{}, "", err
+	}
+	if !found {
+		return WorkspaceUser{}, "", ErrEmailVerificationUnavailable
+	}
 	token, err := auth.RandomToken(32)
 	if err != nil {
 		return WorkspaceUser{}, "", err
 	}
 	now := s.nowUTC()
 	expires := now.Add(emailVerificationTokenLifetime)
-	user, issued, err := s.repo.IssueWorkspaceUserEmailVerification(ctx, email, recoveryCodeHash(token), now, expires, emailVerificationResendCooldown)
+	user, issued, err := s.repo.IssueWorkspaceUserEmailVerification(ctx, user.Email, recoveryCodeHash(token), now, expires, emailVerificationResendCooldown)
 	if err != nil {
 		return WorkspaceUser{}, "", err
 	}
 	if !issued {
-		return WorkspaceUser{}, "", errors.New("user is not awaiting email verification")
+		return WorkspaceUser{}, "", ErrEmailVerificationUnavailable
 	}
 	return user, token, nil
 }
 
+func (s *Service) CancelEmailVerificationIssue(ctx context.Context, userID, token string) error {
+	_, err := s.repo.CancelWorkspaceUserEmailVerification(ctx, userID, recoveryCodeHash(token), s.nowUTC())
+	return err
+}
+
 func (s *Service) AuthenticateWorkspaceUser(ctx context.Context, email, password string, requireVerified bool) (WorkspaceUser, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	user, found, err := s.repo.FindWorkspaceUserByEmail(ctx, email)
+	user, found, err := s.findWorkspaceUserByLoginEmail(ctx, email)
 	if err != nil {
 		return WorkspaceUser{}, err
 	}
@@ -366,57 +430,69 @@ func (s *Service) AuthenticateWorkspaceUser(ctx context.Context, email, password
 	}
 	passwordMatches := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)) == nil
 	if !found || user.PasswordHash == "" || user.Status != WorkspaceUserStatusActive || (requireVerified && !user.EmailVerified) || !passwordMatches {
-		return WorkspaceUser{}, errors.New("invalid email or password")
+		return WorkspaceUser{}, ErrInvalidWorkspaceCredentials
 	}
 	return user, nil
 }
 
 func (s *Service) BeginPasswordReset(ctx context.Context, email string) (WorkspaceUser, string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
+	user, found, err := s.findWorkspaceUserByLoginEmail(ctx, email)
+	if err != nil {
+		return WorkspaceUser{}, "", err
+	}
+	if !found {
+		return WorkspaceUser{}, "", ErrPasswordResetUnavailable
+	}
 	token, err := auth.RandomToken(32)
 	if err != nil {
 		return WorkspaceUser{}, "", err
 	}
 	now := s.nowUTC()
 	expires := now.Add(passwordResetTokenLifetime)
-	user, issued, err := s.repo.IssueWorkspaceUserPasswordReset(ctx, email, recoveryCodeHash(token), now, expires, passwordResetRequestCooldown)
+	user, issued, err := s.repo.IssueWorkspaceUserPasswordReset(ctx, user.Email, recoveryCodeHash(token), now, expires, passwordResetRequestCooldown)
 	if err != nil {
 		return WorkspaceUser{}, "", err
 	}
 	if !issued {
-		return WorkspaceUser{}, "", errors.New("user is not eligible for password reset")
+		return WorkspaceUser{}, "", ErrPasswordResetUnavailable
 	}
 	_ = s.audit(ctx, email, "password_reset_requested", "workspace_user", user.ID, "Requested password reset")
 	return user, token, nil
 }
 
-func (s *Service) CompletePasswordReset(ctx context.Context, token, password string) error {
+func (s *Service) CancelPasswordResetIssue(ctx context.Context, userID, token string) error {
+	_, err := s.repo.CancelWorkspaceUserPasswordReset(ctx, userID, recoveryCodeHash(token), s.nowUTC())
+	return err
+}
+
+func (s *Service) CompletePasswordReset(ctx context.Context, token, password string) (WorkspaceUser, error) {
 	if err := validatePasswordStrength(password); err != nil {
-		return err
+		return WorkspaceUser{}, err
 	}
 	hashToken := recoveryCodeHash(token)
 	current, found, err := s.repo.FindWorkspaceUserByPasswordResetHash(ctx, hashToken)
 	if err != nil {
-		return err
+		return WorkspaceUser{}, err
 	}
 	now := s.nowUTC()
 	if !found || current.PasswordResetExpiresAt == nil || !now.Before(*current.PasswordResetExpiresAt) {
-		return ErrResetTokenInvalid
+		return WorkspaceUser{}, ErrResetTokenInvalid
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return err
+		return WorkspaceUser{}, err
 	}
 	user, consumed, err := s.repo.ConsumeWorkspaceUserPasswordReset(ctx, hashToken, string(passwordHash), now)
 	if err != nil {
-		return err
+		return WorkspaceUser{}, err
 	}
 	if !consumed {
-		return ErrResetTokenInvalid
+		return WorkspaceUser{}, ErrResetTokenInvalid
 	}
 	_ = s.audit(ctx, user.Email, "password_reset_completed", "workspace_user", user.ID, "Completed password reset")
 	_ = s.publishAccountSecurityNotification(ctx, user, "账户密码已重置", "您的账户密码已通过密码找回流程重置，其他登录会话已失效。", "password_reset_completed")
-	return nil
+	return user, nil
 }
 
 func (s *Service) BeginTOTPSetup(ctx context.Context, actor, currentPassword string) (TOTPSetup, error) {
@@ -425,13 +501,13 @@ func (s *Service) BeginTOTPSetup(ctx context.Context, actor, currentPassword str
 		return TOTPSetup{}, err
 	}
 	if user.Status != WorkspaceUserStatusActive {
-		return TOTPSetup{}, errors.New("workspace user is disabled")
+		return TOTPSetup{}, ErrWorkspaceUserDisabled
 	}
 	if user.TOTPEnabled {
-		return TOTPSetup{}, errors.New("TOTP is already enabled")
+		return TOTPSetup{}, ErrTOTPAlreadyEnabled
 	}
 	if user.PasswordHash == "" || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)) != nil {
-		return TOTPSetup{}, errors.New("current password is incorrect")
+		return TOTPSetup{}, ErrCurrentPasswordIncorrect
 	}
 	now := s.nowUTC()
 	secret, err := auth.GenerateTOTPSecret()
@@ -470,18 +546,21 @@ func (s *Service) confirmTOTP(ctx context.Context, actor, code string, includeRe
 		return nil, err
 	}
 	if user.TOTPEnabled {
-		return nil, errors.New("TOTP is already enabled")
+		return nil, ErrTOTPAlreadyEnabled
+	}
+	if strings.TrimSpace(user.TOTPSecretCiphertext) == "" {
+		return nil, ErrTOTPEnrollmentNotStarted
 	}
 	secret, setupExpiresAt, err := decryptTOTPSecret(s.secretKey, user.TOTPSecretCiphertext)
 	if err != nil {
-		return nil, errors.New("TOTP enrollment has not been started")
+		return nil, err
 	}
 	now := s.nowUTC()
 	if setupExpiresAt == nil || !now.Before(*setupExpiresAt) {
-		return nil, errors.New("TOTP enrollment has expired; start again")
+		return nil, ErrTOTPEnrollmentExpired
 	}
 	if !auth.ValidateTOTP(secret, code, now) {
-		return nil, errors.New("invalid TOTP code")
+		return nil, ErrTOTPInvalidCode
 	}
 	var codes []string
 	if includeRecoveryCodes {
@@ -511,13 +590,9 @@ func (s *Service) confirmTOTP(ctx context.Context, actor, code string, includeRe
 }
 
 func (s *Service) DisableTOTP(ctx context.Context, actor, code string) error {
-	user, err := s.workspaceUserByID(ctx, actor)
+	user, err := s.VerifyUserTOTP(ctx, actor, code)
 	if err != nil {
 		return err
-	}
-	secret, _, err := decryptTOTPSecret(s.secretKey, user.TOTPSecretCiphertext)
-	if err != nil || !user.TOTPEnabled || !auth.ValidateTOTP(secret, code, time.Now().UTC()) {
-		return errors.New("invalid TOTP code")
 	}
 	user.TOTPEnabled = false
 	user.TOTPSecretCiphertext = ""
@@ -540,7 +615,7 @@ func (s *Service) VerifyUserTOTP(ctx context.Context, userID, code string) (Work
 		return WorkspaceUser{}, err
 	}
 	if user.Status != WorkspaceUserStatusActive || !user.TOTPEnabled {
-		return WorkspaceUser{}, errors.New("TOTP is not enabled")
+		return WorkspaceUser{}, ErrTOTPNotEnabled
 	}
 	secret, _, err := decryptTOTPSecret(s.secretKey, user.TOTPSecretCiphertext)
 	if err == nil && auth.ValidateTOTP(secret, code, time.Now().UTC()) {
@@ -555,7 +630,7 @@ func (s *Service) VerifyUserTOTP(ctx context.Context, userID, code string) (Work
 		_ = s.audit(ctx, userID, "totp_recovery_used", "workspace_user", user.ID, "Used a TOTP recovery code")
 		return user, nil
 	}
-	return WorkspaceUser{}, errors.New("invalid TOTP code")
+	return WorkspaceUser{}, ErrTOTPInvalidCode
 }
 
 func (s *Service) GenerateTOTPRecoveryCodes(ctx context.Context, actor, code string) ([]string, error) {
@@ -639,16 +714,8 @@ func (s *Service) ExternalIdentityExists(ctx context.Context, issuer, subject st
 	if err != nil || found {
 		return found, err
 	}
-	users, err := s.repo.ListWorkspaceUsers(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, user := range users {
-		if user.ExternalIssuer == issuer && user.ExternalSubject == subject {
-			return true, nil
-		}
-	}
-	return false, nil
+	_, found, err = s.repo.FindWorkspaceUserByExternalIdentity(ctx, issuer, subject)
+	return found, err
 }
 
 func (s *Service) UnbindCurrentAuthIdentity(ctx context.Context, actor, provider string) error {
@@ -674,10 +741,10 @@ func (s *Service) UnbindCurrentAuthIdentity(ctx context.Context, actor, provider
 		}
 	}
 	if index < 0 {
-		return errors.New("authentication identity is not bound")
+		return ErrAuthIdentityNotBound
 	}
 	if user.PasswordHash == "" && len(identities) <= 1 {
-		return errors.New("cannot remove the last available login method")
+		return ErrLastLoginMethod
 	}
 	identity := identities[index]
 	if err := s.repo.DeleteAuthIdentity(ctx, identity.ID); err != nil {
@@ -693,7 +760,7 @@ func (s *Service) UnbindCurrentAuthIdentity(ctx context.Context, actor, provider
 	return s.audit(ctx, actor, "auth_identity_unbound", "workspace_user", user.ID, "Unbound "+identity.Issuer+" authentication identity")
 }
 
-func (s *Service) BindCurrentAuthIdentity(ctx context.Context, actor, issuer, subject, email string) error {
+func (s *Service) BindCurrentAuthIdentity(ctx context.Context, actor, issuer, subject, email string, emailVerified bool) error {
 	user, err := s.workspaceUserForActor(ctx, actor)
 	if err != nil {
 		return err
@@ -715,21 +782,25 @@ func (s *Service) BindCurrentAuthIdentity(ctx context.Context, actor, issuer, su
 	}
 	now := time.Now().UTC()
 	identity := AuthIdentity{ID: "aid_" + randomID(10), UserID: user.ID, Issuer: issuer, Subject: subject, Email: strings.ToLower(strings.TrimSpace(email)), CreatedAt: now, UpdatedAt: now}
-	if err := s.repo.SaveAuthIdentity(ctx, identity); err != nil {
+	verifyEmail := emailVerified && !user.EmailVerified && strings.EqualFold(user.Email, identity.Email)
+	if err := s.repo.BindAuthIdentity(ctx, identity, verifyEmail); err != nil {
 		return err
 	}
 	return s.audit(ctx, actor, "auth_identity_bound", "workspace_user", user.ID, "Bound "+issuer+" authentication identity")
 }
 
-func (s *Service) SessionVersion(ctx context.Context, actor string) (int64, bool) {
+func (s *Service) SessionVersion(ctx context.Context, actor string) (int64, bool, error) {
 	user, err := s.workspaceUserForActor(ctx, actor)
 	if err != nil {
-		return 0, false
+		if errors.Is(err, ErrDeploymentManagedAccount) {
+			return 0, false, nil
+		}
+		return 0, false, err
 	}
 	if user.Status != WorkspaceUserStatusActive {
-		return user.SessionVersion + 1, true
+		return user.SessionVersion + 1, true, nil
 	}
-	return user.SessionVersion, true
+	return user.SessionVersion, true, nil
 }
 
 func (s *Service) RevokeAccountSessions(ctx context.Context, actor string) error {
@@ -745,14 +816,15 @@ func (s *Service) RevokeAccountSessions(ctx context.Context, actor string) error
 	return s.audit(ctx, actor, "account_sessions_revoked", "workspace_user", user.ID, "Revoked all account sessions")
 }
 
-func (s *Service) ProvisionOIDCUser(ctx context.Context, issuer, subject, email, displayName, departmentCode string, defaults ...WorkspaceUserDefaults) (WorkspaceUser, error) {
+func (s *Service) ProvisionOIDCUser(ctx context.Context, issuer, subject, email, displayName, departmentCode string, emailVerified bool, defaults ...WorkspaceUserDefaults) (WorkspaceUser, error) {
 	issuer = strings.TrimSpace(issuer)
 	subject = strings.TrimSpace(subject)
-	email = strings.ToLower(strings.TrimSpace(email))
+	var err error
+	email, err = normalizeWorkspaceUserEmail(email)
 	if issuer == "" || subject == "" {
 		return WorkspaceUser{}, errors.New("oidc issuer and subject are required")
 	}
-	if email == "" || !strings.Contains(email, "@") {
+	if err != nil {
 		return WorkspaceUser{}, errors.New("oidc email claim is required")
 	}
 	identity, found, err := s.repo.FindAuthIdentity(ctx, issuer, subject)
@@ -767,24 +839,45 @@ func (s *Service) ProvisionOIDCUser(ctx context.Context, issuer, subject, email,
 		if user.Status != WorkspaceUserStatusActive {
 			return WorkspaceUser{}, errors.New("workspace user is disabled")
 		}
+		if emailVerified && !user.EmailVerified && user.Email == email {
+			user.EmailVerified = true
+			user.EmailVerifyHash = ""
+			user.EmailVerifyExpiresAt = nil
+			user.EmailVerifySentAt = nil
+			user.UpdatedAt = time.Now().UTC()
+			if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
+				return WorkspaceUser{}, err
+			}
+		}
 		return user, nil
 	}
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	legacyUser, legacyFound, err := s.repo.FindWorkspaceUserByExternalIdentity(ctx, issuer, subject)
 	if err != nil {
 		return WorkspaceUser{}, err
 	}
-	for _, user := range users {
-		if user.ExternalIssuer == issuer && user.ExternalSubject == subject {
-			if user.Status != WorkspaceUserStatusActive {
-				return WorkspaceUser{}, errors.New("workspace user is disabled")
-			}
-			now := time.Now().UTC()
-			_ = s.repo.SaveAuthIdentity(ctx, AuthIdentity{ID: "aid_" + randomID(10), UserID: user.ID, Issuer: issuer, Subject: subject, Email: user.Email, CreatedAt: now, UpdatedAt: now})
-			return user, nil
+	if legacyFound {
+		if legacyUser.Status != WorkspaceUserStatusActive {
+			return WorkspaceUser{}, errors.New("workspace user is disabled")
 		}
-		if user.Email == email && (user.ExternalIssuer != "" || user.ExternalSubject != "") {
-			return WorkspaceUser{}, errors.New("email is already bound to another external identity")
+		now := time.Now().UTC()
+		verifyEmail := emailVerified && !legacyUser.EmailVerified && legacyUser.Email == email
+		identity := AuthIdentity{ID: "aid_" + randomID(10), UserID: legacyUser.ID, Issuer: issuer, Subject: subject, Email: legacyUser.Email, CreatedAt: now, UpdatedAt: now}
+		if err := s.repo.BindAuthIdentity(ctx, identity, verifyEmail); err != nil {
+			return WorkspaceUser{}, err
 		}
+		if verifyEmail {
+			legacyUser.EmailVerified = true
+			legacyUser.EmailVerifyHash = ""
+			legacyUser.EmailVerifyExpiresAt = nil
+			legacyUser.EmailVerifySentAt = nil
+			legacyUser.UpdatedAt = now
+		}
+		return legacyUser, nil
+	}
+	if existingEmail, emailFound, err := s.repo.FindWorkspaceUserByEmail(ctx, email); err != nil {
+		return WorkspaceUser{}, err
+	} else if emailFound && (existingEmail.ExternalIssuer != "" || existingEmail.ExternalSubject != "") {
+		return WorkspaceUser{}, errors.New("email is already bound to another external identity")
 	}
 	departmentID := ""
 	if code := strings.TrimSpace(departmentCode); code != "" {
@@ -800,15 +893,13 @@ func (s *Service) ProvisionOIDCUser(ctx context.Context, issuer, subject, email,
 		}
 	}
 	now := time.Now().UTC()
-	user := WorkspaceUser{ID: "usr_" + randomID(10), Email: email, DisplayName: strings.TrimSpace(displayName), Status: WorkspaceUserStatusActive, Role: RoleDeveloper, ExternalIssuer: issuer, ExternalSubject: subject, DepartmentID: departmentID, CreatedAt: now, UpdatedAt: now}
+	user := WorkspaceUser{ID: "usr_" + randomID(10), Email: email, DisplayName: strings.TrimSpace(displayName), Status: WorkspaceUserStatusActive, Role: RoleDeveloper, ExternalIssuer: issuer, ExternalSubject: subject, DepartmentID: departmentID, EmailVerified: emailVerified, CreatedAt: now, UpdatedAt: now}
 	applyWorkspaceUserDefaults(&user, defaults)
 	if err := s.ensureUniqueUserEmail(ctx, "", email); err != nil {
 		return WorkspaceUser{}, err
 	}
-	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
-		return WorkspaceUser{}, err
-	}
-	if err := s.repo.SaveAuthIdentity(ctx, AuthIdentity{ID: "aid_" + randomID(10), UserID: user.ID, Issuer: issuer, Subject: subject, Email: email, CreatedAt: now, UpdatedAt: now}); err != nil {
+	identity = AuthIdentity{ID: "aid_" + randomID(10), UserID: user.ID, Issuer: issuer, Subject: subject, Email: email, CreatedAt: now, UpdatedAt: now}
+	if err := s.repo.SaveProvisionedWorkspaceUser(ctx, user, identity); err != nil {
 		return WorkspaceUser{}, err
 	}
 	if err := s.audit(ctx, email, "oidc_provision", "workspace_user", user.ID, fmt.Sprintf("Provisioned workspace user %s through OIDC", email)); err != nil {
@@ -874,13 +965,18 @@ func (s *Service) UpdateWorkspaceUser(ctx context.Context, actor string, id stri
 	user.TOTPSecretCiphertext = existing.TOTPSecretCiphertext
 	user.TOTPRecoveryHashes = existing.TOTPRecoveryHashes
 	user.PasswordHash = existing.PasswordHash
-	user.EmailVerified = existing.EmailVerified
-	user.EmailVerifyHash = existing.EmailVerifyHash
-	user.EmailVerifyExpiresAt = existing.EmailVerifyExpiresAt
-	user.PasswordResetHash = existing.PasswordResetHash
-	user.PasswordResetExpiresAt = existing.PasswordResetExpiresAt
+	emailChanged := !strings.EqualFold(strings.TrimSpace(user.Email), strings.TrimSpace(existing.Email))
+	if !emailChanged {
+		user.EmailVerified = existing.EmailVerified
+		user.EmailVerifyHash = existing.EmailVerifyHash
+		user.EmailVerifyExpiresAt = existing.EmailVerifyExpiresAt
+		user.EmailVerifySentAt = existing.EmailVerifySentAt
+		user.PasswordResetHash = existing.PasswordResetHash
+		user.PasswordResetExpiresAt = existing.PasswordResetExpiresAt
+		user.PasswordResetSentAt = existing.PasswordResetSentAt
+	}
 	user.SessionVersion = existing.SessionVersion
-	if user.Status != existing.Status || user.Role != existing.Role || user.DepartmentID != existing.DepartmentID {
+	if emailChanged || user.Status != existing.Status || user.Role != existing.Role || user.DepartmentID != existing.DepartmentID {
 		user.SessionVersion++
 	}
 	user.CreatedAt = existing.CreatedAt
@@ -1064,24 +1160,27 @@ func (s *Service) workspaceUserByID(ctx context.Context, id string) (WorkspaceUs
 	if id == "" {
 		return WorkspaceUser{}, errors.New("user id is required")
 	}
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	user, found, err := s.repo.FindWorkspaceUserByID(ctx, id)
 	if err != nil {
 		return WorkspaceUser{}, err
 	}
-	for _, user := range users {
-		if user.ID == id {
-			return user, nil
-		}
+	if found {
+		return user, nil
 	}
 	return WorkspaceUser{}, fmt.Errorf("user %s not found", id)
 }
 
 func (s *Service) workspaceUserForActor(ctx context.Context, actor string) (WorkspaceUser, error) {
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	actor = strings.TrimSpace(actor)
+	user, found, err := s.repo.FindWorkspaceUserByID(ctx, actor)
+	if err != nil || found {
+		return user, err
+	}
+	user, found, err = s.findWorkspaceUserByLoginEmail(ctx, actor)
 	if err != nil {
 		return WorkspaceUser{}, err
 	}
-	if user, ok := workspaceUserByActor(users, actor); ok {
+	if found {
 		return user, nil
 	}
 	return WorkspaceUser{}, ErrDeploymentManagedAccount
@@ -1124,6 +1223,29 @@ func (s *Service) ensureUniqueUserEmail(ctx context.Context, currentID string, e
 		return fmt.Errorf("%w: %s", ErrUserEmailExists, email)
 	}
 	return nil
+}
+
+// findWorkspaceUserByLoginEmail keeps local authentication compatible with
+// historical mixed-case addresses while preserving the rule that provider
+// aliases are only used for registration deduplication, not as login names.
+func (s *Service) findWorkspaceUserByLoginEmail(ctx context.Context, email string) (WorkspaceUser, bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	user, found, err := s.repo.FindWorkspaceUserByEmail(ctx, email)
+	if err != nil || found {
+		return user, found, err
+	}
+	normalized := NormalizeEmailForAliasDedup(email)
+	if normalized == "" {
+		return WorkspaceUser{}, false, nil
+	}
+	user, found, err = s.repo.FindWorkspaceUserByEmailNormalized(ctx, normalized)
+	if err != nil || !found {
+		return user, found, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(user.Email), email) {
+		return WorkspaceUser{}, false, nil
+	}
+	return user, true, nil
 }
 
 func (s *Service) ensureUniqueRoleBinding(ctx context.Context, next RoleBinding) error {
