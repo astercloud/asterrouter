@@ -28,7 +28,7 @@ function currentTOTP(secret: string): string {
 
 async function signOut(page: Page) {
   await page.getByRole('button', { name: 'Account menu' }).click()
-  await page.getByRole('button', { name: 'Sign out' }).click()
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
   await expect(page).toHaveURL(/\/login$/)
 }
 
