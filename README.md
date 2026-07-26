@@ -56,17 +56,17 @@ AI Platform is a separate deployment role, not a relay-customer feature. It has 
 
 ## What is available now
 
-- OpenAI-compatible Models, Chat Completions, Responses, Images, Audio, Realtime, and durable Jobs, including streaming and artifact delivery.
+- OpenAI-compatible Models, Chat Completions, Responses, Embeddings, Images, Audio, Realtime, and durable Jobs, plus Anthropic Count Tokens, including streaming and artifact delivery where the protocol supports it.
 - Multi-provider routing, fallback, account capacity controls, cooldowns, circuit breaking, and sticky routing.
 - API Key lifecycle, model allowlists, rate limits, token quotas, budgets, usage, cost allocation, alerts, traces, audit, and export.
 - Installed plugin workbenches that reuse host-managed routing, credentials, usage evidence, and artifacts.
 - Enterprise identity and access governance, plus Personal, Relay Operator, Enterprise, and AI Platform consoles.
 - Platform Tenant and Gateway Principal management; direct tenant-bound keys; HMAC and RS256 JWT/JWKS delegated access; signed HTTPS usage delivery with retry, dead letter, and requeue.
-- Private deployment foundations: PostgreSQL, backup and restore, diagnostics, and verified release updates.
+- Private deployment foundations: PostgreSQL, an optional two-instance Compose topology, authenticated operational metrics, backup and restore, diagnostics, and verified release updates.
 
 ## Where the product is going
 
-The roadmap extends the same Core to broader price-aware provider selection, browser-assisted price collection, Embeddings and other public protocols, additional media adapters, Redis-backed coordination, and Kubernetes scaling. These are not current product claims.
+The roadmap extends the same Core to broader price-aware provider selection, browser-assisted price collection, additional public protocols and media adapters, Redis-backed coordination, and Kubernetes scaling. These are not current product claims.
 
 The roadmap is intentionally not a release promise. The public product boundary is kept in this README; private deployment planning is delivered with the engagement.
 
@@ -125,6 +125,11 @@ The Core remains usable when official online services are unavailable. Prompts, 
 - [Build status](https://github.com/astercloud/asterrouter/actions)
 - [Deployment environment template](./deploy/asterrouter.env.example)
 - [Docker deployment guide](./deploy/DOCKER.md)
+- [High-availability operations runbook](./deploy/HA_RUNBOOK.md)
+- [Product positioning](./docs/product-positioning.md)
+- [Target architecture](./docs/goal/README.md)
+- [Experience refactor](./docs/refactor/v1/README.md)
+- [V5 implementation roadmap](./docs/roadmap/v5/README.md)
 - [简体中文说明](./README.zh-CN.md)
 
 <details>

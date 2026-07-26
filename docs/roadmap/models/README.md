@@ -64,7 +64,7 @@ AsterRouter 不维护一份写死在代码或前端中的“最新完整模型�
 - 原子变更：账号与库存同事务保存；批量路由先完整校验，再同事务写入。
 - 权责唯一：Provider Connection 不保存模型或 Secret；模型与凭据都属于 Provider Account。
 - 失效关闭：active Route 只能绑定 active `GatewayModel`；disabled 公共模型只允许保留 disabled 历史 Route。
-- 能力不冒充：账号库存可以包含尚未交付网关端点的 embedding 或需要插件的媒体 deployment；库存存在不自动产生可执行 Route。
+- 能力不冒充：账号库存可以包含当前 Adapter 不支持的 embedding 或需要插件的媒体 deployment；库存存在不自动产生可执行 Route。
 
 ## 5. 系统架构
 
@@ -198,7 +198,7 @@ stateDiagram-v2
 
 API Key、治理策略和外部集成中的 allowlist/denylist 是兼容历史配置和分阶段部署的软引用，不承担模型存在性。管理端新建操作只提供 active `GatewayModel.model_id`；请求执行时 `ResolveGatewayModel` 再次只解析 active GatewayModel，因此直接 API 写入未知或已停用字符串也不能绕过公共模型目录或产生路由候选。
 
-Route 还必须通过 Provider 类型、Gateway Model 模态与 `upstream_format` 的组合校验。当前 embedding 可以作为账号库存事实存在，但 `/v1/embeddings` 尚未进入本次多协议文本 Core，因此不能创建可执行 Route。图片和视频 `native_media` Route 仍需运行时 Provider Adapter 能力门禁；内置同步音频与 Realtime Route 只接受 `openai_compatible`，不会把 AWS、Vertex 或 Azure 文本连接误当成 OpenAI Audio 端点。
+Route 还必须通过 Provider 类型、Gateway Model 模态与 `upstream_format` 的组合校验。Embedding 使用独立的 `/v1/embeddings` Pipeline 与 `openai_embeddings` 格式，当前只允许 OpenAI-compatible 和 Azure OpenAI；图片和视频 `native_media` Route 仍需运行时 Provider Adapter 能力门禁；内置同步音频与 Realtime Route 只接受 `openai_compatible`，不会把 AWS、Vertex 或 Azure 文本连接误当成 OpenAI Audio 端点。
 
 Provider CRUD 不接受 `models` 或 Secret 字段。`enabled_models=[]` 是合法同步请求，用于显式停用支持自动发现账号的全部模型；库存行和发现证据继续保留，账号因无可用 Route 不会进入调度。手工云目录通过 Provider Account 创建/更新接口原子保存。
 

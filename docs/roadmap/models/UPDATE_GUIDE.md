@@ -15,7 +15,7 @@
 6. 在“模型路由”使用“批量匹配模型”，复核 route group、优先级和权重后提交。
 7. 用 Gateway Simulator 检查候选和调度结果，再发送最小真实请求。
 
-账号库存与可执行路由不是同一事实。当前版本中，embedding deployment 可以保留在库存但不会出现在可执行 Route Checklist；Azure 图像、Vertex/DashScope/混元/BytePlus 等媒体模型只有在对应 Provider Adapter 声明能力后才能运行；内置同步音频与 Realtime 只使用 `openai_compatible` 账号。
+账号库存与可执行路由不是同一事实。Embedding 只有在 OpenAI-compatible 或 Azure OpenAI 账号上使用 `openai_embeddings` 格式时才会出现在可执行 Route Checklist；Azure 图像、Vertex/DashScope/混元/BytePlus 等媒体模型只有在对应 Provider Adapter 声明能力后才能运行；内置同步音频与 Realtime 只使用 `openai_compatible` 账号。
 
 创建或启用 `GatewayModel` 后，管理员 Key、Platform Key、外部集成、Operator 使用方 Key、治理策略、个人控制台、Simulator、模型定价和有效价格切换决策会在下次加载时自动读取最新目录，不需要修改任何前端推荐数组。
 
