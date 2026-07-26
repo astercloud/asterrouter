@@ -15,6 +15,7 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 	"github.com/astercloud/asterrouter/backend/internal/httpx"
 	"github.com/gin-gonic/gin"
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestOnboardingHTTPJourneyPerformsGovernedVerification(t *testing.T) {
@@ -88,7 +89,26 @@ func TestOnboardingHTTPJourneyPerformsGovernedVerification(t *testing.T) {
 	if configRecorder.Code != http.StatusOK {
 		t.Fatalf("client config status=%d body=%s", configRecorder.Code, configRecorder.Body.String())
 	}
-	if strings.Contains(configRecorder.Body.String(), apiKey.Credential) || !strings.Contains(configRecorder.Body.String(), `env_key = \"ASTERROUTER_API_KEY\"`) || !strings.Contains(configRecorder.Body.String(), `http://router.example.test/v1`) {
+	var configEnvelope struct {
+		Data controlplane.APIKeyClientConfig `json:"data"`
+	}
+	if err := json.Unmarshal(configRecorder.Body.Bytes(), &configEnvelope); err != nil {
+		t.Fatalf("decode client config: %v", err)
+	}
+	var codexConfig struct {
+		ModelProvider  string `toml:"model_provider"`
+		Model          string `toml:"model"`
+		ModelProviders map[string]struct {
+			BaseURL string `toml:"base_url"`
+			EnvKey  string `toml:"env_key"`
+			WireAPI string `toml:"wire_api"`
+		} `toml:"model_providers"`
+	}
+	if err := toml.Unmarshal([]byte(configEnvelope.Data.Content), &codexConfig); err != nil {
+		t.Fatalf("parse client TOML: %v\n%s", err, configEnvelope.Data.Content)
+	}
+	provider := codexConfig.ModelProviders["asterrouter"]
+	if strings.Contains(configRecorder.Body.String(), apiKey.Credential) || codexConfig.ModelProvider != "asterrouter" || codexConfig.Model != "team-model" || provider.BaseURL != "http://router.example.test/v1" || provider.EnvKey != "ASTERROUTER_API_KEY" || provider.WireAPI != "responses" {
 		t.Fatalf("client config leaked or is incomplete: %s", configRecorder.Body.String())
 	}
 

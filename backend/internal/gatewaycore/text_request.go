@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 )
 
@@ -746,7 +747,11 @@ func decodeGeminiContent(raw json.RawMessage) (TextMessage, error) {
 }
 
 func encodeOpenAIChatRequest(request CanonicalTextRequest) ([]byte, error) {
-	messages := make([]any, 0, len(request.System)+len(request.Messages)*2)
+	capacity, ok := expandedTextPartCapacity(len(request.System), len(request.Messages))
+	if !ok {
+		return nil, ErrInvalidCanonicalRequest
+	}
+	messages := make([]any, 0, capacity)
 	if len(request.System) > 0 {
 		messages = append(messages, map[string]any{"role": "system", "content": strings.Join(request.System, "\n\n")})
 	}
@@ -778,7 +783,11 @@ func encodeOpenAIChatRequest(request CanonicalTextRequest) ([]byte, error) {
 }
 
 func encodeOpenAIResponsesRequest(request CanonicalTextRequest) ([]byte, error) {
-	input := make([]any, 0, len(request.Messages)*2)
+	capacity, ok := expandedTextPartCapacity(0, len(request.Messages))
+	if !ok {
+		return nil, ErrInvalidCanonicalRequest
+	}
+	input := make([]any, 0, capacity)
 	for _, message := range request.Messages {
 		encoded, err := encodeResponsesMessage(message)
 		if err != nil {
@@ -813,6 +822,13 @@ func encodeOpenAIResponsesRequest(request CanonicalTextRequest) ([]byte, error) 
 		payload["text"] = map[string]any{"format": format}
 	}
 	return json.Marshal(payload)
+}
+
+func expandedTextPartCapacity(base, messageCount int) (int, bool) {
+	if base < 0 || messageCount < 0 || messageCount > (math.MaxInt-base)/2 {
+		return 0, false
+	}
+	return base + messageCount*2, true
 }
 
 func encodeAnthropicRequest(request CanonicalTextRequest) ([]byte, error) {

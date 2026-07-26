@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/testutil"
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestOnboardingSessionRepositoryContract(t *testing.T) {
@@ -228,6 +229,34 @@ func TestAPIKeyClientConfigShellQuotesUntrustedValues(t *testing.T) {
 		if !strings.Contains(config.Content, "'model'\"'\"'$(printf-danger)'") || !strings.Contains(config.Content, "'https://router.example.test/edge'\"'\"'$(printf-url)") {
 			t.Fatalf("client %s content is not shell quoted:\n%s", client, config.Content)
 		}
+	}
+}
+
+func TestAPIKeyClientConfigTOMLEncodesUntrustedValues(t *testing.T) {
+	service := NewService(NewMemoryRepository(), "/v1", "client-config-test-secret")
+	model := "model\"\n[model_providers.attacker]\nwire_api = \"chat\""
+	created, err := service.CreateAPIKey(context.Background(), "admin", APIKeyCreateRequest{
+		Name: "TOML quoting", ModelAllowlist: []string{model},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayURL := "https://router.example.test/edge\"quoted/v1"
+	config, err := service.APIKeyClientConfig(context.Background(), created.Record.ID, ClientCodex, model, gatewayURL)
+	if err != nil {
+		t.Fatalf("APIKeyClientConfig(): %v", err)
+	}
+	var decoded struct {
+		ModelProvider  string                        `toml:"model_provider"`
+		Model          string                        `toml:"model"`
+		ModelProviders map[string]codexModelProvider `toml:"model_providers"`
+	}
+	if err := toml.Unmarshal([]byte(config.Content), &decoded); err != nil {
+		t.Fatalf("generated configuration is invalid TOML: %v\n%s", err, config.Content)
+	}
+	provider, ok := decoded.ModelProviders["asterrouter"]
+	if !ok || len(decoded.ModelProviders) != 1 || decoded.ModelProvider != "asterrouter" || decoded.Model != model || provider.BaseURL != gatewayURL || provider.WireAPI != "responses" {
+		t.Fatalf("decoded configuration=%+v provider=%+v", decoded, provider)
 	}
 }
 

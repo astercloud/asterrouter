@@ -8,9 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 var (
@@ -414,14 +415,29 @@ func (s *Service) APIKeyClientConfig(ctx context.Context, apiKeyID, client, mode
 		VerificationPath:     "/api/v1/admin/api-keys/" + key.ID + "/client-verifications",
 		RecoveryInstructions: []string{"restore_previous_configuration", "unset_asterrouter_environment_variables"},
 	}
-	quotedGateway, quotedModel := strconv.Quote(gatewayURL), strconv.Quote(model)
 	shellGateway, shellModel := shellQuote(gatewayURL), shellQuote(model)
 	switch client {
 	case ClientCodex:
 		config.Format = "toml"
 		config.FilePath = "~/.codex/config.toml"
 		config.Environment = map[string]string{"ASTERROUTER_API_KEY": "<one-time-credential>"}
-		config.Content = fmt.Sprintf("model_provider = \"asterrouter\"\nmodel = %s\n\n[model_providers.asterrouter]\nname = \"AsterRouter\"\nbase_url = %s\nenv_key = \"ASTERROUTER_API_KEY\"\nwire_api = \"responses\"\n", quotedModel, quotedGateway)
+		content, marshalErr := toml.Marshal(struct {
+			ModelProvider  string                        `toml:"model_provider"`
+			Model          string                        `toml:"model"`
+			ModelProviders map[string]codexModelProvider `toml:"model_providers"`
+		}{
+			ModelProvider: "asterrouter",
+			Model:         model,
+			ModelProviders: map[string]codexModelProvider{
+				"asterrouter": {
+					Name: "AsterRouter", BaseURL: gatewayURL, EnvKey: "ASTERROUTER_API_KEY", WireAPI: "responses",
+				},
+			},
+		})
+		if marshalErr != nil {
+			return APIKeyClientConfig{}, fmt.Errorf("encode client configuration: %w", marshalErr)
+		}
+		config.Content = string(content)
 	case ClientClaudeCode:
 		anthropicBaseURL := strings.TrimSuffix(gatewayURL, "/v1")
 		config.Format = "shell"
@@ -444,6 +460,13 @@ func (s *Service) APIKeyClientConfig(ctx context.Context, apiKeyID, client, mode
 		config.Content = fmt.Sprintf("export ANTHROPIC_API_KEY=\"$ASTERROUTER_API_KEY\"\nexport ANTHROPIC_BASE_URL=%s\nexport ANTHROPIC_MODEL=%s\n", shellQuote(anthropicBaseURL), shellModel)
 	}
 	return config, nil
+}
+
+type codexModelProvider struct {
+	Name    string `toml:"name"`
+	BaseURL string `toml:"base_url"`
+	EnvKey  string `toml:"env_key"`
+	WireAPI string `toml:"wire_api"`
 }
 
 func (s *Service) CompleteOnboardingVerification(ctx context.Context, actor, id string, result ClientVerificationResult) (OnboardingSession, error) {

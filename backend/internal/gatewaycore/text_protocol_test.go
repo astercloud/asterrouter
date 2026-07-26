@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -41,6 +42,15 @@ func TestCanonicalTextRequestProtocolMatrix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExpandedTextPartCapacityRejectsOverflow(t *testing.T) {
+	if _, ok := expandedTextPartCapacity(1, math.MaxInt); ok {
+		t.Fatal("overflowing capacity was accepted")
+	}
+	if capacity, ok := expandedTextPartCapacity(3, 4); !ok || capacity != 11 {
+		t.Fatalf("capacity=%d ok=%t, want 11 true", capacity, ok)
 	}
 }
 
