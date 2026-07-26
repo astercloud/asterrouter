@@ -16,7 +16,12 @@ type SocialOAuthConfig struct {
 	Provider, ClientID, ClientSecret, RedirectURL string
 	Enabled                                       bool
 }
-type SocialOAuthProfile struct{ Subject, Email, DisplayName string }
+type SocialOAuthProfile struct {
+	Subject       string
+	Email         string
+	EmailVerified bool
+	DisplayName   string
+}
 type SocialOAuthService struct {
 	config SocialOAuthConfig
 	state  *OIDCService
@@ -89,7 +94,7 @@ func (s *SocialOAuthService) googleProfile(ctx context.Context, token string) (S
 	if info.Subject == "" || info.Email == "" || !info.EmailVerified {
 		return SocialOAuthProfile{}, errors.New("Google account must expose a verified email")
 	}
-	return SocialOAuthProfile{Subject: info.Subject, Email: strings.ToLower(info.Email), DisplayName: info.Name}, nil
+	return SocialOAuthProfile{Subject: info.Subject, Email: strings.ToLower(info.Email), EmailVerified: true, DisplayName: info.Name}, nil
 }
 
 func (s *SocialOAuthService) githubProfile(ctx context.Context, token string) (SocialOAuthProfile, error) {
@@ -123,7 +128,7 @@ func (s *SocialOAuthService) githubProfile(ctx context.Context, token string) (S
 	if name == "" {
 		name = user.Login
 	}
-	return SocialOAuthProfile{Subject: fmt.Sprintf("%d", user.ID), Email: strings.ToLower(email), DisplayName: name}, nil
+	return SocialOAuthProfile{Subject: fmt.Sprintf("%d", user.ID), Email: strings.ToLower(email), EmailVerified: true, DisplayName: name}, nil
 }
 
 func (s *SocialOAuthService) getJSON(ctx context.Context, endpoint, token string, out any) error {

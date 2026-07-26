@@ -39,6 +39,15 @@ function normalizeMessage(status: number, message?: string): string {
   return message || t('common.failed')
 }
 
+function readCookie(name: string): string {
+  const prefix = `${encodeURIComponent(name)}=`
+  for (const part of document.cookie.split(';')) {
+    const value = part.trim()
+    if (value.startsWith(prefix)) return decodeURIComponent(value.slice(prefix.length))
+  }
+  return ''
+}
+
 export const apiClient = axios.create({
   baseURL: '/api/v1',
   timeout: 20000,
@@ -84,6 +93,8 @@ apiClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  const csrfToken = readCookie('asterrouter_csrf')
+  if (csrfToken) config.headers['X-CSRF-Token'] = csrfToken
   return config
 })
 

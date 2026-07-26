@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/astercloud/asterrouter/backend/internal/auth"
 )
 
 func TestServiceDefaults(t *testing.T) {
@@ -23,6 +25,27 @@ func TestServiceDefaults(t *testing.T) {
 	}
 	if got.GatewayBasePath != "/v1" {
 		t.Fatalf("GatewayBasePath = %q", got.GatewayBasePath)
+	}
+}
+
+func TestSettingsAcceptBuiltInEmailTemplatesAndRejectInvalidSyntax(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), ServiceOptions{Version: "test", StorageMode: "memory"})
+	current, err := svc.Admin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range auth.DefaultEmailTemplates() {
+		current.EmailTemplates = append(current.EmailTemplates, EmailTemplate{
+			Event: item.Event, Locale: item.Locale, Subject: item.Subject, HTML: item.HTML,
+		})
+	}
+	if _, err := svc.Update(t.Context(), current); err != nil {
+		t.Fatalf("Update(default email templates): %v", err)
+	}
+
+	current.EmailTemplates[0].Subject = "{{.UnknownField}}"
+	if _, err := svc.Update(t.Context(), current); err == nil || !strings.Contains(err.Error(), "invalid email template") {
+		t.Fatalf("Update(invalid email template) error = %v", err)
 	}
 }
 
@@ -103,6 +126,9 @@ func TestAuthenticationSettingsRequireSecurePublicBaseURL(t *testing.T) {
 		{name: "ipv6 loopback", baseURL: "http://[::1]:5173"},
 		{name: "remote http", baseURL: "http://router.example.test", wantErr: true},
 		{name: "userinfo", baseURL: "https://user:password@router.example.test", wantErr: true},
+		{name: "path", baseURL: "https://router.example.test/asterrouter", wantErr: true},
+		{name: "query", baseURL: "https://router.example.test?tenant=one", wantErr: true},
+		{name: "fragment", baseURL: "https://router.example.test#auth", wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			svc := NewService(NewMemoryRepository(), ServiceOptions{Version: "test", StorageMode: "memory"})
@@ -122,17 +148,97 @@ func TestAuthenticationSettingsRequireSecurePublicBaseURL(t *testing.T) {
 	}
 }
 
+func TestAuthenticationSettingsRejectIncompleteIdentityProviders(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		edit func(*AdminSettings)
+	}{
+		{name: "OIDC client id", edit: func(in *AdminSettings) {
+			in.OIDCEnabled = true
+			in.OIDCIssuerURL = "https://id.example.test"
+		}},
+		{name: "OIDC issuer", edit: func(in *AdminSettings) {
+			in.OIDCEnabled = true
+			in.OIDCClientID = "client"
+		}},
+		{name: "OIDC secure issuer", edit: func(in *AdminSettings) {
+			in.OIDCEnabled = true
+			in.OIDCClientID = "client"
+			in.OIDCIssuerURL = "http://id.example.test"
+		}},
+		{name: "Feishu secret", edit: func(in *AdminSettings) {
+			in.FeishuEnabled = true
+			in.FeishuAppID = "app"
+		}},
+		{name: "DingTalk secret", edit: func(in *AdminSettings) {
+			in.DingTalkEnabled = true
+			in.DingTalkClientID = "app"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc := NewService(NewMemoryRepository(), ServiceOptions{Version: "test", StorageMode: "memory"})
+			current, err := svc.Admin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			current.PublicBaseURL = "https://router.example.test"
+			test.edit(&current)
+			if _, err := svc.Update(t.Context(), current); err == nil {
+				t.Fatal("incomplete identity provider configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestAuthenticationSettingsPreserveConfiguredProviderSecrets(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory", SecretKey: "settings-test-secret"})
+	current, err := svc.Admin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.PublicBaseURL = "https://router.example.test"
+	current.OIDCEnabled = true
+	current.OIDCIssuerURL = "https://id.example.test"
+	current.OIDCClientID = "oidc-client"
+	current.OIDCClientSecret = "oidc-secret"
+	current.FeishuEnabled = true
+	current.FeishuAppID = "feishu-app"
+	current.FeishuAppSecret = "feishu-secret"
+	current.DingTalkEnabled = true
+	current.DingTalkClientID = "dingtalk-app"
+	current.DingTalkClientSecret = "dingtalk-secret"
+	configured, err := svc.Update(t.Context(), current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured.FeishuAppSecret = ""
+	configured.DingTalkClientSecret = ""
+	configured.OIDCClientSecret = ""
+	if _, err := svc.Update(t.Context(), configured); err != nil {
+		t.Fatalf("redacted configured secrets were rejected: %v", err)
+	}
+	feishuSecret, err := svc.FeishuSecret(t.Context())
+	if err != nil || feishuSecret != "feishu-secret" {
+		t.Fatalf("FeishuSecret() = %q, %v", feishuSecret, err)
+	}
+	dingTalkSecret, err := svc.DingTalkSecret(t.Context())
+	if err != nil || dingTalkSecret != "dingtalk-secret" {
+		t.Fatalf("DingTalkSecret() = %q, %v", dingTalkSecret, err)
+	}
+	oidcSecret, err := svc.OIDCSecret(t.Context())
+	if err != nil || oidcSecret != "oidc-secret" {
+		t.Fatalf("OIDCSecret() = %q, %v", oidcSecret, err)
+	}
+	admin, err := svc.Admin(t.Context())
+	if err != nil || !admin.OIDCClientSecretConfigured || admin.OIDCClientSecret != "" {
+		t.Fatalf("Admin() exposed or lost OIDC secret state: configured=%v secret=%q err=%v", admin.OIDCClientSecretConfigured, admin.OIDCClientSecret, err)
+	}
+}
+
 func TestSensitiveSettingsUpgradeLegacyPlaintextOnUpdate(t *testing.T) {
 	repo := NewMemoryRepository()
-	legacy := map[string]string{
-		KeyFeishuAppSecret:      "feishu-secret",
-		KeyGitHubOAuthSecret:    "github-secret",
-		KeyGoogleOAuthSecret:    "google-secret",
-		KeyDingTalkClientSecret: "dingtalk-secret",
-		KeyTurnstileSecretKey:   "turnstile-secret",
-		KeySMTPPassword:         "smtp-secret",
-		KeyBackupS3SecretKey:    "backup-secret",
-	}
+	legacy := legacySensitiveSettingValues()
 	if err := repo.SetMultiple(t.Context(), legacy); err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +246,9 @@ func TestSensitiveSettingsUpgradeLegacyPlaintextOnUpdate(t *testing.T) {
 
 	if value, err := svc.FeishuSecret(t.Context()); err != nil || value != legacy[KeyFeishuAppSecret] {
 		t.Fatalf("FeishuSecret() = %q, %v", value, err)
+	}
+	if value, err := svc.OIDCSecret(t.Context()); err != nil || value != legacy[KeyOIDCClientSecret] {
+		t.Fatalf("OIDCSecret() = %q, %v", value, err)
 	}
 	github, google, err := svc.SocialOAuthSecrets(t.Context())
 	if err != nil || github != legacy[KeyGitHubOAuthSecret] || google != legacy[KeyGoogleOAuthSecret] {
@@ -173,6 +282,136 @@ func TestSensitiveSettingsUpgradeLegacyPlaintextOnUpdate(t *testing.T) {
 		if raw[key] == plaintext || !strings.HasPrefix(raw[key], settingCiphertextPrefix) {
 			t.Fatalf("legacy setting %s was not upgraded to ciphertext", key)
 		}
+	}
+}
+
+func TestMigrateLegacySensitiveSettingsEncryptsAllValuesAndIsIdempotent(t *testing.T) {
+	repo := NewMemoryRepository()
+	legacy := legacySensitiveSettingValues()
+	if err := repo.SetMultiple(t.Context(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory", SecretKey: "settings-test-secret"})
+	if err := svc.MigrateLegacySensitiveSettings(t.Context()); err != nil {
+		t.Fatalf("MigrateLegacySensitiveSettings(): %v", err)
+	}
+	first, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, plaintext := range legacy {
+		if first[key] == plaintext || !strings.HasPrefix(first[key], settingCiphertextPrefix) {
+			t.Fatalf("legacy setting %s was not encrypted", key)
+		}
+		decrypted, err := decryptSettingValue("settings-test-secret", key, first[key])
+		if err != nil || decrypted != plaintext {
+			t.Fatalf("decrypt migrated setting %s = %q, %v", key, decrypted, err)
+		}
+	}
+	if err := svc.MigrateLegacySensitiveSettings(t.Context()); err != nil {
+		t.Fatalf("second MigrateLegacySensitiveSettings(): %v", err)
+	}
+	second, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range legacy {
+		if second[key] != first[key] {
+			t.Fatalf("idempotent migration rewrote setting %s", key)
+		}
+	}
+}
+
+func TestMigrateLegacySensitiveSettingsFailsBeforeWritingWithWrongKey(t *testing.T) {
+	repo := NewMemoryRepository()
+	ciphertext, err := encryptSettingValue("original-secret", KeyTurnstileSecretKey, "turnstile-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]string{
+		KeyTurnstileSecretKey: ciphertext,
+		KeySMTPPassword:       "legacy-smtp-secret",
+	}
+	if err := repo.SetMultiple(t.Context(), before); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory", SecretKey: "wrong-secret"})
+	if err := svc.MigrateLegacySensitiveSettings(t.Context()); err == nil {
+		t.Fatal("migration accepted ciphertext encrypted with another key")
+	}
+	after, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range before {
+		if after[key] != value {
+			t.Fatalf("failed migration changed setting %s", key)
+		}
+	}
+}
+
+type conflictOnceSettingsRepository struct {
+	*MemoryRepository
+	attempts atomic.Int32
+}
+
+func (r *conflictOnceSettingsRepository) ReplaceIfUnchanged(ctx context.Context, replacements map[string]ValueReplacement) error {
+	if r.attempts.Add(1) == 1 {
+		return ErrSettingsChanged
+	}
+	return r.MemoryRepository.ReplaceIfUnchanged(ctx, replacements)
+}
+
+func TestMigrateLegacySensitiveSettingsRetriesConcurrentChange(t *testing.T) {
+	repo := &conflictOnceSettingsRepository{MemoryRepository: NewMemoryRepository()}
+	if err := repo.SetMultiple(t.Context(), map[string]string{KeySMTPPassword: "legacy-smtp-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory", SecretKey: "settings-test-secret"})
+	if err := svc.MigrateLegacySensitiveSettings(t.Context()); err != nil {
+		t.Fatalf("MigrateLegacySensitiveSettings(): %v", err)
+	}
+	if repo.attempts.Load() != 2 {
+		t.Fatalf("migration attempts = %d, want 2", repo.attempts.Load())
+	}
+}
+
+func TestMemoryReplaceIfUnchangedIsAtomic(t *testing.T) {
+	repo := NewMemoryRepository()
+	if err := repo.SetMultiple(t.Context(), map[string]string{"first": "old-first", "second": "old-second"}); err != nil {
+		t.Fatal(err)
+	}
+	err := repo.ReplaceIfUnchanged(t.Context(), map[string]ValueReplacement{
+		"first":  {Expected: "old-first", Value: "new-first"},
+		"second": {Expected: "stale-second", Value: "new-second"},
+	})
+	if !errors.Is(err, ErrSettingsChanged) {
+		t.Fatalf("ReplaceIfUnchanged() error = %v", err)
+	}
+	values, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["first"] != "old-first" || values["second"] != "old-second" {
+		t.Fatalf("failed replacement partially changed settings: %#v", values)
+	}
+	if err := repo.ReplaceIfUnchanged(t.Context(), map[string]ValueReplacement{
+		"missing": {Expected: "", Value: "new-value"},
+	}); !errors.Is(err, ErrSettingsChanged) {
+		t.Fatalf("ReplaceIfUnchanged(missing) error = %v", err)
+	}
+}
+
+func legacySensitiveSettingValues() map[string]string {
+	return map[string]string{
+		KeyOIDCClientSecret:     "oidc-secret",
+		KeyFeishuAppSecret:      "feishu-secret",
+		KeyGitHubOAuthSecret:    "github-secret",
+		KeyGoogleOAuthSecret:    "google-secret",
+		KeyDingTalkClientSecret: "dingtalk-secret",
+		KeyTurnstileSecretKey:   "turnstile-secret",
+		KeySMTPPassword:         "smtp-secret",
+		KeyBackupS3SecretKey:    "backup-secret",
 	}
 }
 

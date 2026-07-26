@@ -158,11 +158,11 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	engUser, err := control.ProvisionOIDCUser(ctx, "https://id.example.test", "eng-user", "eng@example.test", "Engineer", "eng")
+	engUser, err := control.ProvisionOIDCUser(ctx, "https://id.example.test", "eng-user", "eng@example.test", "Engineer", "eng", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	finUser, err := control.ProvisionOIDCUser(ctx, "https://id.example.test", "fin-user", "fin@example.test", "Finance", "fin")
+	finUser, err := control.ProvisionOIDCUser(ctx, "https://id.example.test", "fin-user", "fin@example.test", "Finance", "fin", false)
 	if err != nil {
 		t.Fatal(err)
 	}

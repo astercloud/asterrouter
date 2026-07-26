@@ -60,7 +60,7 @@ describe('AccountProfileView', () => {
     setActivePinia(pinia)
     vi.mocked(account.getAccountProfile).mockResolvedValue(structuredClone(profile))
     vi.mocked(account.changeAccountPassword).mockResolvedValue({
-      access_token: 'replacement-token',
+      access_token: 'oidc-cookie',
       expires_at: '2099-01-01T00:00:00Z',
       changed: true
     })
@@ -101,7 +101,7 @@ describe('AccountProfileView', () => {
     await flushPromises()
 
     expect(account.changeAccountPassword).toHaveBeenCalledWith('current-password', 'updated-password')
-    expect(localStorage.getItem('asterrouter_admin_token')).toBe('replacement-token')
+    expect(localStorage.getItem('asterrouter_admin_token')).toBe('oidc-cookie')
     expect(wrapper.text()).toContain('Password changed')
 
     wrapper.unmount()
@@ -143,7 +143,7 @@ describe('AccountProfileView', () => {
   it('requires an existing factor before replacing recovery codes', async () => {
     vi.mocked(account.getAccountProfile).mockResolvedValue({ ...structuredClone(profile), totp_enabled: true, totp_available: true })
     vi.mocked(account.generateTOTPRecoveryCodes).mockResolvedValue({
-      access_token: 'totp-replacement-token',
+      access_token: 'oidc-cookie',
       expires_at: '2099-01-01T00:00:00Z',
       codes: ['RECOV1-RECOV2']
     })
@@ -159,7 +159,7 @@ describe('AccountProfileView', () => {
 
     expect(account.generateTOTPRecoveryCodes).toHaveBeenCalledWith('123456')
     expect(wrapper.text()).toContain('RECOV1-RECOV2')
-    expect(localStorage.getItem('asterrouter_admin_token')).toBe('totp-replacement-token')
+    expect(localStorage.getItem('asterrouter_admin_token')).toBe('oidc-cookie')
     wrapper.unmount()
   })
 })

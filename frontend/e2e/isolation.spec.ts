@@ -1,5 +1,5 @@
 import { expect, test, type APIResponse, type Page } from '@playwright/test'
-import { adminPost, createGatewayFixture, envelope, loginDemo, loginUser, registerUsers } from './fixtures'
+import { adminPost, createGatewayFixture, envelope, loginDemo, loginTestPrincipal, loginUser, registerUsers } from './fixtures'
 
 type WorkspaceUser = { id: string; email: string; department_id?: string }
 type APIKeyResult = { key: string; record: { id: string; owner_user_id: string } }
@@ -39,7 +39,7 @@ test('@smoke @j03 department and owner isolation covers reads, writes, and expor
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The isolation workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
-  const adminToken = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const adminToken = await loginTestPrincipal(page)
   expect(adminToken).not.toBe('')
 
   const runID = `${testInfo.project.name}-${Date.now()}`

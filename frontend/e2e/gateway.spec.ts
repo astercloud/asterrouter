@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { adminPost, createGatewayFixture, createPublishedPricingRule, envelope, loginDemo } from './fixtures'
+import { adminPost, createGatewayFixture, createPublishedPricingRule, envelope, loginDemo, loginTestPrincipal } from './fixtures'
 
 type PolicyAlert = {
   id: string
@@ -44,7 +44,7 @@ test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   expect(token).not.toBe('')
 
   const runID = `${testInfo.project.name}-${Date.now()}`
@@ -120,7 +120,7 @@ test('@smoke @j05 quota and budget warn, deduplicate, escalate, and reject with 
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   expect(token).not.toBe('')
 
   const runID = `${testInfo.project.name}-${Date.now()}`
@@ -220,7 +220,7 @@ test('@smoke @j04 failed primary route falls back and records attempts', async (
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   expect(token).not.toBe('')
 
   const runID = `${testInfo.project.name}-${Date.now()}`

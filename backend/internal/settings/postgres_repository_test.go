@@ -108,3 +108,50 @@ func TestPostgresInvitationCodeConsumptionIsAtomic(t *testing.T) {
 	defer repo.Close()
 	testInvitationCodeConsumptionIsAtomic(t, repo)
 }
+
+func TestPostgresReplaceIfUnchangedIsAtomicAndPersistent(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	repo, err := NewPostgresRepository(t.Context(), schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMultiple(t.Context(), map[string]string{"first": "old-first", "second": "old-second"}); err != nil {
+		t.Fatal(err)
+	}
+	err = repo.ReplaceIfUnchanged(t.Context(), map[string]ValueReplacement{
+		"first":  {Expected: "old-first", Value: "new-first"},
+		"second": {Expected: "stale-second", Value: "new-second"},
+	})
+	if !errors.Is(err, ErrSettingsChanged) {
+		t.Fatalf("ReplaceIfUnchanged(stale) error = %v", err)
+	}
+	values, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["first"] != "old-first" || values["second"] != "old-second" {
+		t.Fatalf("failed replacement partially changed settings: %#v", values)
+	}
+	if err := repo.ReplaceIfUnchanged(t.Context(), map[string]ValueReplacement{
+		"first":  {Expected: "old-first", Value: "new-first"},
+		"second": {Expected: "old-second", Value: "new-second"},
+	}); err != nil {
+		t.Fatalf("ReplaceIfUnchanged(valid): %v", err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewPostgresRepository(t.Context(), schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	values, err = reopened.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["first"] != "new-first" || values["second"] != "new-second" {
+		t.Fatalf("replacement did not persist: %#v", values)
+	}
+}

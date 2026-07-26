@@ -23,10 +23,12 @@ describe('api client', () => {
 
   afterEach(() => {
     apiClient.defaults.adapter = originalAdapter
+		document.cookie = 'asterrouter_csrf=; Max-Age=0; Path=/'
   })
 
   it('adds auth and locale headers and unwraps successful envelopes', async () => {
     localStorage.setItem('asterrouter_admin_token', 'test-token')
+		document.cookie = 'asterrouter_csrf=csrf-token; Path=/'
     let captured: AxiosRequestConfig | undefined
     apiClient.defaults.adapter = async (config) => {
       captured = config
@@ -37,6 +39,7 @@ describe('api client', () => {
 
     expect(result.data).toEqual({ id: 'provider-1' })
     expect(captured?.headers?.Authorization).toBe('Bearer test-token')
+		expect(captured?.headers?.['X-CSRF-Token']).toBe('csrf-token')
     expect(captured?.headers?.['Accept-Language']).toBe('en-US')
   })
 

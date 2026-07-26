@@ -17,6 +17,7 @@ const (
 	KeyOIDCProviderName         = "oidc_provider_name"
 	KeyOIDCIssuerURL            = "oidc_issuer_url"
 	KeyOIDCClientID             = "oidc_client_id"
+	KeyOIDCClientSecret         = "oidc_client_secret"
 	KeyOIDCRequireVerifiedEmail = "oidc_require_verified_email"
 	KeyFeishuEnabled            = "feishu_enabled"
 	KeyFeishuRegion             = "feishu_region"
@@ -156,6 +157,8 @@ type AdminSettings struct {
 	RuntimeRestartReasons         []string                     `json:"runtime_restart_reasons"`
 	OIDCIssuerURL                 string                       `json:"oidc_issuer_url"`
 	OIDCClientID                  string                       `json:"oidc_client_id"`
+	OIDCClientSecret              string                       `json:"oidc_client_secret,omitempty"`
+	OIDCClientSecretConfigured    bool                         `json:"oidc_client_secret_configured"`
 	FeishuAppID                   string                       `json:"feishu_app_id"`
 	FeishuAppSecret               string                       `json:"feishu_app_secret,omitempty"`
 	FeishuConfigured              bool                         `json:"feishu_configured"`

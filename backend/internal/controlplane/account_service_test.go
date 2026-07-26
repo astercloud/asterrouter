@@ -2,8 +2,12 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/astercloud/asterrouter/backend/internal/auth"
 )
 
 func TestCurrentAccountProfileUpdateAndPasswordChange(t *testing.T) {
@@ -59,7 +63,7 @@ func TestCurrentAccountProfileRejectsDeploymentManagedActor(t *testing.T) {
 func TestExternalAccountUsesEmailRecoveryToEnableLocalPasswordLogin(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")
-	user, err := svc.ProvisionOIDCUser(ctx, "feishu:cn", "union-1", "user@example.test", "Enterprise User", "")
+	user, err := svc.ProvisionOIDCUser(ctx, "feishu:cn", "union-1", "user@example.test", "Enterprise User", "", false)
 	if err != nil {
 		t.Fatalf("ProvisionOIDCUser(): %v", err)
 	}
@@ -74,11 +78,15 @@ func TestExternalAccountUsesEmailRecoveryToEnableLocalPasswordLogin(t *testing.T
 	if err != nil {
 		t.Fatalf("BeginPasswordReset(): %v", err)
 	}
-	if err := svc.CompletePasswordReset(ctx, resetToken, "local-password-value"); err != nil {
+	if _, err := svc.CompletePasswordReset(ctx, resetToken, "local-password-value"); err != nil {
 		t.Fatalf("CompletePasswordReset(): %v", err)
 	}
-	if _, err := svc.AuthenticateWorkspaceUser(ctx, user.Email, "local-password-value", false); err != nil {
+	if _, err := svc.AuthenticateWorkspaceUser(ctx, user.Email, "local-password-value", true); err != nil {
 		t.Fatalf("AuthenticateWorkspaceUser(): %v", err)
+	}
+	profile, err = svc.CurrentAccountProfile(ctx, user.ID)
+	if err != nil || !profile.EmailVerified {
+		t.Fatalf("password recovery did not verify the mailbox: profile=%+v err=%v", profile, err)
 	}
 	if err := svc.ChangeCurrentAccountPassword(ctx, user.ID, AccountPasswordUpdateRequest{NewPassword: "replacement-password"}); err == nil {
 		t.Fatal("changing an enabled local password must require the current password")
@@ -111,5 +119,32 @@ func TestEnsureLocalAdminPersistsAccountState(t *testing.T) {
 	}
 	if _, err := svc.AuthenticateWorkspaceUser(ctx, admin.Email, "bootstrap-password", false); err != nil {
 		t.Fatalf("bootstrap password changed unexpectedly: %v", err)
+	}
+}
+
+func TestRecoveryCodeCanDisableTOTP(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret")
+	user, _, err := svc.RegisterWorkspaceUser(ctx, "recovery@example.test", "current-password", "Recovery User", false)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceUser(): %v", err)
+	}
+	setup, err := svc.BeginTOTPSetup(ctx, user.ID, "current-password")
+	if err != nil {
+		t.Fatalf("BeginTOTPSetup(): %v", err)
+	}
+	codes, err := svc.ConfirmTOTPWithRecoveryCodes(ctx, user.ID, auth.GenerateTOTPCode(setup.Secret, time.Now().UTC()))
+	if err != nil || len(codes) == 0 {
+		t.Fatalf("ConfirmTOTPWithRecoveryCodes() codes=%d err=%v", len(codes), err)
+	}
+	if err := svc.DisableTOTP(ctx, user.ID, "invalid-code"); !errors.Is(err, ErrTOTPInvalidCode) {
+		t.Fatalf("DisableTOTP(invalid) error = %v", err)
+	}
+	if err := svc.DisableTOTP(ctx, user.ID, codes[0]); err != nil {
+		t.Fatalf("DisableTOTP(recovery code): %v", err)
+	}
+	profile, err := svc.CurrentAccountProfile(ctx, user.ID)
+	if err != nil || profile.TOTPEnabled {
+		t.Fatalf("profile after recovery disable = %+v, %v", profile, err)
 	}
 }

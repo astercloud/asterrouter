@@ -101,7 +101,10 @@ func New(opts Options) http.Handler {
 		}
 		opts.ControlService.SetAlertDispatcher(dispatchers)
 		if opts.AuthService != nil {
-			opts.AuthService.SetSessionVersionResolver(func(subject string) (int64, bool) {
+			opts.AuthService.SetSessionVersionResolver(func(subject string) (int64, bool, error) {
+				if opts.Runtime.DemoMode && subject == "demo" {
+					return 0, true, nil
+				}
 				return opts.ControlService.SessionVersion(context.Background(), subject)
 			})
 		}
@@ -239,6 +242,7 @@ func New(opts Options) http.Handler {
 		httpx.OK(c, data.PublicSettings)
 	})
 	api.POST("/auth/login", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
 		if !allowAuthRequest(c, authLimiter, "too many login attempts") {
 			return
 		}
@@ -251,6 +255,7 @@ func New(opts Options) http.Handler {
 			Password          string `json:"password"`
 			TurnstileToken    string `json:"turnstile_token"`
 			AgreementAccepted bool   `json:"agreement_accepted"`
+			SessionMode       string `json:"session_mode"`
 		}
 		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1301, "invalid login payload")
@@ -269,7 +274,8 @@ func New(opts Options) http.Handler {
 		}
 		security, err := opts.SettingsService.LoginSecurity(c.Request.Context())
 		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1303, err.Error())
+			_ = c.Error(err)
+			httpx.Error(c, http.StatusServiceUnavailable, 1303, "authentication settings are unavailable")
 			return
 		}
 		if security.TurnstileEnabled {
@@ -279,40 +285,61 @@ func New(opts Options) http.Handler {
 			}
 		}
 		result, err := opts.AuthService.Login(c.Request.Context(), req.Username, req.Password)
-		if err == nil && opts.ControlService != nil && opts.AuthService.IsLocalPrincipal(req.Username) {
-			if profile, profileErr := opts.ControlService.CurrentAccountProfile(c.Request.Context(), req.Username); profileErr == nil && profile.TOTPEnabled {
-				if !allowAuthRequestForKey(c, endpointLimiters.mfaChallengePrincipal, profile.ID, "too many MFA challenges") {
+		isDemoPrincipal := opts.Runtime.DemoMode && strings.TrimSpace(req.Username) == "demo"
+		if err == nil && opts.ControlService != nil && opts.AuthService.IsLocalPrincipal(req.Username) && !isDemoPrincipal {
+			state, stateErr := opts.ControlService.CurrentAccountAuthenticationState(c.Request.Context(), req.Username)
+			if stateErr != nil {
+				recordAuthenticationError(c, "load_local_mfa_state", stateErr)
+				httpx.Error(c, http.StatusInternalServerError, 1303, "authentication failed")
+				return
+			}
+			if state.TOTPEnabled {
+				if !allowAuthRequestForKey(c, endpointLimiters.mfaChallengePrincipal, state.UserID, "too many MFA challenges") {
 					return
 				}
-				challenge, expires, challengeErr := opts.AuthService.BeginMFA(profile.ID, profile.Role)
+				challenge, expires, challengeErr := opts.AuthService.BeginMFA(state.UserID, state.Role)
 				if challengeErr != nil {
-					httpx.Error(c, http.StatusInternalServerError, 1315, challengeErr.Error())
+					_ = c.Error(challengeErr)
+					httpx.Error(c, http.StatusInternalServerError, 1315, "MFA challenge could not be created")
 					return
 				}
 				endpointLimiters.loginPrincipal.Reset(loginPrincipalKey)
-				httpx.OK(c, gin.H{"mfa_required": true, "challenge": challenge, "expires_at": expires})
+				authLimiter.Reset(c.ClientIP())
+				writeMFAChallenge(c, challenge, expires, cookieSessionRequested(req.SessionMode))
 				return
 			}
 		}
-		if err != nil {
+		if err != nil && opts.ControlService != nil {
 			policy, policyErr := opts.SettingsService.RegistrationPolicy(c.Request.Context())
-			if policyErr == nil && opts.ControlService != nil {
-				if user, userErr := opts.ControlService.AuthenticateWorkspaceUser(c.Request.Context(), req.Username, req.Password, policy.EmailVerification); userErr == nil {
-					if user.TOTPEnabled {
-						if !allowAuthRequestForKey(c, endpointLimiters.mfaChallengePrincipal, user.ID, "too many MFA challenges") {
-							return
-						}
-						challenge, expires, challengeErr := opts.AuthService.BeginMFA(user.ID, user.Role)
-						if challengeErr != nil {
-							httpx.Error(c, http.StatusInternalServerError, 1315, challengeErr.Error())
-							return
-						}
-						endpointLimiters.loginPrincipal.Reset(loginPrincipalKey)
-						httpx.OK(c, gin.H{"mfa_required": true, "challenge": challenge, "expires_at": expires})
+			if policyErr != nil {
+				recordAuthenticationError(c, "workspace_login_policy", policyErr)
+				httpx.Error(c, http.StatusServiceUnavailable, 1303, "authentication settings are unavailable")
+				return
+			}
+			user, userErr := opts.ControlService.AuthenticateWorkspaceUser(c.Request.Context(), req.Username, req.Password, policy.EmailVerification)
+			if userErr != nil {
+				if !errors.Is(userErr, controlplane.ErrInvalidWorkspaceCredentials) {
+					recordAuthenticationError(c, "workspace_login", userErr)
+					httpx.Error(c, http.StatusInternalServerError, 1303, "authentication failed")
+					return
+				}
+			} else {
+				if user.TOTPEnabled {
+					if !allowAuthRequestForKey(c, endpointLimiters.mfaChallengePrincipal, user.ID, "too many MFA challenges") {
 						return
 					}
-					result, err = opts.AuthService.LoginOIDC(user.ID, user.Role)
+					challenge, expires, challengeErr := opts.AuthService.BeginMFA(user.ID, user.Role)
+					if challengeErr != nil {
+						_ = c.Error(challengeErr)
+						httpx.Error(c, http.StatusInternalServerError, 1315, "MFA challenge could not be created")
+						return
+					}
+					endpointLimiters.loginPrincipal.Reset(loginPrincipalKey)
+					authLimiter.Reset(c.ClientIP())
+					writeMFAChallenge(c, challenge, expires, cookieSessionRequested(req.SessionMode))
+					return
 				}
+				result, err = opts.AuthService.LoginOIDC(user.ID, user.Role)
 			}
 		}
 		if err != nil {
@@ -320,19 +347,31 @@ func New(opts Options) http.Handler {
 				httpx.Error(c, http.StatusUnauthorized, 1302, "invalid username or password")
 				return
 			}
-			httpx.Error(c, http.StatusInternalServerError, 1303, err.Error())
+			_ = c.Error(err)
+			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication failed")
 			return
 		}
 		endpointLimiters.loginPrincipal.Reset(loginPrincipalKey)
+		if cookieSessionRequested(req.SessionMode) {
+			result, err = setCookieSession(c, result)
+			if err != nil {
+				recordAuthenticationError(c, "create_cookie_session", err)
+				httpx.Error(c, http.StatusInternalServerError, 1303, "authentication failed")
+				return
+			}
+		}
+		authLimiter.Reset(c.ClientIP())
 		httpx.OK(c, enrichLoginResult(c.Request.Context(), opts.ControlService, result))
 	})
 	api.POST("/auth/register", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
 		if !allowAuthRequest(c, endpointLimiters.register, "too many registration attempts") {
 			return
 		}
 		policy, err := opts.SettingsService.RegistrationPolicy(c.Request.Context())
 		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1303, err.Error())
+			_ = c.Error(err)
+			httpx.Error(c, http.StatusServiceUnavailable, 1303, "authentication settings are unavailable")
 			return
 		}
 		if !policy.Enabled {
@@ -371,7 +410,8 @@ func New(opts Options) http.Handler {
 		}
 		security, securityErr := opts.SettingsService.LoginSecurity(c.Request.Context())
 		if securityErr != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1303, securityErr.Error())
+			_ = c.Error(securityErr)
+			httpx.Error(c, http.StatusServiceUnavailable, 1303, "authentication settings are unavailable")
 			return
 		}
 		if security.TurnstileEnabled {
@@ -407,21 +447,30 @@ func New(opts Options) http.Handler {
 			}
 			if errors.Is(err, controlplane.ErrPasswordTooWeak) || errors.Is(err, controlplane.ErrPasswordTooLong) {
 				httpx.Error(c, http.StatusBadRequest, 1322, controlplane.ErrPasswordTooWeak.Error())
+			} else if errors.Is(err, controlplane.ErrInvalidWorkspaceEmail) {
+				httpx.Error(c, http.StatusBadRequest, 1322, controlplane.ErrInvalidWorkspaceEmail.Error())
 			} else if errors.Is(err, controlplane.ErrUserEmailExists) {
 				httpx.Error(c, http.StatusConflict, 1322, "email is already registered")
 			} else {
-				_ = c.Error(err)
-				httpx.Error(c, http.StatusBadRequest, 1322, "registration could not be completed")
+				recordAuthenticationError(c, "register_workspace_user", err)
+				httpx.Error(c, http.StatusInternalServerError, 1322, "registration could not be completed")
 			}
 			return
 		}
 		emailDeliveryFailed := false
 		if policy.EmailVerification && !opts.Runtime.DemoMode {
-			public, _ := opts.SettingsService.Public(c.Request.Context())
-			verifyURL := strings.TrimRight(public.PublicBaseURL, "/") + "/verify-email?token=" + url.QueryEscape(token)
-			if mailErr := authEmailSender.Send(c.Request.Context(), "email_verification", user.Email, user.DisplayName, verifyURL); mailErr != nil {
+			verifyURL, linkErr := authenticationActionURL(c.Request.Context(), opts.SettingsService, "/verify-email", token)
+			if linkErr == nil {
+				linkErr = sendAuthenticationEmail(authEmailSender, c.Request.Context(), "email_verification", user.Email, user.DisplayName, verifyURL, func(ctx context.Context) error {
+					return opts.ControlService.CancelEmailVerificationIssue(ctx, user.ID, token)
+				})
+			}
+			if linkErr != nil {
 				emailDeliveryFailed = true
-				_ = c.Error(mailErr)
+				_ = c.Error(linkErr)
+				if cancelErr := opts.ControlService.CancelEmailVerificationIssue(c.Request.Context(), user.ID, token); cancelErr != nil {
+					_ = c.Error(cancelErr)
+				}
 			}
 		}
 		data := gin.H{"user_id": user.ID, "verification_required": policy.EmailVerification, "email_delivery_failed": emailDeliveryFailed}
@@ -442,8 +491,13 @@ func New(opts Options) http.Handler {
 			return
 		}
 		if err := opts.ControlService.VerifyWorkspaceUserEmail(c.Request.Context(), req.Token); err != nil {
-			// 统一文案：不区分 token 不存在 / 已过期 / 已使用，避免据此探测他人注册状态。
-			httpx.Error(c, http.StatusBadRequest, 1323, "email verification link is invalid or expired")
+			if errors.Is(err, controlplane.ErrVerificationTokenInvalid) {
+				// 不区分 token 不存在、已过期或已使用。
+				httpx.Error(c, http.StatusBadRequest, 1323, "email verification link is invalid or expired")
+			} else {
+				recordAuthenticationError(c, "verify_email", err)
+				httpx.Error(c, http.StatusInternalServerError, 1323, "email verification failed")
+			}
 			return
 		}
 		httpx.OK(c, gin.H{"verified": true})
@@ -462,6 +516,7 @@ func New(opts Options) http.Handler {
 		}
 		security, securityErr := opts.SettingsService.LoginSecurity(c.Request.Context())
 		if securityErr != nil {
+			recordAuthenticationError(c, "resend_verification_settings", securityErr)
 			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication settings are unavailable")
 			return
 		}
@@ -473,6 +528,7 @@ func New(opts Options) http.Handler {
 		}
 		policy, policyErr := opts.SettingsService.RegistrationPolicy(c.Request.Context())
 		if policyErr != nil {
+			recordAuthenticationError(c, "resend_verification_policy", policyErr)
 			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication settings are unavailable")
 			return
 		}
@@ -482,11 +538,20 @@ func New(opts Options) http.Handler {
 		}
 		user, token, err := opts.ControlService.RenewEmailVerification(c.Request.Context(), req.Email)
 		if err == nil {
-			public, _ := opts.SettingsService.Public(c.Request.Context())
-			verifyURL := strings.TrimRight(public.PublicBaseURL, "/") + "/verify-email?token=" + url.QueryEscape(token)
-			if mailErr := authEmailSender.Send(c.Request.Context(), "email_verification", user.Email, user.DisplayName, verifyURL); mailErr != nil {
-				_ = c.Error(mailErr)
+			verifyURL, linkErr := authenticationActionURL(c.Request.Context(), opts.SettingsService, "/verify-email", token)
+			if linkErr == nil {
+				linkErr = sendAuthenticationEmail(authEmailSender, c.Request.Context(), "email_verification", user.Email, user.DisplayName, verifyURL, func(ctx context.Context) error {
+					return opts.ControlService.CancelEmailVerificationIssue(ctx, user.ID, token)
+				})
 			}
+			if linkErr != nil {
+				_ = c.Error(linkErr)
+				if cancelErr := opts.ControlService.CancelEmailVerificationIssue(c.Request.Context(), user.ID, token); cancelErr != nil {
+					_ = c.Error(cancelErr)
+				}
+			}
+		} else if !errors.Is(err, controlplane.ErrEmailVerificationUnavailable) {
+			recordAuthenticationError(c, "resend_verification", err)
 		}
 		httpx.OK(c, gin.H{"accepted": true})
 	})
@@ -504,6 +569,7 @@ func New(opts Options) http.Handler {
 		}
 		policy, policyErr := opts.SettingsService.RegistrationPolicy(c.Request.Context())
 		if policyErr != nil {
+			recordAuthenticationError(c, "forgot_password_policy", policyErr)
 			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication settings are unavailable")
 			return
 		}
@@ -513,6 +579,7 @@ func New(opts Options) http.Handler {
 		}
 		security, securityErr := opts.SettingsService.LoginSecurity(c.Request.Context())
 		if securityErr != nil {
+			recordAuthenticationError(c, "forgot_password_settings", securityErr)
 			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication settings are unavailable")
 			return
 		}
@@ -524,11 +591,20 @@ func New(opts Options) http.Handler {
 		}
 		user, token, err := opts.ControlService.BeginPasswordReset(c.Request.Context(), req.Email)
 		if err == nil {
-			public, _ := opts.SettingsService.Public(c.Request.Context())
-			resetURL := strings.TrimRight(public.PublicBaseURL, "/") + "/reset-password?token=" + url.QueryEscape(token)
-			if mailErr := authEmailSender.Send(c.Request.Context(), "password_reset", user.Email, user.DisplayName, resetURL); mailErr != nil {
-				_ = c.Error(mailErr)
+			resetURL, linkErr := authenticationActionURL(c.Request.Context(), opts.SettingsService, "/reset-password", token)
+			if linkErr == nil {
+				linkErr = sendAuthenticationEmail(authEmailSender, c.Request.Context(), "password_reset", user.Email, user.DisplayName, resetURL, func(ctx context.Context) error {
+					return opts.ControlService.CancelPasswordResetIssue(ctx, user.ID, token)
+				})
 			}
+			if linkErr != nil {
+				_ = c.Error(linkErr)
+				if cancelErr := opts.ControlService.CancelPasswordResetIssue(c.Request.Context(), user.ID, token); cancelErr != nil {
+					_ = c.Error(cancelErr)
+				}
+			}
+		} else if !errors.Is(err, controlplane.ErrPasswordResetUnavailable) {
+			recordAuthenticationError(c, "forgot_password", err)
 		}
 		httpx.OK(c, gin.H{"accepted": true})
 	})
@@ -544,7 +620,8 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
-		if err := opts.ControlService.CompletePasswordReset(c.Request.Context(), req.Token, req.Password); err != nil {
+		user, err := opts.ControlService.CompletePasswordReset(c.Request.Context(), req.Token, req.Password)
+		if err != nil {
 			// 只回显用户自己可修正的原因（密码强度）与统一的凭据失效文案；
 			// 其余错误（如数据库故障）不外泄内部细节。
 			switch {
@@ -558,20 +635,31 @@ func New(opts Options) http.Handler {
 			}
 			return
 		}
+		if opts.AuthService != nil && opts.AuthService.IsLocalPrincipal(user.ID) {
+			opts.AuthService.SetPasswordHash(user.PasswordHash)
+		}
 		httpx.OK(c, gin.H{"reset": true})
 	})
 	api.POST("/auth/logout", func(c *gin.Context) {
+		if !verifyCookieSessionCSRF(c) {
+			return
+		}
+		clearCookieSession(c)
 		if opts.AuthService != nil && opts.ControlService != nil {
-			provided := bearerToken(c)
-			if provided == "" {
-				provided, _ = c.Cookie("asterrouter_session")
-			}
-			if principal, ok := opts.AuthService.Verify(provided); ok {
-				_ = opts.ControlService.RevokeAccountSessions(c.Request.Context(), principal.Subject)
+			provided := requestSessionToken(c)
+			principal, err := opts.AuthService.VerifyWithError(provided)
+			if err == nil {
+				if err := opts.ControlService.RevokeAccountSessions(c.Request.Context(), principal.Subject); err != nil {
+					recordAuthenticationError(c, "logout_revoke_sessions", err)
+					httpx.Error(c, http.StatusInternalServerError, 1307, "logout could not be completed")
+					return
+				}
+			} else if errors.Is(err, auth.ErrSessionStateUnavailable) {
+				recordAuthenticationError(c, "logout_session_state", err)
+				httpx.Error(c, http.StatusInternalServerError, 1307, "logout could not be completed")
+				return
 			}
 		}
-		c.SetSameSite(http.SameSiteLaxMode)
-		c.SetCookie("asterrouter_session", "", -1, "/", "", true, true)
 		httpx.OK(c, gin.H{"logged_out": true})
 	})
 	api.GET("/auth/oidc", func(c *gin.Context) {
@@ -583,11 +671,15 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusNotFound, 1404, "oidc is not configured")
 			return
 		}
-		entry, err := opts.OIDCService.Begin(time.Now().UTC())
-		if err != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1304, err.Error())
+		if !allowAuthRequest(c, endpointLimiters.externalLoginStart, "too many external login attempts") {
 			return
 		}
+		entry, err := opts.OIDCService.Begin(time.Now().UTC())
+		if err != nil {
+			redirectExternalLoginFailure(c, "oidc", err)
+			return
+		}
+		setExternalOAuthStateCookie(c, "oidc", entry.Value)
 		c.Redirect(http.StatusFound, opts.OIDCService.AuthorizationURL(entry))
 	})
 	api.GET("/auth/feishu", func(c *gin.Context) {
@@ -599,11 +691,15 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusNotFound, 1404, "feishu login is not configured")
 			return
 		}
-		entry, err := opts.FeishuService.Begin(time.Now().UTC())
-		if err != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1308, err.Error())
+		if !allowAuthRequest(c, endpointLimiters.externalLoginStart, "too many external login attempts") {
 			return
 		}
+		entry, err := opts.FeishuService.Begin(time.Now().UTC())
+		if err != nil {
+			redirectExternalLoginFailure(c, "feishu", err)
+			return
+		}
+		setExternalOAuthStateCookie(c, "feishu", entry.Value)
 		c.Redirect(http.StatusFound, opts.FeishuService.AuthorizationURL(entry.Value, auth.PKCEChallenge(entry.Verifier)))
 	})
 	api.GET("/auth/dingtalk", func(c *gin.Context) {
@@ -615,11 +711,15 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusNotFound, 1404, "DingTalk login is not configured")
 			return
 		}
-		entry, err := opts.DingTalkService.Begin(time.Now().UTC())
-		if err != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1308, err.Error())
+		if !allowAuthRequest(c, endpointLimiters.externalLoginStart, "too many external login attempts") {
 			return
 		}
+		entry, err := opts.DingTalkService.Begin(time.Now().UTC())
+		if err != nil {
+			redirectExternalLoginFailure(c, "dingtalk", err)
+			return
+		}
+		setExternalOAuthStateCookie(c, "dingtalk", entry.Value)
 		c.Redirect(http.StatusFound, opts.DingTalkService.AuthorizationURL(entry))
 	})
 	api.GET("/auth/oidc/callback", func(c *gin.Context) {
@@ -627,14 +727,19 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusNotFound, 1404, "oidc is not configured")
 			return
 		}
+		if !consumeExternalOAuthStateCookie(c, "oidc", c.Query("state")) {
+			redirectExternalLoginFailure(c, "oidc", errExternalOAuthStateMismatch)
+			return
+		}
 		profile, err := opts.OIDCService.Complete(c.Request.Context(), c.Query("state"), c.Query("code"), time.Now().UTC())
 		if err != nil {
-			httpx.Error(c, http.StatusUnauthorized, 1305, err.Error())
+			redirectExternalLoginFailure(c, "oidc", err)
 			return
 		}
 		if transaction, binding := opts.authBindingStore.Consume(c.Query("state"), "oidc", time.Now().UTC()); binding {
-			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, opts.OIDCService.IssuerURL(), profile.Subject, profile.Email); err != nil {
-				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", err.Error()))
+			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, opts.OIDCService.IssuerURL(), profile.Subject, profile.Email, profile.EmailVerified); err != nil {
+				_ = c.Error(err)
+				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", ""))
 				return
 			}
 			c.Redirect(http.StatusFound, authBindingRedirect(transaction, "success", "oidc", ""))
@@ -642,31 +747,33 @@ func New(opts Options) http.Handler {
 		}
 		adminSettings, settingsErr := opts.SettingsService.Admin(c.Request.Context())
 		if settingsErr != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1327, "user defaults are unavailable")
+			redirectExternalLoginFailure(c, "oidc", settingsErr)
 			return
 		}
 		defaults := workspaceUserDefaults(adminSettings, "oidc")
-		user, err := opts.ControlService.ProvisionOIDCUser(c.Request.Context(), opts.OIDCService.IssuerURL(), profile.Subject, profile.Email, profile.DisplayName, profile.Department, defaults)
+		user, err := opts.ControlService.ProvisionOIDCUser(c.Request.Context(), opts.OIDCService.IssuerURL(), profile.Subject, profile.Email, profile.DisplayName, profile.Department, profile.EmailVerified, defaults)
 		if err != nil {
-			httpx.Error(c, http.StatusForbidden, 1306, err.Error())
+			redirectExternalLoginFailure(c, "oidc", err)
 			return
 		}
 		if user.TOTPEnabled {
 			challenge, expires, err := opts.AuthService.BeginMFA(user.ID, user.Role)
 			if err != nil {
-				httpx.Error(c, http.StatusInternalServerError, 1315, err.Error())
+				redirectExternalLoginFailure(c, "oidc", err)
 				return
 			}
-			c.Redirect(http.StatusFound, "/login?mfa="+url.QueryEscape(challenge)+"&expires="+url.QueryEscape(expires.Format(time.RFC3339)))
+			redirectExternalMFAChallenge(c, challenge, expires)
 			return
 		}
 		result, err := opts.AuthService.LoginOIDC(user.ID, user.Role)
 		if err != nil {
-			httpx.Error(c, http.StatusUnauthorized, 1307, err.Error())
+			redirectExternalLoginFailure(c, "oidc", err)
 			return
 		}
-		c.SetSameSite(http.SameSiteLaxMode)
-		c.SetCookie("asterrouter_session", result.AccessToken, int(time.Until(result.ExpiresAt).Seconds()), "/", "", true, true)
+		if _, err := setCookieSession(c, result); err != nil {
+			redirectExternalLoginFailure(c, "oidc", err)
+			return
+		}
 		c.Redirect(http.StatusFound, "/login?oidc=success")
 	})
 	api.GET("/auth/feishu/callback", func(c *gin.Context) {
@@ -674,19 +781,24 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusNotFound, 1404, "feishu login is not configured")
 			return
 		}
+		if !consumeExternalOAuthStateCookie(c, "feishu", c.Query("state")) {
+			redirectExternalLoginFailure(c, "feishu", errExternalOAuthStateMismatch)
+			return
+		}
 		entry, err := opts.FeishuService.Consume(c.Query("state"), time.Now().UTC())
 		if err != nil {
-			httpx.Error(c, http.StatusUnauthorized, 1309, err.Error())
+			redirectExternalLoginFailure(c, "feishu", err)
 			return
 		}
 		profile, err := opts.FeishuService.Complete(c.Request.Context(), c.Query("code"), entry.Verifier)
 		if err != nil {
-			httpx.Error(c, http.StatusUnauthorized, 1310, err.Error())
+			redirectExternalLoginFailure(c, "feishu", err)
 			return
 		}
 		if transaction, binding := opts.authBindingStore.Consume(c.Query("state"), "feishu", time.Now().UTC()); binding {
-			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, "feishu:"+opts.FeishuService.Region(), profile.Subject, profile.Email); err != nil {
-				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", err.Error()))
+			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, "feishu:"+opts.FeishuService.Region(), profile.Subject, profile.Email, false); err != nil {
+				_ = c.Error(err)
+				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", ""))
 				return
 			}
 			c.Redirect(http.StatusFound, authBindingRedirect(transaction, "success", "feishu", ""))
@@ -694,31 +806,33 @@ func New(opts Options) http.Handler {
 		}
 		adminSettings, settingsErr := opts.SettingsService.Admin(c.Request.Context())
 		if settingsErr != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1327, "user defaults are unavailable")
+			redirectExternalLoginFailure(c, "feishu", settingsErr)
 			return
 		}
 		defaults := workspaceUserDefaults(adminSettings, "feishu")
-		user, err := opts.ControlService.ProvisionOIDCUser(c.Request.Context(), "feishu:"+opts.FeishuService.Region(), profile.Subject, profile.Email, profile.DisplayName, profile.Department, defaults)
+		user, err := opts.ControlService.ProvisionOIDCUser(c.Request.Context(), "feishu:"+opts.FeishuService.Region(), profile.Subject, profile.Email, profile.DisplayName, profile.Department, false, defaults)
 		if err != nil {
-			httpx.Error(c, http.StatusForbidden, 1306, err.Error())
+			redirectExternalLoginFailure(c, "feishu", err)
 			return
 		}
 		if user.TOTPEnabled {
 			challenge, expires, err := opts.AuthService.BeginMFA(user.ID, user.Role)
 			if err != nil {
-				httpx.Error(c, http.StatusInternalServerError, 1315, err.Error())
+				redirectExternalLoginFailure(c, "feishu", err)
 				return
 			}
-			c.Redirect(http.StatusFound, "/login?mfa="+url.QueryEscape(challenge)+"&expires="+url.QueryEscape(expires.Format(time.RFC3339)))
+			redirectExternalMFAChallenge(c, challenge, expires)
 			return
 		}
 		result, err := opts.AuthService.LoginOIDC(user.ID, user.Role)
 		if err != nil {
-			httpx.Error(c, http.StatusUnauthorized, 1307, err.Error())
+			redirectExternalLoginFailure(c, "feishu", err)
 			return
 		}
-		c.SetSameSite(http.SameSiteLaxMode)
-		c.SetCookie("asterrouter_session", result.AccessToken, int(time.Until(result.ExpiresAt).Seconds()), "/", "", true, true)
+		if _, err := setCookieSession(c, result); err != nil {
+			redirectExternalLoginFailure(c, "feishu", err)
+			return
+		}
 		c.Redirect(http.StatusFound, "/login?provider=feishu")
 	})
 	api.GET("/auth/dingtalk/callback", func(c *gin.Context) {
@@ -726,14 +840,19 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusNotFound, 1404, "DingTalk login is not configured")
 			return
 		}
+		if !consumeExternalOAuthStateCookie(c, "dingtalk", c.Query("state")) {
+			redirectExternalLoginFailure(c, "dingtalk", errExternalOAuthStateMismatch)
+			return
+		}
 		profile, err := opts.DingTalkService.Complete(c.Request.Context(), c.Query("state"), c.Query("code"), time.Now().UTC())
 		if err != nil {
-			httpx.Error(c, http.StatusUnauthorized, 1310, err.Error())
+			redirectExternalLoginFailure(c, "dingtalk", err)
 			return
 		}
 		if transaction, binding := opts.authBindingStore.Consume(c.Query("state"), "dingtalk", time.Now().UTC()); binding {
-			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, "dingtalk", profile.Subject, profile.Email); err != nil {
-				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", err.Error()))
+			if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, "dingtalk", profile.Subject, profile.Email, false); err != nil {
+				_ = c.Error(err)
+				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", ""))
 				return
 			}
 			c.Redirect(http.StatusFound, authBindingRedirect(transaction, "success", "dingtalk", ""))
@@ -741,31 +860,33 @@ func New(opts Options) http.Handler {
 		}
 		adminSettings, err := opts.SettingsService.Admin(c.Request.Context())
 		if err != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1327, "user defaults are unavailable")
+			redirectExternalLoginFailure(c, "dingtalk", err)
 			return
 		}
 		defaults := workspaceUserDefaults(adminSettings, "dingtalk")
-		user, err := opts.ControlService.ProvisionOIDCUser(c.Request.Context(), "dingtalk", profile.Subject, profile.Email, profile.DisplayName, profile.Department, defaults)
+		user, err := opts.ControlService.ProvisionOIDCUser(c.Request.Context(), "dingtalk", profile.Subject, profile.Email, profile.DisplayName, profile.Department, false, defaults)
 		if err != nil {
-			httpx.Error(c, http.StatusForbidden, 1306, err.Error())
+			redirectExternalLoginFailure(c, "dingtalk", err)
 			return
 		}
 		if user.TOTPEnabled {
 			challenge, expires, challengeErr := opts.AuthService.BeginMFA(user.ID, user.Role)
 			if challengeErr != nil {
-				httpx.Error(c, http.StatusInternalServerError, 1315, challengeErr.Error())
+				redirectExternalLoginFailure(c, "dingtalk", challengeErr)
 				return
 			}
-			c.Redirect(http.StatusFound, "/login?mfa="+url.QueryEscape(challenge)+"&expires="+url.QueryEscape(expires.Format(time.RFC3339)))
+			redirectExternalMFAChallenge(c, challenge, expires)
 			return
 		}
 		result, err := opts.AuthService.LoginOIDC(user.ID, user.Role)
 		if err != nil {
-			httpx.Error(c, http.StatusUnauthorized, 1307, err.Error())
+			redirectExternalLoginFailure(c, "dingtalk", err)
 			return
 		}
-		c.SetSameSite(http.SameSiteLaxMode)
-		c.SetCookie("asterrouter_session", result.AccessToken, int(time.Until(result.ExpiresAt).Seconds()), "/", "", true, true)
+		if _, err := setCookieSession(c, result); err != nil {
+			redirectExternalLoginFailure(c, "dingtalk", err)
+			return
+		}
 		c.Redirect(http.StatusFound, "/login?provider=dingtalk")
 	})
 	for _, social := range []*auth.SocialOAuthService{opts.GitHubOAuthService, opts.GoogleOAuthService} {
@@ -778,62 +899,74 @@ func New(opts Options) http.Handler {
 				httpx.Error(c, http.StatusForbidden, 1328, "login agreement must be accepted")
 				return
 			}
-			entry, err := social.Begin(time.Now().UTC())
-			if err != nil {
-				httpx.Error(c, http.StatusServiceUnavailable, 1308, err.Error())
+			if !allowAuthRequest(c, endpointLimiters.externalLoginStart, "too many external login attempts") {
 				return
 			}
+			entry, err := social.Begin(time.Now().UTC())
+			if err != nil {
+				redirectExternalLoginFailure(c, provider, err)
+				return
+			}
+			setExternalOAuthStateCookie(c, provider, entry.Value)
 			c.Redirect(http.StatusFound, social.AuthorizationURL(entry))
 		})
 		api.GET("/auth/oauth/"+provider+"/callback", func(c *gin.Context) {
+			if !consumeExternalOAuthStateCookie(c, provider, c.Query("state")) {
+				redirectExternalLoginFailure(c, provider, errExternalOAuthStateMismatch)
+				return
+			}
 			profile, err := social.Complete(c.Request.Context(), c.Query("state"), c.Query("code"), time.Now().UTC())
 			if err != nil {
-				httpx.Error(c, http.StatusUnauthorized, 1305, err.Error())
+				redirectExternalLoginFailure(c, provider, err)
 				return
 			}
 			if transaction, binding := opts.authBindingStore.Consume(c.Query("state"), provider, time.Now().UTC()); binding {
-				if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, provider, profile.Subject, profile.Email); err != nil {
-					c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", err.Error()))
+				if err := opts.ControlService.BindCurrentAuthIdentity(c.Request.Context(), transaction.UserID, provider, profile.Subject, profile.Email, profile.EmailVerified); err != nil {
+					_ = c.Error(err)
+					c.Redirect(http.StatusFound, authBindingRedirect(transaction, "error", "", ""))
 					return
 				}
 				c.Redirect(http.StatusFound, authBindingRedirect(transaction, "success", provider, ""))
 				return
 			}
 			if err := authorizeSocialProvision(c.Request.Context(), opts.SettingsService, opts.ControlService, provider, profile.Subject, profile.Email); err != nil {
-				httpx.Error(c, http.StatusForbidden, 1329, err.Error())
+				redirectExternalLoginFailure(c, provider, err)
 				return
 			}
 			adminSettings, err := opts.SettingsService.Admin(c.Request.Context())
 			if err != nil {
-				httpx.Error(c, http.StatusServiceUnavailable, 1327, "user defaults are unavailable")
+				redirectExternalLoginFailure(c, provider, err)
 				return
 			}
 			defaults := workspaceUserDefaults(adminSettings, provider)
-			user, err := opts.ControlService.ProvisionOIDCUser(c.Request.Context(), provider, profile.Subject, profile.Email, profile.DisplayName, "", defaults)
+			user, err := opts.ControlService.ProvisionOIDCUser(c.Request.Context(), provider, profile.Subject, profile.Email, profile.DisplayName, "", profile.EmailVerified, defaults)
 			if err != nil {
-				httpx.Error(c, http.StatusForbidden, 1306, err.Error())
+				redirectExternalLoginFailure(c, provider, err)
 				return
 			}
 			if user.TOTPEnabled {
 				challenge, expires, challengeErr := opts.AuthService.BeginMFA(user.ID, user.Role)
 				if challengeErr != nil {
-					httpx.Error(c, http.StatusInternalServerError, 1315, challengeErr.Error())
+					redirectExternalLoginFailure(c, provider, challengeErr)
 					return
 				}
-				c.Redirect(http.StatusFound, "/login?mfa="+url.QueryEscape(challenge)+"&expires="+url.QueryEscape(expires.Format(time.RFC3339)))
+				redirectExternalMFAChallenge(c, challenge, expires)
 				return
 			}
 			result, err := opts.AuthService.LoginOIDC(user.ID, user.Role)
 			if err != nil {
-				httpx.Error(c, http.StatusUnauthorized, 1307, err.Error())
+				redirectExternalLoginFailure(c, provider, err)
 				return
 			}
-			c.SetSameSite(http.SameSiteLaxMode)
-			c.SetCookie("asterrouter_session", result.AccessToken, int(time.Until(result.ExpiresAt).Seconds()), "/", "", true, true)
+			if _, err := setCookieSession(c, result); err != nil {
+				redirectExternalLoginFailure(c, provider, err)
+				return
+			}
 			c.Redirect(http.StatusFound, "/login?oauth="+url.QueryEscape(provider)+"&status=success")
 		})
 	}
 	api.POST("/auth/totp/login", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
 		if !allowAuthRequest(c, endpointLimiters.totpLogin, "too many MFA attempts") {
 			return
 		}
@@ -842,40 +975,81 @@ func New(opts Options) http.Handler {
 			return
 		}
 		var req struct {
-			Challenge string `json:"challenge"`
-			Code      string `json:"code"`
+			Challenge   string `json:"challenge"`
+			Code        string `json:"code"`
+			SessionMode string `json:"session_mode"`
 		}
 		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
-		userID, role, ok := opts.AuthService.InspectMFA(req.Challenge)
+		challenge := strings.TrimSpace(req.Challenge)
+		challengeFromCookie := false
+		if challenge == "" {
+			if cookieChallenge, err := c.Cookie(externalMFAChallengeCookie); err == nil {
+				challenge = strings.TrimSpace(cookieChallenge)
+				challengeFromCookie = true
+			}
+		}
+		userID, role, ok := opts.AuthService.InspectMFA(challenge)
 		if !ok {
+			if challengeFromCookie {
+				clearExternalMFAChallengeCookie(c)
+			}
 			httpx.Error(c, http.StatusUnauthorized, 1316, "MFA challenge is invalid or expired")
 			return
 		}
-		if _, err := opts.ControlService.VerifyUserTOTP(c.Request.Context(), userID, req.Code); err != nil {
-			if opts.AuthService.RecordMFAFailure(req.Challenge) {
+		verifiedUser, err := opts.ControlService.VerifyUserTOTP(c.Request.Context(), userID, req.Code)
+		if err != nil {
+			if errors.Is(err, controlplane.ErrTOTPInvalidCode) {
+				if opts.AuthService.RecordMFAFailure(challenge) {
+					if challengeFromCookie {
+						clearExternalMFAChallengeCookie(c)
+					}
+					httpx.Error(c, http.StatusUnauthorized, 1316, "MFA challenge is invalid or expired")
+					return
+				}
+				httpx.Error(c, http.StatusUnauthorized, 1317, "invalid TOTP code")
+				return
+			}
+			if errors.Is(err, controlplane.ErrTOTPNotEnabled) {
+				_, _, _ = opts.AuthService.ConsumeMFA(challenge)
+				if challengeFromCookie {
+					clearExternalMFAChallengeCookie(c)
+				}
 				httpx.Error(c, http.StatusUnauthorized, 1316, "MFA challenge is invalid or expired")
 				return
 			}
-			httpx.Error(c, http.StatusUnauthorized, 1317, "invalid TOTP code")
+			recordAuthenticationError(c, "verify_mfa", err)
+			httpx.Error(c, http.StatusInternalServerError, 1307, "authentication failed")
 			return
 		}
-		consumedUserID, consumedRole, ok := opts.AuthService.ConsumeMFA(req.Challenge)
-		if !ok || consumedUserID != userID || consumedRole != role {
+		consumedUserID, consumedRole, ok := opts.AuthService.ConsumeMFA(challenge)
+		if !ok || consumedUserID != userID || consumedRole != role || verifiedUser.ID != userID {
+			if challengeFromCookie {
+				clearExternalMFAChallengeCookie(c)
+			}
 			httpx.Error(c, http.StatusUnauthorized, 1316, "MFA challenge is invalid or expired")
 			return
 		}
-		result, err := opts.AuthService.LoginOIDC(userID, role)
+		result, err := opts.AuthService.LoginOIDC(verifiedUser.ID, verifiedUser.Role)
 		if err != nil {
-			httpx.Error(c, http.StatusUnauthorized, 1307, err.Error())
+			clearExternalMFAChallengeCookie(c)
+			_ = c.Error(err)
+			httpx.Error(c, http.StatusUnauthorized, 1307, "authentication failed")
 			return
 		}
 		endpointLimiters.mfaChallengePrincipal.Reset(userID)
 		endpointLimiters.totpLogin.Reset(c.ClientIP())
-		c.SetSameSite(http.SameSiteLaxMode)
-		c.SetCookie("asterrouter_session", result.AccessToken, int(time.Until(result.ExpiresAt).Seconds()), "/", "", true, true)
+		clearExternalMFAChallengeCookie(c)
+		if challengeFromCookie || cookieSessionRequested(req.SessionMode) {
+			result, err = setCookieSession(c, result)
+			if err != nil {
+				recordAuthenticationError(c, "create_mfa_cookie_session", err)
+				httpx.Error(c, http.StatusInternalServerError, 1307, "authentication failed")
+				return
+			}
+		}
 		httpx.OK(c, enrichLoginResult(c.Request.Context(), opts.ControlService, result))
 	})
 
@@ -889,7 +1063,7 @@ func New(opts Options) http.Handler {
 	api.GET("/auth/me", requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService), func(c *gin.Context) {
 		httpx.OK(c, currentAuthUser(c, opts))
 	})
-	registerAccountRoutes(api, opts, endpointLimiters.totpManagement)
+	registerAccountRoutes(api, opts, endpointLimiters.totpManagement, endpointLimiters.accountBindingStart)
 	api.POST("/auth/totp/setup", requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService), func(c *gin.Context) {
 		beginAccountTOTPSetup(c, opts, endpointLimiters.totpManagement)
 	})
@@ -984,6 +1158,9 @@ func New(opts Options) http.Handler {
 			return
 		}
 		data.RuntimeRestartReasons = authenticationRestartReasons(previous, data)
+		if strings.TrimSpace(req.OIDCClientSecret) != "" {
+			data.RuntimeRestartReasons = append(data.RuntimeRestartReasons, "oidc_secret")
+		}
 		if strings.TrimSpace(req.FeishuAppSecret) != "" {
 			data.RuntimeRestartReasons = append(data.RuntimeRestartReasons, "feishu_secret")
 		}
@@ -1185,6 +1362,30 @@ func emailDomainAllowed(allowedDomains []string, domain string) bool {
 		}
 	}
 	return false
+}
+
+func authenticationActionURL(ctx context.Context, service *settings.Service, path, token string) (string, error) {
+	public, err := service.Public(ctx)
+	if err != nil {
+		return "", err
+	}
+	baseURL := strings.TrimSpace(public.PublicBaseURL)
+	if baseURL == "" {
+		return "", errors.New("public authentication base URL is unavailable")
+	}
+	if err := settings.ValidateSecureAuthenticationBaseURL(baseURL); err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", errors.New("public authentication base URL is invalid")
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/" + strings.TrimLeft(path, "/")
+	query := parsed.Query()
+	query.Set("token", token)
+	parsed.RawQuery = query.Encode()
+	parsed.Fragment = ""
+	return parsed.String(), nil
 }
 
 func authenticationRestartReasons(previous, current settings.AdminSettings) []string {

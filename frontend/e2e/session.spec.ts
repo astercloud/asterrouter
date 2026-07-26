@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test'
-import { envelope as data, loginDemo } from './fixtures'
+import { envelope as data, loginDemo, loginTestPrincipal } from './fixtures'
 
 test('@smoke @j02 logout immediately revokes a dedicated user session', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The session contract is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
-  const adminToken = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const adminToken = await loginTestPrincipal(page)
   const headers = { Authorization: `Bearer ${adminToken}` }
   const settings = await data<Record<string, unknown>>(await page.request.get('/api/v1/admin/settings', { headers }))
   const originalRegistration = Boolean(settings.registration_enabled)
@@ -48,7 +48,7 @@ test('@smoke @j02 role changes and disabling immediately revoke existing user se
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The session contract is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
-  const adminToken = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const adminToken = await loginTestPrincipal(page)
   const headers = { Authorization: `Bearer ${adminToken}` }
   const settings = await data<Record<string, unknown>>(await page.request.get('/api/v1/admin/settings', { headers }))
   const email = `e2e-session-admin-${Date.now()}@example.test`

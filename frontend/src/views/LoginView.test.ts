@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { defineComponent } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { login as loginRequest, register as registerRequest, verifyEmail as verifyEmailRequest } from '@/api/auth'
+import { completeTOTPLogin, getCurrentUser, login as loginRequest, register as registerRequest, resetPassword as resetPasswordRequest, verifyEmail as verifyEmailRequest } from '@/api/auth'
 import i18n, { setLocale } from '@/i18n'
 import { useAppStore } from '@/stores/app'
 import { makeAuthUser, makePublicSettings } from '@/test/fixtures'
@@ -22,18 +22,24 @@ vi.mock('@/api/auth', () => ({
 }))
 
 const loginMock = vi.mocked(loginRequest)
+const completeTOTPMock = vi.mocked(completeTOTPLogin)
 const registerMock = vi.mocked(registerRequest)
+const resetPasswordMock = vi.mocked(resetPasswordRequest)
 const verifyEmailMock = vi.mocked(verifyEmailRequest)
+const currentUserMock = vi.mocked(getCurrentUser)
 const target = defineComponent({ template: '<main><h1>Personal Console</h1></main>' })
 
 describe('LoginView demo entry', () => {
   beforeEach(() => {
     setLocale('zh-CN')
 		loginMock.mockReset()
+		completeTOTPMock.mockReset()
 		registerMock.mockReset()
+		resetPasswordMock.mockReset()
 		verifyEmailMock.mockReset()
+		currentUserMock.mockReset()
     loginMock.mockResolvedValue({
-      access_token: 'demo-token',
+      access_token: 'oidc-cookie',
       token_type: 'Bearer',
       expires_at: '2099-01-01T00:00:00Z',
       user: makeAuthUser({ username: 'demo', role: 'demo_admin' })
@@ -78,7 +84,7 @@ describe('LoginView demo entry', () => {
 
     expect(loginMock).toHaveBeenCalledWith('demo', 'demo', false, '')
     expect(router.currentRoute.value.fullPath).toBe('/console/overview')
-    expect(localStorage.getItem('asterrouter_admin_token')).toBe('demo-token')
+    expect(localStorage.getItem('asterrouter_admin_token')).toBe('oidc-cookie')
     wrapper.unmount()
   })
 
@@ -90,8 +96,8 @@ describe('LoginView demo entry', () => {
     wrapper.unmount()
   })
 
-	it('keeps an MFA challenge out of local session storage', async () => {
-		loginMock.mockResolvedValue({ mfa_required: true, challenge: 'mfa-challenge', expires_at: '2099-01-01T00:00:00Z' })
+	it('enters browser MFA without exposing a challenge to JavaScript', async () => {
+		loginMock.mockResolvedValue({ mfa_required: true, expires_at: '2099-01-01T00:00:00Z' })
 		const { wrapper } = await mountLogin(false)
 		await wrapper.get('#password').setValue('long-password')
 		await wrapper.get('form').trigger('submit')
@@ -104,7 +110,64 @@ describe('LoginView demo entry', () => {
 		wrapper.unmount()
 	})
 
-	it('submits registration fields and exposes verification email recovery', async () => {
+	it('completes external MFA without exposing a challenge to JavaScript', async () => {
+		completeTOTPMock.mockResolvedValue({
+			access_token: 'oidc-cookie',
+			token_type: 'Bearer',
+			expires_at: '2099-01-01T00:00:00Z',
+			user: makeAuthUser({ username: 'external@example.test', role: 'developer', allowed_surfaces: ['personal'] })
+		})
+		const { router, wrapper } = await mountLogin(false, '/login?mfa=required')
+
+		expect(wrapper.find('#mfa-code').exists()).toBe(true)
+		expect(router.currentRoute.value.query).toEqual({ mfa: 'required' })
+		await wrapper.get('#mfa-code').setValue('123456')
+		await wrapper.get('form').trigger('submit')
+		await flushPromises()
+
+		expect(completeTOTPMock).toHaveBeenCalledWith('', '123456')
+		expect(router.currentRoute.value.fullPath).toBe('/console/overview')
+		wrapper.unmount()
+	})
+
+		it.each([
+		['OIDC', '/login?oidc=success'],
+		['Feishu', '/login?provider=feishu'],
+		['DingTalk', '/login?provider=dingtalk'],
+		['GitHub', '/login?oauth=github&status=success'],
+		['Google', '/login?oauth=google&status=success']
+		])('restores the HttpOnly cookie session after %s login', async (_provider, callbackPath) => {
+		const user = makeAuthUser({ username: 'external@example.test', role: 'developer', allowed_surfaces: ['personal'] })
+		currentUserMock.mockResolvedValue(user)
+
+		const { router, wrapper } = await mountLogin(false, callbackPath)
+		await flushPromises()
+
+		expect(currentUserMock).toHaveBeenCalledOnce()
+		expect(router.currentRoute.value.fullPath).toBe('/console/overview')
+		expect(localStorage.getItem('asterrouter_admin_token')).toBe('oidc-cookie')
+		expect(JSON.parse(localStorage.getItem('asterrouter_admin_user') || '{}')).toEqual(user)
+			wrapper.unmount()
+		})
+
+		it('shows a generic error for failed external login callbacks', async () => {
+			const { wrapper } = await mountLogin(false, '/login?external=error&provider=oidc')
+			await flushPromises()
+
+			expect(currentUserMock).not.toHaveBeenCalled()
+			expect(wrapper.text()).toContain('第三方登录未能完成')
+			wrapper.unmount()
+		})
+
+		it('shows a server revocation warning after a failed sign-out', async () => {
+			const { wrapper } = await mountLogin(false, '/login?logout=failed')
+			await flushPromises()
+
+			expect(wrapper.text()).toContain('无法确认服务端会话已撤销')
+			wrapper.unmount()
+		})
+
+		it('submits registration fields and exposes verification email recovery', async () => {
 		registerMock.mockResolvedValue({ user_id: 'user-1', verification_required: true, email_delivery_failed: true })
 		const { wrapper } = await mountLogin(false, '/register', { registration_enabled: true, email_verify_enabled: true, allowed_email_domains: ['example.com'] })
 		await wrapper.get('#account-email').setValue('user@example.com')
@@ -121,11 +184,27 @@ describe('LoginView demo entry', () => {
 
 		it('verifies direct email links from the first-class route', async () => {
 		verifyEmailMock.mockResolvedValue({ verified: true })
-		const { wrapper } = await mountLogin(false, '/verify-email?token=verify-token')
+		const { router, wrapper } = await mountLogin(false, '/verify-email?token=verify-token')
 		await flushPromises()
 
 		expect(verifyEmailMock).toHaveBeenCalledWith('verify-token')
+		expect(router.currentRoute.value.fullPath).toBe('/verify-email')
 		expect(wrapper.text()).toContain('邮箱验证成功')
+			wrapper.unmount()
+		})
+
+		it('removes reset tokens from the URL while retaining them for submission', async () => {
+			resetPasswordMock.mockResolvedValue({ reset: true })
+			const { router, wrapper } = await mountLogin(false, '/reset-password?token=reset-token')
+			await flushPromises()
+
+			expect(router.currentRoute.value.fullPath).toBe('/reset-password')
+			await wrapper.get('#new-password').setValue('another-long-password')
+			await wrapper.get('#confirm-password').setValue('another-long-password')
+			await wrapper.get('form').trigger('submit')
+			await flushPromises()
+
+			expect(resetPasswordMock).toHaveBeenCalledWith('reset-token', 'another-long-password')
 			wrapper.unmount()
 		})
 

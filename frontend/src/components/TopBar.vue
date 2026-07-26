@@ -59,8 +59,12 @@ async function openAccount() {
 
 async function logout() {
   accountOpen.value = false
-	await auth.signOut()
-  await router.push('/login')
+	try {
+		await auth.signOut()
+		await router.push('/login')
+	} catch {
+		await router.push({ path: '/login', query: { logout: 'failed' } })
+	}
 }
 
 function closeOnOutsideClick(event: MouseEvent) {

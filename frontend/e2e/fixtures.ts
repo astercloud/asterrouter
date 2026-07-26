@@ -92,6 +92,10 @@ export async function loginUser(page: Page, email: string, password: string): Pr
   return result.access_token
 }
 
+export function loginTestPrincipal(page: Page): Promise<string> {
+  return loginUser(page, process.env.ASTER_E2E_USERNAME || 'demo', process.env.ASTER_E2E_PASSWORD || 'demo')
+}
+
 export async function registerUsers(
   page: Page,
   adminToken: string,

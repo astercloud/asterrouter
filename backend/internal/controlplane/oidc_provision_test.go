@@ -12,7 +12,7 @@ func TestProvisionOIDCUserBindsStableIdentityAndDepartment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", "User@Example.test", "User", "eng")
+	user, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", "User@Example.test", "User", "eng", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,12 +23,85 @@ func TestProvisionOIDCUserBindsStableIdentityAndDepartment(t *testing.T) {
 	if err != nil || len(profile.AuthIdentities) != 1 || profile.AuthIdentities[0].Subject != "subject-1" {
 		t.Fatalf("profile identities=%+v err=%v", profile.AuthIdentities, err)
 	}
-	again, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", "changed@example.test", "Changed", "")
+	again, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", "changed@example.test", "Changed", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.ID != user.ID || again.Email != user.Email {
+	if again.ID != user.ID || again.Email != user.Email || again.EmailVerified {
 		t.Fatalf("stable identity was not reused: %+v", again)
+	}
+	verified, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", user.Email, "Changed", "", true)
+	if err != nil || !verified.EmailVerified {
+		t.Fatalf("matching verified provider email was not promoted: user=%+v err=%v", verified, err)
+	}
+}
+
+func TestProvisionOIDCUserPreservesExplicitEmailTrust(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1", "secret")
+
+	untrusted, err := svc.ProvisionOIDCUser(ctx, "https://id.example.test", "untrusted", "untrusted@example.test", "Untrusted", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if untrusted.EmailVerified {
+		t.Fatal("untrusted external email was marked verified")
+	}
+
+	trusted, err := svc.ProvisionOIDCUser(ctx, "google", "trusted", "trusted@example.test", "Trusted", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !trusted.EmailVerified {
+		t.Fatal("verified external email was not persisted")
+	}
+}
+
+func TestProvisionOIDCUserLegacyIdentityUpgradeIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1", "secret")
+	now := time.Now().UTC()
+	legacy := WorkspaceUser{
+		ID: "usr_legacy", Email: "legacy@example.test", Status: WorkspaceUserStatusActive, Role: RoleDeveloper,
+		ExternalIssuer: "github", ExternalSubject: "legacy-subject", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repo.SaveWorkspaceUser(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveAuthIdentity(ctx, AuthIdentity{ID: "aid_existing", UserID: legacy.ID, Issuer: "github", Subject: "different-subject", Email: legacy.Email, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProvisionOIDCUser(ctx, "github", "legacy-subject", legacy.Email, "Legacy", "", true); err == nil {
+		t.Fatal("legacy identity upgrade conflict must be rejected")
+	}
+	stored, err := svc.workspaceUserByID(ctx, legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.EmailVerified {
+		t.Fatal("failed legacy identity upgrade changed email verification state")
+	}
+}
+
+func TestSaveProvisionedWorkspaceUserIsAtomicInMemory(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	if err := repo.SaveAuthIdentity(ctx, AuthIdentity{ID: "aid_existing", UserID: "usr_existing", Issuer: "github", Subject: "subject", Email: "existing@example.test", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	user := WorkspaceUser{ID: "usr_new", Email: "new@example.test", Status: WorkspaceUserStatusActive, Role: RoleDeveloper, CreatedAt: now, UpdatedAt: now}
+	identity := AuthIdentity{ID: "aid_new", UserID: user.ID, Issuer: "github", Subject: "subject", Email: user.Email, CreatedAt: now, UpdatedAt: now}
+	if err := repo.SaveProvisionedWorkspaceUser(ctx, user, identity); err == nil {
+		t.Fatal("conflicting identity must reject the atomic provision")
+	}
+	users, err := repo.ListWorkspaceUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 0 {
+		t.Fatalf("failed provision left a workspace user behind: %+v", users)
 	}
 }
 
@@ -60,7 +133,7 @@ func TestUnbindCurrentAuthIdentityProtectsLastLoginMethod(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemoryRepository()
 	svc := NewService(repo, "/v1", "secret")
-	user, err := svc.ProvisionOIDCUser(ctx, "github", "subject-1", "external@example.test", "External", "")
+	user, err := svc.ProvisionOIDCUser(ctx, "github", "subject-1", "external@example.test", "External", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,13 +202,13 @@ func TestBindCurrentAuthIdentityEnforcesOwnershipAndIssuerUniqueness(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.BindCurrentAuthIdentity(ctx, first.ID, "github", "github-1", first.Email); err != nil {
+	if err := svc.BindCurrentAuthIdentity(ctx, first.ID, "github", "github-1", first.Email, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.BindCurrentAuthIdentity(ctx, second.ID, "github", "github-1", second.Email); err == nil {
+	if err := svc.BindCurrentAuthIdentity(ctx, second.ID, "github", "github-1", second.Email, true); err == nil {
 		t.Fatal("identity owned by another user must be rejected")
 	}
-	if err := svc.BindCurrentAuthIdentity(ctx, first.ID, "github", "github-2", first.Email); err == nil {
+	if err := svc.BindCurrentAuthIdentity(ctx, first.ID, "github", "github-2", first.Email, true); err == nil {
 		t.Fatal("a second identity for the same issuer must be rejected")
 	}
 	profile, err := svc.CurrentAccountProfile(ctx, first.ID)
@@ -155,9 +228,56 @@ func TestBindCurrentAuthIdentityEnforcesOwnershipAndIssuerUniqueness(t *testing.
 	}
 }
 
+func TestBindCurrentAuthIdentityOnlyVerifiesMatchingTrustedEmail(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1", "secret")
+	user, _, err := svc.RegisterWorkspaceUser(ctx, "local@example.test", "long-password", "Local", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindCurrentAuthIdentity(ctx, user.ID, "github", "different-email", "different@example.test", true); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := svc.CurrentAccountProfile(ctx, user.ID)
+	if err != nil || profile.EmailVerified {
+		t.Fatalf("different provider email changed verification state: profile=%+v err=%v", profile, err)
+	}
+	if err := svc.BindCurrentAuthIdentity(ctx, user.ID, "google", "matching-email", user.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	profile, err = svc.CurrentAccountProfile(ctx, user.ID)
+	if err != nil || !profile.EmailVerified {
+		t.Fatalf("matching verified provider email was not promoted: profile=%+v err=%v", profile, err)
+	}
+}
+
+func TestBindCurrentAuthIdentityDoesNotVerifyEmailWhenIdentityBindingFails(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1", "secret")
+	user, _, err := svc.RegisterWorkspaceUser(ctx, "local@example.test", "long-password", "Local", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := repo.SaveAuthIdentity(ctx, AuthIdentity{ID: "aid_existing", UserID: user.ID, Issuer: "github", Subject: "existing", Email: user.Email, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindCurrentAuthIdentity(ctx, user.ID, "github", "conflicting", user.Email, true); err == nil {
+		t.Fatal("second identity for the same issuer must be rejected")
+	}
+	profile, err := svc.CurrentAccountProfile(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.EmailVerified {
+		t.Fatal("failed identity binding changed email verification state")
+	}
+}
+
 func TestProvisionOIDCUserRejectsDisabledAndConflictingIdentity(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "secret")
-	user, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", "user@example.test", "User", "")
+	user, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", "user@example.test", "User", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,10 +285,10 @@ func TestProvisionOIDCUserRejectsDisabledAndConflictingIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", user.Email, "User", ""); err == nil {
+	if _, err := svc.ProvisionOIDCUser(context.Background(), "https://id.example.test", "subject-1", user.Email, "User", "", false); err == nil {
 		t.Fatal("disabled user should be rejected")
 	}
-	if _, err := svc.ProvisionOIDCUser(context.Background(), "https://other.example.test", "subject-2", user.Email, "User", ""); err == nil {
+	if _, err := svc.ProvisionOIDCUser(context.Background(), "https://other.example.test", "subject-2", user.Email, "User", "", false); err == nil {
 		t.Fatal("conflicting identity should be rejected")
 	}
 }

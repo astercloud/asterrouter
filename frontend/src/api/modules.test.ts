@@ -32,15 +32,15 @@ describe('API module contracts', () => {
     client.post.mockResolvedValueOnce({ data: loginResult })
     expect(await auth.login('user', 'secret', true, 'turnstile')).toEqual(loginResult)
     expect(client.post).toHaveBeenLastCalledWith('/auth/login', {
-      username: 'user', password: 'secret', agreement_accepted: true, turnstile_token: 'turnstile'
+      username: 'user', password: 'secret', agreement_accepted: true, turnstile_token: 'turnstile', session_mode: 'cookie'
     })
 
     client.get.mockResolvedValueOnce({ data: loginResult.user })
     expect(await auth.getCurrentUser()).toEqual(loginResult.user)
     expect(client.get).toHaveBeenLastCalledWith('/auth/me')
 
-    await auth.completeTOTPLogin('challenge', '123456')
-    expect(client.post).toHaveBeenLastCalledWith('/auth/totp/login', { challenge: 'challenge', code: '123456' })
+		await auth.completeTOTPLogin('challenge', '123456')
+		expect(client.post).toHaveBeenLastCalledWith('/auth/totp/login', { challenge: 'challenge', code: '123456', session_mode: 'cookie' })
 		await auth.register('user@example.com', 'password-123', 'User', 'invite', true, 'register-turnstile')
     expect(client.post).toHaveBeenLastCalledWith('/auth/register', {
 			email: 'user@example.com', password: 'password-123', display_name: 'User', invitation_code: 'invite', agreement_accepted: true, turnstile_token: 'register-turnstile'

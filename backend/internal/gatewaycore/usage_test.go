@@ -84,6 +84,25 @@ func TestNormalizeUsageReportsMissingAndInvalid(t *testing.T) {
 	}
 }
 
+func TestNormalizeUsageSimpleOpenAIFastPathMatchesGeneralSemantics(t *testing.T) {
+	got := NormalizeUsage([]byte(`{"id":"response","usage":{"prompt_tokens":123,"completion_tokens":456,"total_tokens":579}}`))
+	if got.InputTokens != 123 || got.OutputTokens != 456 || got.TotalInputTokens == nil || *got.TotalInputTokens != 123 || got.UncachedInputTokens == nil || *got.UncachedInputTokens != 123 || got.CacheFieldsPresent || got.UsageNormalizationStatus != UsageNormalizationOpenAI {
+		t.Fatalf("NormalizeUsage() = %+v", got)
+	}
+}
+
+func TestNormalizeUsageFastPathOnlyReadsTopLevelUnescapedUsage(t *testing.T) {
+	got := NormalizeUsage([]byte(`{"metadata":{"usage":{"prompt_tokens":999,"completion_tokens":999}},"usage":{"prompt_tokens":12,"completion_tokens":34}}`))
+	if got.InputTokens != 12 || got.OutputTokens != 34 {
+		t.Fatalf("top-level usage = %+v", got)
+	}
+
+	escaped := NormalizeUsage([]byte(`{"usage":{"prompt_tokens":12,"completion_tokens":34,"prompt\u005ftokens\u005fdetails":{"cached_tokens":10}}}`))
+	if escaped.InputTokens != 12 || escaped.OutputTokens != 34 || escaped.CacheReadTokens == nil || *escaped.CacheReadTokens != 10 || !escaped.CacheFieldsPresent {
+		t.Fatalf("escaped cache fields = %+v", escaped)
+	}
+}
+
 func intTestPointer(value int) *int {
 	return &value
 }

@@ -1,10 +1,14 @@
 package auth
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSMTPMailerRequiresConfiguration(t *testing.T) {
@@ -54,5 +58,49 @@ func TestBuildSMTPMessageEncodesUntrustedContent(t *testing.T) {
 	}
 	if !strings.Contains(string(message), "Content-Transfer-Encoding: base64") {
 		t.Fatalf("message is missing base64 transfer encoding: %s", message)
+	}
+}
+
+func TestSMTPMailerRejectsPlaintextServerWithoutSTARTTLS(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	commands := make(chan []string, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			commands <- nil
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		_, _ = fmt.Fprint(conn, "220 smtp.example.test ESMTP\r\n")
+		reader := bufio.NewReader(conn)
+		var received []string
+		line, readErr := reader.ReadString('\n')
+		if readErr == nil {
+			received = append(received, strings.TrimSpace(line))
+			_, _ = fmt.Fprint(conn, "250-smtp.example.test\r\n250 AUTH PLAIN\r\n")
+			_ = conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+			if line, readErr = reader.ReadString('\n'); readErr == nil {
+				received = append(received, strings.TrimSpace(line))
+			}
+		}
+		commands <- received
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	mailer := SMTPMailer{Config: SMTPConfig{
+		Host: "127.0.0.1", Port: port, Username: "mailer", Password: "smtp-secret", From: "sender@example.test",
+	}}
+	err = mailer.Send(t.Context(), "user@example.test", "verification subject", "sensitive reset link")
+	if err == nil || !strings.Contains(err.Error(), "STARTTLS") {
+		t.Fatalf("Send() error = %v, want mandatory STARTTLS failure", err)
+	}
+	received := <-commands
+	if len(received) != 1 || !strings.HasPrefix(received[0], "EHLO ") {
+		t.Fatalf("plaintext SMTP commands = %#v, want only EHLO", received)
 	}
 }

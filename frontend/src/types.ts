@@ -116,7 +116,7 @@ export interface LoginSuccessResult {
 
 export interface MFAChallengeResult {
 	mfa_required: true
-	challenge: string
+	challenge?: string
 	expires_at: string
 }
 
@@ -126,7 +126,9 @@ export interface AdminSettings extends PublicSettings {
 	runtime_restart_required: boolean
 	runtime_restart_reasons: string[]
 	oidc_issuer_url: string
-  oidc_client_id: string
+	oidc_client_id: string
+	oidc_client_secret?: string
+	oidc_client_secret_configured: boolean
 	feishu_app_id: string
 	feishu_app_secret?: string
 	feishu_configured: boolean

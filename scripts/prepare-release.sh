@@ -28,19 +28,24 @@ fi
 
 printf '%s\n' "$VERSION" > "${ROOT_DIR}/backend/cmd/asterrouter/VERSION"
 
-node - "$ROOT_DIR/frontend/package.json" "$VERSION" <<'NODE'
+node - "$ROOT_DIR/frontend/package.json" "$ROOT_DIR/frontend/package-lock.json" "$VERSION" <<'NODE'
 const fs = require('node:fs')
-const [path, version] = process.argv.slice(2)
-const data = JSON.parse(fs.readFileSync(path, 'utf8'))
-data.version = version
-fs.writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`)
+const [packagePath, lockPath, version] = process.argv.slice(2)
+const packageData = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
+packageData.version = version
+fs.writeFileSync(packagePath, `${JSON.stringify(packageData, null, 2)}\n`)
+
+const lockData = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
+lockData.version = version
+if (lockData.packages?.['']) lockData.packages[''].version = version
+fs.writeFileSync(lockPath, `${JSON.stringify(lockData, null, 2)}\n`)
 NODE
 
 cat <<EOF
 Prepared AsterRouter ${VERSION}.
 
 Next steps:
-  git diff -- backend/cmd/asterrouter/VERSION frontend/package.json
+  git diff -- backend/cmd/asterrouter/VERSION frontend/package.json frontend/package-lock.json
   git commit -am "chore: prepare release v${VERSION}"
   git tag -a "v${VERSION}" -m "AsterRouter ${VERSION}"
   git push origin main "v${VERSION}"

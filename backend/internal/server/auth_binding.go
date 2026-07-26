@@ -19,10 +19,19 @@ type authBindingStore struct {
 	mu           sync.Mutex
 	transactions map[string]authBindingTransaction
 	ttl          time.Duration
+	maxEntries   int
 }
 
+const defaultMaxAuthBindingTransactions = 10000
+
+var errAuthBindingCapacity = errors.New("too many pending authentication binding transactions")
+
 func newAuthBindingStore() *authBindingStore {
-	return &authBindingStore{transactions: map[string]authBindingTransaction{}, ttl: 10 * time.Minute}
+	return &authBindingStore{
+		transactions: map[string]authBindingTransaction{},
+		ttl:          10 * time.Minute,
+		maxEntries:   defaultMaxAuthBindingTransactions,
+	}
 }
 
 func (s *authBindingStore) Save(state, userID, provider, returnPath string, now time.Time) error {
@@ -32,8 +41,12 @@ func (s *authBindingStore) Save(state, userID, provider, returnPath string, now 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.transactions[state] = authBindingTransaction{UserID: userID, Provider: provider, ReturnPath: safeAccountReturnPath(returnPath), CreatedAt: now.UTC()}
-	s.pruneLocked(now.UTC())
+	now = now.UTC()
+	s.pruneLocked(now)
+	if _, exists := s.transactions[state]; !exists && len(s.transactions) >= s.maxEntries {
+		return errAuthBindingCapacity
+	}
+	s.transactions[state] = authBindingTransaction{UserID: userID, Provider: provider, ReturnPath: safeAccountReturnPath(returnPath), CreatedAt: now}
 	return nil
 }
 

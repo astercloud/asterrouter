@@ -1,8 +1,8 @@
 import { expect, type Page, test } from '@playwright/test'
-import { adminPost, captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './fixtures'
+import { adminPost, captureBrowserErrors, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
 
 async function createActiveGatewayModel(page: Page, prefix: string): Promise<string> {
-  const token = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const token = await loginTestPrincipal(page)
   const modelID = `${prefix}-${Date.now()}`
   await adminPost(page, token, '/gateway-models', {
     model_id: modelID,

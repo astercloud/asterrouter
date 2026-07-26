@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
-import { captureBrowserErrors, envelope, loginDemo, registerUsers } from './fixtures'
+import { captureBrowserErrors, envelope, loginDemo, loginTestPrincipal, loginUser, registerUsers } from './fixtures'
 
 async function loginThroughPage(page: Page, email: string, password: string, redirect: string): Promise<void> {
   await page.goto(`/login?redirect=${encodeURIComponent(redirect)}`)
@@ -32,7 +32,7 @@ test('@smoke @j09 customer and account sessions are isolated, surface-safe, and 
 
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
-  const adminToken = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const adminToken = await loginTestPrincipal(page)
   const runID = `${testInfo.project.name}-${Date.now()}`
   const password = 'synthetic-password-123'
   const [customerA, customerB] = await registerUsers(page, adminToken, [
@@ -44,7 +44,7 @@ test('@smoke @j09 customer and account sessions are isolated, surface-safe, and 
   await page.evaluate(() => localStorage.clear())
   await loginThroughPage(page, customerA.email, password, '/customer/overview')
   await expect(page.getByRole('heading', { level: 1, name: 'Account overview' })).toBeVisible()
-  const customerAToken = await page.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+  const customerAToken = await loginUser(page, customerA.email, password)
   const customerABilling = await envelope<{ balance_micros: number }>(await page.request.get('/api/v1/customer/billing', {
     headers: { Authorization: `Bearer ${customerAToken}` }
   }))
@@ -56,7 +56,7 @@ test('@smoke @j09 customer and account sessions are isolated, surface-safe, and 
   try {
     await loginThroughPage(otherPage, customerB.email, password, `${origin}/customer/overview`)
     await expect(otherPage.getByRole('heading', { level: 1, name: 'Account overview' })).toBeVisible()
-    const customerBToken = await otherPage.evaluate(() => localStorage.getItem('asterrouter_admin_token') || '')
+    const customerBToken = await loginUser(otherPage, customerB.email, password)
     const customerBBilling = await envelope<{ balance_micros: number }>(await otherPage.request.get(`${origin}/api/v1/customer/billing`, {
       headers: { Authorization: `Bearer ${customerBToken}` }
     }))

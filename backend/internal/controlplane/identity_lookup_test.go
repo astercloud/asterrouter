@@ -27,7 +27,11 @@ func TestWorkspaceUserLookupByEmail(t *testing.T) {
 			if err := tc.repo.SaveWorkspaceUser(ctx, user2); err != nil {
 				t.Fatalf("SaveWorkspaceUser(user2): %v", err)
 			}
-			found, ok, err := tc.repo.FindWorkspaceUserByEmail(ctx, "found@example.test")
+			found, ok, err := tc.repo.FindWorkspaceUserByID(ctx, "usr_1")
+			if err != nil || !ok || found.Email != user1.Email {
+				t.Fatalf("ID lookup user=%+v ok=%t err=%v", found, ok, err)
+			}
+			found, ok, err = tc.repo.FindWorkspaceUserByEmail(ctx, "found@example.test")
 			if err != nil {
 				t.Fatalf("FindWorkspaceUserByEmail(): %v", err)
 			}
@@ -40,6 +44,15 @@ func TestWorkspaceUserLookupByEmail(t *testing.T) {
 			found, ok, err = tc.repo.FindWorkspaceUserByEmailNormalized(ctx, NormalizeEmailForAliasDedup("found+tag@example.test"))
 			if err != nil || !ok || found.ID != "usr_1" {
 				t.Fatalf("normalized lookup user=%+v ok=%t err=%v", found, ok, err)
+			}
+			user2.ExternalIssuer = "github"
+			user2.ExternalSubject = "subject-2"
+			if err := tc.repo.SaveWorkspaceUser(ctx, user2); err != nil {
+				t.Fatal(err)
+			}
+			found, ok, err = tc.repo.FindWorkspaceUserByExternalIdentity(ctx, "github", "subject-2")
+			if err != nil || !ok || found.ID != user2.ID {
+				t.Fatalf("external identity lookup user=%+v ok=%t err=%v", found, ok, err)
 			}
 			_, ok, err = tc.repo.FindWorkspaceUserByEmail(ctx, "missing@example.test")
 			if err != nil {
@@ -120,6 +133,8 @@ func TestPostgresWorkspaceUserLookups(t *testing.T) {
 		EmailVerifyExpiresAt:   &expires,
 		PasswordResetHash:      "hash_reset_postgres",
 		PasswordResetExpiresAt: &expires,
+		ExternalIssuer:         "github",
+		ExternalSubject:        "postgres-subject",
 		CreatedAt:              now,
 		UpdatedAt:              now,
 	}
@@ -127,11 +142,17 @@ func TestPostgresWorkspaceUserLookups(t *testing.T) {
 		t.Fatalf("SaveWorkspaceUser(): %v", err)
 	}
 	for name, lookup := range map[string]func() (WorkspaceUser, bool, error){
+		"id": func() (WorkspaceUser, bool, error) {
+			return repo.FindWorkspaceUserByID(ctx, user.ID)
+		},
 		"email": func() (WorkspaceUser, bool, error) {
 			return repo.FindWorkspaceUserByEmail(ctx, user.Email)
 		},
 		"normalized email": func() (WorkspaceUser, bool, error) {
 			return repo.FindWorkspaceUserByEmailNormalized(ctx, NormalizeEmailForAliasDedup(user.Email))
+		},
+		"external identity": func() (WorkspaceUser, bool, error) {
+			return repo.FindWorkspaceUserByExternalIdentity(ctx, user.ExternalIssuer, user.ExternalSubject)
 		},
 		"email verification hash": func() (WorkspaceUser, bool, error) {
 			return repo.FindWorkspaceUserByEmailVerifyHash(ctx, user.EmailVerifyHash)

@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const authAttemptLimiterMaxKeys = 10000
+
 type authAttemptWindow struct {
 	Count   int
 	ResetAt time.Time
@@ -13,11 +15,13 @@ type authAttemptLimiter struct {
 	mu       sync.Mutex
 	limit    int
 	window   time.Duration
+	maxKeys  int
+	nextGC   time.Time
 	attempts map[string]authAttemptWindow
 }
 
 func newAuthAttemptLimiter(limit int, window time.Duration) *authAttemptLimiter {
-	return &authAttemptLimiter{limit: limit, window: window, attempts: map[string]authAttemptWindow{}}
+	return &authAttemptLimiter{limit: limit, window: window, maxKeys: authAttemptLimiterMaxKeys, attempts: map[string]authAttemptWindow{}}
 }
 
 func (l *authAttemptLimiter) Allow(key string, now time.Time) bool {
@@ -28,7 +32,24 @@ func (l *authAttemptLimiter) Allow(key string, now time.Time) bool {
 func (l *authAttemptLimiter) AllowWithRetry(key string, now time.Time) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	v := l.attempts[key]
+	v, exists := l.attempts[key]
+	if !exists && len(l.attempts) >= l.maxKeys {
+		if l.nextGC.IsZero() || !now.Before(l.nextGC) {
+			for currentKey, attempt := range l.attempts {
+				if !now.Before(attempt.ResetAt) {
+					delete(l.attempts, currentKey)
+				}
+			}
+			gcInterval := min(l.window, time.Minute)
+			if gcInterval <= 0 {
+				gcInterval = time.Minute
+			}
+			l.nextGC = now.Add(gcInterval)
+		}
+		if len(l.attempts) >= l.maxKeys {
+			return false, max(l.nextGC.Sub(now), time.Second)
+		}
+	}
 	if v.ResetAt.IsZero() || !now.Before(v.ResetAt) {
 		v = authAttemptWindow{ResetAt: now.Add(l.window)}
 	}
@@ -38,13 +59,6 @@ func (l *authAttemptLimiter) AllowWithRetry(key string, now time.Time) (bool, ti
 	}
 	v.Count++
 	l.attempts[key] = v
-	if len(l.attempts) > 10000 {
-		for k, a := range l.attempts {
-			if !now.Before(a.ResetAt) {
-				delete(l.attempts, k)
-			}
-		}
-	}
 	return true, 0
 }
 
@@ -65,6 +79,8 @@ type authEndpointLimiters struct {
 	resetPassword         *authAttemptLimiter
 	verifyEmail           *authAttemptLimiter
 	resendVerification    *authAttemptLimiter
+	externalLoginStart    *authAttemptLimiter
+	accountBindingStart   *authAttemptLimiter
 	totpLogin             *authAttemptLimiter
 	totpManagement        *authAttemptLimiter
 }
@@ -79,6 +95,8 @@ func newAuthEndpointLimiters() *authEndpointLimiters {
 		resetPassword:         newAuthAttemptLimiter(10, time.Minute),
 		verifyEmail:           newAuthAttemptLimiter(10, time.Minute),
 		resendVerification:    newAuthAttemptLimiter(3, time.Minute),
+		externalLoginStart:    newAuthAttemptLimiter(30, time.Minute),
+		accountBindingStart:   newAuthAttemptLimiter(10, 10*time.Minute),
 		totpLogin:             newAuthAttemptLimiter(10, time.Minute),
 		totpManagement:        newAuthAttemptLimiter(5, 15*time.Minute),
 	}
