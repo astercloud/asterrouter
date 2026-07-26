@@ -167,6 +167,24 @@ describe('AdminModelRoutesView', () => {
     wrapper.unmount()
   })
 
+  it('offers the dedicated embedding format only for capable providers', async () => {
+	vi.mocked(control.getGatewayModels).mockResolvedValue([
+	  { id: 'gateway-embedding', model_id: 'embedding-upstream', name: 'Embedding', modality: 'embedding', default_route_group: 'default', status: 'active' }
+	] as never)
+	vi.mocked(control.getProviderAccounts).mockResolvedValue([
+	  { id: 'account-1', name: 'Account One', platform: 'openai_compatible', models: ['embedding-upstream'] }
+	] as never)
+	vi.mocked(control.getModelRoutes).mockResolvedValue([])
+
+	const wrapper = mount(AdminModelRoutesView, { global: { plugins: [i18n] } })
+	await flushPromises()
+	await wrapper.findAll('button').find((button) => button.text().includes('New model route'))!.trigger('click')
+
+	expect(wrapper.find('option[value="openai_embeddings"]').exists()).toBe(true)
+	expect(wrapper.find('option[value="native_media"]').exists()).toBe(false)
+	wrapper.unmount()
+  })
+
   it('shows account inventory and public mappings in the support matrix', async () => {
     const wrapper = mount(AdminModelRoutesView, { global: { plugins: [i18n] } })
     await flushPromises()

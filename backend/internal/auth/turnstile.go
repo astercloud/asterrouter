@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const turnstileVerifyURL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
@@ -30,7 +33,7 @@ func (v TurnstileVerifier) Verify(ctx context.Context, secret, response, remoteI
 	}
 	client := v.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	form := url.Values{"secret": {secret}, "response": {response}}
 	if strings.TrimSpace(remoteIP) != "" {
@@ -46,11 +49,15 @@ func (v TurnstileVerifier) Verify(ctx context.Context, secret, response, remoteI
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("turnstile verification returned HTTP %d", resp.StatusCode)
+	}
 	var result struct {
 		Success bool     `json:"success"`
 		Errors  []string `json:"error-codes"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&result); err != nil {
 		return err
 	}
 	if !result.Success {

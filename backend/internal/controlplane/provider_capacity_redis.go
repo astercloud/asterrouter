@@ -10,8 +10,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const maxProviderCapacityLeaseDuration = 7 * 24 * time.Hour
-
 type RedisProviderCapacityStoreConfig struct {
 	Namespace string
 }

@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/alerts.yml
+
+scrape_configs:
+  - job_name: asterrouter
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/asterrouter_metrics_token
+    static_configs:
+      - targets:
+          - asterrouter-a:8080
+          - asterrouter-b:8080

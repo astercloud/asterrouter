@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,13 +36,16 @@ type Options struct {
 	ExportJobStore     CSVExportJobStore
 	DurableAIJobs      DurableAIJobAdmission
 	AIJobRuntime       AIJobRuntimeStatusProvider
+	HumanVerifier      HumanVerifier
+	AuthEmailSender    AuthenticationEmailSender
 	authBindingStore   *authBindingStore
 }
 
 type RuntimeConfig struct {
-	AdminToken  string
-	DemoMode    bool
-	FrontendDir string
+	AdminToken   string
+	MetricsToken string
+	DemoMode     bool
+	FrontendDir  string
 }
 
 type AIJobRuntimeStatusProvider interface {
@@ -50,8 +55,30 @@ type AIJobRuntimeStatusProvider interface {
 func New(opts Options) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	r.ForwardedByClientIP = false
+	_ = r.SetTrustedProxies(nil)
+	if opts.SettingsService != nil {
+		if current, err := opts.SettingsService.Admin(context.Background()); err == nil && current.TrustedProxyHeaders {
+			if err := r.SetTrustedProxies(current.TrustedProxyCIDRs); err != nil {
+				slog.Error("ignore invalid trusted proxy configuration", "error", err)
+			} else {
+				r.ForwardedByClientIP = true
+				r.RemoteIPHeaders = []string{"X-Forwarded-For", "X-Real-IP"}
+			}
+		}
+	}
+	r.Use(func(c *gin.Context) {
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Next()
+	})
+	metrics := newServerMetrics()
+	r.Use(metrics.middleware())
 	r.Use(gin.Recovery())
-	authLimiter := newAuthAttemptLimiter(10, 5*time.Minute)
+	authLimiter := newAuthAttemptLimiter(60, 5*time.Minute)
+	endpointLimiters := newAuthEndpointLimiters()
+	humanVerifier := defaultHumanVerifier(opts.HumanVerifier)
+	authEmailSender := defaultAuthenticationEmailSender(opts.AuthEmailSender, opts.SettingsService)
 	if opts.authBindingStore == nil {
 		opts.authBindingStore = newAuthBindingStore()
 	}
@@ -60,6 +87,10 @@ func New(opts Options) http.Handler {
 		exportJobStore = newCSVExportJobStore()
 	}
 	if opts.ControlService != nil {
+		if strings.TrimSpace(opts.Runtime.MetricsToken) != "" {
+			opts.ControlService.SetCapacityAdmissionObserver(metrics)
+			metrics.setProviderCapacitySnapshotSource(opts.ControlService.ProviderCapacityMetrics)
+		}
 		dispatchers := multiAlertDispatcher{}
 		if opts.PluginService != nil {
 			dispatchers = append(dispatchers, opts.PluginService)
@@ -84,36 +115,48 @@ func New(opts Options) http.Handler {
 	r.GET("/health", func(c *gin.Context) {
 		httpx.OK(c, gin.H{"status": "ok"})
 	})
+	r.GET("/metrics", requireMetricsToken(opts.Runtime.MetricsToken), metrics.handle)
 
 	r.GET("/ready", func(c *gin.Context) {
+		if opts.SettingsService == nil {
+			metrics.recordReadiness(false)
+			writeReadinessUnavailable(c, "settings", errors.New("settings service is not configured"))
+			return
+		}
 		if err := opts.SettingsService.Health(c.Request.Context()); err != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1001, err.Error())
+			metrics.recordReadiness(false)
+			writeReadinessUnavailable(c, "settings", err)
 			return
 		}
 		if opts.ControlService != nil {
 			if err := opts.ControlService.Health(c.Request.Context()); err != nil {
-				httpx.Error(c, http.StatusServiceUnavailable, 1001, err.Error())
+				metrics.recordReadiness(false)
+				writeReadinessUnavailable(c, "control_plane", err)
 				return
 			}
 		}
 		if opts.OperatorService != nil {
 			if err := opts.OperatorService.Health(c.Request.Context()); err != nil {
-				httpx.Error(c, http.StatusServiceUnavailable, 1001, err.Error())
+				metrics.recordReadiness(false)
+				writeReadinessUnavailable(c, "operator", err)
 				return
 			}
 		}
 		if opts.PluginService != nil {
 			if err := opts.PluginService.Health(c.Request.Context()); err != nil {
-				httpx.Error(c, http.StatusServiceUnavailable, 1001, err.Error())
+				metrics.recordReadiness(false)
+				writeReadinessUnavailable(c, "plugins", err)
 				return
 			}
 		}
 		if exportJobStore != nil {
 			if err := exportJobStore.Health(c.Request.Context()); err != nil {
-				httpx.Error(c, http.StatusServiceUnavailable, 1001, err.Error())
+				metrics.recordReadiness(false)
+				writeReadinessUnavailable(c, "export_jobs", err)
 				return
 			}
 		}
+		metrics.recordReadiness(true)
 		httpx.OK(c, gin.H{"status": "ready"})
 	})
 
@@ -196,8 +239,7 @@ func New(opts Options) http.Handler {
 		httpx.OK(c, data.PublicSettings)
 	})
 	api.POST("/auth/login", func(c *gin.Context) {
-		if !authLimiter.Allow(c.ClientIP(), time.Now().UTC()) {
-			httpx.Error(c, http.StatusTooManyRequests, 1429, "too many login attempts")
+		if !allowAuthRequest(c, authLimiter, "too many login attempts") {
 			return
 		}
 		if opts.AuthService == nil {
@@ -210,8 +252,15 @@ func New(opts Options) http.Handler {
 			TurnstileToken    string `json:"turnstile_token"`
 			AgreementAccepted bool   `json:"agreement_accepted"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1301, "invalid login payload")
+			return
+		}
+		loginPrincipalKey := strings.ToLower(strings.TrimSpace(req.Username))
+		if loginPrincipalKey == "" {
+			loginPrincipalKey = "<empty>"
+		}
+		if !allowAuthRequestForKey(c, endpointLimiters.loginPrincipal, loginPrincipalKey, "too many login attempts") {
 			return
 		}
 		if !agreementAccepted(c.Request.Context(), opts.SettingsService, req.AgreementAccepted) {
@@ -224,7 +273,7 @@ func New(opts Options) http.Handler {
 			return
 		}
 		if security.TurnstileEnabled {
-			if err := (auth.TurnstileVerifier{}).Verify(c.Request.Context(), security.TurnstileSecret, req.TurnstileToken, c.ClientIP()); err != nil {
+			if err := humanVerifier.Verify(c.Request.Context(), security.TurnstileSecret, req.TurnstileToken, c.ClientIP()); err != nil {
 				httpx.Error(c, http.StatusForbidden, 1311, "turnstile verification failed")
 				return
 			}
@@ -232,11 +281,15 @@ func New(opts Options) http.Handler {
 		result, err := opts.AuthService.Login(c.Request.Context(), req.Username, req.Password)
 		if err == nil && opts.ControlService != nil && opts.AuthService.IsLocalPrincipal(req.Username) {
 			if profile, profileErr := opts.ControlService.CurrentAccountProfile(c.Request.Context(), req.Username); profileErr == nil && profile.TOTPEnabled {
+				if !allowAuthRequestForKey(c, endpointLimiters.mfaChallengePrincipal, profile.ID, "too many MFA challenges") {
+					return
+				}
 				challenge, expires, challengeErr := opts.AuthService.BeginMFA(profile.ID, profile.Role)
 				if challengeErr != nil {
 					httpx.Error(c, http.StatusInternalServerError, 1315, challengeErr.Error())
 					return
 				}
+				endpointLimiters.loginPrincipal.Reset(loginPrincipalKey)
 				httpx.OK(c, gin.H{"mfa_required": true, "challenge": challenge, "expires_at": expires})
 				return
 			}
@@ -246,11 +299,15 @@ func New(opts Options) http.Handler {
 			if policyErr == nil && opts.ControlService != nil {
 				if user, userErr := opts.ControlService.AuthenticateWorkspaceUser(c.Request.Context(), req.Username, req.Password, policy.EmailVerification); userErr == nil {
 					if user.TOTPEnabled {
+						if !allowAuthRequestForKey(c, endpointLimiters.mfaChallengePrincipal, user.ID, "too many MFA challenges") {
+							return
+						}
 						challenge, expires, challengeErr := opts.AuthService.BeginMFA(user.ID, user.Role)
 						if challengeErr != nil {
 							httpx.Error(c, http.StatusInternalServerError, 1315, challengeErr.Error())
 							return
 						}
+						endpointLimiters.loginPrincipal.Reset(loginPrincipalKey)
 						httpx.OK(c, gin.H{"mfa_required": true, "challenge": challenge, "expires_at": expires})
 						return
 					}
@@ -266,10 +323,13 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusInternalServerError, 1303, err.Error())
 			return
 		}
-		authLimiter.Reset(c.ClientIP())
+		endpointLimiters.loginPrincipal.Reset(loginPrincipalKey)
 		httpx.OK(c, enrichLoginResult(c.Request.Context(), opts.ControlService, result))
 	})
 	api.POST("/auth/register", func(c *gin.Context) {
+		if !allowAuthRequest(c, endpointLimiters.register, "too many registration attempts") {
+			return
+		}
 		policy, err := opts.SettingsService.RegistrationPolicy(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1303, err.Error())
@@ -285,9 +345,14 @@ func New(opts Options) http.Handler {
 			DisplayName       string `json:"display_name"`
 			InvitationCode    string `json:"invitation_code"`
 			AgreementAccepted bool   `json:"agreement_accepted"`
+			TurnstileToken    string `json:"turnstile_token"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
+			return
+		}
+		registerPrincipalKey := c.ClientIP() + "\x00" + strings.ToLower(strings.TrimSpace(req.Email))
+		if !allowAuthRequestForKey(c, endpointLimiters.registerPrincipal, registerPrincipalKey, "too many registration attempts") {
 			return
 		}
 		if !agreementAccepted(c.Request.Context(), opts.SettingsService, req.AgreementAccepted) {
@@ -304,15 +369,20 @@ func New(opts Options) http.Handler {
 				return
 			}
 		}
-		if policy.InvitationRequired {
-			if len(req.Password) < 10 {
-				httpx.Error(c, http.StatusBadRequest, 1322, "password must contain at least 10 characters")
+		security, securityErr := opts.SettingsService.LoginSecurity(c.Request.Context())
+		if securityErr != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1303, securityErr.Error())
+			return
+		}
+		if security.TurnstileEnabled {
+			if err := humanVerifier.Verify(c.Request.Context(), security.TurnstileSecret, req.TurnstileToken, c.ClientIP()); err != nil {
+				httpx.Error(c, http.StatusForbidden, 1311, "turnstile verification failed")
 				return
 			}
-			if err := opts.SettingsService.ConsumeInvitationCode(c.Request.Context(), req.InvitationCode); err != nil {
-				httpx.Error(c, http.StatusForbidden, 1326, err.Error())
-				return
-			}
+		}
+		if err := controlplane.ValidatePasswordStrength(req.Password); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1322, err.Error())
+			return
 		}
 		adminSettings, settingsErr := opts.SettingsService.Admin(c.Request.Context())
 		if settingsErr != nil {
@@ -320,82 +390,172 @@ func New(opts Options) http.Handler {
 			return
 		}
 		defaults := workspaceUserDefaults(adminSettings, "local")
-		user, token, err := opts.ControlService.RegisterWorkspaceUser(c.Request.Context(), req.Email, req.Password, req.DisplayName, policy.EmailVerification, defaults)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1322, err.Error())
-			return
-		}
-		if policy.EmailVerification && !opts.Runtime.DemoMode {
-			public, _ := opts.SettingsService.Public(c.Request.Context())
-			verifyURL := strings.TrimRight(public.PublicBaseURL, "/") + "/login?verify=" + url.QueryEscape(token)
-			if mailErr := sendConfiguredEmail(c.Request.Context(), opts.SettingsService, "email_verification", user.Email, user.DisplayName, verifyURL); mailErr != nil {
-				httpx.Error(c, http.StatusBadGateway, 1324, "verification email could not be sent")
+		invitationConsumed := false
+		if policy.InvitationRequired {
+			if err := opts.SettingsService.ConsumeInvitationCode(c.Request.Context(), req.InvitationCode); err != nil {
+				httpx.Error(c, http.StatusForbidden, 1326, "invitation code is invalid")
 				return
 			}
+			invitationConsumed = true
 		}
-		data := gin.H{"user_id": user.ID, "verification_required": policy.EmailVerification}
+		user, token, err := opts.ControlService.RegisterWorkspaceUser(c.Request.Context(), req.Email, req.Password, req.DisplayName, policy.EmailVerification, defaults)
+		if err != nil {
+			if invitationConsumed {
+				if restoreErr := opts.SettingsService.RestoreInvitationCode(c.Request.Context(), req.InvitationCode); restoreErr != nil {
+					_ = c.Error(restoreErr)
+				}
+			}
+			if errors.Is(err, controlplane.ErrPasswordTooWeak) || errors.Is(err, controlplane.ErrPasswordTooLong) {
+				httpx.Error(c, http.StatusBadRequest, 1322, controlplane.ErrPasswordTooWeak.Error())
+			} else if errors.Is(err, controlplane.ErrUserEmailExists) {
+				httpx.Error(c, http.StatusConflict, 1322, "email is already registered")
+			} else {
+				_ = c.Error(err)
+				httpx.Error(c, http.StatusBadRequest, 1322, "registration could not be completed")
+			}
+			return
+		}
+		emailDeliveryFailed := false
+		if policy.EmailVerification && !opts.Runtime.DemoMode {
+			public, _ := opts.SettingsService.Public(c.Request.Context())
+			verifyURL := strings.TrimRight(public.PublicBaseURL, "/") + "/verify-email?token=" + url.QueryEscape(token)
+			if mailErr := authEmailSender.Send(c.Request.Context(), "email_verification", user.Email, user.DisplayName, verifyURL); mailErr != nil {
+				emailDeliveryFailed = true
+				_ = c.Error(mailErr)
+			}
+		}
+		data := gin.H{"user_id": user.ID, "verification_required": policy.EmailVerification, "email_delivery_failed": emailDeliveryFailed}
 		if policy.EmailVerification && opts.Runtime.DemoMode {
 			data["verification_token"] = token
 		}
 		httpx.OK(c, data)
 	})
 	api.POST("/auth/verify-email", func(c *gin.Context) {
+		if !allowAuthRequest(c, endpointLimiters.verifyEmail, "too many verification attempts") {
+			return
+		}
 		var req struct {
 			Token string `json:"token"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
 		if err := opts.ControlService.VerifyWorkspaceUserEmail(c.Request.Context(), req.Token); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1323, err.Error())
+			// 统一文案：不区分 token 不存在 / 已过期 / 已使用，避免据此探测他人注册状态。
+			httpx.Error(c, http.StatusBadRequest, 1323, "email verification link is invalid or expired")
 			return
 		}
 		httpx.OK(c, gin.H{"verified": true})
 	})
 	api.POST("/auth/resend-verification", func(c *gin.Context) {
-		var req struct {
-			Email string `json:"email"`
+		if !allowAuthRequest(c, endpointLimiters.resendVerification, "too many verification requests") {
+			return
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
+		var req struct {
+			Email          string `json:"email"`
+			TurnstileToken string `json:"turnstile_token"`
+		}
+		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
+			return
+		}
+		security, securityErr := opts.SettingsService.LoginSecurity(c.Request.Context())
+		if securityErr != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication settings are unavailable")
+			return
+		}
+		if security.TurnstileEnabled {
+			if err := humanVerifier.Verify(c.Request.Context(), security.TurnstileSecret, req.TurnstileToken, c.ClientIP()); err != nil {
+				httpx.Error(c, http.StatusForbidden, 1311, "turnstile verification failed")
+				return
+			}
+		}
+		policy, policyErr := opts.SettingsService.RegistrationPolicy(c.Request.Context())
+		if policyErr != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication settings are unavailable")
+			return
+		}
+		if !policy.EmailVerification {
+			httpx.OK(c, gin.H{"accepted": true})
 			return
 		}
 		user, token, err := opts.ControlService.RenewEmailVerification(c.Request.Context(), req.Email)
 		if err == nil {
 			public, _ := opts.SettingsService.Public(c.Request.Context())
-			verifyURL := strings.TrimRight(public.PublicBaseURL, "/") + "/login?verify=" + url.QueryEscape(token)
-			_ = sendConfiguredEmail(c.Request.Context(), opts.SettingsService, "email_verification", user.Email, user.DisplayName, verifyURL)
+			verifyURL := strings.TrimRight(public.PublicBaseURL, "/") + "/verify-email?token=" + url.QueryEscape(token)
+			if mailErr := authEmailSender.Send(c.Request.Context(), "email_verification", user.Email, user.DisplayName, verifyURL); mailErr != nil {
+				_ = c.Error(mailErr)
+			}
 		}
 		httpx.OK(c, gin.H{"accepted": true})
 	})
 	api.POST("/auth/forgot-password", func(c *gin.Context) {
-		var req struct {
-			Email string `json:"email"`
+		if !allowAuthRequest(c, endpointLimiters.forgotPassword, "too many password reset requests") {
+			return
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
+		var req struct {
+			Email          string `json:"email"`
+			TurnstileToken string `json:"turnstile_token"`
+		}
+		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
+		}
+		policy, policyErr := opts.SettingsService.RegistrationPolicy(c.Request.Context())
+		if policyErr != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication settings are unavailable")
+			return
+		}
+		if !policy.PasswordReset {
+			httpx.Error(c, http.StatusForbidden, 1329, "password reset is disabled")
+			return
+		}
+		security, securityErr := opts.SettingsService.LoginSecurity(c.Request.Context())
+		if securityErr != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1303, "authentication settings are unavailable")
+			return
+		}
+		if security.TurnstileEnabled {
+			if err := humanVerifier.Verify(c.Request.Context(), security.TurnstileSecret, req.TurnstileToken, c.ClientIP()); err != nil {
+				httpx.Error(c, http.StatusForbidden, 1311, "turnstile verification failed")
+				return
+			}
 		}
 		user, token, err := opts.ControlService.BeginPasswordReset(c.Request.Context(), req.Email)
 		if err == nil {
 			public, _ := opts.SettingsService.Public(c.Request.Context())
-			resetURL := strings.TrimRight(public.PublicBaseURL, "/") + "/login?reset=" + url.QueryEscape(token)
-			_ = sendConfiguredEmail(c.Request.Context(), opts.SettingsService, "password_reset", user.Email, user.DisplayName, resetURL)
+			resetURL := strings.TrimRight(public.PublicBaseURL, "/") + "/reset-password?token=" + url.QueryEscape(token)
+			if mailErr := authEmailSender.Send(c.Request.Context(), "password_reset", user.Email, user.DisplayName, resetURL); mailErr != nil {
+				_ = c.Error(mailErr)
+			}
 		}
 		httpx.OK(c, gin.H{"accepted": true})
 	})
 	api.POST("/auth/reset-password", func(c *gin.Context) {
+		if !allowAuthRequest(c, endpointLimiters.resetPassword, "too many password reset attempts") {
+			return
+		}
 		var req struct {
 			Token    string `json:"token"`
 			Password string `json:"password"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
 		if err := opts.ControlService.CompletePasswordReset(c.Request.Context(), req.Token, req.Password); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1325, err.Error())
+			// 只回显用户自己可修正的原因（密码强度）与统一的凭据失效文案；
+			// 其余错误（如数据库故障）不外泄内部细节。
+			switch {
+			case errors.Is(err, controlplane.ErrPasswordTooWeak), errors.Is(err, controlplane.ErrPasswordTooLong):
+				httpx.Error(c, http.StatusBadRequest, 1325, err.Error())
+			case errors.Is(err, controlplane.ErrResetTokenInvalid):
+				httpx.Error(c, http.StatusBadRequest, 1325, "password reset link is invalid or expired")
+			default:
+				_ = c.Error(err)
+				httpx.Error(c, http.StatusInternalServerError, 1325, "password reset failed")
+			}
 			return
 		}
 		httpx.OK(c, gin.H{"reset": true})
@@ -674,21 +834,37 @@ func New(opts Options) http.Handler {
 		})
 	}
 	api.POST("/auth/totp/login", func(c *gin.Context) {
+		if !allowAuthRequest(c, endpointLimiters.totpLogin, "too many MFA attempts") {
+			return
+		}
+		if opts.AuthService == nil || opts.ControlService == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1300, "auth service is not available")
+			return
+		}
 		var req struct {
 			Challenge string `json:"challenge"`
 			Code      string `json:"code"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
+		if err := bindAuthJSON(c, &req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
-		userID, role, ok := opts.AuthService.ConsumeMFA(req.Challenge)
+		userID, role, ok := opts.AuthService.InspectMFA(req.Challenge)
 		if !ok {
 			httpx.Error(c, http.StatusUnauthorized, 1316, "MFA challenge is invalid or expired")
 			return
 		}
 		if _, err := opts.ControlService.VerifyUserTOTP(c.Request.Context(), userID, req.Code); err != nil {
+			if opts.AuthService.RecordMFAFailure(req.Challenge) {
+				httpx.Error(c, http.StatusUnauthorized, 1316, "MFA challenge is invalid or expired")
+				return
+			}
 			httpx.Error(c, http.StatusUnauthorized, 1317, "invalid TOTP code")
+			return
+		}
+		consumedUserID, consumedRole, ok := opts.AuthService.ConsumeMFA(req.Challenge)
+		if !ok || consumedUserID != userID || consumedRole != role {
+			httpx.Error(c, http.StatusUnauthorized, 1316, "MFA challenge is invalid or expired")
 			return
 		}
 		result, err := opts.AuthService.LoginOIDC(userID, role)
@@ -696,6 +872,8 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusUnauthorized, 1307, err.Error())
 			return
 		}
+		endpointLimiters.mfaChallengePrincipal.Reset(userID)
+		endpointLimiters.totpLogin.Reset(c.ClientIP())
 		c.SetSameSite(http.SameSiteLaxMode)
 		c.SetCookie("asterrouter_session", result.AccessToken, int(time.Until(result.ExpiresAt).Seconds()), "/", "", true, true)
 		httpx.OK(c, enrichLoginResult(c.Request.Context(), opts.ControlService, result))
@@ -711,72 +889,18 @@ func New(opts Options) http.Handler {
 	api.GET("/auth/me", requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService), func(c *gin.Context) {
 		httpx.OK(c, currentAuthUser(c, opts))
 	})
-	registerAccountRoutes(api, opts)
+	registerAccountRoutes(api, opts, endpointLimiters.totpManagement)
 	api.POST("/auth/totp/setup", requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService), func(c *gin.Context) {
-		data, err := opts.ControlService.BeginTOTPSetup(c.Request.Context(), actor(c))
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1312, err.Error())
-			return
-		}
-		httpx.OK(c, data)
+		beginAccountTOTPSetup(c, opts, endpointLimiters.totpManagement)
 	})
 	api.POST("/auth/totp/confirm", requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService), func(c *gin.Context) {
-		var req struct {
-			Code string `json:"code"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
-			return
-		}
-		codes, err := opts.ControlService.ConfirmTOTPWithRecoveryCodes(c.Request.Context(), actor(c), req.Code)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1313, err.Error())
-			return
-		}
-		response, err := replacementAccountSession(c, opts)
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
-			return
-		}
-		enabled := true
-		response.Enabled = &enabled
-		response.Codes = codes
-		httpx.OK(c, response)
+		confirmAccountTOTP(c, opts, endpointLimiters.totpManagement)
 	})
 	api.POST("/auth/totp/disable", requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService), func(c *gin.Context) {
-		var req struct {
-			Code string `json:"code"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
-			return
-		}
-		if err := opts.ControlService.DisableTOTP(c.Request.Context(), actor(c), req.Code); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1314, err.Error())
-			return
-		}
-		response, err := replacementAccountSession(c, opts)
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
-			return
-		}
-		enabled := false
-		response.Enabled = &enabled
-		httpx.OK(c, response)
+		disableAccountTOTP(c, opts, endpointLimiters.totpManagement)
 	})
 	api.POST("/auth/totp/recovery-codes", requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService), func(c *gin.Context) {
-		codes, err := opts.ControlService.GenerateTOTPRecoveryCodes(c.Request.Context(), actor(c))
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1318, err.Error())
-			return
-		}
-		response, err := replacementAccountSession(c, opts)
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
-			return
-		}
-		response.Codes = codes
-		httpx.OK(c, response)
+		regenerateAccountTOTPRecoveryCodes(c, opts, endpointLimiters.totpManagement)
 	})
 	registerPluginOpenRoutes(api.Group("/open/plugins"), opts.PluginService, opts.ControlService)
 	registerPluginHostRoutes(api.Group("/plugin-host"), opts.PluginService, opts.ControlService)
@@ -817,8 +941,21 @@ func New(opts Options) http.Handler {
 	admin.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceEnterprise))
 	admin.Use(requireRBAC(opts.ControlService))
 	registerAdminRoutes(admin, opts.ControlService, exportJobStore, opts.AIJobRuntime)
+	registerAPIKeyClientRoutes(admin.Group("/api-keys"), opts.ControlService, opts.SettingsService)
 	registerPluginRoutes(admin.Group("/plugins"), opts.PluginService, opts.ControlService, "enterprise")
 	registerSystemRoutes(admin.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
+	onboarding := api.Group("/onboarding")
+	onboarding.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
+	onboarding.Use(requireProfile(opts.SettingsService, "enterprise"))
+	onboarding.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceEnterprise))
+	onboarding.Use(requireRBAC(opts.ControlService))
+	registerOnboardingRoutes(onboarding, opts.ControlService, opts.SettingsService)
+	supply := api.Group("/supply")
+	supply.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
+	supply.Use(requireProfile(opts.SettingsService, "enterprise"))
+	supply.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceEnterprise))
+	supply.Use(requireRBAC(opts.ControlService))
+	registerSupplyRoutes(supply, opts.ControlService)
 	admin.GET("/settings", func(c *gin.Context) {
 		data, err := opts.SettingsService.Admin(c.Request.Context())
 		if err != nil {
@@ -883,12 +1020,12 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusBadRequest, 1402, "valid recipient is required")
 			return
 		}
-		host, port, username, password, from, err := opts.SettingsService.SMTPConfig(c.Request.Context())
+		smtpSettings, err := opts.SettingsService.SMTPConfig(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusServiceUnavailable, 1501, err.Error())
 			return
 		}
-		mailer := auth.SMTPMailer{Config: auth.SMTPConfig{Host: host, Port: port, Username: username, Password: password, From: from}}
+		mailer := auth.SMTPMailer{Config: smtpConfig(smtpSettings)}
 		if err := mailer.Send(c.Request.Context(), strings.TrimSpace(req.Recipient), "AsterRouter SMTP test", "SMTP configuration is working."); err != nil {
 			httpx.Error(c, http.StatusBadGateway, 1502, err.Error())
 			return
@@ -925,12 +1062,12 @@ func New(opts Options) http.Handler {
 			httpx.Error(c, http.StatusBadRequest, 1420, err.Error())
 			return
 		}
-		host, port, username, password, from, err := opts.SettingsService.SMTPConfig(c.Request.Context())
+		smtpSettings, err := opts.SettingsService.SMTPConfig(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusServiceUnavailable, 1501, err.Error())
 			return
 		}
-		if err := (auth.SMTPMailer{Config: auth.SMTPConfig{Host: host, Port: port, Username: username, Password: password, From: from}}).SendHTML(c.Request.Context(), req.Recipient, subject, htmlBody); err != nil {
+		if err := (auth.SMTPMailer{Config: smtpConfig(smtpSettings)}).SendHTML(c.Request.Context(), req.Recipient, subject, htmlBody); err != nil {
 			httpx.Error(c, http.StatusBadGateway, 1502, err.Error())
 			return
 		}
@@ -987,6 +1124,11 @@ func New(opts Options) http.Handler {
 	return r
 }
 
+func writeReadinessUnavailable(c *gin.Context, dependency string, err error) {
+	slog.Warn("readiness dependency unavailable", "dependency", dependency, "error", err)
+	httpx.Error(c, http.StatusServiceUnavailable, 1001, "service dependency is unavailable")
+}
+
 func enrichLoginResult(ctx context.Context, control *controlplane.Service, result auth.LoginResult) auth.LoginResult {
 	result.User.AllowedSurfaces = allowedSurfacesForActor(ctx, control, result.User.Username)
 	return result
@@ -1035,7 +1177,7 @@ func authorizeSocialProvision(ctx context.Context, settingsService *settings.Ser
 }
 
 func emailDomainAllowed(allowedDomains []string, domain string) bool {
-	domain = strings.ToLower(strings.TrimSpace(domain))
+	domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 	for _, value := range allowedDomains {
 		candidate := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), "*.")
 		if candidate != "" && (domain == candidate || strings.HasSuffix(domain, "."+candidate)) {
@@ -1064,6 +1206,9 @@ func authenticationRestartReasons(previous, current settings.AdminSettings) []st
 	}
 	if previous.GoogleOAuthEnabled != current.GoogleOAuthEnabled || previous.GoogleOAuthClientID != current.GoogleOAuthClientID || previous.GoogleOAuthConfigured != current.GoogleOAuthConfigured {
 		reasons = append(reasons, "google")
+	}
+	if previous.TrustedProxyHeaders != current.TrustedProxyHeaders || !slices.Equal(previous.TrustedProxyCIDRs, current.TrustedProxyCIDRs) {
+		reasons = append(reasons, "trusted_proxy_headers")
 	}
 	return reasons
 }
@@ -1116,9 +1261,16 @@ func sendConfiguredEmailData(ctx context.Context, service *settings.Service, eve
 	if err != nil {
 		return err
 	}
-	host, port, username, password, from, err := service.SMTPConfig(ctx)
+	smtpSettings, err := service.SMTPConfig(ctx)
 	if err != nil {
 		return err
 	}
-	return (auth.SMTPMailer{Config: auth.SMTPConfig{Host: host, Port: port, Username: username, Password: password, From: from}}).SendHTML(ctx, recipient, subject, htmlBody)
+	return (auth.SMTPMailer{Config: smtpConfig(smtpSettings)}).SendHTML(ctx, recipient, subject, htmlBody)
+}
+
+func smtpConfig(value settings.SMTPSettings) auth.SMTPConfig {
+	return auth.SMTPConfig{
+		Host: value.Host, Port: value.Port, Username: value.Username, Password: value.Password,
+		From: value.From, FromName: value.FromName, UseTLS: value.UseTLS,
+	}
 }

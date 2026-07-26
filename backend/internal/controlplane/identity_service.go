@@ -3,27 +3,96 @@ package controlplane
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type TOTPSetup struct {
-	Secret          string `json:"secret"`
-	ProvisioningURI string `json:"provisioning_uri"`
+	Secret          string    `json:"secret"`
+	ProvisioningURI string    `json:"provisioning_uri"`
+	ExpiresAt       time.Time `json:"expires_at"`
 }
 
-const maxAvatarDataURLBytes = 256 * 1024
+const totpSetupTTL = 10 * time.Minute
+
+type totpSecretEnvelope struct {
+	Secret         string     `json:"secret"`
+	SetupExpiresAt *time.Time `json:"setup_expires_at,omitempty"`
+}
+
+const (
+	maxAvatarDataURLBytes = 256 * 1024
+	// MinPasswordLength 是所有本地密码入口（注册、重置、改密）的统一下限。
+	MinPasswordLength = 10
+	// MaxPasswordBytes 来自 bcrypt 的输入上限。显式校验可避免不同入口返回不同错误。
+	MaxPasswordBytes                = 72
+	emailVerificationTokenLifetime  = 30 * time.Minute
+	passwordResetTokenLifetime      = 30 * time.Minute
+	emailVerificationResendCooldown = time.Minute
+	passwordResetRequestCooldown    = time.Minute
+	dummyWorkspaceUserPasswordHash  = "$2a$10$wmA3Ghc6aFB2Rxw5TFl.RuY69eTsen./ma./DUx2BUj.yf/unXtKO"
+)
 
 var ErrDeploymentManagedAccount = errors.New("personal account is managed by deployment configuration")
+
+var ErrUserEmailExists = errors.New("user email already exists")
+
+// ErrPasswordTooWeak 表示密码不满足强度要求。该原因可以安全地回给调用方——
+// 它描述的是用户自己提交的输入，不泄漏任何账号是否存在的信息。
+var ErrPasswordTooWeak = fmt.Errorf("password must contain at least %d characters", MinPasswordLength)
+
+var ErrPasswordTooLong = fmt.Errorf("password must not exceed %d bytes", MaxPasswordBytes)
+
+// ErrResetTokenInvalid 表示密码重置凭据不可用（不存在、已过期或已使用）。
+// 三种情况共用一个错误，避免调用方据此探测邮箱是否已注册。
+var ErrResetTokenInvalid = errors.New("password reset token is invalid or expired")
+
+// ErrVerificationTokenInvalid 表示邮箱验证凭据不可用，同样合并了不存在/过期/已使用。
+var ErrVerificationTokenInvalid = errors.New("email verification token is invalid or expired")
+
+func validatePasswordStrength(password string) error {
+	if utf8.RuneCountInString(password) < MinPasswordLength {
+		return ErrPasswordTooWeak
+	}
+	if len([]byte(password)) > MaxPasswordBytes {
+		return ErrPasswordTooLong
+	}
+	return nil
+}
+
+// ValidatePasswordStrength 供 HTTP 边界在消费邀请码等有副作用的操作前复用同一密码策略。
+func ValidatePasswordStrength(password string) error {
+	return validatePasswordStrength(password)
+}
+
+func normalizeWorkspaceUserEmail(value string) (string, error) {
+	email := strings.ToLower(strings.TrimSpace(value))
+	if email == "" || len(email) > 254 || strings.Count(email, "@") != 1 {
+		return "", errors.New("valid email is required")
+	}
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Address != email {
+		return "", errors.New("valid email is required")
+	}
+	local, domain, ok := strings.Cut(email, "@")
+	if !ok || local == "" || domain == "" || len(local) > 64 {
+		return "", errors.New("valid email is required")
+	}
+	return email, nil
+}
 
 func (s *Service) EnsureLocalAdmin(ctx context.Context, username, password string, defaults ...WorkspaceUserDefaults) (WorkspaceUser, error) {
 	username = strings.TrimSpace(username)
@@ -140,17 +209,17 @@ func (s *Service) ChangeCurrentAccountPassword(ctx context.Context, actor string
 	if err != nil {
 		return err
 	}
-	if len(req.NewPassword) < 10 {
-		return errors.New("new password must contain at least 10 characters")
+	if err := validatePasswordStrength(req.NewPassword); err != nil {
+		return err
 	}
-	settingPassword := user.PasswordHash == ""
-	if !settingPassword {
-		if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)) != nil {
-			return errors.New("current password is incorrect")
-		}
-		if req.CurrentPassword == req.NewPassword {
-			return errors.New("new password must be different from the current password")
-		}
+	if user.PasswordHash == "" {
+		return errors.New("use password recovery to set a local password")
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)) != nil {
+		return errors.New("current password is incorrect")
+	}
+	if req.CurrentPassword == req.NewPassword {
+		return errors.New("new password must be different from the current password")
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
@@ -165,9 +234,6 @@ func (s *Service) ChangeCurrentAccountPassword(ctx context.Context, actor string
 		return err
 	}
 	action, summary := "account_password_changed", "Changed personal account password"
-	if settingPassword {
-		action, summary = "account_password_enabled", "Enabled local password login"
-	}
 	if err := s.audit(ctx, actor, action, "workspace_user", user.ID, summary); err != nil {
 		return err
 	}
@@ -221,12 +287,13 @@ func validateAvatarDataURL(value string) error {
 }
 
 func (s *Service) RegisterWorkspaceUser(ctx context.Context, email, password, displayName string, requireVerification bool, defaults ...WorkspaceUserDefaults) (WorkspaceUser, string, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" || !strings.Contains(email, "@") {
-		return WorkspaceUser{}, "", errors.New("valid email is required")
+	var err error
+	email, err = normalizeWorkspaceUserEmail(email)
+	if err != nil {
+		return WorkspaceUser{}, "", err
 	}
-	if len(password) < 10 {
-		return WorkspaceUser{}, "", errors.New("password must contain at least 10 characters")
+	if err := validatePasswordStrength(password); err != nil {
+		return WorkspaceUser{}, "", err
 	}
 	if err := s.ensureUniqueUserEmail(ctx, "", email); err != nil {
 		return WorkspaceUser{}, "", err
@@ -245,143 +312,114 @@ func (s *Service) RegisterWorkspaceUser(ctx context.Context, email, password, di
 			return WorkspaceUser{}, "", err
 		}
 		user.EmailVerifyHash = recoveryCodeHash(verificationToken)
-		expires := now.Add(30 * time.Minute)
+		expires := now.Add(emailVerificationTokenLifetime)
 		user.EmailVerifyExpiresAt = &expires
 	}
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return WorkspaceUser{}, "", err
 	}
-	if err := s.audit(ctx, email, "register", "workspace_user", user.ID, "Registered workspace user"); err != nil {
-		return WorkspaceUser{}, "", err
-	}
+	_ = s.audit(ctx, email, "register", "workspace_user", user.ID, "Registered workspace user")
 	return user, verificationToken, nil
 }
 
 func (s *Service) VerifyWorkspaceUserEmail(ctx context.Context, token string) error {
 	hash := recoveryCodeHash(token)
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	now := s.nowUTC()
+	user, consumed, err := s.repo.ConsumeWorkspaceUserEmailVerification(ctx, hash, now)
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	for _, user := range users {
-		if user.EmailVerifyHash == hash && user.EmailVerifyExpiresAt != nil && now.Before(*user.EmailVerifyExpiresAt) {
-			user.EmailVerified = true
-			user.EmailVerifyHash = ""
-			user.EmailVerifyExpiresAt = nil
-			user.UpdatedAt = now
-			if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
-				return err
-			}
-			return s.audit(ctx, user.Email, "email_verified", "workspace_user", user.ID, "Verified workspace user email")
-		}
+	if !consumed {
+		return ErrVerificationTokenInvalid
 	}
-	return errors.New("email verification token is invalid or expired")
+	_ = s.audit(ctx, user.Email, "email_verified", "workspace_user", user.ID, "Verified workspace user email")
+	return nil
 }
 
 func (s *Service) RenewEmailVerification(ctx context.Context, email string) (WorkspaceUser, string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	token, err := auth.RandomToken(32)
 	if err != nil {
 		return WorkspaceUser{}, "", err
 	}
-	for _, user := range users {
-		if user.Email == email && user.Status == WorkspaceUserStatusActive && !user.EmailVerified {
-			token, err := auth.RandomToken(32)
-			if err != nil {
-				return WorkspaceUser{}, "", err
-			}
-			expires := time.Now().UTC().Add(30 * time.Minute)
-			user.EmailVerifyHash = recoveryCodeHash(token)
-			user.EmailVerifyExpiresAt = &expires
-			user.UpdatedAt = time.Now().UTC()
-			if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
-				return WorkspaceUser{}, "", err
-			}
-			return user, token, nil
-		}
+	now := s.nowUTC()
+	expires := now.Add(emailVerificationTokenLifetime)
+	user, issued, err := s.repo.IssueWorkspaceUserEmailVerification(ctx, email, recoveryCodeHash(token), now, expires, emailVerificationResendCooldown)
+	if err != nil {
+		return WorkspaceUser{}, "", err
 	}
-	return WorkspaceUser{}, "", errors.New("user is not awaiting email verification")
+	if !issued {
+		return WorkspaceUser{}, "", errors.New("user is not awaiting email verification")
+	}
+	return user, token, nil
 }
 
 func (s *Service) AuthenticateWorkspaceUser(ctx context.Context, email, password string, requireVerified bool) (WorkspaceUser, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	user, found, err := s.repo.FindWorkspaceUserByEmail(ctx, email)
 	if err != nil {
 		return WorkspaceUser{}, err
 	}
-	for _, user := range users {
-		if user.Email == email && user.PasswordHash != "" {
-			if user.Status != WorkspaceUserStatusActive || (requireVerified && !user.EmailVerified) || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
-				break
-			}
-			return user, nil
-		}
+	passwordHash := dummyWorkspaceUserPasswordHash
+	if found && user.PasswordHash != "" {
+		passwordHash = user.PasswordHash
 	}
-	return WorkspaceUser{}, errors.New("invalid email or password")
+	passwordMatches := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)) == nil
+	if !found || user.PasswordHash == "" || user.Status != WorkspaceUserStatusActive || (requireVerified && !user.EmailVerified) || !passwordMatches {
+		return WorkspaceUser{}, errors.New("invalid email or password")
+	}
+	return user, nil
 }
 
 func (s *Service) BeginPasswordReset(ctx context.Context, email string) (WorkspaceUser, string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	token, err := auth.RandomToken(32)
 	if err != nil {
 		return WorkspaceUser{}, "", err
 	}
-	for _, user := range users {
-		if user.Email == email && user.Status == WorkspaceUserStatusActive && user.PasswordHash != "" {
-			token, err := auth.RandomToken(32)
-			if err != nil {
-				return WorkspaceUser{}, "", err
-			}
-			expires := time.Now().UTC().Add(30 * time.Minute)
-			user.PasswordResetHash = recoveryCodeHash(token)
-			user.PasswordResetExpiresAt = &expires
-			user.UpdatedAt = time.Now().UTC()
-			if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
-				return WorkspaceUser{}, "", err
-			}
-			_ = s.audit(ctx, email, "password_reset_requested", "workspace_user", user.ID, "Requested password reset")
-			return user, token, nil
-		}
+	now := s.nowUTC()
+	expires := now.Add(passwordResetTokenLifetime)
+	user, issued, err := s.repo.IssueWorkspaceUserPasswordReset(ctx, email, recoveryCodeHash(token), now, expires, passwordResetRequestCooldown)
+	if err != nil {
+		return WorkspaceUser{}, "", err
 	}
-	return WorkspaceUser{}, "", errors.New("user is not eligible for password reset")
+	if !issued {
+		return WorkspaceUser{}, "", errors.New("user is not eligible for password reset")
+	}
+	_ = s.audit(ctx, email, "password_reset_requested", "workspace_user", user.ID, "Requested password reset")
+	return user, token, nil
 }
 
 func (s *Service) CompletePasswordReset(ctx context.Context, token, password string) error {
-	if len(password) < 10 {
-		return errors.New("password must contain at least 10 characters")
+	if err := validatePasswordStrength(password); err != nil {
+		return err
 	}
 	hashToken := recoveryCodeHash(token)
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	current, found, err := s.repo.FindWorkspaceUserByPasswordResetHash(ctx, hashToken)
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	for _, user := range users {
-		if user.PasswordResetHash == hashToken && user.PasswordResetExpiresAt != nil && now.Before(*user.PasswordResetExpiresAt) {
-			passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-			if err != nil {
-				return err
-			}
-			user.PasswordHash = string(passwordHash)
-			user.PasswordResetHash = ""
-			user.PasswordResetExpiresAt = nil
-			user.SessionVersion++
-			user.UpdatedAt = now
-			if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
-				return err
-			}
-			if err := s.audit(ctx, user.Email, "password_reset_completed", "workspace_user", user.ID, "Completed password reset"); err != nil {
-				return err
-			}
-			_ = s.publishAccountSecurityNotification(ctx, user, "账户密码已重置", "您的账户密码已通过密码找回流程重置，其他登录会话已失效。", "password_reset_completed")
-			return nil
-		}
+	now := s.nowUTC()
+	if !found || current.PasswordResetExpiresAt == nil || !now.Before(*current.PasswordResetExpiresAt) {
+		return ErrResetTokenInvalid
 	}
-	return errors.New("password reset token is invalid or expired")
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	user, consumed, err := s.repo.ConsumeWorkspaceUserPasswordReset(ctx, hashToken, string(passwordHash), now)
+	if err != nil {
+		return err
+	}
+	if !consumed {
+		return ErrResetTokenInvalid
+	}
+	_ = s.audit(ctx, user.Email, "password_reset_completed", "workspace_user", user.ID, "Completed password reset")
+	_ = s.publishAccountSecurityNotification(ctx, user, "账户密码已重置", "您的账户密码已通过密码找回流程重置，其他登录会话已失效。", "password_reset_completed")
+	return nil
 }
 
-func (s *Service) BeginTOTPSetup(ctx context.Context, actor string) (TOTPSetup, error) {
+func (s *Service) BeginTOTPSetup(ctx context.Context, actor, currentPassword string) (TOTPSetup, error) {
 	user, err := s.workspaceUserByID(ctx, actor)
 	if err != nil {
 		return TOTPSetup{}, err
@@ -389,24 +427,32 @@ func (s *Service) BeginTOTPSetup(ctx context.Context, actor string) (TOTPSetup, 
 	if user.Status != WorkspaceUserStatusActive {
 		return TOTPSetup{}, errors.New("workspace user is disabled")
 	}
+	if user.TOTPEnabled {
+		return TOTPSetup{}, errors.New("TOTP is already enabled")
+	}
+	if user.PasswordHash == "" || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)) != nil {
+		return TOTPSetup{}, errors.New("current password is incorrect")
+	}
+	now := s.nowUTC()
 	secret, err := auth.GenerateTOTPSecret()
 	if err != nil {
 		return TOTPSetup{}, err
 	}
-	ciphertext, err := encryptSecret(s.secretKey, secret)
+	expiresAt := now.Add(totpSetupTTL)
+	ciphertext, err := encryptTOTPSecret(s.secretKey, secret, &expiresAt)
 	if err != nil {
 		return TOTPSetup{}, err
 	}
 	user.TOTPEnabled = false
 	user.TOTPSecretCiphertext = ciphertext
-	user.UpdatedAt = time.Now().UTC()
+	user.UpdatedAt = now
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return TOTPSetup{}, err
 	}
 	if err := s.audit(ctx, actor, "totp_setup_started", "workspace_user", user.ID, "Started TOTP enrollment"); err != nil {
 		return TOTPSetup{}, err
 	}
-	return TOTPSetup{Secret: secret, ProvisioningURI: auth.TOTPProvisioningURI("AsterRouter", user.Email, secret)}, nil
+	return TOTPSetup{Secret: secret, ProvisioningURI: auth.TOTPProvisioningURI("AsterRouter", user.Email, secret), ExpiresAt: expiresAt}, nil
 }
 
 func (s *Service) ConfirmTOTP(ctx context.Context, actor, code string) error {
@@ -423,11 +469,18 @@ func (s *Service) confirmTOTP(ctx context.Context, actor, code string, includeRe
 	if err != nil {
 		return nil, err
 	}
-	secret, err := decryptSecret(s.secretKey, user.TOTPSecretCiphertext)
+	if user.TOTPEnabled {
+		return nil, errors.New("TOTP is already enabled")
+	}
+	secret, setupExpiresAt, err := decryptTOTPSecret(s.secretKey, user.TOTPSecretCiphertext)
 	if err != nil {
 		return nil, errors.New("TOTP enrollment has not been started")
 	}
-	if !auth.ValidateTOTP(secret, code, time.Now().UTC()) {
+	now := s.nowUTC()
+	if setupExpiresAt == nil || !now.Before(*setupExpiresAt) {
+		return nil, errors.New("TOTP enrollment has expired; start again")
+	}
+	if !auth.ValidateTOTP(secret, code, now) {
 		return nil, errors.New("invalid TOTP code")
 	}
 	var codes []string
@@ -439,9 +492,14 @@ func (s *Service) confirmTOTP(ctx context.Context, actor, code string, includeRe
 		}
 		user.TOTPRecoveryHashes = hashes
 	}
+	ciphertext, err := encryptTOTPSecret(s.secretKey, secret, nil)
+	if err != nil {
+		return nil, err
+	}
 	user.TOTPEnabled = true
+	user.TOTPSecretCiphertext = ciphertext
 	user.SessionVersion++
-	user.UpdatedAt = time.Now().UTC()
+	user.UpdatedAt = now
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return nil, err
 	}
@@ -457,7 +515,7 @@ func (s *Service) DisableTOTP(ctx context.Context, actor, code string) error {
 	if err != nil {
 		return err
 	}
-	secret, err := decryptSecret(s.secretKey, user.TOTPSecretCiphertext)
+	secret, _, err := decryptTOTPSecret(s.secretKey, user.TOTPSecretCiphertext)
 	if err != nil || !user.TOTPEnabled || !auth.ValidateTOTP(secret, code, time.Now().UTC()) {
 		return errors.New("invalid TOTP code")
 	}
@@ -484,32 +542,26 @@ func (s *Service) VerifyUserTOTP(ctx context.Context, userID, code string) (Work
 	if user.Status != WorkspaceUserStatusActive || !user.TOTPEnabled {
 		return WorkspaceUser{}, errors.New("TOTP is not enabled")
 	}
-	secret, err := decryptSecret(s.secretKey, user.TOTPSecretCiphertext)
+	secret, _, err := decryptTOTPSecret(s.secretKey, user.TOTPSecretCiphertext)
 	if err == nil && auth.ValidateTOTP(secret, code, time.Now().UTC()) {
 		return user, nil
 	}
 	hash := recoveryCodeHash(code)
-	for index, stored := range user.TOTPRecoveryHashes {
-		if stored == hash {
-			user.TOTPRecoveryHashes = append(user.TOTPRecoveryHashes[:index], user.TOTPRecoveryHashes[index+1:]...)
-			user.UpdatedAt = time.Now().UTC()
-			if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
-				return WorkspaceUser{}, err
-			}
-			_ = s.audit(ctx, userID, "totp_recovery_used", "workspace_user", user.ID, "Used a TOTP recovery code")
-			return user, nil
-		}
+	user, consumed, err := s.repo.ConsumeWorkspaceUserTOTPRecoveryCode(ctx, userID, hash, time.Now().UTC())
+	if err != nil {
+		return WorkspaceUser{}, err
+	}
+	if consumed {
+		_ = s.audit(ctx, userID, "totp_recovery_used", "workspace_user", user.ID, "Used a TOTP recovery code")
+		return user, nil
 	}
 	return WorkspaceUser{}, errors.New("invalid TOTP code")
 }
 
-func (s *Service) GenerateTOTPRecoveryCodes(ctx context.Context, actor string) ([]string, error) {
-	user, err := s.workspaceUserByID(ctx, actor)
+func (s *Service) GenerateTOTPRecoveryCodes(ctx context.Context, actor, code string) ([]string, error) {
+	user, err := s.VerifyUserTOTP(ctx, actor, code)
 	if err != nil {
 		return nil, err
-	}
-	if !user.TOTPEnabled {
-		return nil, errors.New("TOTP is not enabled")
 	}
 	codes, hashes, err := newTOTPRecoveryCodes()
 	if err != nil {
@@ -543,6 +595,34 @@ func newTOTPRecoveryCodes() ([]string, []string, error) {
 func recoveryCodeHash(code string) string {
 	sum := sha256.Sum256([]byte(strings.ToUpper(strings.TrimSpace(code))))
 	return hex.EncodeToString(sum[:])
+}
+
+func encryptTOTPSecret(secretKey, secret string, setupExpiresAt *time.Time) (string, error) {
+	payload, err := json.Marshal(totpSecretEnvelope{Secret: secret, SetupExpiresAt: setupExpiresAt})
+	if err != nil {
+		return "", err
+	}
+	return encryptSecret(secretKey, string(payload))
+}
+
+func decryptTOTPSecret(secretKey, ciphertext string) (string, *time.Time, error) {
+	plaintext, err := decryptSecret(secretKey, ciphertext)
+	if err != nil {
+		return "", nil, err
+	}
+	var envelope totpSecretEnvelope
+	if json.Unmarshal([]byte(plaintext), &envelope) == nil && strings.TrimSpace(envelope.Secret) != "" {
+		return envelope.Secret, envelope.SetupExpiresAt, nil
+	}
+	if strings.TrimSpace(plaintext) == "" {
+		return "", nil, errors.New("TOTP secret is empty")
+	}
+	return plaintext, nil, nil
+}
+
+// constantTimeHashEqual 以常量时间比较两个 hex 编码的哈希值，防时序攻击。
+func constantTimeHashEqual(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func (s *Service) ListWorkspaceUsers(ctx context.Context) ([]WorkspaceUser, error) {
@@ -1020,15 +1100,28 @@ func (s *Service) roleBindingByID(ctx context.Context, id string) (RoleBinding, 
 	return RoleBinding{}, fmt.Errorf("role binding %s not found", id)
 }
 
+// ensureUniqueUserEmail 拒绝与已有账号冲突的邮箱：既比对邮箱原值，也比对归一化后的
+// “收件箱标识”，防止同一收件箱借 +别名 / Gmail 点号 / FQDN 根点派生多个账号
+// （见 NormalizeEmailForAliasDedup）。冲突时对外只说明邮箱已被占用，不透露命中的是
+// 哪个变体，避免泄漏他人已注册的具体地址。
 func (s *Service) ensureUniqueUserEmail(ctx context.Context, currentID string, email string) error {
-	users, err := s.repo.ListWorkspaceUsers(ctx)
+	user, found, err := s.repo.FindWorkspaceUserByEmail(ctx, email)
 	if err != nil {
 		return err
 	}
-	for _, user := range users {
-		if user.Email == email && user.ID != currentID {
-			return fmt.Errorf("user email %s already exists", email)
-		}
+	if found && user.ID != currentID {
+		return fmt.Errorf("%w: %s", ErrUserEmailExists, email)
+	}
+	normalized := NormalizeEmailForAliasDedup(email)
+	if normalized == "" {
+		return nil
+	}
+	user, found, err = s.repo.FindWorkspaceUserByEmailNormalized(ctx, normalized)
+	if err != nil {
+		return err
+	}
+	if found && user.ID != currentID {
+		return fmt.Errorf("%w: %s", ErrUserEmailExists, email)
 	}
 	return nil
 }

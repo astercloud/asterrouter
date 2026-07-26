@@ -36,6 +36,7 @@ type Service struct {
 	licenseFingerprint        string
 	packageCacheDir           string
 	packageActiveDir          string
+	pluginDataDir             string
 	pluginHostURL             string
 	coreVersion               string
 	targetOS                  string
@@ -62,6 +63,7 @@ type ServiceOptions struct {
 	OfficialLicense           OfficialLicenseConfig
 	PackageCacheDir           string
 	PluginActiveDir           string
+	PluginDataDir             string
 	PluginHostURL             string
 	CoreVersion               string
 	TargetOS                  string
@@ -105,6 +107,7 @@ func NewServiceWithOptions(repo Repository, options ServiceOptions) *Service {
 	}
 	cacheDir := defaultString(strings.TrimSpace(options.PackageCacheDir), defaultPackageCacheDir())
 	activeDir := defaultString(strings.TrimSpace(options.PluginActiveDir), defaultPackageActiveDir(cacheDir))
+	dataDir := defaultString(strings.TrimSpace(options.PluginDataDir), defaultPluginDataDir(cacheDir))
 	return &Service{
 		repo:                      repo,
 		secretKey:                 key,
@@ -116,6 +119,7 @@ func NewServiceWithOptions(repo Repository, options ServiceOptions) *Service {
 		licenseFingerprint:        strings.TrimSpace(options.OfficialLicense.Fingerprint),
 		packageCacheDir:           cacheDir,
 		packageActiveDir:          activeDir,
+		pluginDataDir:             dataDir,
 		pluginHostURL:             strings.TrimRight(strings.TrimSpace(options.PluginHostURL), "/"),
 		coreVersion:               defaultString(strings.TrimSpace(options.CoreVersion), "0.1.0-dev"),
 		targetOS:                  defaultString(strings.ToLower(strings.TrimSpace(options.TargetOS)), runtime.GOOS),
@@ -187,6 +191,9 @@ func (s *Service) catalog(ctx context.Context, surface string) (Catalog, error) 
 			return Catalog{}, err
 		}
 		plugins[index].Packages = packages
+		if _, err := s.PluginFrontendContribution(ctx, plugins[index].ID); err == nil {
+			plugins[index].FrontendAvailable = true
+		}
 	}
 	filtered := make([]Plugin, 0, len(plugins))
 	for _, plugin := range plugins {
@@ -355,4 +362,12 @@ func defaultPackageActiveDir(cacheDir string) string {
 	}
 	parent := filepath.Dir(cacheDir)
 	return filepath.Join(parent, "plugin-active")
+}
+
+func defaultPluginDataDir(cacheDir string) string {
+	cacheDir = strings.TrimSpace(cacheDir)
+	if cacheDir == "" {
+		return filepath.Join(".", "data", "plugin-data")
+	}
+	return filepath.Join(filepath.Dir(cacheDir), "plugin-data")
 }

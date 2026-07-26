@@ -1,0 +1,45 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: sustained tenant capacity rejection
+    interval: 1m
+    input_series:
+      - series: 'asterrouter_capacity_admissions_total{instance="router-a",scope="tenant",result="rejected",reason="tenant_concurrency"}'
+        values: '0+60x12'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: AsterRouterCapacityRejectionsSustained
+        exp_alerts:
+          - exp_labels:
+              instance: router-a
+              scope: tenant
+              severity: warning
+            exp_annotations:
+              summary: AsterRouter tenant capacity rejections are sustained
+              description: Capacity rejections exceeded 0.1 requests per second for five minutes. Compare demand, configured limits, and healthy fallback capacity before expanding supply.
+              runbook: deploy/HA_RUNBOOK.md#容量告警演练
+
+  - name: provider concurrency remains saturated
+    interval: 1m
+    input_series:
+      - series: 'asterrouter_provider_capacity_current{instance="router-a",provider="provider-a",provider_account="account-a",dimension="concurrency"}'
+        values: '9x8'
+      - series: 'asterrouter_provider_capacity_limit{instance="router-a",provider="provider-a",provider_account="account-a",dimension="concurrency"}'
+        values: '10x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AsterRouterProviderCapacitySaturated
+        exp_alerts:
+          - exp_labels:
+              dimension: concurrency
+              instance: router-a
+              provider: provider-a
+              provider_account: account-a
+              severity: warning
+            exp_annotations:
+              summary: AsterRouter provider capacity is near its configured limit
+              description: Provider account account-a has used at least 90 percent of its concurrency limit for five minutes.
+              runbook: deploy/HA_RUNBOOK.md#容量告警演练

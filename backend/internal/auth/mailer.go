@@ -16,9 +16,10 @@ import (
 )
 
 type SMTPConfig struct {
-	Host                     string
-	Port                     int
-	Username, Password, From string
+	Host                               string
+	Port                               int
+	Username, Password, From, FromName string
+	UseTLS                             bool
 }
 type SMTPMailer struct {
 	Config  SMTPConfig
@@ -42,6 +43,12 @@ func (m SMTPMailer) send(ctx context.Context, to, subject, contentType, body str
 	if err != nil {
 		return fmt.Errorf("invalid SMTP sender: %w", err)
 	}
+	if strings.ContainsAny(cfg.FromName, "\r\n") {
+		return errors.New("SMTP sender name must be a single line")
+	}
+	if name := strings.TrimSpace(cfg.FromName); name != "" {
+		fromAddress.Name = name
+	}
 	toAddress, err := parseSMTPAddress(to)
 	if err != nil {
 		return fmt.Errorf("invalid SMTP recipient: %w", err)
@@ -56,19 +63,34 @@ func (m SMTPMailer) send(ctx context.Context, to, subject, contentType, body str
 	}
 	address := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
 	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	var conn net.Conn
+	if cfg.UseTLS {
+		conn, err = tls.DialWithDialer(&dialer, "tcp", address, &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12})
+	} else {
+		conn, err = dialer.DialContext(ctx, "tcp", address)
+	}
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+	deadline := time.Now().Add(timeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
 	client, err := smtp.NewClient(conn, cfg.Host)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
-			return err
+	if !cfg.UseTLS {
+		ok, _ := client.Extension("STARTTLS")
+		if ok {
+			if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
+				return err
+			}
 		}
 	}
 	if cfg.Username != "" {

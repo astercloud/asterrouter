@@ -24,7 +24,7 @@ AsterRouter 是面向企业团队、AI API 平台和客户产品的 AI Access Ga
 - **更省钱：** 在策略、健康和容量约束内比较合格线路，逐步实现价格插件、成本感知调度和可验证节省。
 - **两种对外接入：** 可以直接签发 AsterRouter Gateway API Key，也可以保留 SaaS/OEM 的用户、Session 和权益体系，只委托 AI 访问上下文。
 - **企业治理：** 按 Tenant、用户、部门、Group、Key Principal、模型和外部 Subject 管理权限、预算、用量与审计。
-- **灵活交付：** 支持自主部署、私有化交付和托管运维；当前以低成本单机运行，Kubernetes 弹性部署属于后续路线图。
+- **灵活交付：** 支持自主部署、私有化交付和托管运维；当前支持低成本单机，并提供 PostgreSQL 双实例升级模板，Kubernetes 弹性部署属于后续路线图。
 - **统一 Core：** 协议、Credential Source 和 Provider 可以扩展，但 Policy、候选规划、账号调度、Usage、Billing 和 Audit 只有一套事实源。
 
 ## 商业场景
@@ -36,7 +36,7 @@ AsterRouter 是面向企业团队、AI API 平台和客户产品的 AI Access Ga
 | SaaS / 桌面 / 移动产品 | 平台委托凭据或签名上下文 | 不接管平台用户体系，只执行 AI Policy、路由、成本和 Usage |
 | 内容与媒体产品 | 两种外部 Credential 均可 | 同步/流式调用、异步 Job、供应商容量、Artifact 和媒体计费 |
 | Partner / OEM | 独立 Tenant + API Key 或委托 Integration | Policy Ceiling、租户隔离、可靠签名用量回传和品牌交付 |
-| 私有化与托管运维 | 同一 Core 的单机或 Kubernetes 部署 | 安装、迁移、备份、升级、诊断、弹性与成本运营 |
+| 私有化与托管运维 | 同一 Core 的单机、双实例或后续 Kubernetes 部署 | 安装、迁移、备份、升级、诊断、弹性与成本运营 |
 
 外部 API Key 只代表 Gateway Principal，不自动创建登录账号、Session 或 Portal 用户。平台委托模式中，平台仍是用户、登录、订阅、订单和支付的事实源。两种方式鉴权后都进入同一 Canonical Gateway Pipeline。
 
@@ -65,7 +65,7 @@ AsterRouter 是面向企业团队、AI API 平台和客户产品的 AI Access Ga
 | Anthropic Messages / Gemini GenerateContent | 正式支持 | 与 OpenAI 协议共用 Policy、路由、容量、Billing、Usage 和 Trace Core |
 | AWS Bedrock Claude / GCP Vertex Claude / GCP Vertex Gemini / Azure OpenAI | 正式支持 | Provider Adapter 负责官方凭据链、云端点、上游协议和错误分类 |
 | 图片 / 音频 / 视频 / Realtime / 异步 Job | 独立通道 | 使用 Direct/Durable、Provider Capacity 与 Artifact 生命周期，不经过文本 IR |
-| Embeddings | 账号库存可记录，网关端点未交付 | 不用 `native_media` 冒充；待独立 Canonical Embedding Pipeline 和 `/v1/embeddings` 契约完成后开放 Route |
+| Embeddings | `/v1/embeddings` 已开放，支持字符串/字符串数组、float/base64 与维度校验 | 使用独立 Canonical Embedding Pipeline 和 `openai_embeddings` Route；当前内置 Adapter 支持 OpenAI-compatible 与 Azure OpenAI |
 | 其他公开协议 | 单独评审 | 只有在协议稳定、文档公开且具备长期维护条件时纳入 |
 
 第三方网关或企业自建兼容服务可以作为上游，但必须通过上述标准 API 契约接入。AsterRouter 不依赖其管理 API、内部数据库或私有字段。
@@ -96,7 +96,7 @@ AsterRouter 不实现以下能力：
 - User/Customer/Service Key 基础类型、Bearer 鉴权、Hash/Fingerprint、禁用、立即轮换和用量归属。
 - 按用户、部门、Key 和模型统计用量与成本。
 - 审计日志、数据保留、脱敏、导出和诊断。
-- 单实例私有化部署、备份恢复和可验证升级。
+- 单实例私有化部署、备份恢复和可验证升级；双实例 Compose/Nginx 模板、认证指标与故障运行手册已经提供，生产就绪仍以候选版本 CI 证据为准。
 
 员工 Portal 只展示本人可见的 Key、模型、额度和用量，不暴露上游账号、渠道或运营信息。
 

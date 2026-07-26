@@ -57,6 +57,8 @@ const confirmPassword = ref('')
 const totpSetup = ref<TOTPSetup | null>(null)
 const totpQRCode = ref('')
 const totpCode = ref('')
+const totpCurrentPassword = ref('')
+const recoveryVerificationCode = ref('')
 const disableCode = ref('')
 const recoveryCodes = ref<string[]>([])
 const copied = ref(false)
@@ -69,6 +71,7 @@ const activeTab = ref<AccountTab>('profile')
 
 const initials = computed(() => (displayName.value || profile.value?.email || profile.value?.id || 'AR').slice(0, 2).toUpperCase())
 const passwordValid = computed(() => newPassword.value.length >= 10 && newPassword.value === confirmPassword.value)
+const passwordRecoveryPath = computed(() => `/forgot-password?email=${encodeURIComponent(profile.value?.email || '')}`)
 const avatarDirty = computed(() => avatarDataURL.value !== savedAvatarDataURL.value)
 const primaryLoginMethods = computed(() => profile.value?.login_methods.filter((method) => method.id === 'email' || method.id === 'local') || [])
 const externalLoginMethods = computed(() => profile.value?.login_methods.filter((method) => !['email', 'local'].includes(method.id) && (method.available || method.bound)) || [])
@@ -281,11 +284,13 @@ async function savePassword() {
 }
 
 async function startTOTP() {
+	if (!profile.value?.password_enabled || !totpCurrentPassword.value) return
 	totpSaving.value = true
 	clearFeedback()
 	recoveryCodes.value = []
 	try {
-		totpSetup.value = await beginTOTPSetup()
+		totpSetup.value = await beginTOTPSetup(totpCurrentPassword.value)
+		totpCurrentPassword.value = ''
 		totpQRCode.value = await QRCode.toDataURL(totpSetup.value.provisioning_uri, { width: 220, margin: 1, errorCorrectionLevel: 'M' })
 	} catch (err) {
 		error.value = readableError(err)
@@ -315,12 +320,14 @@ async function enableTOTP() {
 }
 
 async function refreshRecoveryCodes() {
+	if (!recoveryVerificationCode.value.trim()) return
 	totpSaving.value = true
 	clearFeedback()
 	try {
-		const result = await generateTOTPRecoveryCodes()
+		const result = await generateTOTPRecoveryCodes(recoveryVerificationCode.value)
 		auth.replaceSessionToken(result.access_token)
 		recoveryCodes.value = result.codes || []
+		recoveryVerificationCode.value = ''
 	} catch (err) {
 		error.value = readableError(err)
 	} finally {
@@ -481,19 +488,21 @@ onMounted(async () => {
 			</section>
 
 			<section class="panel account-section">
-				<div class="panel-header"><div><h2>{{ profile.password_enabled ? t('account.changePassword') : t('account.setPassword') }}</h2><p>{{ t('account.passwordHelp') }}</p></div><LockKeyhole :size="20" /></div>
-				<form class="panel-body password-form" data-form="account-password" @submit.prevent="savePassword">
-					<div v-if="profile.password_enabled" class="field"><label for="account-current-password">{{ t('account.currentPassword') }}</label><input id="account-current-password" v-model="currentPassword" type="password" autocomplete="current-password" :disabled="profile.managed_by_config" required /></div>
-					<div class="field"><label for="account-new-password">{{ t('account.newPassword') }}</label><input id="account-new-password" v-model="newPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /><small>{{ t('account.passwordRule') }}</small></div>
-					<div class="field"><label for="account-confirm-password">{{ t('account.confirmPassword') }}</label><input id="account-confirm-password" v-model="confirmPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /></div>
-					<div class="form-actions"><button class="button" type="submit" :disabled="passwordSaving || (profile.password_enabled && !currentPassword) || !passwordValid || profile.managed_by_config"><KeyRound :size="16" />{{ passwordSaving ? t('common.saving') : profile.password_enabled ? t('account.changePassword') : t('account.setPassword') }}</button></div>
-				</form>
+					<div class="panel-header"><div><h2>{{ profile.password_enabled ? t('account.changePassword') : t('account.setPassword') }}</h2><p>{{ profile.password_enabled ? t('account.passwordHelp') : t('account.passwordSetupByEmailHelp') }}</p></div><LockKeyhole :size="20" /></div>
+					<form v-if="profile.password_enabled" class="panel-body password-form" data-form="account-password" @submit.prevent="savePassword">
+						<div class="field"><label for="account-current-password">{{ t('account.currentPassword') }}</label><input id="account-current-password" v-model="currentPassword" type="password" autocomplete="current-password" :disabled="profile.managed_by_config" required /></div>
+						<div class="field"><label for="account-new-password">{{ t('account.newPassword') }}</label><input id="account-new-password" v-model="newPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /><small>{{ t('account.passwordRule') }}</small></div>
+						<div class="field"><label for="account-confirm-password">{{ t('account.confirmPassword') }}</label><input id="account-confirm-password" v-model="confirmPassword" type="password" minlength="10" autocomplete="new-password" :disabled="profile.managed_by_config" required /></div>
+						<div class="form-actions"><button class="button" type="submit" :disabled="passwordSaving || !currentPassword || !passwordValid || profile.managed_by_config"><KeyRound :size="16" />{{ passwordSaving ? t('common.saving') : t('account.changePassword') }}</button></div>
+					</form>
+					<div v-else class="panel-body session-action"><div><strong>{{ t('account.passwordSetupByEmail') }}</strong><p>{{ t('account.passwordSetupByEmailHelp') }}</p></div><a class="button" :href="passwordRecoveryPath"><Mail :size="16" />{{ t('account.sendPasswordSetupEmail') }}</a></div>
 			</section>
 
 			<section class="panel account-section">
 				<div class="panel-header"><div><h2>{{ t('account.twoFactor') }}</h2><p>{{ t('account.twoFactorHelp') }}</p></div><ShieldCheck :size="21" /></div>
 				<div class="panel-body totp-body">
-					<div class="security-status"><span class="method-icon"><BadgeCheck v-if="profile.totp_enabled" :size="20" /><ShieldCheck v-else :size="20" /></span><div><strong>{{ profile.totp_enabled ? t('account.totpOn') : t('account.totpOff') }}</strong><p>{{ profile.totp_available || profile.totp_enabled ? t('account.totpStatusHelp') : t('account.totpUnavailable') }}</p></div><button v-if="!profile.totp_enabled && profile.totp_available && !totpSetup" class="button" type="button" :disabled="totpSaving" @click="startTOTP"><Camera :size="16" />{{ t('account.setupTOTP') }}</button></div>
+						<div class="security-status"><span class="method-icon"><BadgeCheck v-if="profile.totp_enabled" :size="20" /><ShieldCheck v-else :size="20" /></span><div><strong>{{ profile.totp_enabled ? t('account.totpOn') : t('account.totpOff') }}</strong><p>{{ profile.totp_available || profile.totp_enabled ? t('account.totpStatusHelp') : t('account.totpUnavailable') }}</p></div></div>
+						<div v-if="!profile.totp_enabled && profile.totp_available && !totpSetup" class="disable-totp"><div class="field"><label for="account-totp-current-password">{{ t('account.currentPassword') }}</label><input id="account-totp-current-password" v-model="totpCurrentPassword" type="password" autocomplete="current-password" :disabled="totpSaving || !profile.password_enabled" /></div><button class="button" type="button" :disabled="totpSaving || !profile.password_enabled || !totpCurrentPassword" @click="startTOTP"><Camera :size="16" />{{ t('account.setupTOTP') }}</button></div>
 
 						<div v-if="totpSetup" class="totp-setup">
 						<img :src="totpQRCode" :alt="t('account.qrCode')" />
@@ -501,7 +510,7 @@ onMounted(async () => {
 					</div>
 
 						<div v-if="profile.totp_enabled" class="totp-enabled-actions">
-						<button class="button secondary" type="button" :disabled="totpSaving" @click="refreshRecoveryCodes"><RefreshCw :size="16" />{{ t('account.regenerateCodes') }}</button>
+							<div class="disable-totp"><div class="field"><label for="account-recovery-totp-code">{{ t('account.verificationCode') }}</label><input id="account-recovery-totp-code" v-model="recoveryVerificationCode" inputmode="text" maxlength="13" autocomplete="one-time-code" /></div><button class="button secondary" type="button" :disabled="totpSaving || !recoveryVerificationCode.trim()" @click="refreshRecoveryCodes"><RefreshCw :size="16" />{{ t('account.regenerateCodes') }}</button></div>
 							<div class="disable-totp"><div class="field"><label for="account-disable-totp-code">{{ t('account.verificationCode') }}</label><input id="account-disable-totp-code" v-model="disableCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" /></div><button class="button danger" type="button" :disabled="totpSaving || !disableCode.trim()" @click="turnOffTOTP"><Trash2 :size="16" />{{ t('account.disableTOTP') }}</button></div>
 					</div>
 

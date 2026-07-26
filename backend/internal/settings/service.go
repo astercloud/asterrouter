@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/mail"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/buildinfo"
@@ -23,6 +24,7 @@ type ServiceOptions struct {
 	DefaultProfile  string
 	StorageMode     string
 	DemoMode        bool
+	SecretKey       string
 }
 
 type Service struct {
@@ -32,8 +34,13 @@ type Service struct {
 	defaultProfile  string
 	storageMode     string
 	demoMode        bool
-	inviteMu        sync.Mutex
+	secretKey       string
 }
+
+var (
+	ErrInvitationCodeRequired = errors.New("invitation code is required")
+	ErrInvitationCodeInvalid  = errors.New("invitation code is invalid")
+)
 
 func NewService(repo Repository, opts ServiceOptions) *Service {
 	version := opts.Version
@@ -44,6 +51,10 @@ func NewService(repo Repository, opts ServiceOptions) *Service {
 	if storageMode == "" {
 		storageMode = "unknown"
 	}
+	secretKey := strings.TrimSpace(opts.SecretKey)
+	if secretKey == "" {
+		secretKey = "asterrouter-local-development-secret"
+	}
 	return &Service{
 		repo:            repo,
 		version:         version,
@@ -51,6 +62,7 @@ func NewService(repo Repository, opts ServiceOptions) *Service {
 		defaultProfile:  strings.TrimSpace(opts.DefaultProfile),
 		storageMode:     storageMode,
 		demoMode:        opts.DemoMode,
+		secretKey:       secretKey,
 	}
 }
 
@@ -63,7 +75,7 @@ func (s *Service) Public(ctx context.Context) (PublicSettings, error) {
 }
 
 func (s *Service) Admin(ctx context.Context) (AdminSettings, error) {
-	raw, err := s.repo.GetAll(ctx)
+	raw, err := s.readValues(ctx)
 	if err != nil {
 		return AdminSettings{}, err
 	}
@@ -104,30 +116,34 @@ func (s *Service) Update(ctx context.Context, in AdminSettings) (AdminSettings, 
 	if err != nil {
 		return AdminSettings{}, err
 	}
-	if strings.TrimSpace(in.FeishuAppSecret) == "" {
-		if existing, getErr := s.repo.GetAll(ctx); getErr == nil && strings.TrimSpace(existing[KeyFeishuAppSecret]) != "" {
-			values[KeyFeishuAppSecret] = existing[KeyFeishuAppSecret]
-		}
+	existing, err := s.readValues(ctx)
+	if err != nil {
+		return AdminSettings{}, err
 	}
-	if existing, getErr := s.repo.GetAll(ctx); getErr == nil {
-		if strings.TrimSpace(in.TurnstileSecretKey) == "" && existing[KeyTurnstileSecretKey] != "" {
-			values[KeyTurnstileSecretKey] = existing[KeyTurnstileSecretKey]
-		}
-		if strings.TrimSpace(in.SMTPPassword) == "" && existing[KeySMTPPassword] != "" {
-			values[KeySMTPPassword] = existing[KeySMTPPassword]
-		}
-		if strings.TrimSpace(in.GitHubOAuthClientSecret) == "" && existing[KeyGitHubOAuthSecret] != "" {
-			values[KeyGitHubOAuthSecret] = existing[KeyGitHubOAuthSecret]
-		}
-		if strings.TrimSpace(in.GoogleOAuthClientSecret) == "" && existing[KeyGoogleOAuthSecret] != "" {
-			values[KeyGoogleOAuthSecret] = existing[KeyGoogleOAuthSecret]
-		}
-		if strings.TrimSpace(in.DingTalkClientSecret) == "" && existing[KeyDingTalkClientSecret] != "" {
-			values[KeyDingTalkClientSecret] = existing[KeyDingTalkClientSecret]
-		}
-		if strings.TrimSpace(in.BackupS3SecretKey) == "" && existing[KeyBackupS3SecretKey] != "" {
-			values[KeyBackupS3SecretKey] = existing[KeyBackupS3SecretKey]
-		}
+	if strings.TrimSpace(in.FeishuAppSecret) == "" && existing[KeyFeishuAppSecret] != "" {
+		values[KeyFeishuAppSecret] = existing[KeyFeishuAppSecret]
+	}
+	if strings.TrimSpace(in.TurnstileSecretKey) == "" && existing[KeyTurnstileSecretKey] != "" {
+		values[KeyTurnstileSecretKey] = existing[KeyTurnstileSecretKey]
+	}
+	if strings.TrimSpace(in.SMTPPassword) == "" && existing[KeySMTPPassword] != "" {
+		values[KeySMTPPassword] = existing[KeySMTPPassword]
+	}
+	if strings.TrimSpace(in.GitHubOAuthClientSecret) == "" && existing[KeyGitHubOAuthSecret] != "" {
+		values[KeyGitHubOAuthSecret] = existing[KeyGitHubOAuthSecret]
+	}
+	if strings.TrimSpace(in.GoogleOAuthClientSecret) == "" && existing[KeyGoogleOAuthSecret] != "" {
+		values[KeyGoogleOAuthSecret] = existing[KeyGoogleOAuthSecret]
+	}
+	if strings.TrimSpace(in.DingTalkClientSecret) == "" && existing[KeyDingTalkClientSecret] != "" {
+		values[KeyDingTalkClientSecret] = existing[KeyDingTalkClientSecret]
+	}
+	if strings.TrimSpace(in.BackupS3SecretKey) == "" && existing[KeyBackupS3SecretKey] != "" {
+		values[KeyBackupS3SecretKey] = existing[KeyBackupS3SecretKey]
+	}
+	values, err = s.encryptValues(values)
+	if err != nil {
+		return AdminSettings{}, err
 	}
 	if err := s.repo.SetMultiple(ctx, values); err != nil {
 		return AdminSettings{}, err
@@ -253,7 +269,7 @@ func (s *Service) Health(ctx context.Context) error {
 }
 
 func (s *Service) FeishuSecret(ctx context.Context) (string, error) {
-	values, err := s.repo.GetAll(ctx)
+	values, err := s.readValues(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -261,7 +277,7 @@ func (s *Service) FeishuSecret(ctx context.Context) (string, error) {
 }
 
 func (s *Service) SocialOAuthSecrets(ctx context.Context) (github, google string, err error) {
-	values, err := s.repo.GetAll(ctx)
+	values, err := s.readValues(ctx)
 	if err != nil {
 		return "", "", err
 	}
@@ -269,7 +285,7 @@ func (s *Service) SocialOAuthSecrets(ctx context.Context) (github, google string
 }
 
 func (s *Service) DingTalkSecret(ctx context.Context) (string, error) {
-	values, err := s.repo.GetAll(ctx)
+	values, err := s.readValues(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -282,50 +298,76 @@ type LoginSecuritySettings struct {
 }
 
 type RegistrationPolicy struct {
-	Enabled, EmailVerification, InvitationRequired bool
-	AllowedDomains, InvitationCodes                []string
+	Enabled, EmailVerification, PasswordReset, InvitationRequired bool
+	AllowedDomains, InvitationCodes                               []string
 }
 
-func (s *Service) SMTPConfig(ctx context.Context) (host string, port int, username, password, from string, err error) {
-	values, err := s.repo.GetAll(ctx)
+type SMTPSettings struct {
+	Host, Username, Password, From, FromName string
+	Port                                     int
+	UseTLS                                   bool
+}
+
+func (s *Service) SMTPConfig(ctx context.Context) (SMTPSettings, error) {
+	values, err := s.readValues(ctx)
 	if err != nil {
-		return "", 0, "", "", "", err
+		return SMTPSettings{}, err
 	}
-	return values[KeySMTPHost], parseInt(values[KeySMTPPort], 587), values[KeySMTPUsername], values[KeySMTPPassword], values[KeySMTPFrom], nil
+	return SMTPSettings{
+		Host: values[KeySMTPHost], Port: parseInt(values[KeySMTPPort], 587),
+		Username: values[KeySMTPUsername], Password: values[KeySMTPPassword],
+		From: values[KeySMTPFrom], FromName: values[KeySMTPFromName], UseTLS: parseBool(values[KeySMTPUseTLS]),
+	}, nil
 }
 
 func (s *Service) RegistrationPolicy(ctx context.Context) (RegistrationPolicy, error) {
-	values, err := s.repo.GetAll(ctx)
+	values, err := s.readValues(ctx)
 	if err != nil {
 		return RegistrationPolicy{}, err
 	}
-	return RegistrationPolicy{Enabled: parseBool(values[KeyRegistrationEnabled]), EmailVerification: parseBool(values[KeyEmailVerifyEnabled]), InvitationRequired: parseBool(values[KeyInvitationRequired]), AllowedDomains: parseStringList(values[KeyAllowedEmailDomains], []string{}), InvitationCodes: parseStringList(values[KeyInvitationCodes], []string{})}, nil
+	emailVerification := parseBool(values[KeyEmailVerifyEnabled])
+	return RegistrationPolicy{Enabled: parseBool(values[KeyRegistrationEnabled]), EmailVerification: emailVerification, PasswordReset: parseBool(values[KeyPasswordResetEnabled]), InvitationRequired: parseBool(values[KeyInvitationRequired]), AllowedDomains: parseStringList(values[KeyAllowedEmailDomains], []string{}), InvitationCodes: parseStringList(values[KeyInvitationCodes], []string{})}, nil
+}
+
+// ValidateInvitationCode 校验邀请码是否可用但不消费它。
+// 注册流程先校验、注册成功后再消费，避免因为后续步骤失败（邮箱重复、
+// 邮件发送失败等）把用户手里的邀请码白白烧掉。
+func (s *Service) ValidateInvitationCode(ctx context.Context, code string) error {
+	_, err := s.findInvitationCode(ctx, code)
+	return err
 }
 
 func (s *Service) ConsumeInvitationCode(ctx context.Context, code string) error {
-	s.inviteMu.Lock()
-	defer s.inviteMu.Unlock()
+	return s.repo.ConsumeInvitationCode(ctx, code)
+}
+
+func (s *Service) RestoreInvitationCode(ctx context.Context, code string) error {
+	return s.repo.RestoreInvitationCode(ctx, code)
+}
+
+func (s *Service) findInvitationCode(ctx context.Context, code string) ([]string, error) {
 	code = strings.TrimSpace(code)
 	if code == "" {
-		return errors.New("invitation code is required")
+		return nil, ErrInvitationCodeRequired
 	}
-	values, err := s.repo.GetAll(ctx)
+	values, err := s.readValues(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	codes := parseStringList(values[KeyInvitationCodes], []string{})
 	for index, candidate := range codes {
 		if subtle.ConstantTimeCompare([]byte(candidate), []byte(code)) == 1 {
-			codes = append(codes[:index], codes[index+1:]...)
-			raw, _ := json.Marshal(codes)
-			return s.repo.SetMultiple(ctx, map[string]string{KeyInvitationCodes: string(raw)})
+			remaining := make([]string, 0, len(codes)-1)
+			remaining = append(remaining, codes[:index]...)
+			remaining = append(remaining, codes[index+1:]...)
+			return remaining, nil
 		}
 	}
-	return errors.New("invitation code is invalid")
+	return nil, ErrInvitationCodeInvalid
 }
 
 func (s *Service) LoginSecurity(ctx context.Context) (LoginSecuritySettings, error) {
-	values, err := s.repo.GetAll(ctx)
+	values, err := s.readValues(ctx)
 	if err != nil {
 		return LoginSecuritySettings{}, err
 	}
@@ -364,6 +406,8 @@ func (s *Service) parse(values map[string]string) AdminSettings {
 			DingTalkEnabled:       parseBool(values[KeyDingTalkEnabled]),
 			RegistrationEnabled:   parseBool(values[KeyRegistrationEnabled]),
 			EmailVerifyEnabled:    parseBool(values[KeyEmailVerifyEnabled]),
+			PasswordResetEnabled:  parseBool(values[KeyPasswordResetEnabled]),
+			AllowedEmailDomains:   parseStringList(values[KeyAllowedEmailDomains], []string{}),
 			TOTPEnabled:           parseBool(values[KeyTOTPEnabled]),
 			TurnstileEnabled:      parseBool(values[KeyTurnstileEnabled]),
 			TurnstileSiteKey:      values[KeyTurnstileSiteKey],
@@ -386,15 +430,15 @@ func (s *Service) parse(values map[string]string) AdminSettings {
 		FeishuConfigured:    strings.TrimSpace(values[KeyFeishuAppSecret]) != "",
 		GitHubOAuthClientID: values[KeyGitHubOAuthClientID], GitHubOAuthConfigured: strings.TrimSpace(values[KeyGitHubOAuthSecret]) != "", GoogleOAuthClientID: values[KeyGoogleOAuthClientID], GoogleOAuthConfigured: strings.TrimSpace(values[KeyGoogleOAuthSecret]) != "",
 		DingTalkClientID: values[KeyDingTalkClientID], DingTalkConfigured: strings.TrimSpace(values[KeyDingTalkClientSecret]) != "",
-		AllowedEmailDomains:  parseStringList(values[KeyAllowedEmailDomains], []string{}),
 		InvitationCodes:      parseStringList(values[KeyInvitationCodes], []string{}),
 		TrustedProxyHeaders:  parseBool(values[KeyTrustedProxyHeaders]),
+		TrustedProxyCIDRs:    parseStringList(values[KeyTrustedProxyCIDRs], []string{}),
 		TurnstileConfigured:  strings.TrimSpace(values[KeyTurnstileSecretKey]) != "",
 		DefaultBalanceMicros: parseInt64(values[KeyDefaultBalanceMicros], 0),
 		DefaultConcurrency:   parseInt(values[KeyDefaultConcurrency], 5),
 		DefaultRPM:           parseInt(values[KeyDefaultRPM], 0),
 		AuthSourceDefaults:   parseAuthSourceDefaults(values[KeyAuthSourceDefaults]),
-		SMTPHost:             values[KeySMTPHost], SMTPPort: parseInt(values[KeySMTPPort], 587), SMTPUsername: values[KeySMTPUsername], SMTPFrom: values[KeySMTPFrom], SMTPConfigured: strings.TrimSpace(values[KeySMTPPassword]) != "",
+		SMTPHost:             values[KeySMTPHost], SMTPPort: parseInt(values[KeySMTPPort], 587), SMTPUsername: values[KeySMTPUsername], SMTPFrom: values[KeySMTPFrom], SMTPFromName: values[KeySMTPFromName], SMTPUseTLS: parseBool(values[KeySMTPUseTLS]), SMTPConfigured: strings.TrimSpace(values[KeySMTPHost]) != "" && strings.TrimSpace(values[KeySMTPFrom]) != "",
 		EmailTemplates:      parseEmailTemplates(values[KeyEmailTemplates]),
 		LoginAgreementTitle: values[KeyLoginAgreementTitle], LoginAgreementContent: values[KeyLoginAgreementContent],
 		DefaultPageSize: parseInt(values[KeyDefaultPageSize], 20), PageSizeOptions: parseIntList(values[KeyPageSizeOptions], []int{10, 20, 50}), HomeContent: values[KeyHomeContent], HideImportButton: parseBool(values[KeyHideImportButton]),
@@ -414,7 +458,7 @@ type BackupS3Config struct {
 }
 
 func (s *Service) BackupS3Config(ctx context.Context) (BackupS3Config, error) {
-	values, err := s.repo.GetAll(ctx)
+	values, err := s.readValues(ctx)
 	if err != nil {
 		return BackupS3Config{}, err
 	}
@@ -444,7 +488,7 @@ func defaults() map[string]string {
 		KeyFeishuAppSecret:          "",
 		KeyGitHubOAuthEnabled:       "false", KeyGitHubOAuthClientID: "", KeyGitHubOAuthSecret: "", KeyGoogleOAuthEnabled: "false", KeyGoogleOAuthClientID: "", KeyGoogleOAuthSecret: "",
 		KeyDingTalkEnabled: "false", KeyDingTalkClientID: "", KeyDingTalkClientSecret: "",
-		KeyRegistrationEnabled: "false", KeyEmailVerifyEnabled: "false", KeyAllowedEmailDomains: "[]", KeyInvitationRequired: "false", KeyInvitationCodes: "[]", KeyTOTPEnabled: "false", KeyTrustedProxyHeaders: "false", KeyTurnstileEnabled: "false", KeyTurnstileSiteKey: "", KeyTurnstileSecretKey: "", KeyDefaultBalanceMicros: "0", KeyDefaultConcurrency: "5", KeyDefaultRPM: "0", KeySMTPHost: "", KeySMTPPort: "587", KeySMTPUsername: "", KeySMTPPassword: "", KeySMTPFrom: "", KeyLoginAgreementEnabled: "false", KeyLoginAgreementTitle: "Terms of Service", KeyLoginAgreementContent: "",
+		KeyRegistrationEnabled: "false", KeyEmailVerifyEnabled: "false", KeyPasswordResetEnabled: "false", KeyAllowedEmailDomains: "[]", KeyInvitationRequired: "false", KeyInvitationCodes: "[]", KeyTOTPEnabled: "false", KeyTrustedProxyHeaders: "false", KeyTrustedProxyCIDRs: "[]", KeyTurnstileEnabled: "false", KeyTurnstileSiteKey: "", KeyTurnstileSecretKey: "", KeyDefaultBalanceMicros: "0", KeyDefaultConcurrency: "5", KeyDefaultRPM: "0", KeySMTPHost: "", KeySMTPPort: "587", KeySMTPUsername: "", KeySMTPPassword: "", KeySMTPFrom: "", KeySMTPFromName: "", KeySMTPUseTLS: "false", KeyLoginAgreementEnabled: "false", KeyLoginAgreementTitle: "Terms of Service", KeyLoginAgreementContent: "",
 		KeyAuthSourceDefaults: "{}",
 		KeyEmailTemplates:     "[]",
 		KeyBackendMode:        "false", KeyDefaultPageSize: "20", KeyPageSizeOptions: "[10,20,50]", KeySupportContact: "", KeyDocumentationURL: "", KeyHomeContent: "", KeyHideImportButton: "false", KeyLoginAgreementMode: "modal", KeyLoginAgreementUpdatedAt: "", KeyLegalDocuments: "[]",
@@ -526,6 +570,35 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 	if in.SMTPPort < 1 || in.SMTPPort > 65535 {
 		return nil, errors.New("smtp_port must be between 1 and 65535")
 	}
+	if in.EmailVerifyEnabled || in.PasswordResetEnabled {
+		if strings.TrimSpace(in.PublicBaseURL) == "" {
+			return nil, errors.New("public_base_url is required when authentication email is enabled")
+		}
+		if strings.TrimSpace(in.SMTPHost) == "" || strings.TrimSpace(in.SMTPFrom) == "" {
+			return nil, errors.New("SMTP host and sender are required when authentication email is enabled")
+		}
+	}
+	if in.EmailVerifyEnabled || in.PasswordResetEnabled || in.OIDCEnabled || in.FeishuEnabled || in.GitHubOAuthEnabled || in.GoogleOAuthEnabled || in.DingTalkEnabled {
+		if err := validateSecureAuthenticationBaseURL(in.PublicBaseURL); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(in.SMTPFrom) != "" {
+		address, err := mail.ParseAddress(strings.TrimSpace(in.SMTPFrom))
+		if err != nil || address.Address != strings.TrimSpace(in.SMTPFrom) {
+			return nil, errors.New("smtp_from must be a valid email address")
+		}
+	}
+	if in.TurnstileEnabled && (strings.TrimSpace(in.TurnstileSiteKey) == "" || (!in.TurnstileConfigured && strings.TrimSpace(in.TurnstileSecretKey) == "")) {
+		return nil, errors.New("Turnstile site key and secret are required when Turnstile is enabled")
+	}
+	trustedProxyCIDRs, err := normalizeTrustedProxyCIDRs(in.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, err
+	}
+	if in.TrustedProxyHeaders && len(trustedProxyCIDRs) == 0 {
+		return nil, errors.New("trusted_proxy_cidrs is required when proxy headers are trusted")
+	}
 	if in.DefaultPageSize < 5 || in.DefaultPageSize > 1000 {
 		return nil, errors.New("default_page_size must be between 5 and 1000")
 	}
@@ -581,14 +654,14 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 	if in.BackupIntervalHours < 1 || in.BackupIntervalHours > 24*30 {
 		return nil, errors.New("backup interval must be between 1 and 720 hours")
 	}
-	for _, domain := range in.AllowedEmailDomains {
-		if strings.TrimSpace(domain) == "" || strings.Contains(domain, "@") {
-			return nil, errors.New("allowed_email_domains must contain domain names")
-		}
+	normalizedDomains, err := normalizeAllowedEmailDomains(in.AllowedEmailDomains)
+	if err != nil {
+		return nil, err
 	}
 	locales, _ := json.Marshal(in.EnabledLocales)
 	profiles, _ := json.Marshal(enabledProfiles)
-	domains, _ := json.Marshal(in.AllowedEmailDomains)
+	domains, _ := json.Marshal(normalizedDomains)
+	proxyCIDRs, _ := json.Marshal(trustedProxyCIDRs)
 	invitationCodes, _ := json.Marshal(in.InvitationCodes)
 	pageSizes, _ := json.Marshal(in.PageSizeOptions)
 	legalDocuments, _ := json.Marshal(in.LegalDocuments)
@@ -621,7 +694,7 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 		KeyFeishuAppSecret:          strings.TrimSpace(in.FeishuAppSecret),
 		KeyGitHubOAuthEnabled:       strconv.FormatBool(in.GitHubOAuthEnabled), KeyGitHubOAuthClientID: strings.TrimSpace(in.GitHubOAuthClientID), KeyGitHubOAuthSecret: strings.TrimSpace(in.GitHubOAuthClientSecret), KeyGoogleOAuthEnabled: strconv.FormatBool(in.GoogleOAuthEnabled), KeyGoogleOAuthClientID: strings.TrimSpace(in.GoogleOAuthClientID), KeyGoogleOAuthSecret: strings.TrimSpace(in.GoogleOAuthClientSecret),
 		KeyDingTalkEnabled: strconv.FormatBool(in.DingTalkEnabled), KeyDingTalkClientID: strings.TrimSpace(in.DingTalkClientID), KeyDingTalkClientSecret: strings.TrimSpace(in.DingTalkClientSecret),
-		KeyRegistrationEnabled: strconv.FormatBool(in.RegistrationEnabled), KeyEmailVerifyEnabled: strconv.FormatBool(in.EmailVerifyEnabled), KeyAllowedEmailDomains: string(domains), KeyInvitationRequired: strconv.FormatBool(in.InvitationRequired), KeyInvitationCodes: string(invitationCodes), KeyTOTPEnabled: strconv.FormatBool(in.TOTPEnabled), KeyTrustedProxyHeaders: strconv.FormatBool(in.TrustedProxyHeaders), KeyTurnstileEnabled: strconv.FormatBool(in.TurnstileEnabled), KeyTurnstileSiteKey: strings.TrimSpace(in.TurnstileSiteKey), KeyTurnstileSecretKey: strings.TrimSpace(in.TurnstileSecretKey), KeyDefaultBalanceMicros: strconv.FormatInt(in.DefaultBalanceMicros, 10), KeyDefaultConcurrency: strconv.Itoa(in.DefaultConcurrency), KeyDefaultRPM: strconv.Itoa(in.DefaultRPM), KeySMTPHost: strings.TrimSpace(in.SMTPHost), KeySMTPPort: strconv.Itoa(in.SMTPPort), KeySMTPUsername: strings.TrimSpace(in.SMTPUsername), KeySMTPPassword: strings.TrimSpace(in.SMTPPassword), KeySMTPFrom: strings.TrimSpace(in.SMTPFrom), KeyLoginAgreementEnabled: strconv.FormatBool(in.LoginAgreementEnabled), KeyLoginAgreementTitle: strings.TrimSpace(in.LoginAgreementTitle), KeyLoginAgreementContent: strings.TrimSpace(in.LoginAgreementContent),
+		KeyRegistrationEnabled: strconv.FormatBool(in.RegistrationEnabled), KeyEmailVerifyEnabled: strconv.FormatBool(in.EmailVerifyEnabled), KeyPasswordResetEnabled: strconv.FormatBool(in.PasswordResetEnabled), KeyAllowedEmailDomains: string(domains), KeyInvitationRequired: strconv.FormatBool(in.InvitationRequired), KeyInvitationCodes: string(invitationCodes), KeyTOTPEnabled: strconv.FormatBool(in.TOTPEnabled), KeyTrustedProxyHeaders: strconv.FormatBool(in.TrustedProxyHeaders), KeyTrustedProxyCIDRs: string(proxyCIDRs), KeyTurnstileEnabled: strconv.FormatBool(in.TurnstileEnabled), KeyTurnstileSiteKey: strings.TrimSpace(in.TurnstileSiteKey), KeyTurnstileSecretKey: strings.TrimSpace(in.TurnstileSecretKey), KeyDefaultBalanceMicros: strconv.FormatInt(in.DefaultBalanceMicros, 10), KeyDefaultConcurrency: strconv.Itoa(in.DefaultConcurrency), KeyDefaultRPM: strconv.Itoa(in.DefaultRPM), KeySMTPHost: strings.TrimSpace(in.SMTPHost), KeySMTPPort: strconv.Itoa(in.SMTPPort), KeySMTPUsername: strings.TrimSpace(in.SMTPUsername), KeySMTPPassword: strings.TrimSpace(in.SMTPPassword), KeySMTPFrom: strings.TrimSpace(in.SMTPFrom), KeySMTPFromName: strings.TrimSpace(in.SMTPFromName), KeySMTPUseTLS: strconv.FormatBool(in.SMTPUseTLS), KeyLoginAgreementEnabled: strconv.FormatBool(in.LoginAgreementEnabled), KeyLoginAgreementTitle: strings.TrimSpace(in.LoginAgreementTitle), KeyLoginAgreementContent: strings.TrimSpace(in.LoginAgreementContent),
 		KeyEmailTemplates:     string(emailTemplates),
 		KeyAuthSourceDefaults: string(authSourceDefaults),
 		KeyBackendMode:        strconv.FormatBool(in.BackendMode), KeyDefaultPageSize: strconv.Itoa(in.DefaultPageSize), KeyPageSizeOptions: string(pageSizes), KeySupportContact: strings.TrimSpace(in.SupportContact), KeyDocumentationURL: strings.TrimSpace(in.DocumentationURL), KeyHomeContent: in.HomeContent, KeyHideImportButton: strconv.FormatBool(in.HideImportButton), KeyLoginAgreementMode: strings.TrimSpace(in.LoginAgreementMode), KeyLoginAgreementUpdatedAt: strings.TrimSpace(in.LoginAgreementUpdatedAt), KeyLegalDocuments: string(legalDocuments),
@@ -784,7 +857,65 @@ func validateAndMarshalEmailTemplates(templates []EmailTemplate) ([]byte, error)
 	return json.Marshal(templates)
 }
 
-var legalSlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var (
+	legalSlugPattern   = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	emailDomainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+)
+
+func normalizeAllowedEmailDomains(values []string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, raw := range values {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		value = strings.TrimPrefix(value, "@")
+		wildcard := strings.HasPrefix(value, "*.")
+		domain := strings.TrimPrefix(value, "*.")
+		if !emailDomainPattern.MatchString(domain) {
+			return nil, fmt.Errorf("invalid allowed email domain %q", raw)
+		}
+		if wildcard {
+			value = "*." + domain
+		} else {
+			value = domain
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
+func normalizeTrustedProxyCIDRs(values []string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if ip := net.ParseIP(value); ip != nil {
+			if ip.To4() != nil {
+				value = ip.String() + "/32"
+			} else {
+				value = ip.String() + "/128"
+			}
+		} else {
+			_, network, err := net.ParseCIDR(value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid trusted proxy CIDR %q", raw)
+			}
+			value = network.String()
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result, nil
+}
 
 func validateLegalDocuments(documents []LegalDocument, required bool) error {
 	if required && len(documents) == 0 {
@@ -824,6 +955,27 @@ func validateOptionalHTTPURL(field, value string) error {
 		return fmt.Errorf("%s must be an http or https URL", field)
 	}
 	return nil
+}
+
+func validateSecureAuthenticationBaseURL(value string) error {
+	value = strings.TrimSpace(value)
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return errors.New("public_base_url must be a valid URL without user credentials")
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	hostname := strings.TrimSpace(parsed.Hostname())
+	if parsed.Scheme == "http" && (strings.EqualFold(hostname, "localhost") || isLoopbackHost(hostname)) {
+		return nil
+	}
+	return errors.New("public_base_url must use https when authentication email or external login is enabled")
+}
+
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func parseProfileList(value string) []string {

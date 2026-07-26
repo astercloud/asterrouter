@@ -56,6 +56,7 @@ type Plugin struct {
 	Surfaces          []string  `json:"surfaces"`
 	EntryPoint        string    `json:"entry_point"`
 	Configurable      bool      `json:"configurable"`
+	FrontendAvailable bool      `json:"frontend_available"`
 	Packages          []Package `json:"packages,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`

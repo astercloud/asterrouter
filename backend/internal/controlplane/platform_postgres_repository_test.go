@@ -16,7 +16,7 @@ func TestPostgresRepositoryPersistsPlatformDomainAndEvidenceSnapshots(t *testing
 		t.Fatalf("NewPostgresRepository(): %v", err)
 	}
 	now := time.Date(2026, time.July, 14, 3, 30, 0, 0, time.UTC)
-	tenant := PlatformTenant{ID: "ptn-postgres", Name: "Postgres Platform", Slug: "postgres-platform", EntitlementReference: "external-plan-1", Status: PlatformTenantStatusActive, CreatedAt: now, UpdatedAt: now}
+	tenant := PlatformTenant{ID: "ptn-postgres", Name: "Postgres Platform", Slug: "postgres-platform", EntitlementReference: "external-plan-1", ConcurrencyLimit: 9, Status: PlatformTenantStatusActive, CreatedAt: now, UpdatedAt: now}
 	principal := GatewayPrincipal{ID: "gpr-postgres", TenantID: tenant.ID, Name: "Postgres Service", PrincipalType: GatewayPrincipalTypeService, ExternalSubjectReference: "svc-1", Status: GatewayPrincipalStatusActive, CreatedAt: now, UpdatedAt: now}
 	integration := ExternalAuthIntegration{ID: "eai-postgres", TenantID: tenant.ID, GatewayPrincipalID: principal.ID, Name: "Postgres Integration", Protocol: ExternalAuthIntegrationProtocolJWT, KeyID: "postgres-v1", Issuer: "https://identity.example", JWKSURL: "https://identity.example/.well-known/jwks.json", SubjectClaim: "subject_ref", ModelsClaim: "models", QPSLimitClaim: "qps", MonthlyTokenClaim: "monthly_tokens", Audience: "https://gateway.example/v1", ModelAllowlist: []string{"model"}, QPSLimit: 2, MonthlyTokenLimit: 100, MaxTTLSeconds: 300, Status: ExternalAuthIntegrationStatusActive, CreatedAt: now, UpdatedAt: now}
 	key := APIKeyRecord{ID: "key-platform-postgres", Name: "Platform Key", KeyHash: "platform-hash", Fingerprint: "platform-fingerprint", Prefix: "ar_platform", Status: APIKeyStatusActive, KeyType: APIKeyTypeService, ProfileScope: ProfileScopePlatform, PlatformTenantID: tenant.ID, GatewayPrincipalID: principal.ID, ModelAllowlist: []string{"model"}, CreatedAt: now, UpdatedAt: now}
@@ -74,7 +74,7 @@ func TestPostgresRepositoryPersistsPlatformDomainAndEvidenceSnapshots(t *testing
 	}
 	defer reopened.Close()
 	tenants, err := reopened.ListPlatformTenants(ctx)
-	if err != nil || len(tenants) != 1 || tenants[0].Slug != tenant.Slug || tenants[0].EntitlementReference != tenant.EntitlementReference {
+	if err != nil || len(tenants) != 1 || tenants[0].Slug != tenant.Slug || tenants[0].EntitlementReference != tenant.EntitlementReference || tenants[0].ConcurrencyLimit != tenant.ConcurrencyLimit {
 		t.Fatalf("platform tenants=%+v err=%v", tenants, err)
 	}
 	principals, err := reopened.ListGatewayPrincipals(ctx)

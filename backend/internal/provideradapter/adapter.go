@@ -67,6 +67,48 @@ func (r *Registry) BuildRequest(ctx context.Context, provider controlplane.Gatew
 	}
 }
 
+func (r *Registry) BuildCountTokensRequest(ctx context.Context, provider controlplane.GatewayProvider, body []byte) (*http.Request, error) {
+	if r == nil {
+		r = NewRegistry(nil)
+	}
+	if provider.Type != controlplane.ProviderTypeAnthropicCompatible || provider.UpstreamFormat != controlplane.UpstreamFormatAnthropic {
+		return nil, fmt.Errorf("%w: provider route does not expose exact token counting", ErrUnsupportedProvider)
+	}
+	endpoint := strings.TrimRight(provider.BaseURL, "/") + "/messages/count_tokens"
+	req, err := newJSONRequest(ctx, endpoint, body, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyCompatibleCredential(req, provider); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+func (r *Registry) BuildEmbeddingRequest(ctx context.Context, provider controlplane.GatewayProvider, body []byte) (*http.Request, error) {
+	if r == nil {
+		r = NewRegistry(nil)
+	}
+	if provider.UpstreamFormat != controlplane.UpstreamFormatOpenAIEmbeddings {
+		return nil, fmt.Errorf("%w: provider route does not expose embeddings", ErrUnsupportedProvider)
+	}
+	switch provider.Type {
+	case controlplane.ProviderTypeOpenAICompatible:
+		req, err := newJSONRequest(ctx, strings.TrimRight(provider.BaseURL, "/")+"/embeddings", body, false)
+		if err != nil {
+			return nil, err
+		}
+		if err := applyCompatibleCredential(req, provider); err != nil {
+			return nil, err
+		}
+		return req, nil
+	case controlplane.ProviderTypeAzureOpenAI:
+		return r.azureEmbeddingRequest(ctx, provider, body)
+	default:
+		return nil, fmt.Errorf("%w: provider type %q does not expose embeddings", ErrUnsupportedProvider, provider.Type)
+	}
+}
+
 func (r *Registry) compatibleRequest(ctx context.Context, provider controlplane.GatewayProvider, body []byte, stream bool) (*http.Request, error) {
 	endpoint, err := compatibleEndpoint(provider, stream)
 	if err != nil {
@@ -76,6 +118,13 @@ func (r *Registry) compatibleRequest(ctx context.Context, provider controlplane.
 	if err != nil {
 		return nil, err
 	}
+	if err := applyCompatibleCredential(req, provider); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+func applyCompatibleCredential(req *http.Request, provider controlplane.GatewayProvider) error {
 	switch provider.Type {
 	case controlplane.ProviderTypeAnthropicCompatible:
 		req.Header.Set("x-api-key", provider.APIKey)
@@ -94,9 +143,9 @@ func (r *Registry) compatibleRequest(ctx context.Context, provider controlplane.
 		}
 	}
 	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
-		return nil, err
+		return err
 	}
-	return req, nil
+	return nil
 }
 
 func compatibleEndpoint(provider controlplane.GatewayProvider, stream bool) (string, error) {
@@ -243,22 +292,55 @@ func (r *Registry) azureRequest(ctx context.Context, provider controlplane.Gatew
 	if err != nil {
 		return nil, err
 	}
+	if err := r.applyAzureCredential(ctx, req, provider); err != nil {
+		return nil, err
+	}
+	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+func (r *Registry) azureEmbeddingRequest(ctx context.Context, provider controlplane.GatewayProvider, body []byte) (*http.Request, error) {
+	apiVersion := strings.TrimSpace(provider.AdapterConfig["api_version"])
+	if apiVersion == "" {
+		return nil, fmt.Errorf("%w: adapter_config.api_version is required", ErrInvalidConfiguration)
+	}
+	baseURL, err := url.Parse(strings.TrimRight(provider.BaseURL, "/"))
+	if err != nil {
+		return nil, fmt.Errorf("%w: Azure endpoint", ErrInvalidConfiguration)
+	}
+	baseURL.Path = path.Join(baseURL.Path, "openai", "deployments", provider.UpstreamModel, "embeddings")
+	query := baseURL.Query()
+	query.Set("api-version", apiVersion)
+	baseURL.RawQuery = query.Encode()
+	req, err := newJSONRequest(ctx, baseURL.String(), body, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.applyAzureCredential(ctx, req, provider); err != nil {
+		return nil, err
+	}
+	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+func (r *Registry) applyAzureCredential(ctx context.Context, req *http.Request, provider controlplane.GatewayProvider) error {
 	switch provider.AuthType {
 	case controlplane.ProviderAuthAPIKey:
 		req.Header.Set("api-key", provider.APIKey)
 	case controlplane.ProviderAuthAzureManagedIdentity:
 		token, tokenErr := r.credentials.AzureToken(ctx, provider)
 		if tokenErr != nil {
-			return nil, tokenErr
+			return tokenErr
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	default:
-		return nil, fmt.Errorf("%w: Azure auth_type %q", ErrInvalidConfiguration, provider.AuthType)
+		return fmt.Errorf("%w: Azure auth_type %q", ErrInvalidConfiguration, provider.AuthType)
 	}
-	if err := controlplane.ApplyProviderAccountHeaderOverrides(req, provider.AdapterConfig); err != nil {
-		return nil, err
-	}
-	return req, nil
+	return nil
 }
 
 func newJSONRequest(ctx context.Context, endpoint string, body []byte, stream bool) (*http.Request, error) {

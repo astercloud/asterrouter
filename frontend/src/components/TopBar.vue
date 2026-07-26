@@ -59,7 +59,7 @@ async function openAccount() {
 
 async function logout() {
   accountOpen.value = false
-  auth.logout()
+	await auth.signOut()
   await router.push('/login')
 }
 

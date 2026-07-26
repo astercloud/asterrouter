@@ -74,7 +74,9 @@ export default {
   auth: {
     totpCode: '动态验证码',
     verifyAndSignIn: '验证并登录',
-    email: '邮箱', displayName: '显示名称', confirmPassword: '确认密码', passwordMismatch: '两次输入的密码不一致', registrationAccepted: '注册已受理，如需验证请检查邮箱。', resetEmailAccepted: '如果账户存在，重置邮件已发送。', passwordResetComplete: '密码重置完成。', emailVerified: '邮箱验证成功，现在可以登录。', createAccount: '创建账户', sendResetEmail: '发送重置邮件', resetPassword: '重置密码', backToLogin: '返回登录', forgotPassword: '忘记密码？',
+		mfaTitle: '双因素验证', mfaHelp: '输入验证器生成的动态验证码或一次性恢复码。',
+    email: '邮箱', displayName: '显示名称', confirmPassword: '确认密码', passwordMismatch: '两次输入的密码不一致', registrationAccepted: '账户已创建。', registrationVerifyEmail: '账户已创建，请查收验证邮件后再登录。', verificationDeliveryFailed: '账户已创建，但验证邮件投递失败。请在下方重新发送。', verificationEmailAccepted: '如果账户仍待验证，新的验证邮件已发送。', resetEmailAccepted: '如果账户存在，重置邮件已发送。', passwordResetComplete: '密码重置完成，现在可以登录。', emailVerified: '邮箱验证成功，现在可以登录。', createAccount: '创建账户', sendResetEmail: '发送重置邮件', resetPassword: '重置密码', backToLogin: '返回登录', forgotPassword: '忘记密码？', forgotPasswordTitle: '找回账户',
+		registrationHelp: '使用符合策略的邮箱创建账户。', resetEmailHelp: '申请一个限时有效的密码重置链接。', resetPasswordHelp: '为此账户设置新密码。', verifyEmail: '验证邮箱', verifyEmailHelp: '确认此账户绑定的邮箱地址。', invalidVerificationLink: '邮箱验证链接无效或已过期。', invalidResetLink: '密码重置链接无效或已过期。', resendVerification: '重新发送验证邮件', resendVerificationTitle: '重新申请验证邮件', resendVerificationHelp: '为仍待确认的账户发送新的限时验证链接。', allowedEmailDomains: '允许的邮箱域名：{domains}', passwordRule: '至少 10 个字符，且不能超过 72 字节。', agreementPrefix: '我已阅读并同意',
     invitationCode: '邀请码',
     welcomeBack: '欢迎回来',
     signInToAccount: '登录并管理你的 AI 网关控制面。',
@@ -177,6 +179,7 @@ export default {
     tenantName: 'Tenant 名称',
     tenantSlug: 'Tenant 标识',
     entitlementReference: '权益引用',
+    tenantConcurrencyLimit: 'Tenant 并发上限',
     principals: '网关调用主体',
     principal: '网关调用主体',
     principalName: '调用主体名称',
@@ -247,6 +250,7 @@ export default {
     title: '管理员后台',
     subtitle: '治理、设置、Provider、插件、审计和运维。',
     overview: '概览',
+		onboarding: '首次接入',
     settings: '系统设置',
     providers: 'Provider 连接',
     gatewayModels: '网关模型',
@@ -260,6 +264,7 @@ export default {
     policies: '策略与配额',
     apiKeys: 'API Keys',
     usage: '用量与成本',
+    supply: '供应利用率',
     costAllocation: '成本分摊',
     traces: '网关 Trace',
     alerts: '告警中心',
@@ -269,6 +274,39 @@ export default {
     plugins: '插件中心',
     audit: '审计日志'
   },
+	onboarding: {
+		title: '首次接入',
+		subtitle: '连接模型来源，发布团队模型，创建应用并完成一次受治理验证。',
+		progress: '首次接入进度',
+		session: '会话 {id}',
+		newSession: '新建接入会话',
+		expired: '接入会话已过期',
+		expiredAction: '新建会话后继续配置。已有对象仍保留在管理后台。',
+		failedAt: '{step}未完成',
+		steps: { source: '模型来源', model: '发布模型', application: '创建应用', verify: '客户端验证' },
+		source: {
+			title: '连接模型来源', subtitle: '保存连接并检查上游模型目录。', type: '协议类型', name: '来源名称', baseURL: '基础地址', account: '资源名称', authType: '认证方式', upstreamModel: '上游模型', secret: '访问凭据', concurrency: '并发上限', connect: '连接并检查', checking: '正在检查'
+		},
+		model: {
+			title: '发布团队模型', subtitle: '为客户端提供稳定的模型标识。', id: '模型标识', name: '显示名称', routeGroup: '路由组', defaultRoute: '默认', description: '描述', publish: '发布模型'
+		},
+		application: {
+			title: '创建应用', subtitle: '建立最小调用权限和独立用量边界。', name: '应用名称', concurrency: '并发上限', monthlyTokens: '月度 Token 上限', create: '创建应用与凭据'
+		},
+		verify: {
+			title: '配置并验证客户端', subtitle: '配置由当前应用、模型和公共网关地址动态生成。', client: '目标客户端', credential: '应用凭据', credentialWindow: '仅在当前 24 小时接入会话内可恢复，不写入浏览器存储。', copyCredential: '复制应用凭据', configuration: '客户端配置', copyConfig: '复制客户端配置', run: '运行真实验证', running: '正在验证', success: '验证成功', failed: '验证失败', operation: 'Operation', openTrace: '打开 Trace'
+		},
+		compatibility: {
+			title: '兼容性证据', subtitle: '正在读取版本化验证记录。', router: 'AsterRouter {version}', revision: '记录 {revision}', runtimeVerified: '客户端实测通过', protocolVerified: '协议验证通过', pending: '待确认', unavailable: '兼容性记录当前不可用。', empty: '当前客户端没有兼容性记录。', validUntil: '证据有效期至 {date}', confirmBeforeUse: '使用前需要重新确认',
+			release: { current: '当前版本', previous: '前一支持线' },
+			languages: { cli: 'CLI', javascript: 'JavaScript', python: 'Python' },
+			limitations: { official_client_runtime_not_executed: '未执行官方客户端运行时，仅验证协议链路。', streaming_not_covered: '当前证据不覆盖流式调用。' }
+		},
+		clients: { codex: 'Codex', claude_code: 'Claude Code', openai_sdk: 'OpenAI SDK', anthropic_sdk: 'Anthropic SDK' },
+		recovery: {
+			check_base_url_credentials_and_upstream_model: '检查基础地址、访问凭据和上游模型。', choose_a_model_returned_by_provider_discovery: '选择来源目录返回的模型。', check_model_protocol_and_source_mapping: '检查模型协议与来源映射。', use_the_onboarding_credential: '使用当前应用凭据后重试。', check_api_key_model_and_policy_scope: '检查应用模型范围与策略。', check_api_key_and_provider_capacity: '检查应用限额与来源容量。', check_route_and_provider_health: '检查路由与来源健康状态。', check_client_protocol_compatibility: '检查客户端协议配置。', inspect_trace_and_retry: '检查 Trace 后重试。'
+		}
+	},
   artifactOps: {
     title: '产物管理',
     subtitle: '统一查看图片、视频、音频任务的生成产物与客户交付状态。',
@@ -614,7 +652,7 @@ export default {
     selected: '已选', unmatched: '未匹配', existing: '已存在',
     toggleBulkRoute: '选择上游模型 {model} 的路由', gatewayModelFor: '上游模型 {model} 对应的网关模型',
     noMatch: '请选择网关模型', alreadyExists: '路由已存在', ready: '可创建', needsMatch: '待匹配', noAccountModels: '该账号没有已启用的模型。',
-    unsupportedPair: '该 Provider 与网关模型当前没有可执行的路由格式。', capabilityMismatch: '能力不匹配', textCore: '文本 Core', mediaAdapter: '媒体 Adapter', builtinDirect: '内置直连',
+    unsupportedPair: '该 Provider 与网关模型当前没有可执行的路由格式。', capabilityMismatch: '能力不匹配', textCore: '文本 Core', embeddingCore: 'Embedding Core', mediaAdapter: '媒体 Adapter', builtinDirect: '内置直连',
     bulkAtomicHint: '所选路由会先整批校验，再在一个事务中写入。', createSelected: '创建 {count} 条路由', bulkCreated: '已批量创建 {count} 条模型路由',
     created: '模型路由已创建', updated: '模型路由已更新', deleted: '模型路由已删除', delete: '删除模型路由', deleteConfirm: '确定删除这条模型路由吗？', empty: ''
   },
@@ -1156,6 +1194,37 @@ export default {
     records: '记录',
     other: '其他'
   },
+  supply: {
+    title: '供应利用率',
+    subtitle: '统一查看已观测需求、已配置容量、路由可用性与基于证据的容量决策。',
+    windowLabel: '观测窗口',
+    dimensionLabel: '利用率维度',
+    windows: { day: '24 小时', week: '7 天', month: '30 天' },
+    dimensions: { providerAccount: 'Provider 账号', routeGroup: '路由组', publishedModel: '发布模型', application: '应用' },
+    metrics: { requests: '请求数', window: '最近 {hours} 小时', capacityRejected: '容量拒绝', rejectedSub: '触发容量门禁的请求', attention: '供应关注项', attentionSub: '饱和、降级或搁浅', recommendations: '可执行建议' },
+    states: { available: '可用', degraded: '降级', saturated: '饱和', idle: '空闲', stranded: '搁浅', unknown: '容量未知', noEvidence: '暂无证据' },
+    evidence: { known: '已知', unknown: '未知', notApplicable: '不适用', notComparable: '不可比较' },
+    constraints: { concurrency: '并发', rpm: 'RPM', tpm: 'TPM', health: '健康', routing: '路由', unknown: '未知' },
+    table: { resource: '资源', state: '状态', demand: '需求', reliability: '可靠性', usage: '用量', capacity: '容量', evidence: '证据', success: '成功率', fallback: '回退率', upstreamErrors: '上游错误', tokens: 'Token', health: '健康覆盖', traces: '{count} 条 Trace' },
+    windowObserved: '{from} 至 {to}',
+    truncated: '窗口样本已截断',
+    empty: '当前窗口没有供应证据。',
+    confidence: { high: '高置信度', medium: '中置信度', low: '低置信度' },
+    recommendations: {
+      title: '容量建议', mode: '模式：{mode}', actionable: '可执行', inconclusive: '结论不足', empty: '当前没有可用的 Provider 账号建议。',
+      increaseCapacity: '增加容量', deferExpansion: '暂缓扩容', reviewStrandedCapacity: '检查搁浅容量',
+      samples: '{count} 个样本', peak: '峰值 {value}', capacityRejected: '{count} 次容量拒绝', health: '健康覆盖 {value}'
+    },
+    reasons: {
+      accountInactive: '账号未启用', accountUnschedulable: '账号不可调度', cooldownActive: '账号处于冷却期', circuitOpen: '熔断器已打开',
+      noActiveRoute: '没有启用的路由', noConfiguredRoute: '没有配置路由', allRouteCapacityStranded: '所有路由容量均已搁浅', evidenceGateNotMet: '证据门槛未满足',
+      sustainedCapacityPressure: '持续容量压力', capacityRejectionObserved: '已观测到容量拒绝', headroomObserved: '存在可用余量', noCapacityRejectionObserved: '未观测到容量拒绝',
+      noStableCapacitySignal: '尚无稳定的容量信号', windowTruncated: '观测窗口已截断', insufficientSamples: '样本不足', unknownCapacity: '配置容量未知',
+      unclassifiedFailures: '存在未分类故障', providerFailuresRequireClassification: 'Provider 故障尚需分类', healthEvidenceIncomplete: '健康证据不完整',
+      policyLimitIsPrimary: '策略限额是主要约束', additionalObservationWindowRequired: '需要继续观测一个窗口', fallbackCapacityObserved: '已观测到回退容量',
+      peakBelowExpansionThreshold: '峰值低于扩容阈值', healthCoverageComplete: '健康覆盖完整'
+    }
+  },
   costAllocation: {
     subtitle: '按 Workspace Key、用户、部门和模型分摊 AI 网关成本。',
     dimension: '分摊维度',
@@ -1604,8 +1673,8 @@ export default {
 		retentionCleanupConfirm: '将永久删除 {days} 天以前的用量、Trace、已解决告警和审计日志。此操作不可撤销，确定继续吗？',
 		retentionCleanupDone: '数据清理完成，共删除 {count} 条记录',
 		restartRequiredHelp: '设置已持久化，但当前进程仍使用保存前的认证 Provider。请在维护窗口重启服务。',
-		restartReasons: { public_base_url: '公共地址或认证回调地址已变化', oidc: 'OIDC Provider 配置已变化', feishu: '飞书/Lark Provider 配置已变化', dingtalk: '钉钉 Provider 配置已变化', github: 'GitHub OAuth 配置已变化', google: 'Google OAuth 配置已变化', feishu_secret: '飞书/Lark Secret 已更新', dingtalk_secret: '钉钉 Secret 已更新', github_secret: 'GitHub OAuth Secret 已更新', google_secret: 'Google OAuth Secret 已更新' },
-    loginTerms: '登录条款', featureFlags: '功能开关', securityAndAuth: '安全与认证', userDefaults: '用户默认值', gatewayServices: '部署形态与网关', emailSettings: '邮件设置', dataBackup: '数据备份', enableLoginTerms: '启用登录协议', loginTermsHelp: '要求用户在认证前接受配置的服务条款。', termsTitle: '文档标题', termsContent: '条款内容', registrationEnabled: '开放注册', registrationHelp: '允许新用户创建账户。', emailVerifyEnabled: '邮箱验证', emailVerifyHelp: '要求新用户验证邮箱地址。', invitationRequired: '邀请码注册', invitationHelp: '注册时必须填写单次使用的邀请码。', totpEnabled: '双因素认证', totpHelp: '允许用户使用 TOTP 保护账户。', defaultBalance: '默认余额（微美元）', defaultConcurrency: '默认并发数', defaultRpm: '默认 RPM', smtpFrom: '发件人地址',
+		restartReasons: { public_base_url: '公共地址或认证回调地址已变化', oidc: 'OIDC Provider 配置已变化', feishu: '飞书/Lark Provider 配置已变化', dingtalk: '钉钉 Provider 配置已变化', github: 'GitHub OAuth 配置已变化', google: 'Google OAuth 配置已变化', trusted_proxy_headers: '可信代理请求头配置已变化', feishu_secret: '飞书/Lark Secret 已更新', dingtalk_secret: '钉钉 Secret 已更新', github_secret: 'GitHub OAuth Secret 已更新', google_secret: 'Google OAuth Secret 已更新' },
+		loginTerms: '登录条款', featureFlags: '功能开关', securityAndAuth: '安全与认证', userDefaults: '用户默认值', gatewayServices: '部署形态与网关', emailSettings: '邮件设置', dataBackup: '数据备份', enableLoginTerms: '启用登录协议', loginTermsHelp: '要求用户在认证前接受配置的服务条款。', termsTitle: '文档标题', termsContent: '条款内容', registrationEnabled: '开放注册', registrationHelp: '允许新用户创建账户。', emailVerifyEnabled: '邮箱验证', emailVerifyHelp: '要求新用户验证邮箱地址。', passwordResetEnabled: '密码找回', passwordResetHelp: '允许本地账户通过邮件申请重置密码。', invitationRequired: '邀请码注册', invitationHelp: '注册时必须填写单次使用的邀请码。', totpEnabled: '双因素认证', totpHelp: '允许用户使用 TOTP 保护账户。', registrationPolicy: '注册策略', allowedEmailDomains: '允许的邮箱域名', allowedEmailDomainsHelp: '每行一个域名。留空允许所有有效域名；通配项同时匹配子域名。', invitationCodes: '邀请码', invitationCodesHelp: '每行一个单次使用邀请码，消费后会原子移除。', loginProtection: '登录防护', turnstileHelp: '密码登录和公开邮件流程必须提交真人验证 token。', trustedProxyHeaders: '信任代理客户端 IP 请求头', trustedProxyHeadersHelp: '仅在已知反向代理之后启用，修改后需重启。', trustedProxyCIDRs: '可信代理 CIDR', defaultBalance: '默认余额（微美元）', defaultConcurrency: '默认并发数', defaultRpm: '默认 RPM', smtpFrom: '发件人地址', smtpFromName: '发件人名称', smtpImplicitTLS: '隐式 TLS', smtpImplicitTLSHelp: '适用于 465 等 SMTPS 端口；587 端口会在服务端支持时使用 STARTTLS。', smtpTestRecipient: '测试收件邮箱', smtpSendTest: '发送测试邮件',
     general: '基础信息',
     deployment: '部署',
     identity: '身份认证',
@@ -1744,6 +1813,9 @@ export default {
     passwordNotConfigured: '尚未设置本地密码，请至少保留一种可用登录方式。',
     changePassword: '修改密码', setPassword: '设置本地密码',
     passwordHelp: '更新当前账户的邮箱登录密码。外部身份账户由身份提供方管理凭据。',
+    passwordSetupByEmail: '通过邮箱验证',
+    passwordSetupByEmailHelp: '创建首个本地密码前，必须通过邮件链接验证邮箱所有权。',
+    sendPasswordSetupEmail: '发送设置邮件',
     currentPassword: '当前密码',
     newPassword: '新密码',
     confirmPassword: '确认新密码',
@@ -1834,8 +1906,8 @@ export default {
     importTarget: 'CC Switch 导入目标',
     importActionHelp: '点击上方按钮，即可把当前 Key 一键导入到 CC Switch；无法唤起时可复制导入链接。',
     importHelp: '当前网关可直接导入使用 OpenAI-compatible Chat Completions 的 OpenCode。',
-    protocolWarning: 'Codex 新版要求 Responses API；Claude Code、Gemini CLI 等使用其他协议。当前网关未开放这些协议，因此不会生成不可用配置。',
-    protocolSupported: 'Chat Completions 可用',
+    protocolWarning: '网关已开放 Chat Completions、Responses、Anthropic Messages 和 Gemini 兼容入口；实际可用模型由当前 Key 与路由决定。',
+    protocolSupported: '主要文本协议已开放',
     protocolResponsesRequired: '需要 Responses API',
     protocolAnthropicRequired: '需要 Anthropic API',
     protocolGeminiRequired: '需要 Gemini API',
@@ -1888,9 +1960,9 @@ export default {
     generateHelp: '选择目标工具，生成对应配置文件、调用脚本或 SDK 示例。',
     configTarget: '配置文件目标工具',
     environmentVariable: '环境变量',
-    responsesRequired: '此配置需要网关提供 Responses API；当前仅生成配置文件，调用前请确认后端协议已开放。',
-    anthropicRequired: '此配置需要网关提供 Anthropic Messages API；当前仅生成配置文件，调用前请确认后端协议已开放。',
-    geminiRequired: '此配置需要网关提供 Gemini API 兼容入口；当前仅生成环境文件，调用前请确认后端协议已开放。',
+    responsesRequired: '此配置使用已开放的 Responses API；实际可用模型由当前 Key 与路由决定。',
+    anthropicRequired: '此配置使用已开放的 Anthropic Messages 与精确 Token 计数入口；实际可用模型由当前 Key 与路由决定。',
+    geminiRequired: '此配置使用已开放的 Gemini API 兼容入口；实际可用模型由当前 Key 与路由决定。',
     generateGate: '请先选择模型并输入完整 API Key。'
   },
   portalKeys: {

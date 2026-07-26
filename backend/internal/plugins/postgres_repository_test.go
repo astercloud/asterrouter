@@ -2,6 +2,7 @@ package plugins
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,4 +42,81 @@ func TestPostgresRepositoryPersistsPluginAcrossRestart(t *testing.T) {
 	if !ok || found.PluginID != plugin.PluginID || len(found.Surfaces) != 2 || found.Status != StatusEnabled {
 		t.Fatalf("persisted plugin ok=%t plugin=%#v", ok, found)
 	}
+}
+
+func TestPostgresRepositorySeedsBuiltinCatalogConcurrently(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	ctx := context.Background()
+	first, err := NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	barrier := newSeedListBarrier(2)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wait sync.WaitGroup
+	for _, repository := range []Repository{first, second} {
+		service := NewService(&seedBarrierRepository{Repository: repository, barrier: barrier})
+		wait.Add(1)
+		go func(service *Service) {
+			defer wait.Done()
+			<-start
+			errs <- service.EnsureSeedData(ctx)
+		}(service)
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("EnsureSeedData() concurrent: %v", err)
+		}
+	}
+	plugins, err := first.ListPlugins(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plugins) != len(builtinPlugins(time.Now().UTC())) {
+		t.Fatalf("seeded plugins=%d", len(plugins))
+	}
+}
+
+type seedListBarrier struct {
+	mu        sync.Mutex
+	remaining int
+	release   chan struct{}
+}
+
+func newSeedListBarrier(participants int) *seedListBarrier {
+	return &seedListBarrier{remaining: participants, release: make(chan struct{})}
+}
+
+func (b *seedListBarrier) wait() {
+	b.mu.Lock()
+	b.remaining--
+	if b.remaining == 0 {
+		close(b.release)
+	}
+	b.mu.Unlock()
+	<-b.release
+}
+
+type seedBarrierRepository struct {
+	Repository
+	barrier *seedListBarrier
+}
+
+func (r *seedBarrierRepository) ListPlugins(ctx context.Context) ([]Plugin, error) {
+	plugins, err := r.Repository.ListPlugins(ctx)
+	if err == nil {
+		r.barrier.wait()
+	}
+	return plugins, err
 }

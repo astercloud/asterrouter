@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"sync"
 
+	"github.com/astercloud/asterrouter/backend/internal/postgresutil"
 	_ "github.com/lib/pq"
 )
 
@@ -189,8 +190,10 @@ func (r *PostgresRepository) Health(ctx context.Context) error { return r.db.Pin
 func (r *PostgresRepository) Close() error                     { return r.db.Close() }
 
 func (r *PostgresRepository) migrate(ctx context.Context) error {
-	_, err := r.db.ExecContext(ctx, operatorSchema)
-	return err
+	return postgresutil.WithSchemaMigrationLock(ctx, r.db, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, operatorSchema)
+		return err
+	})
 }
 
 const operatorSchema = `

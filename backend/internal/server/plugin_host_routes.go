@@ -15,6 +15,26 @@ import (
 )
 
 func registerPluginHostRoutes(group *gin.RouterGroup, svc *plugins.Service, control *controlplane.Service) {
+	group.GET("/:plugin_id/config", func(c *gin.Context) {
+		if !requestFromLoopback(c.Request) {
+			httpx.Error(c, http.StatusForbidden, 1790, "plugin host API is only available on loopback")
+			return
+		}
+		if svc == nil {
+			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
+			return
+		}
+		config, err := svc.SidecarConfig(c.Request.Context(), c.Param("plugin_id"), bearerToken(c))
+		if err != nil {
+			writePluginHostError(c, err)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Header("Pragma", "no-cache")
+		c.Header("X-Content-Type-Options", "nosniff")
+		httpx.OK(c, config)
+	})
+
 	group.GET("/:plugin_id/feeds/:service_key", func(c *gin.Context) {
 		if !requestFromLoopback(c.Request) {
 			httpx.Error(c, http.StatusForbidden, 1790, "plugin host API is only available on loopback")

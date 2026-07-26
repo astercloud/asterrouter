@@ -16,15 +16,13 @@ type gatewayRateSample struct {
 }
 
 type gatewayScheduler struct {
-	mu             sync.Mutex
-	rateSamples    map[string][]gatewayRateSample
-	halfOpenProbes map[string]bool
+	mu          sync.Mutex
+	rateSamples map[string][]gatewayRateSample
 }
 
 func newGatewayScheduler() *gatewayScheduler {
 	return &gatewayScheduler{
-		rateSamples:    map[string][]gatewayRateSample{},
-		halfOpenProbes: map[string]bool{},
+		rateSamples: map[string][]gatewayRateSample{},
 	}
 }
 

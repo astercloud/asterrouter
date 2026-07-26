@@ -45,11 +45,12 @@ func TestManagerLoadsCanonicalEnvironment(t *testing.T) {
 	t.Setenv("ASTERROUTER_SERVER_HTTP_LISTEN", "127.0.0.1:18081")
 	t.Setenv("ASTERROUTER_SERVER_JOBS_QUEUE_LIMITS_PROFILE", "12")
 	t.Setenv("ASTERROUTER_SERVER_ARTIFACTS_S3_PATH_STYLE", "true")
+	t.Setenv("ASTERROUTER_SERVER_OBSERVABILITY_METRICS_TOKEN", "metrics-secret")
 	loaded, err := Manager.Load(t.Context(), cfgm.Env("ASTERROUTER_"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Server.HTTP.Listen != "127.0.0.1:18081" || loaded.Server.Jobs.Queue.Limits.Profile != 12 || !loaded.Server.Artifacts.S3.PathStyle {
+	if loaded.Server.HTTP.Listen != "127.0.0.1:18081" || loaded.Server.Jobs.Queue.Limits.Profile != 12 || !loaded.Server.Artifacts.S3.PathStyle || loaded.Server.Observability.MetricsToken != "metrics-secret" {
 		t.Fatalf("unexpected environment config: %#v", loaded.Server)
 	}
 }
@@ -71,6 +72,7 @@ func TestValidateNormalizesDerivedValues(t *testing.T) {
 	cfg.HTTP.Listen = " 0.0.0.0:18090 "
 	cfg.Plugins.CacheDir = " /var/lib/asterrouter/plugins/cache "
 	cfg.Plugins.ActiveDir = ""
+	cfg.Plugins.DataDir = ""
 	cfg.Plugins.HostURL = ""
 	validated, err := Validate(cfg, "source")
 	if err != nil {
@@ -78,6 +80,9 @@ func TestValidateNormalizesDerivedValues(t *testing.T) {
 	}
 	if validated.Plugins.ActiveDir != "/var/lib/asterrouter/plugins/plugin-active" {
 		t.Fatalf("active dir = %q", validated.Plugins.ActiveDir)
+	}
+	if validated.Plugins.DataDir != "/var/lib/asterrouter/plugins/plugin-data" {
+		t.Fatalf("data dir = %q", validated.Plugins.DataDir)
 	}
 	if validated.Plugins.HostURL != "http://127.0.0.1:18090/api/v1/plugin-host" {
 		t.Fatalf("host URL = %q", validated.Plugins.HostURL)

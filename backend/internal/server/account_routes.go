@@ -36,7 +36,15 @@ type accountSecurityResponse struct {
 	Codes       []string  `json:"codes,omitempty"`
 }
 
-func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
+type totpSetupRequest struct {
+	CurrentPassword string `json:"current_password"`
+}
+
+type totpVerificationRequest struct {
+	Code string `json:"code"`
+}
+
+func registerAccountRoutes(api *gin.RouterGroup, opts Options, totpLimiter *authAttemptLimiter) {
 	account := api.Group("/account")
 	account.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
 
@@ -170,81 +178,10 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 		}
 		httpx.OK(c, gin.H{"authorization_url": authorizationURL})
 	})
-	account.POST("/totp/setup", func(c *gin.Context) {
-		public, err := opts.SettingsService.Public(c.Request.Context())
-		if err != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1002, err.Error())
-			return
-		}
-		if !public.TOTPEnabled {
-			httpx.Error(c, http.StatusForbidden, 1333, "TOTP is disabled by the administrator")
-			return
-		}
-		data, err := opts.ControlService.BeginTOTPSetup(c.Request.Context(), actor(c))
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1312, err.Error())
-			return
-		}
-		httpx.OK(c, data)
-	})
-	account.POST("/totp/confirm", func(c *gin.Context) {
-		var req struct {
-			Code string `json:"code"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
-			return
-		}
-		codes, err := opts.ControlService.ConfirmTOTPWithRecoveryCodes(c.Request.Context(), actor(c), req.Code)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1313, err.Error())
-			return
-		}
-		response, err := replacementAccountSession(c, opts)
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
-			return
-		}
-		enabled := true
-		response.Enabled = &enabled
-		response.Codes = codes
-		httpx.OK(c, response)
-	})
-	account.POST("/totp/recovery-codes", func(c *gin.Context) {
-		codes, err := opts.ControlService.GenerateTOTPRecoveryCodes(c.Request.Context(), actor(c))
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1318, err.Error())
-			return
-		}
-		response, err := replacementAccountSession(c, opts)
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
-			return
-		}
-		response.Codes = codes
-		httpx.OK(c, response)
-	})
-	account.DELETE("/totp", func(c *gin.Context) {
-		var req struct {
-			Code string `json:"code"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
-			return
-		}
-		if err := opts.ControlService.DisableTOTP(c.Request.Context(), actor(c), req.Code); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1314, err.Error())
-			return
-		}
-		response, err := replacementAccountSession(c, opts)
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
-			return
-		}
-		enabled := false
-		response.Enabled = &enabled
-		httpx.OK(c, response)
-	})
+	account.POST("/totp/setup", func(c *gin.Context) { beginAccountTOTPSetup(c, opts, totpLimiter) })
+	account.POST("/totp/confirm", func(c *gin.Context) { confirmAccountTOTP(c, opts, totpLimiter) })
+	account.POST("/totp/recovery-codes", func(c *gin.Context) { regenerateAccountTOTPRecoveryCodes(c, opts, totpLimiter) })
+	account.DELETE("/totp", func(c *gin.Context) { disableAccountTOTP(c, opts, totpLimiter) })
 	account.POST("/sessions/revoke-others", func(c *gin.Context) {
 		if err := opts.ControlService.RevokeAccountSessions(c.Request.Context(), actor(c)); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1338, err.Error())
@@ -258,6 +195,115 @@ func registerAccountRoutes(api *gin.RouterGroup, opts Options) {
 		response.Changed = true
 		httpx.OK(c, response)
 	})
+}
+
+func beginAccountTOTPSetup(c *gin.Context, opts Options, limiter *authAttemptLimiter) {
+	public, err := opts.SettingsService.Public(c.Request.Context())
+	if err != nil {
+		httpx.Error(c, http.StatusServiceUnavailable, 1002, "authentication settings are unavailable")
+		return
+	}
+	if !public.TOTPEnabled {
+		httpx.Error(c, http.StatusForbidden, 1333, "TOTP is disabled by the administrator")
+		return
+	}
+	if !allowTOTPManagementRequest(c, limiter) {
+		return
+	}
+	var req totpSetupRequest
+	if err := bindAuthJSON(c, &req); err != nil {
+		httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
+		return
+	}
+	data, err := opts.ControlService.BeginTOTPSetup(c.Request.Context(), actor(c), req.CurrentPassword)
+	if err != nil {
+		httpx.Error(c, http.StatusBadRequest, 1312, err.Error())
+		return
+	}
+	resetTOTPManagementLimiter(c, limiter)
+	httpx.OK(c, data)
+}
+
+func confirmAccountTOTP(c *gin.Context, opts Options, limiter *authAttemptLimiter) {
+	if !allowTOTPManagementRequest(c, limiter) {
+		return
+	}
+	var req totpVerificationRequest
+	if err := bindAuthJSON(c, &req); err != nil {
+		httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
+		return
+	}
+	codes, err := opts.ControlService.ConfirmTOTPWithRecoveryCodes(c.Request.Context(), actor(c), req.Code)
+	if err != nil {
+		httpx.Error(c, http.StatusBadRequest, 1313, err.Error())
+		return
+	}
+	resetTOTPManagementLimiter(c, limiter)
+	response, err := replacementAccountSession(c, opts)
+	if err != nil {
+		httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+		return
+	}
+	enabled := true
+	response.Enabled = &enabled
+	response.Codes = codes
+	httpx.OK(c, response)
+}
+
+func regenerateAccountTOTPRecoveryCodes(c *gin.Context, opts Options, limiter *authAttemptLimiter) {
+	if !allowTOTPManagementRequest(c, limiter) {
+		return
+	}
+	var req totpVerificationRequest
+	if err := bindAuthJSON(c, &req); err != nil {
+		httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
+		return
+	}
+	codes, err := opts.ControlService.GenerateTOTPRecoveryCodes(c.Request.Context(), actor(c), req.Code)
+	if err != nil {
+		httpx.Error(c, http.StatusBadRequest, 1318, "invalid TOTP code")
+		return
+	}
+	resetTOTPManagementLimiter(c, limiter)
+	response, err := replacementAccountSession(c, opts)
+	if err != nil {
+		httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+		return
+	}
+	response.Codes = codes
+	httpx.OK(c, response)
+}
+
+func disableAccountTOTP(c *gin.Context, opts Options, limiter *authAttemptLimiter) {
+	if !allowTOTPManagementRequest(c, limiter) {
+		return
+	}
+	var req totpVerificationRequest
+	if err := bindAuthJSON(c, &req); err != nil {
+		httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
+		return
+	}
+	if err := opts.ControlService.DisableTOTP(c.Request.Context(), actor(c), req.Code); err != nil {
+		httpx.Error(c, http.StatusBadRequest, 1314, err.Error())
+		return
+	}
+	resetTOTPManagementLimiter(c, limiter)
+	response, err := replacementAccountSession(c, opts)
+	if err != nil {
+		httpx.Error(c, http.StatusInternalServerError, 1330, err.Error())
+		return
+	}
+	enabled := false
+	response.Enabled = &enabled
+	httpx.OK(c, response)
+}
+
+func allowTOTPManagementRequest(c *gin.Context, limiter *authAttemptLimiter) bool {
+	return allowAuthRequestForKey(c, limiter, actor(c), "too many TOTP verification attempts")
+}
+
+func resetTOTPManagementLimiter(c *gin.Context, limiter *authAttemptLimiter) {
+	limiter.Reset(actor(c))
 }
 
 func replacementAccountSession(c *gin.Context, opts Options) (accountSecurityResponse, error) {

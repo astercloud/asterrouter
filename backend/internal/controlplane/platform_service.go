@@ -361,7 +361,10 @@ func platformTenantFromRequest(req PlatformTenantRequest, createdAt time.Time) (
 	if !oneOf(status, PlatformTenantStatusActive, PlatformTenantStatusDisabled) {
 		return PlatformTenant{}, errors.New("platform tenant status must be active or disabled")
 	}
-	return PlatformTenant{Name: name, Slug: slug, EntitlementReference: strings.TrimSpace(req.EntitlementReference), Status: status, CreatedAt: createdAt, UpdatedAt: createdAt}, nil
+	if req.ConcurrencyLimit < 0 {
+		return PlatformTenant{}, errors.New("platform tenant concurrency_limit must be non-negative")
+	}
+	return PlatformTenant{Name: name, Slug: slug, EntitlementReference: strings.TrimSpace(req.EntitlementReference), ConcurrencyLimit: req.ConcurrencyLimit, Status: status, CreatedAt: createdAt, UpdatedAt: createdAt}, nil
 }
 
 func gatewayPrincipalFromRequest(req GatewayPrincipalRequest, createdAt time.Time) (GatewayPrincipal, error) {

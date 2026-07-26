@@ -40,9 +40,12 @@ type Service struct {
 }
 
 type mfaChallenge struct {
-	Subject, Role string
-	ExpiresAt     time.Time
+	Subject, Role  string
+	ExpiresAt      time.Time
+	FailedAttempts int
 }
+
+const maxMFAChallengeAttempts = 5
 
 type Principal struct {
 	Subject        string `json:"sub"`
@@ -131,6 +134,44 @@ func (s *Service) ConsumeMFA(token string) (string, string, bool) {
 		return "", "", false
 	}
 	return challenge.Subject, challenge.Role, true
+}
+
+// InspectMFA 返回仍有效的 challenge，但不消费它。调用方应仅在第二因素校验成功后
+// 调用 ConsumeMFA，以便输错一次验证码时仍可重试，同时保持最终签发会话的单次性。
+func (s *Service) InspectMFA(token string) (string, string, bool) {
+	s.mfaMu.Lock()
+	defer s.mfaMu.Unlock()
+	key := strings.TrimSpace(token)
+	challenge, ok := s.mfaChallenges[key]
+	if !ok {
+		return "", "", false
+	}
+	if time.Now().UTC().After(challenge.ExpiresAt) {
+		delete(s.mfaChallenges, key)
+		return "", "", false
+	}
+	return challenge.Subject, challenge.Role, true
+}
+
+// RecordMFAFailure applies an account-independent attempt cap to a pending
+// challenge. The caller still keeps its IP rate limit; this cap prevents a
+// leaked challenge from being brute-forced through many source addresses.
+func (s *Service) RecordMFAFailure(token string) bool {
+	s.mfaMu.Lock()
+	defer s.mfaMu.Unlock()
+	key := strings.TrimSpace(token)
+	challenge, ok := s.mfaChallenges[key]
+	if !ok || time.Now().UTC().After(challenge.ExpiresAt) {
+		delete(s.mfaChallenges, key)
+		return true
+	}
+	challenge.FailedAttempts++
+	if challenge.FailedAttempts >= maxMFAChallengeAttempts {
+		delete(s.mfaChallenges, key)
+		return true
+	}
+	s.mfaChallenges[key] = challenge
+	return false
 }
 
 func (s *Service) Login(_ context.Context, username string, password string) (LoginResult, error) {

@@ -2,12 +2,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(tr -d '\r\n' < "${ROOT_DIR}/backend/cmd/asterrouter/VERSION")"
 
 if [ -f "${ROOT_DIR}/.env" ]; then
   set -a
   # shellcheck disable=SC1091
   . "${ROOT_DIR}/.env"
   set +a
+fi
+
+if [ "${ASTER_DEV_ISOLATED_MEMORY:-0}" = "1" ]; then
+  export ASTERROUTER_SERVER_STORAGE_DATABASE_URL=""
+  export ASTERROUTER_SERVER_STORAGE_REDIS_URL=""
+  export ASTERROUTER_SERVER_JOBS_QUEUE_DRIVER="memory"
+  export ASTERROUTER_SERVER_JOBS_ROUTING_AFFINITY_DRIVER="repository"
 fi
 
 KILL_OCCUPIED="${ASTER_DEV_KILL_OCCUPIED:-1}"
@@ -157,7 +165,7 @@ fi
   ASTERROUTER_SERVER_HTTP_LISTEN="${ASTERROUTER_SERVER_HTTP_LISTEN:-${BACKEND_HOST}:${BACKEND_PORT}}" \
     ASTERROUTER_SERVER_HTTP_FRONTEND_DIR="${ASTERROUTER_SERVER_HTTP_FRONTEND_DIR:-../frontend/dist}" \
     ASTERROUTER_SERVER_BOOTSTRAP_DEMO_MODE="${DEMO_MODE}" \
-    go run ./cmd/asterrouter server
+    go run -ldflags "-X github.com/astercloud/asterrouter/backend/internal/buildinfo.Version=${VERSION}" ./cmd/asterrouter server
 ) &
 PIDS+=("$!")
 

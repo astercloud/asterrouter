@@ -56,17 +56,17 @@ AI Platform 是独立部署角色，不是中转 Customer 的一种用法。它�
 
 ## 当前可用
 
-- OpenAI 兼容的 Models、Chat Completions、Responses、Images、Audio、Realtime 与持久化 Job，包括流式响应和 Artifact 交付。
+- OpenAI 兼容的 Models、Chat Completions、Responses、Embeddings、Images、Audio、Realtime 与持久化 Job，以及 Anthropic Count Tokens；协议支持时提供流式响应和 Artifact 交付。
 - 多 Provider 路由、失败切换、账号容量控制、冷却、熔断与粘性路由。
 - API Key 生命周期、模型白名单、限流、Token 配额、预算、用量、成本分摊、告警、Trace、审计和导出。
 - 已安装插件工作台复用宿主管理的路由、凭据、用量证据与 Artifact。
 - 企业身份与访问治理，以及 Personal、Relay Operator、Enterprise、AI Platform 四类后台。
 - Platform Tenant 与 Gateway Principal 管理；绑定 Tenant 的直接 Key；HMAC 与 RS256 JWT/JWKS 委托访问；带重试、死信和人工重放的签名 HTTPS 用量回传。
-- 私有化部署底座：PostgreSQL、备份恢复、诊断与已验证的 Release 更新。
+- 私有化部署底座：PostgreSQL、可选双实例 Compose 拓扑、认证运维指标、备份恢复、诊断与已验证的 Release 更新。
 
 ## 产品将走向哪里
 
-路线图会把同一个 Core 扩展到更完整的报价驱动线路选择、浏览器辅助价格采集、Embeddings 等公开协议、更多媒体适配器、Redis 协调与 Kubernetes 弹性部署。这些都不是当前产品承诺。
+路线图会把同一个 Core 扩展到更完整的报价驱动线路选择、浏览器辅助价格采集、其他公开协议、更多媒体适配器、Redis 协调与 Kubernetes 弹性部署。这些都不是当前产品承诺。
 
 路线图不是 Release 承诺。公开产品边界以本 README 为准；私有化交付规划会随项目交付。
 
@@ -125,6 +125,11 @@ AsterRouter 支持三种交付方式：
 - [构建状态](https://github.com/astercloud/asterrouter/actions)
 - [部署环境变量模板](./deploy/asterrouter.env.example)
 - [Docker 部署指南](./deploy/DOCKER.md)
+- [高可用运行手册](./deploy/HA_RUNBOOK.md)
+- [产品定位](./docs/product-positioning.md)
+- [目标架构](./docs/goal/README.md)
+- [体验重构](./docs/refactor/v1/README.md)
+- [V5 实施路线图](./docs/roadmap/v5/README.md)
 - [English README](./README.md)
 
 <details>

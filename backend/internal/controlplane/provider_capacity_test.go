@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/astercloud/asterrouter/backend/internal/testutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,6 +26,7 @@ func TestProviderCapacityStoreContract(t *testing.T) {
 		open func(*testing.T) providerCapacityTestHarness
 	}{
 		{name: "memory", open: newMemoryProviderCapacityTestHarness},
+		{name: "postgres", open: newPostgresProviderCapacityTestHarness},
 		{name: "redis", open: newRedisProviderCapacityTestHarness},
 	}
 	for _, test := range tests {
@@ -127,6 +130,7 @@ func TestProviderCapacityDoesNotOversellAcrossConcurrentInstances(t *testing.T) 
 			store := NewMemoryProviderCapacityStore()
 			return store, store
 		}},
+		{name: "postgres", open: newPostgresProviderCapacityStores},
 		{name: "redis", open: func(t *testing.T) (ProviderCapacityStore, ProviderCapacityStore) {
 			harness := newRedisProviderCapacityTestHarness(t)
 			first := harness.store.(*RedisProviderCapacityStore)
@@ -139,7 +143,7 @@ func TestProviderCapacityDoesNotOversellAcrossConcurrentInstances(t *testing.T) 
 			first, second := test.open(t)
 			var acquired atomic.Int32
 			var wait sync.WaitGroup
-			for index := 0; index < 20; index++ {
+			for index := 0; index < 64; index++ {
 				wait.Add(1)
 				go func(index int) {
 					defer wait.Done()
@@ -147,7 +151,7 @@ func TestProviderCapacityDoesNotOversellAcrossConcurrentInstances(t *testing.T) 
 					if index%2 == 1 {
 						store = second
 					}
-					request := providerCapacityTestRequest("account-shared", "shared-"+string(rune('a'+index)))
+					request := providerCapacityTestRequest("account-shared", "shared-"+strconv.Itoa(index))
 					request.ConcurrencyLimit = 3
 					if _, _, ok, err := store.Acquire(context.Background(), request); err != nil {
 						t.Errorf("acquire: %v", err)
@@ -162,6 +166,27 @@ func TestProviderCapacityDoesNotOversellAcrossConcurrentInstances(t *testing.T) 
 			}
 		})
 	}
+}
+
+func TestPostgresServicesShareProviderCapacityAndHalfOpenProbe(t *testing.T) {
+	firstStore, secondStore := newPostgresProviderCapacityStores(t)
+	first := NewService(firstStore.(*PostgresRepository), "/v1")
+	second := NewService(secondStore.(*PostgresRepository), "/v1")
+	provider := GatewayProvider{AccountID: "shared-half-open-account", CircuitState: CircuitStateHalfOpen, CircuitProbe: true}
+
+	permit, reason, acquired, err := first.TryAcquireProviderAccountPermitContext(context.Background(), provider, 0, "half-open-first")
+	if err != nil || !acquired || reason != "" {
+		t.Fatalf("first half-open permit acquired=%t reason=%q err=%v", acquired, reason, err)
+	}
+	if _, reason, acquired, err := second.TryAcquireProviderAccountPermitContext(context.Background(), provider, 0, "half-open-second"); err != nil || acquired || reason != "circuit_half_open_busy" {
+		t.Fatalf("second half-open permit acquired=%t reason=%q err=%v", acquired, reason, err)
+	}
+	permit.Release()
+	third, reason, acquired, err := second.TryAcquireProviderAccountPermitContext(context.Background(), provider, 0, "half-open-third")
+	if err != nil || !acquired || reason != "" {
+		t.Fatalf("released half-open permit acquired=%t reason=%q err=%v", acquired, reason, err)
+	}
+	third.Release()
 }
 
 func TestRedisProviderCapacityStoreConfiguration(t *testing.T) {
@@ -212,6 +237,36 @@ func newMemoryProviderCapacityTestHarness(*testing.T) providerCapacityTestHarnes
 	store := NewMemoryProviderCapacityStore()
 	store.now = func() time.Time { return now }
 	return providerCapacityTestHarness{store: store, advance: func(duration time.Duration) { now = now.Add(duration) }}
+}
+
+func newPostgresProviderCapacityTestHarness(t *testing.T) providerCapacityTestHarness {
+	t.Helper()
+	schema := testutil.NewPostgresSchema(t)
+	repo, err := NewPostgresRepository(context.Background(), schema.URL)
+	if err != nil {
+		t.Fatalf("NewPostgresRepository(): %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	return providerCapacityTestHarness{store: repo, advance: func(duration time.Duration) { time.Sleep(duration + 15*time.Millisecond) }}
+}
+
+func newPostgresProviderCapacityStores(t *testing.T) (ProviderCapacityStore, ProviderCapacityStore) {
+	t.Helper()
+	schema := testutil.NewPostgresSchema(t)
+	first, err := NewPostgresRepository(context.Background(), schema.URL)
+	if err != nil {
+		t.Fatalf("open first postgres provider capacity store: %v", err)
+	}
+	second, err := NewPostgresRepository(context.Background(), schema.URL)
+	if err != nil {
+		_ = first.Close()
+		t.Fatalf("open second postgres provider capacity store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = first.Close()
+		_ = second.Close()
+	})
+	return first, second
 }
 
 func newRedisProviderCapacityTestHarness(t *testing.T) providerCapacityTestHarness {

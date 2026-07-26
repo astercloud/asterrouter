@@ -76,7 +76,7 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 	}
 	rt.settingsService = settings.NewService(rt.settingsRepo, settings.ServiceOptions{
 		Version: buildinfo.Version, EnabledProfiles: profiles, DefaultProfile: defaultProfile,
-		StorageMode: rt.storageMode, DemoMode: cfg.Bootstrap.DemoMode,
+		StorageMode: rt.storageMode, DemoMode: cfg.Bootstrap.DemoMode, SecretKey: cfg.Security.SecretKey,
 	})
 	if err = rt.settingsService.BootstrapProfile(ctx); err != nil {
 		return nil, fmt.Errorf("bootstrap profile: %w", err)
@@ -155,7 +155,7 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 			InstanceID: cfg.Official.Instance.ID, Fingerprint: cfg.Official.Instance.Fingerprint,
 			DisplayName: cfg.Official.Instance.DisplayName,
 		},
-		PackageCacheDir: cfg.Plugins.CacheDir, PluginActiveDir: cfg.Plugins.ActiveDir,
+		PackageCacheDir: cfg.Plugins.CacheDir, PluginActiveDir: cfg.Plugins.ActiveDir, PluginDataDir: cfg.Plugins.DataDir,
 		PluginHostURL: cfg.Plugins.HostURL, CoreVersion: buildinfo.Version, ArtifactSinkRegistry: rt.controlService,
 	})
 	if err = rt.pluginService.EnsureSeedData(ctx); err != nil {
@@ -183,7 +183,8 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 
 	rt.handler = httpserver.New(httpserver.Options{
 		Runtime: httpserver.RuntimeConfig{
-			AdminToken: cfg.Security.Admin.Token, DemoMode: cfg.Bootstrap.DemoMode, FrontendDir: cfg.HTTP.FrontendDir,
+			AdminToken: cfg.Security.Admin.Token, MetricsToken: cfg.Observability.MetricsToken,
+			DemoMode: cfg.Bootstrap.DemoMode, FrontendDir: cfg.HTTP.FrontendDir,
 		},
 		AuthService: authService, OIDCService: oidcService, FeishuService: feishuService,
 		GitHubOAuthService: githubOAuthService, GoogleOAuthService: googleOAuthService, DingTalkService: dingTalkService,

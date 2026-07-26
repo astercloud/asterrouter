@@ -16,9 +16,12 @@ func TestPlatformCredentialRequiresTenantPrincipalAndSnapshotsGatewayEvidence(t 
 	if _, err := svc.CreatePlatformAPIKey(ctx, "operator", APIKeyCreateRequest{Name: "unbound", KeyType: APIKeyTypeService, ModelAllowlist: []string{"model"}}); err == nil {
 		t.Fatal("CreatePlatformAPIKey() accepted a key without tenant/principal")
 	}
-	tenant, err := svc.CreatePlatformTenant(ctx, "operator", PlatformTenantRequest{Name: "Studio One", Slug: "studio-one"})
+	tenant, err := svc.CreatePlatformTenant(ctx, "operator", PlatformTenantRequest{Name: "Studio One", Slug: "studio-one", ConcurrencyLimit: 7})
 	if err != nil {
 		t.Fatalf("CreatePlatformTenant(): %v", err)
+	}
+	if tenant.ConcurrencyLimit != 7 {
+		t.Fatalf("tenant concurrency limit=%d, want 7", tenant.ConcurrencyLimit)
 	}
 	principal, err := svc.CreateGatewayPrincipal(ctx, "operator", GatewayPrincipalRequest{TenantID: tenant.ID, Name: "Production backend", PrincipalType: GatewayPrincipalTypeService})
 	if err != nil {
@@ -84,6 +87,13 @@ func TestPlatformCredentialRequiresTenantPrincipalAndSnapshotsGatewayEvidence(t 
 	}
 	if _, err := svc.AuthenticateGatewayKey(ctx, created.Key); !errors.Is(err, ErrGatewayUnauthorized) {
 		t.Fatalf("AuthenticateGatewayKey(disabled principal) error=%v, want ErrGatewayUnauthorized", err)
+	}
+}
+
+func TestPlatformTenantRejectsNegativeConcurrencyLimit(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1")
+	if _, err := svc.CreatePlatformTenant(context.Background(), "operator", PlatformTenantRequest{Name: "Invalid", Slug: "invalid", ConcurrencyLimit: -1}); err == nil {
+		t.Fatal("CreatePlatformTenant() accepted a negative concurrency limit")
 	}
 }
 

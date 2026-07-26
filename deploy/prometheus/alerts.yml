@@ -1,0 +1,95 @@
+groups:
+  - name: asterrouter-availability
+    rules:
+      - alert: AsterRouterInstanceNotReady
+        expr: asterrouter_readiness_status == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: AsterRouter instance is not ready
+          description: The last readiness check failed for more than two minutes. Stop routing new requests to this instance and inspect its dependency logs.
+          runbook: deploy/HA_RUNBOOK.md#数据库不可用
+
+      - alert: AsterRouterReadinessFlapping
+        expr: increase(asterrouter_readiness_checks_total{result="unavailable"}[5m]) > 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: AsterRouter readiness is repeatedly failing
+          description: Readiness failed more than three times in five minutes. Check PostgreSQL connectivity and instance resource pressure.
+          runbook: deploy/HA_RUNBOOK.md#数据库不可用
+
+      - alert: AsterRouterHTTP5xxRateHigh
+        expr: |
+          sum by (instance) (rate(asterrouter_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum by (instance) (rate(asterrouter_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: AsterRouter HTTP 5xx ratio is high
+          description: More than five percent of completed HTTP requests returned 5xx for ten minutes. Inspect affected routes and correlate Request IDs with Trace and Usage.
+          runbook: deploy/HA_RUNBOOK.md#单实例故障
+
+  - name: asterrouter-capacity
+    rules:
+      - alert: AsterRouterCapacityAdmissionErrors
+        expr: sum by (instance, scope) (increase(asterrouter_capacity_admissions_total{result="error"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: AsterRouter capacity admission store is failing
+          description: Capacity admission for {{ $labels.scope }} reported an internal error. Stop risky routing changes and verify the shared capacity store.
+          runbook: deploy/HA_RUNBOOK.md#容量告警演练
+
+      - alert: AsterRouterCapacityRejectionsSustained
+        expr: sum by (instance, scope) (rate(asterrouter_capacity_admissions_total{result="rejected"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: AsterRouter {{ $labels.scope }} capacity rejections are sustained
+          description: Capacity rejections exceeded 0.1 requests per second for five minutes. Compare demand, configured limits, and healthy fallback capacity before expanding supply.
+          runbook: deploy/HA_RUNBOOK.md#容量告警演练
+
+      - alert: AsterRouterProviderCapacitySaturated
+        expr: |
+          (
+            asterrouter_provider_capacity_current
+            /
+            clamp_min(asterrouter_provider_capacity_limit, 1)
+          ) >= 0.9
+          and
+          asterrouter_provider_capacity_limit > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: AsterRouter provider capacity is near its configured limit
+          description: Provider account {{ $labels.provider_account }} has used at least 90 percent of its {{ $labels.dimension }} limit for five minutes.
+          runbook: deploy/HA_RUNBOOK.md#容量告警演练
+
+      - alert: AsterRouterProviderCircuitOpen
+        expr: asterrouter_provider_account_circuit_open == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: AsterRouter provider account circuit remains open
+          description: Provider account {{ $labels.provider_account }} has remained open-circuit for five minutes. Inspect classified failures and healthy fallback routes.
+          runbook: deploy/HA_RUNBOOK.md#容量告警演练
+
+      - alert: AsterRouterProviderCapacitySnapshotUnavailable
+        expr: asterrouter_provider_capacity_snapshot_status == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: AsterRouter provider capacity metrics are unavailable
+          description: The instance could not read authoritative provider capacity state for two minutes. Treat capacity dashboards as stale and inspect shared store health.
+          runbook: deploy/HA_RUNBOOK.md#容量告警演练

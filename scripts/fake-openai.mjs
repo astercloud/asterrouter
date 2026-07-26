@@ -68,6 +68,26 @@ const server = createServer(async (request, response) => {
       })
       return
     }
+		if (request.method === 'POST' && request.url === '/v1/responses') {
+			const payload = await readJSON(request)
+			if (mode === '429') {
+				json(response, 429, { error: { type: 'rate_limit_error', message: 'synthetic rate limit' } })
+				return
+			}
+			if (mode === '500') {
+				json(response, 500, { error: { type: 'upstream_error', message: 'synthetic upstream failure' } })
+				return
+			}
+			json(response, 200, {
+				id: 'e2e-response',
+				object: 'response',
+				status: 'completed',
+				model: payload.model || 'upstream-model',
+				output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'e2e-ok' }] }],
+				usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 }
+			})
+			return
+		}
     json(response, 404, { error: { type: 'not_found', message: 'not found' } })
   } catch (error) {
     json(response, 400, { error: { type: 'invalid_request', message: error instanceof Error ? error.message : 'invalid request' } })

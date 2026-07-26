@@ -44,30 +44,38 @@ const (
 )
 
 type WorkspaceUser struct {
-	ID                     string     `json:"id"`
-	Email                  string     `json:"email"`
-	DisplayName            string     `json:"display_name"`
-	AvatarDataURL          string     `json:"avatar_data_url,omitempty"`
-	Status                 string     `json:"status"`
-	Role                   string     `json:"role"`
-	BalanceMicros          int64      `json:"balance_micros"`
-	ConcurrencyLimit       int        `json:"concurrency_limit"`
-	RPMLimit               int        `json:"rpm_limit"`
-	ExternalIssuer         string     `json:"external_issuer,omitempty"`
-	ExternalSubject        string     `json:"external_subject,omitempty"`
-	DepartmentID           string     `json:"department_id,omitempty"`
-	TOTPEnabled            bool       `json:"totp_enabled"`
-	TOTPSecretCiphertext   string     `json:"-"`
-	TOTPRecoveryHashes     []string   `json:"-"`
-	PasswordHash           string     `json:"-"`
-	EmailVerified          bool       `json:"email_verified"`
-	EmailVerifyHash        string     `json:"-"`
-	EmailVerifyExpiresAt   *time.Time `json:"-"`
+	ID string `json:"id"`
+	// Email 是账号邮箱原值，用于展示、登录与邮件投递。
+	Email string `json:"email"`
+	// EmailNormalized 是 Email 的“收件箱标识”（见 NormalizeEmailForAliasDedup），
+	// 仅用于注册查重，防止同一收件箱借 +别名 / Gmail 点号派生多个账号。
+	EmailNormalized      string     `json:"-"`
+	DisplayName          string     `json:"display_name"`
+	AvatarDataURL        string     `json:"avatar_data_url,omitempty"`
+	Status               string     `json:"status"`
+	Role                 string     `json:"role"`
+	BalanceMicros        int64      `json:"balance_micros"`
+	ConcurrencyLimit     int        `json:"concurrency_limit"`
+	RPMLimit             int        `json:"rpm_limit"`
+	ExternalIssuer       string     `json:"external_issuer,omitempty"`
+	ExternalSubject      string     `json:"external_subject,omitempty"`
+	DepartmentID         string     `json:"department_id,omitempty"`
+	TOTPEnabled          bool       `json:"totp_enabled"`
+	TOTPSecretCiphertext string     `json:"-"`
+	TOTPRecoveryHashes   []string   `json:"-"`
+	PasswordHash         string     `json:"-"`
+	EmailVerified        bool       `json:"email_verified"`
+	EmailVerifyHash      string     `json:"-"`
+	EmailVerifyExpiresAt *time.Time `json:"-"`
+	// EmailVerifySentAt 记录上一次发送验证邮件的时间，用于重发冷却。
+	EmailVerifySentAt      *time.Time `json:"-"`
 	PasswordResetHash      string     `json:"-"`
 	PasswordResetExpiresAt *time.Time `json:"-"`
-	SessionVersion         int64      `json:"-"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
+	// PasswordResetSentAt 记录上一次签发密码重置邮件的时间，用于跨实例冷却。
+	PasswordResetSentAt *time.Time `json:"-"`
+	SessionVersion      int64      `json:"-"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 type AuthIdentity struct {

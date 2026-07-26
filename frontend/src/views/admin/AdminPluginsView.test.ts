@@ -179,6 +179,7 @@ describe('AdminPluginsView workbench', () => {
       vendor: 'AsterCloud',
       surfaces: ['personal', 'enterprise'],
       status: 'enabled',
+      frontend_available: true,
       packages: [{
         plugin_id: 'com.asterrouter.videogen.workbench',
         package_id: 'pkg-video',
@@ -208,6 +209,46 @@ describe('AdminPluginsView workbench', () => {
     expect(videoNavigationItem).toBeDefined()
     expect(videoNavigationItem?.find('button.button').exists()).toBe(true)
 
+    wrapper.unmount()
+  })
+
+  it('opens any installed plugin that exposes a frontend contribution', async () => {
+    const monitorPrice = {
+      ...catalogPlugin,
+      id: 'com.asterrouter.monitorprice.workbench',
+      plugin_id: 'com.asterrouter.monitorprice.workbench',
+      name: 'MonitorPrice',
+      category: 'finops',
+      type: 'remote',
+      status: 'enabled',
+      frontend_available: true,
+      packages: [{
+        plugin_id: 'com.asterrouter.monitorprice.workbench',
+        package_id: 'pkg-monitorprice',
+        version: '0.1.0',
+        channel: 'stable',
+        os: 'darwin',
+        arch: 'arm64',
+        sha256: 'sha256:monitorprice',
+        size_bytes: 1,
+        required_entitlement: false,
+        revoked: false,
+        revoked_by_advisory: false,
+        compatible: true,
+        install_status: 'installed'
+      }]
+    }
+    vi.mocked(plugins.getPluginCatalog).mockResolvedValue({
+      summary: { total: 2, enabled: 2, free: 2, paid_locked: 0, configurable: 1 },
+      plugins: [{ ...catalogPlugin, status: 'enabled' }, monitorPrice]
+    })
+
+    const wrapper = mount(AdminPluginsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const item = wrapper.findAll('.plugin-launcher-item').find((entry) => entry.text().includes('MonitorPrice'))
+    expect(item).toBeDefined()
+    expect(item?.find('button.button').exists()).toBe(true)
     wrapper.unmount()
   })
 })

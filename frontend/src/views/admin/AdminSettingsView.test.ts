@@ -50,7 +50,27 @@ const loadedSettings = {
   email_templates: [],
   runtime_restart_required: false,
   runtime_restart_reasons: [],
-  auth_source_defaults: {}
+  auth_source_defaults: {},
+  registration_enabled: true,
+  email_verify_enabled: true,
+  password_reset_enabled: true,
+  invitation_required: true,
+  allowed_email_domains: ['example.com'],
+  invitation_codes: ['INVITE-ONE'],
+  turnstile_enabled: true,
+  turnstile_site_key: 'site-key',
+  turnstile_secret_key: '',
+  turnstile_configured: true,
+  trusted_proxy_headers: true,
+  trusted_proxy_cidrs: ['10.0.0.0/8'],
+  smtp_host: 'smtp.example.com',
+  smtp_port: 465,
+  smtp_username: 'mailer',
+  smtp_password: '',
+  smtp_from: 'noreply@example.com',
+  smtp_from_name: 'AsterRouter',
+  smtp_use_tls: true,
+  smtp_configured: true
 }
 
 describe('AdminSettingsView', () => {
@@ -96,6 +116,47 @@ describe('AdminSettingsView', () => {
     await saveBar.get('button').trigger('click')
     await flushPromises()
     expect(settings.updateAdminSettings).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+  })
+
+  it('loads and saves registration, verification, proxy, Turnstile, and SMTP settings', async () => {
+    const wrapper = mount(AdminSettingsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const fieldControl = (label: string, control: 'input' | 'textarea') => {
+      const field = wrapper.findAll('.field').find((item) => item.find('label').text() === label)
+      expect(field, `missing settings field: ${label}`).toBeDefined()
+      return field!.get(control).element as HTMLInputElement | HTMLTextAreaElement
+    }
+
+    await wrapper.get('#settings-tab-features').trigger('click')
+    expect(wrapper.text()).toContain('Password recovery')
+    expect(fieldControl('Allowed email domains', 'textarea').value).toBe('example.com')
+    expect(fieldControl('Invitation codes', 'textarea').value).toBe('INVITE-ONE')
+
+    await wrapper.get('#settings-tab-security').trigger('click')
+    expect(fieldControl('Site Key', 'input').value).toBe('site-key')
+    expect(fieldControl('Trusted proxy CIDRs', 'textarea').value).toBe('10.0.0.0/8')
+
+    await wrapper.get('#settings-tab-email').trigger('click')
+    expect(fieldControl('SMTP Host', 'input').value).toBe('smtp.example.com')
+    expect(fieldControl('Sender name', 'input').value).toBe('AsterRouter')
+
+    await wrapper.get('[data-section="settings-save-bar"] button').trigger('click')
+    await flushPromises()
+
+    expect(settings.updateAdminSettings).toHaveBeenCalledWith(expect.objectContaining({
+      password_reset_enabled: true,
+      allowed_email_domains: ['example.com'],
+      invitation_codes: ['INVITE-ONE'],
+      turnstile_enabled: true,
+      turnstile_site_key: 'site-key',
+      trusted_proxy_headers: true,
+      trusted_proxy_cidrs: ['10.0.0.0/8'],
+      smtp_from_name: 'AsterRouter',
+      smtp_use_tls: true
+    }))
 
     wrapper.unmount()
   })

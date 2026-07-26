@@ -30,6 +30,8 @@ const (
 
 	GatewayOperationListModels         = "list_models"
 	GatewayOperationChatCompletion     = "chat_completion"
+	GatewayOperationCountTokens        = "count_tokens"
+	GatewayOperationEmbedding          = "embedding"
 	GatewayOperationImageGeneration    = "image_generation"
 	GatewayOperationVideoGeneration    = "video_generation"
 	GatewayOperationAudioGeneration    = "audio_generation"
@@ -38,11 +40,12 @@ const (
 	GatewayOperationSpeechGeneration   = "speech_generation"
 	GatewayOperationRealtimeSession    = "realtime_session"
 
-	GatewayModalityMetadata = "metadata"
-	GatewayModalityText     = "text"
-	GatewayModalityImage    = "image"
-	GatewayModalityVideo    = "video"
-	GatewayModalityAudio    = "audio"
+	GatewayModalityMetadata  = "metadata"
+	GatewayModalityText      = "text"
+	GatewayModalityEmbedding = "embedding"
+	GatewayModalityImage     = "image"
+	GatewayModalityVideo     = "video"
+	GatewayModalityAudio     = "audio"
 
 	GatewayLanePolicyDirectOnly       = "direct_only"
 	GatewayLanePolicyDurableOnly      = "durable_only"
@@ -424,6 +427,7 @@ type PlatformTenant struct {
 	Name                 string    `json:"name"`
 	Slug                 string    `json:"slug"`
 	EntitlementReference string    `json:"entitlement_reference"`
+	ConcurrencyLimit     int       `json:"concurrency_limit"`
 	Status               string    `json:"status"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
@@ -433,6 +437,7 @@ type PlatformTenantRequest struct {
 	Name                 string `json:"name"`
 	Slug                 string `json:"slug"`
 	EntitlementReference string `json:"entitlement_reference"`
+	ConcurrencyLimit     int    `json:"concurrency_limit"`
 	Status               string `json:"status"`
 }
 
@@ -824,6 +829,11 @@ type GatewayTraceQuery struct {
 	GatewayPrincipalID        string
 	ExternalAuthIntegrationID string
 	Model                     string
+	ProviderID                string
+	AccountID                 string
+	GatewayModelID            string
+	RouteID                   string
+	RouteGroup                string
 	Status                    string
 	CreatedFrom               time.Time
 	CreatedTo                 time.Time

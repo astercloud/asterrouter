@@ -12,7 +12,8 @@ func TestMapRemoteCatalogPluginsUsesManifestSurfaces(t *testing.T) {
 		"plugin":         "imagegen-workbench",
 		"version":        "0.3.2",
 		"manifest": map[string]any{
-			"surfaces": []string{"personal", "enterprise", "personal"},
+			"surfaces":     []string{"personal", "enterprise", "personal"},
+			"configurable": true,
 		},
 	})
 	if err != nil {
@@ -36,6 +37,9 @@ func TestMapRemoteCatalogPluginsUsesManifestSurfaces(t *testing.T) {
 	}
 	if got, want := plugins[0].Surfaces, []string{"personal", "enterprise"}; !equalStringSlices(got, want) {
 		t.Fatalf("surfaces = %#v, want %#v", got, want)
+	}
+	if !plugins[0].Configurable {
+		t.Fatal("manifest configurable flag was not preserved")
 	}
 }
 

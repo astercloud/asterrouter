@@ -18,6 +18,7 @@ require (
 	github.com/gowebpki/jcs v1.0.1
 	github.com/lib/pq v1.12.3
 	github.com/lwmacct/251207-go-pkg-cfgm v0.33.260716
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/urfave/cli/v3 v3.10.1
 	golang.org/x/crypto v0.54.0
@@ -64,7 +65,6 @@ require (
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.60.0 // indirect

@@ -26,6 +26,8 @@ export interface PublicSettings {
 	dingtalk_enabled: boolean
 	registration_enabled: boolean
 	email_verify_enabled: boolean
+	password_reset_enabled: boolean
+	allowed_email_domains: string[]
 	totp_enabled: boolean
 	turnstile_enabled: boolean
 	turnstile_site_key: string
@@ -94,6 +96,7 @@ export interface AccountProfile {
 export interface TOTPSetup {
 	secret: string
 	provisioning_uri: string
+	expires_at: string
 }
 
 export interface AccountSecurityUpdate {
@@ -104,12 +107,20 @@ export interface AccountSecurityUpdate {
 	codes?: string[]
 }
 
-export interface LoginResult {
+export interface LoginSuccessResult {
   access_token: string
   token_type: string
   expires_at: string
   user: AuthUser
 }
+
+export interface MFAChallengeResult {
+	mfa_required: true
+	challenge: string
+	expires_at: string
+}
+
+export type LoginResult = LoginSuccessResult | MFAChallengeResult
 
 export interface AdminSettings extends PublicSettings {
 	runtime_restart_required: boolean
@@ -128,9 +139,9 @@ export interface AdminSettings extends PublicSettings {
 	dingtalk_client_id: string
 	dingtalk_client_secret?: string
 	dingtalk_configured: boolean
-	allowed_email_domains: string[]
 	invitation_codes: string[]
 	trusted_proxy_headers: boolean
+	trusted_proxy_cidrs: string[]
 	turnstile_secret_key?: string
 	turnstile_configured: boolean
 	default_balance_micros: number
@@ -142,6 +153,8 @@ export interface AdminSettings extends PublicSettings {
 	smtp_username: string
 	smtp_password?: string
 	smtp_from: string
+	smtp_from_name: string
+	smtp_use_tls: boolean
 	smtp_configured: boolean
 	email_templates: EmailTemplate[]
 	login_agreement_title: string
@@ -1412,6 +1425,7 @@ export interface PlatformTenant {
   name: string
   slug: string
   entitlement_reference: string
+  concurrency_limit: number
   status: string
   created_at: string
   updated_at: string
@@ -1421,6 +1435,7 @@ export interface PlatformTenantRequest {
   name: string
   slug: string
   entitlement_reference: string
+  concurrency_limit: number
   status: string
 }
 
@@ -1687,6 +1702,7 @@ export interface Plugin {
   surfaces: string[]
   entry_point: string
   configurable: boolean
+  frontend_available?: boolean
   packages?: PluginPackage[]
   created_at: string
   updated_at: string
@@ -2112,6 +2128,183 @@ export interface CostAllocationReport {
   rows: CostAllocationRow[]
 }
 
+export type SupplyDimension = 'provider_account' | 'route_group' | 'published_model' | 'application'
+export type SupplyCapacityStatus = 'available' | 'degraded' | 'saturated' | 'idle' | 'stranded' | 'unknown' | 'no_evidence'
+export type SupplyEvidenceStatus = 'known' | 'unknown' | 'not_applicable' | 'not_comparable'
+
+export interface SupplyWindow {
+  from: string
+  to: string
+  duration_seconds: number
+  trace_count: number
+  usage_record_count: number
+  truncated: boolean
+}
+
+export interface SupplyEvidenceFreshness {
+  trace_as_of?: string
+  usage_as_of?: string
+  health_as_of?: string
+  capacity_as_of: string
+}
+
+export interface SupplyEvidenceFilter {
+  api_key_id?: string
+  gateway_principal_id?: string
+  model?: string
+  provider_account_id?: string
+  route_group?: string
+  gateway_model_id?: string
+}
+
+export interface SupplyEvidenceSummary {
+  trace_count: number
+  usage_record_count: number
+  attempt_count: number
+  sources: string[]
+  filter: SupplyEvidenceFilter
+  complete: boolean
+}
+
+export interface SupplyDemandMetrics {
+  requests: number
+  successful_requests: number
+  rejected_requests: number
+  success_rate: number
+  http_429_requests: number
+  http_5xx_requests: number
+  fallback_requests: number
+  fallback_rate: number
+  no_candidate_requests: number
+  capacity_rejected_requests: number
+  policy_rejected_requests: number
+  account_error_requests: number
+  protocol_incompatible_requests: number
+  unclassified_failure_requests: number
+}
+
+export interface SupplyTokenMetrics {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens?: number
+  reasoning_status: SupplyEvidenceStatus
+  normalization_gaps: number
+}
+
+export interface SupplyCostTotal {
+  currency: string
+  cost_micros: number
+  priced_requests: number
+}
+
+export interface SupplyConcurrencyMetrics {
+  current: number
+  p50: number
+  p95: number
+  p99: number
+  peak: number
+}
+
+export interface SupplyWatermark {
+  status: SupplyEvidenceStatus
+  source: string
+  limit: number
+  current: number
+  peak: number
+  current_ratio: number
+  peak_ratio: number
+}
+
+export interface SupplyWatermarks {
+  rpm: SupplyWatermark
+  tpm: SupplyWatermark
+  concurrency: SupplyWatermark
+}
+
+export interface SupplyPeriodMetrics {
+  peak_minute?: string
+  peak_minute_calls: number
+  idle_hours: number
+  cooldown_seconds: number
+  health_coverage: number
+}
+
+export interface SupplyUtilizationRow {
+  dimension: SupplyDimension
+  id: string
+  name: string
+  provider_id?: string
+  gateway_model_id?: string
+  route_group?: string
+  api_key_id?: string
+  gateway_principal_id?: string
+  capacity_status: SupplyCapacityStatus
+  primary_constraint: 'concurrency' | 'rpm' | 'tpm' | 'health' | 'routing' | 'unknown'
+  unknown_capacity: boolean
+  stranded_capacity: boolean
+  stranded_reasons: string[]
+  demand: SupplyDemandMetrics
+  tokens: SupplyTokenMetrics
+  costs: SupplyCostTotal[]
+  unpriced_requests: number
+  concurrency: SupplyConcurrencyMetrics
+  watermarks: SupplyWatermarks
+  period: SupplyPeriodMetrics
+  evidence: SupplyEvidenceSummary
+}
+
+export interface SupplyUtilizationReport {
+  window: SupplyWindow
+  freshness: SupplyEvidenceFreshness
+  rows: SupplyUtilizationRow[]
+  by_dimension: Record<string, number>
+}
+
+export interface CapacityRecommendationEvidence {
+  sample_count: number
+  peak_watermark: number
+  capacity_rejected_requests: number
+  policy_rejected_requests: number
+  unclassified_failure_requests: number
+  fallback_rate: number
+  success_rate: number
+  health_coverage: number
+  observed_from: string
+  observed_to: string
+}
+
+export interface CapacityRecommendation {
+  id: string
+  status: 'actionable' | 'inconclusive'
+  type: 'increase_capacity' | 'defer_expansion' | 'review_stranded_capacity'
+  target: SupplyEvidenceFilter
+  target_name: string
+  primary_constraint: SupplyUtilizationRow['primary_constraint']
+  confidence: 'high' | 'medium' | 'low'
+  reason_codes: string[]
+  counter_evidence: string[]
+  missing_evidence: string[]
+  affected_applications: string[]
+  affected_models: string[]
+  affected_route_groups: string[]
+  evidence: CapacityRecommendationEvidence
+  rollback: string
+}
+
+export interface CapacityRecommendationReport {
+  mode: 'observe_only'
+  generated_at: string
+  window: SupplyWindow
+  summary: {
+    total: number
+    actionable: number
+    inconclusive: number
+  }
+  items: CapacityRecommendation[]
+}
+
 export interface RecordListQuery {
   limit?: number
   offset?: number
@@ -2121,6 +2314,10 @@ export interface RecordListQuery {
   model?: string
   provider_id?: string
   provider_account_id?: string
+  gateway_principal_id?: string
+  gateway_model_id?: string
+  route_id?: string
+  route_group?: string
   type?: string
   severity?: string
   status?: string
@@ -2391,4 +2588,161 @@ export interface ExportJob {
   created_at: string
   updated_at: string
   expires_at: string
+}
+
+export type OnboardingClient = 'codex' | 'claude_code' | 'openai_sdk' | 'anthropic_sdk'
+export type OnboardingStatus = 'in_progress' | 'failed' | 'completed'
+export type OnboardingStep = 'started' | 'model_source' | 'published_model' | 'api_key' | 'verification'
+export type CompatibilityReleaseLine = 'current' | 'previous'
+export type CompatibilityEvidenceLevel = 'sdk_runtime' | 'protocol_mock' | 'pending'
+export type CompatibilityResult = 'passed' | 'failed' | 'pending'
+export type CompatibilityVerificationStatus = 'verified' | 'pending_confirmation'
+
+export interface CompatibilityRecord {
+  id: string
+  client: OnboardingClient
+  language: 'cli' | 'javascript' | 'python'
+  version: string
+  release_line: CompatibilityReleaseLine
+  router_version: string
+  protocol_version: string
+  suite: string
+  result: CompatibilityResult
+  verification_status: CompatibilityVerificationStatus
+  capabilities: string[]
+  known_limitations: string[]
+  evidence_level: CompatibilityEvidenceLevel
+  evidence_reference: string
+  version_source: string
+  tested_at?: string
+  expires_at?: string
+}
+
+export interface CompatibilityManifest {
+  schema_version: 'asterrouter.compatibility.v1'
+  revision: string
+  router_version: string
+  generated_at: string
+  support_window_days: number
+  records: CompatibilityRecord[]
+}
+
+export interface OnboardingSession {
+  id: string
+  actor: string
+  status: OnboardingStatus
+  current_step: OnboardingStep
+  provider_id?: string
+  provider_account_id?: string
+  provider_health_check_id?: string
+  gateway_model_id?: string
+  model_route_id?: string
+  api_key_id?: string
+  verification_client?: OnboardingClient
+  verification_model?: string
+  verification_operation_id?: string
+  verification_trace_id?: string
+  verification_http_status?: number
+  verification_error_code?: string
+  verification_recovery_action?: string
+  failure_stage?: OnboardingStep
+  failure_code?: string
+  recovery_hint?: string
+  version: number
+  created_at: string
+  updated_at: string
+  expires_at: string
+  completed_steps: OnboardingStep[]
+  pending_steps: OnboardingStep[]
+}
+
+export interface OnboardingModelSourceRequest {
+  provider_name: string
+  provider_type: 'openai_compatible' | 'anthropic_compatible' | 'gemini_compatible'
+  base_url: string
+  account_name: string
+  auth_type: 'api_key' | 'bearer'
+  secret: string
+  adapter_config: Record<string, string>
+  upstream_model: string
+  concurrency: number
+  rpm_limit: number
+  tpm_limit: number
+}
+
+export interface OnboardingModelSourceResult {
+  session: OnboardingSession
+  provider: ProviderConnection
+  account: ProviderAccount
+  health: ProviderAccountHealthCheck
+}
+
+export interface OnboardingPublishedModelRequest {
+  model_id: string
+  name: string
+  description: string
+  modality: 'chat'
+  route_group: string
+  upstream_model: string
+  upstream_format: string
+}
+
+export interface OnboardingPublishedModelResult {
+  session: OnboardingSession
+  published_model: GatewayModel
+  route: ModelRoute
+}
+
+export interface OnboardingAPIKeyRequest {
+  name: string
+  qps_limit: number
+  rpm_limit: number
+  tpm_limit: number
+  concurrency_limit: number
+  monthly_token_limit: number
+  monthly_budget_micros: number
+}
+
+export interface OnboardingAPIKeyResult {
+  session: OnboardingSession
+  api_key: APIKeyRecord
+  credential: string
+}
+
+export interface APIKeyClientConfig {
+  api_key_id: string
+  client: OnboardingClient
+  model: string
+  gateway_url: string
+  credential_env: string
+  format: string
+  file_path?: string
+  content: string
+  environment: Record<string, string>
+  verification_path: string
+  recovery_instructions: string[]
+  contains_secret: boolean
+}
+
+export interface ClientVerificationRequest {
+  client: OnboardingClient
+  model: string
+  credential: string
+}
+
+export interface ClientVerificationResult {
+  status: 'success' | 'failed'
+  client: OnboardingClient
+  api_key_id: string
+  model: string
+  http_status: number
+  operation_id?: string
+  trace_id?: string
+  error_code?: string
+  recovery_action?: string
+}
+
+export interface OnboardingVerificationResult {
+  session: OnboardingSession
+  verification: ClientVerificationResult
 }

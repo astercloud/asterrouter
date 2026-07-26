@@ -197,6 +197,7 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 			RPMLimit:                 auth.APIKey.RPMLimit,
 			TPMLimit:                 auth.APIKey.TPMLimit,
 			ConcurrencyLimit:         auth.APIKey.ConcurrencyLimit,
+			TenantConcurrencyLimit:   platformTenantConcurrencyLimit(auth.PlatformTenant),
 			MonthlyTokenLimit:        auth.effectiveMonthlyTokenLimit(),
 			MonthlyBudgetMicros:      auth.effectiveMonthlyBudgetMicros(),
 			MonthlyImageLimit:        auth.APIKey.MonthlyImageLimit,
@@ -209,12 +210,21 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 	}
 }
 
+func platformTenantConcurrencyLimit(tenant *PlatformTenant) int {
+	if tenant == nil || tenant.ConcurrencyLimit <= 0 {
+		return 0
+	}
+	return tenant.ConcurrencyLimit
+}
+
 func gatewayModelSupportsCanonicalRequest(model GatewayModel, request gatewaycore.CanonicalRequest) bool {
 	switch request.Protocol {
 	case gatewaycore.ProtocolOpenAIChat:
 		return model.Modality == "chat" || model.Modality == "multimodal"
-	case gatewaycore.ProtocolOpenAIResponses, gatewaycore.ProtocolAnthropicMessages, gatewaycore.ProtocolGeminiGenerate:
+	case gatewaycore.ProtocolOpenAIResponses, gatewaycore.ProtocolAnthropicMessages, gatewaycore.ProtocolAnthropicCountTokens, gatewaycore.ProtocolGeminiGenerate:
 		return model.Modality == "chat" || model.Modality == "multimodal"
+	case gatewaycore.ProtocolOpenAIEmbeddings:
+		return model.Modality == GatewayModalityEmbedding
 	case gatewaycore.ProtocolOpenAIImages:
 		return model.Modality == GatewayModalityImage || model.Modality == "multimodal"
 	case gatewaycore.ProtocolOpenAIMedia:

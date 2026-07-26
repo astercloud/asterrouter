@@ -47,3 +47,25 @@ func TestDemoLoginIssuesDemoPrincipal(t *testing.T) {
 		t.Fatalf("principal = %+v", principal)
 	}
 }
+
+func TestMFAChallengeIsInvalidatedAfterFiveFailures(t *testing.T) {
+	svc := NewService(Config{Username: "admin", Password: "secret", SecretKey: "test-secret"})
+	challenge, _, err := svc.BeginMFA("user-1", "developer")
+	if err != nil {
+		t.Fatalf("BeginMFA(): %v", err)
+	}
+	for attempt := 1; attempt < maxMFAChallengeAttempts; attempt++ {
+		if exhausted := svc.RecordMFAFailure(challenge); exhausted {
+			t.Fatalf("challenge exhausted after %d failures", attempt)
+		}
+		if _, _, ok := svc.InspectMFA(challenge); !ok {
+			t.Fatalf("challenge disappeared after %d failures", attempt)
+		}
+	}
+	if exhausted := svc.RecordMFAFailure(challenge); !exhausted {
+		t.Fatal("challenge remained valid after the maximum failure count")
+	}
+	if _, _, ok := svc.InspectMFA(challenge); ok {
+		t.Fatal("exhausted challenge can still be inspected")
+	}
+}

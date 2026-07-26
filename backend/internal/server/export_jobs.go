@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/astercloud/asterrouter/backend/internal/postgresutil"
 	_ "github.com/lib/pq"
 )
 
@@ -219,7 +220,8 @@ func newPostgresCSVExportJobStore(ctx context.Context, databaseURL string) (*pos
 }
 
 func (s *postgresCSVExportJobStore) migrate(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	return postgresutil.WithSchemaMigrationLock(ctx, s.db, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS csv_export_jobs (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -247,7 +249,8 @@ CREATE INDEX IF NOT EXISTS csv_export_jobs_expires_idx
 CREATE INDEX IF NOT EXISTS csv_export_jobs_owner_created_idx
   ON csv_export_jobs(owner, created_at DESC);
 `)
-	return err
+		return err
+	})
 }
 
 func (s *postgresCSVExportJobStore) create(ctx context.Context, owner string, kind string, filename string, parameters map[string]string) (csvExportJob, error) {

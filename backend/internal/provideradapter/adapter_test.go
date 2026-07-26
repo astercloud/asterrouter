@@ -3,6 +3,7 @@ package provideradapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -70,6 +71,56 @@ func TestRegistryBuildsProviderRequests(t *testing.T) {
 			}
 			if test.stream && req.Header.Get("Accept") != "text/event-stream" {
 				t.Fatalf("Accept=%q", req.Header.Get("Accept"))
+			}
+		})
+	}
+}
+
+func TestRegistryBuildAnthropicCountTokensRequest(t *testing.T) {
+	registry := NewRegistry(fakeCredentialResolver{})
+	provider := controlplane.GatewayProvider{
+		Type: controlplane.ProviderTypeAnthropicCompatible, BaseURL: "https://anthropic.example/v1",
+		AuthType: controlplane.ProviderAuthAPIKey, APIKey: "key", UpstreamModel: "claude",
+		UpstreamFormat: controlplane.UpstreamFormatAnthropic,
+	}
+	request, err := registry.BuildCountTokensRequest(context.Background(), provider, []byte(`{"model":"claude","messages":[]}`))
+	if err != nil {
+		t.Fatalf("BuildCountTokensRequest(): %v", err)
+	}
+	if request.URL.Path != "/v1/messages/count_tokens" || request.Header.Get("x-api-key") != "key" || request.Header.Get("anthropic-version") != "2023-06-01" {
+		t.Fatalf("request url=%s headers=%v", request.URL, request.Header)
+	}
+	unsupported := provider
+	unsupported.Type = controlplane.ProviderTypeOpenAICompatible
+	unsupported.UpstreamFormat = controlplane.UpstreamFormatOpenAIChat
+	if _, err := registry.BuildCountTokensRequest(context.Background(), unsupported, nil); !errors.Is(err, ErrUnsupportedProvider) {
+		t.Fatalf("unsupported error=%v", err)
+	}
+}
+
+func TestRegistryBuildsEmbeddingRequests(t *testing.T) {
+	registry := NewRegistry(fakeCredentialResolver{})
+	tests := []struct {
+		name, path, query, header, value string
+		provider                         controlplane.GatewayProvider
+	}{
+		{
+			name: "OpenAI compatible", path: "/v1/embeddings", header: "Authorization", value: "Bearer key",
+			provider: controlplane.GatewayProvider{Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: "https://openai.example/v1", AuthType: controlplane.ProviderAuthAPIKey, APIKey: "key", UpstreamModel: "embedding", UpstreamFormat: controlplane.UpstreamFormatOpenAIEmbeddings},
+		},
+		{
+			name: "Azure API key", path: "/openai/deployments/deployment/embeddings", query: "api-version=2025-04-01-preview", header: "api-key", value: "azure-key",
+			provider: controlplane.GatewayProvider{Type: controlplane.ProviderTypeAzureOpenAI, BaseURL: "https://azure.example", AuthType: controlplane.ProviderAuthAPIKey, APIKey: "azure-key", AdapterConfig: map[string]string{"api_version": "2025-04-01-preview"}, UpstreamModel: "deployment", UpstreamFormat: controlplane.UpstreamFormatOpenAIEmbeddings},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := registry.BuildEmbeddingRequest(context.Background(), test.provider, []byte(`{"model":"embedding","input":["hello"]}`))
+			if err != nil {
+				t.Fatalf("BuildEmbeddingRequest(): %v", err)
+			}
+			if request.URL.Path != test.path || request.URL.RawQuery != test.query || request.Header.Get(test.header) != test.value {
+				t.Fatalf("request url=%s headers=%v", request.URL, request.Header)
 			}
 		})
 	}

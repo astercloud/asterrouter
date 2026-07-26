@@ -32,6 +32,7 @@ func TestGatewayProtocolErrorsUseClientEnvelope(t *testing.T) {
 		{protocol: gatewaycore.ProtocolOpenAIChat, want: `"type":"rate_limit_error"`},
 		{protocol: gatewaycore.ProtocolOpenAIResponses, want: `"type":"rate_limit_error"`},
 		{protocol: gatewaycore.ProtocolAnthropicMessages, want: `"type":"rate_limit_error"`},
+		{protocol: gatewaycore.ProtocolAnthropicCountTokens, want: `"type":"rate_limit_error"`},
 		{protocol: gatewaycore.ProtocolGeminiGenerate, want: `"status":"RESOURCE_EXHAUSTED"`},
 	}
 	for _, test := range tests {

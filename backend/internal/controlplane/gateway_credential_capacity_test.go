@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -58,6 +59,34 @@ func TestCredentialCapacityStoreContract(t *testing.T) {
 			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), blocked); err != nil || !acquired || reason != "" {
 				t.Fatalf("reacquire concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
 			}
+
+			tenantFirst := capacityRequest("tenant-credential-a", "lease-tenant-1", now)
+			tenantFirst.TenantID = "tenant-aggregate"
+			tenantFirst.TenantConcurrencyLimit = 1
+			tenantLease, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), tenantFirst)
+			if err != nil || !acquired || reason != "" {
+				t.Fatalf("acquire tenant lease=%+v reason=%q acquired=%t err=%v", tenantLease, reason, acquired, err)
+			}
+			tenantBlocked := capacityRequest("tenant-credential-b", "lease-tenant-2", now)
+			tenantBlocked.TenantID = tenantFirst.TenantID
+			tenantBlocked.TenantConcurrencyLimit = 1
+			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), tenantBlocked); err != nil || acquired || reason != "tenant_concurrency_exhausted" {
+				t.Fatalf("blocked tenant concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
+			}
+			isolatedTenant := tenantBlocked
+			isolatedTenant.LeaseID = "lease-tenant-isolated"
+			isolatedTenant.TenantID = "tenant-capacity-isolated"
+			isolatedLease, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), isolatedTenant)
+			if err != nil || !acquired || reason != "" {
+				t.Fatalf("isolated tenant lease=%+v reason=%q acquired=%t err=%v", isolatedLease, reason, acquired, err)
+			}
+			if err := store.ReleaseCredentialCapacity(context.Background(), tenantLease); err != nil {
+				t.Fatalf("release tenant lease: %v", err)
+			}
+			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), tenantBlocked); err != nil || !acquired || reason != "" {
+				t.Fatalf("reacquire tenant concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
+			}
+			_ = store.ReleaseCredentialCapacity(context.Background(), isolatedLease)
 
 			qps := capacityRequest("qps", "lease-qps-1", now)
 			qps.QPSLimit = 1
@@ -190,9 +219,9 @@ func TestCredentialCapacityDoesNotOversellAcrossConcurrentInstances(t *testing.T
 			leases := make(chan struct {
 				store CredentialCapacityStore
 				lease CredentialCapacityLease
-			}, 20)
+			}, 64)
 			var wait sync.WaitGroup
-			for index := 0; index < 20; index++ {
+			for index := 0; index < 64; index++ {
 				wait.Add(1)
 				go func(index int) {
 					defer wait.Done()
@@ -213,6 +242,80 @@ func TestCredentialCapacityDoesNotOversellAcrossConcurrentInstances(t *testing.T
 							store CredentialCapacityStore
 							lease CredentialCapacityLease
 						}{store, lease}
+					}
+				}(index)
+			}
+			wait.Wait()
+			close(leases)
+			if acquired.Load() != 3 {
+				t.Fatalf("acquired=%d, want 3", acquired.Load())
+			}
+			for item := range leases {
+				if err := item.store.ReleaseCredentialCapacity(context.Background(), item.lease); err != nil {
+					t.Errorf("ReleaseCredentialCapacity(): %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestTenantCapacityDoesNotOversellAcrossCredentialsAndInstances(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*testing.T) (CredentialCapacityStore, CredentialCapacityStore)
+	}{
+		{name: "memory", open: func(*testing.T) (CredentialCapacityStore, CredentialCapacityStore) {
+			repo := NewMemoryRepository()
+			return repo, repo
+		}},
+		{name: "postgres", open: func(t *testing.T) (CredentialCapacityStore, CredentialCapacityStore) {
+			schema := testutil.NewPostgresSchema(t)
+			first, err := NewPostgresRepository(context.Background(), schema.URL)
+			if err != nil {
+				t.Fatalf("open first repository: %v", err)
+			}
+			second, err := NewPostgresRepository(context.Background(), schema.URL)
+			if err != nil {
+				_ = first.Close()
+				t.Fatalf("open second repository: %v", err)
+			}
+			t.Cleanup(func() { _ = first.Close(); _ = second.Close() })
+			return first, second
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			first, second := test.open(t)
+			now := time.Date(2026, time.July, 14, 10, 0, 0, 0, time.UTC)
+			var acquired atomic.Int32
+			leases := make(chan struct {
+				store CredentialCapacityStore
+				lease CredentialCapacityLease
+			}, 64)
+			var wait sync.WaitGroup
+			for index := 0; index < 64; index++ {
+				wait.Add(1)
+				go func(index int) {
+					defer wait.Done()
+					store := first
+					if index%2 == 1 {
+						store = second
+					}
+					request := capacityRequest("application-"+strconv.Itoa(index%8), testutil.UniqueID("tenant-lease"), now)
+					request.TenantConcurrencyLimit = 3
+					lease, reason, ok, err := store.AcquireCredentialCapacity(context.Background(), request)
+					if err != nil {
+						t.Errorf("AcquireCredentialCapacity(): %v", err)
+						return
+					}
+					if ok {
+						acquired.Add(1)
+						leases <- struct {
+							store CredentialCapacityStore
+							lease CredentialCapacityLease
+						}{store, lease}
+					} else if reason != "tenant_concurrency_exhausted" {
+						t.Errorf("capacity reason=%q", reason)
 					}
 				}(index)
 			}

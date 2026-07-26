@@ -265,7 +265,7 @@ func (r *MemoryRepository) RequeuePlatformUsageDeliveryEvent(_ context.Context, 
 
 func (r *PostgresRepository) ListPlatformTenants(ctx context.Context) ([]PlatformTenant, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, slug, entitlement_reference, status, created_at, updated_at
+SELECT id, name, slug, entitlement_reference, concurrency_limit, status, created_at, updated_at
 FROM platform_tenants
 ORDER BY created_at ASC, name ASC
 `)
@@ -276,7 +276,7 @@ ORDER BY created_at ASC, name ASC
 	out := []PlatformTenant{}
 	for rows.Next() {
 		var tenant PlatformTenant
-		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Slug, &tenant.EntitlementReference, &tenant.Status, &tenant.CreatedAt, &tenant.UpdatedAt); err != nil {
+		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Slug, &tenant.EntitlementReference, &tenant.ConcurrencyLimit, &tenant.Status, &tenant.CreatedAt, &tenant.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, tenant)
@@ -286,15 +286,16 @@ ORDER BY created_at ASC, name ASC
 
 func (r *PostgresRepository) SavePlatformTenant(ctx context.Context, tenant PlatformTenant) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO platform_tenants(id, name, slug, entitlement_reference, status, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7)
+INSERT INTO platform_tenants(id, name, slug, entitlement_reference, concurrency_limit, status, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8)
 ON CONFLICT(id) DO UPDATE SET
   name = EXCLUDED.name,
   slug = EXCLUDED.slug,
   entitlement_reference = EXCLUDED.entitlement_reference,
+  concurrency_limit = EXCLUDED.concurrency_limit,
   status = EXCLUDED.status,
   updated_at = EXCLUDED.updated_at
-`, tenant.ID, tenant.Name, tenant.Slug, tenant.EntitlementReference, tenant.Status, tenant.CreatedAt, tenant.UpdatedAt)
+`, tenant.ID, tenant.Name, tenant.Slug, tenant.EntitlementReference, tenant.ConcurrencyLimit, tenant.Status, tenant.CreatedAt, tenant.UpdatedAt)
 	return err
 }
 

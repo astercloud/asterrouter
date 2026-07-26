@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 )
 
@@ -125,6 +126,8 @@ func DecodeCanonicalTextRequest(protocol Protocol, raw []byte, modelOverride str
 		return decodeOpenAIResponsesRequest(raw)
 	case ProtocolAnthropicMessages:
 		return decodeAnthropicRequest(raw)
+	case ProtocolAnthropicCountTokens:
+		return decodeAnthropicCountTokensRequest(raw)
 	case ProtocolGeminiGenerate:
 		return decodeGeminiRequest(raw, modelOverride, streamOverride)
 	default:
@@ -459,6 +462,14 @@ func decodeResponsesInput(raw json.RawMessage) ([]TextMessage, error) {
 }
 
 func decodeAnthropicRequest(raw []byte) (CanonicalTextRequest, error) {
+	return decodeAnthropicRequestForOperation(raw, true)
+}
+
+func decodeAnthropicCountTokensRequest(raw []byte) (CanonicalTextRequest, error) {
+	return decodeAnthropicRequestForOperation(raw, false)
+}
+
+func decodeAnthropicRequestForOperation(raw []byte, generation bool) (CanonicalTextRequest, error) {
 	var payload struct {
 		Model         string            `json:"model"`
 		System        json.RawMessage   `json:"system"`
@@ -477,13 +488,20 @@ func decodeAnthropicRequest(raw []byte) (CanonicalTextRequest, error) {
 	if len(raw) == 0 || decodeStrictTextJSON(raw, &payload) != nil {
 		return CanonicalTextRequest{}, ErrInvalidCanonicalRequest
 	}
-	if payload.MaxTokens == nil || *payload.MaxTokens <= 0 {
+	if generation && (payload.MaxTokens == nil || *payload.MaxTokens <= 0) {
 		return CanonicalTextRequest{}, fmt.Errorf("%w: max_tokens must be greater than zero", ErrInvalidCanonicalRequest)
+	}
+	if !generation && (payload.Stream || payload.MaxTokens != nil || payload.Temperature != nil || payload.TopP != nil || payload.TopK != nil || len(payload.StopSequences) > 0) {
+		return CanonicalTextRequest{}, unsupportedTextFeature("generation", "count_tokens does not accept generation controls")
 	}
 	if rawJSONPresent(payload.Thinking) || rawJSONPresent(payload.MCPServers) {
 		return CanonicalTextRequest{}, unsupportedTextFeature("anthropic_extension", "thinking and MCP server blocks are provider-specific")
 	}
-	request := CanonicalTextRequest{Model: payload.Model, Stream: payload.Stream, Generation: TextGenerationConfig{Temperature: payload.Temperature, TopP: payload.TopP, TopK: payload.TopK, MaxOutputTokens: payload.MaxTokens, StopSequences: payload.StopSequences}}
+	request := CanonicalTextRequest{Model: payload.Model}
+	if generation {
+		request.Stream = payload.Stream
+		request.Generation = TextGenerationConfig{Temperature: payload.Temperature, TopP: payload.TopP, TopK: payload.TopK, MaxOutputTokens: payload.MaxTokens, StopSequences: payload.StopSequences}
+	}
 	var err error
 	request.System, err = decodeAnthropicSystem(payload.System)
 	if err != nil {
@@ -729,7 +747,11 @@ func decodeGeminiContent(raw json.RawMessage) (TextMessage, error) {
 }
 
 func encodeOpenAIChatRequest(request CanonicalTextRequest) ([]byte, error) {
-	messages := make([]any, 0, len(request.System)+len(request.Messages)*2)
+	capacity, ok := expandedTextPartCapacity(len(request.System), len(request.Messages))
+	if !ok {
+		return nil, ErrInvalidCanonicalRequest
+	}
+	messages := make([]any, 0, capacity)
 	if len(request.System) > 0 {
 		messages = append(messages, map[string]any{"role": "system", "content": strings.Join(request.System, "\n\n")})
 	}
@@ -761,7 +783,11 @@ func encodeOpenAIChatRequest(request CanonicalTextRequest) ([]byte, error) {
 }
 
 func encodeOpenAIResponsesRequest(request CanonicalTextRequest) ([]byte, error) {
-	input := make([]any, 0, len(request.Messages)*2)
+	capacity, ok := expandedTextPartCapacity(0, len(request.Messages))
+	if !ok {
+		return nil, ErrInvalidCanonicalRequest
+	}
+	input := make([]any, 0, capacity)
 	for _, message := range request.Messages {
 		encoded, err := encodeResponsesMessage(message)
 		if err != nil {
@@ -798,7 +824,32 @@ func encodeOpenAIResponsesRequest(request CanonicalTextRequest) ([]byte, error) 
 	return json.Marshal(payload)
 }
 
+func expandedTextPartCapacity(base, messageCount int) (int, bool) {
+	if base < 0 || messageCount < 0 || messageCount > (math.MaxInt-base)/2 {
+		return 0, false
+	}
+	return base + messageCount*2, true
+}
+
 func encodeAnthropicRequest(request CanonicalTextRequest) ([]byte, error) {
+	return encodeAnthropicRequestForOperation(request, true)
+}
+
+func EncodeAnthropicCountTokensRequest(request CanonicalTextRequest, upstreamModel string) ([]byte, error) {
+	request.Model = strings.TrimSpace(upstreamModel)
+	if request.Model == "" {
+		return nil, fmt.Errorf("%w: upstream model is required", ErrInvalidCanonicalRequest)
+	}
+	if err := validateCanonicalTextRequest(request); err != nil {
+		return nil, err
+	}
+	if request.Stream || request.Generation.Temperature != nil || request.Generation.TopP != nil || request.Generation.TopK != nil || request.Generation.MaxOutputTokens != nil || len(request.Generation.StopSequences) > 0 {
+		return nil, unsupportedTextFeature("generation", "count_tokens does not accept generation controls")
+	}
+	return encodeAnthropicRequestForOperation(request, false)
+}
+
+func encodeAnthropicRequestForOperation(request CanonicalTextRequest, generation bool) ([]byte, error) {
 	messages := make([]any, 0, len(request.Messages))
 	for _, message := range request.Messages {
 		blocks, err := encodeAnthropicContent(message.Content)
@@ -807,25 +858,28 @@ func encodeAnthropicRequest(request CanonicalTextRequest) ([]byte, error) {
 		}
 		messages = append(messages, map[string]any{"role": string(message.Role), "content": blocks})
 	}
-	payload := map[string]any{"model": request.Model, "messages": messages, "stream": request.Stream}
+	payload := map[string]any{"model": request.Model, "messages": messages}
 	if len(request.System) > 0 {
 		payload["system"] = strings.Join(request.System, "\n\n")
 	}
-	if request.Generation.MaxOutputTokens == nil {
-		return nil, unsupportedTextFeature("max_output_tokens", "Anthropic requires max_tokens")
-	}
-	payload["max_tokens"] = *request.Generation.MaxOutputTokens
-	if request.Generation.Temperature != nil {
-		payload["temperature"] = *request.Generation.Temperature
-	}
-	if request.Generation.TopP != nil {
-		payload["top_p"] = *request.Generation.TopP
-	}
-	if request.Generation.TopK != nil {
-		payload["top_k"] = *request.Generation.TopK
-	}
-	if len(request.Generation.StopSequences) > 0 {
-		payload["stop_sequences"] = request.Generation.StopSequences
+	if generation {
+		payload["stream"] = request.Stream
+		if request.Generation.MaxOutputTokens == nil {
+			return nil, unsupportedTextFeature("max_output_tokens", "Anthropic requires max_tokens")
+		}
+		payload["max_tokens"] = *request.Generation.MaxOutputTokens
+		if request.Generation.Temperature != nil {
+			payload["temperature"] = *request.Generation.Temperature
+		}
+		if request.Generation.TopP != nil {
+			payload["top_p"] = *request.Generation.TopP
+		}
+		if request.Generation.TopK != nil {
+			payload["top_k"] = *request.Generation.TopK
+		}
+		if len(request.Generation.StopSequences) > 0 {
+			payload["stop_sequences"] = request.Generation.StopSequences
+		}
 	}
 	if len(request.Tools) > 0 {
 		payload["tools"] = encodeAnthropicTools(request.Tools)

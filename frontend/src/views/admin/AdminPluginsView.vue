@@ -223,11 +223,6 @@ const videoGenPlugin = computed(() => catalog.value.plugins.find((plugin) => plu
 const videoGenInstalled = computed(() => Boolean(videoGenPlugin.value?.packages?.some((pkg) => pkg.install_status === 'installed')))
 const videoGenReady = computed(() => videoGenInstalled.value && videoGenPlugin.value?.status === 'enabled')
 const installedPlugins = computed(() => catalog.value.plugins.filter((plugin) => plugin.packages?.some((pkg) => pkg.install_status === 'installed')))
-const frontendWorkbenchPluginIDs = new Set([
-  'com.asterrouter.imagegen.workbench',
-  'com.asterrouter.videogen.workbench'
-])
-
 const filteredPlugins = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   return catalog.value.plugins.filter((plugin) => {
@@ -292,7 +287,7 @@ function openPluginWorkbench(plugin: Plugin) {
 }
 
 function hasFrontendWorkbench(plugin: Plugin) {
-  return frontendWorkbenchPluginIDs.has(plugin.plugin_id)
+  return plugin.frontend_available === true
 }
 
 async function load() {

@@ -98,3 +98,13 @@ func TestPostgresRepositorySerializesConflictingDeploymentProfiles(t *testing.T)
 		t.Fatalf("persisted unexpected deployment profile: %#v", values)
 	}
 }
+
+func TestPostgresInvitationCodeConsumptionIsAtomic(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	repo, err := NewPostgresRepository(t.Context(), schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	testInvitationCodeConsumptionIsAtomic(t, repo)
+}

@@ -6,6 +6,10 @@ import * as account from '@/api/account'
 import type { AccountProfile } from '@/types'
 import AccountProfileView from './AccountProfileView.vue'
 
+vi.mock('qrcode', () => ({
+  default: { toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,dG90cA==') }
+}))
+
 vi.mock('@/api/account', () => ({
   beginAccountIdentityBinding: vi.fn(),
   beginTOTPSetup: vi.fn(),
@@ -100,6 +104,62 @@ describe('AccountProfileView', () => {
     expect(localStorage.getItem('asterrouter_admin_token')).toBe('replacement-token')
     expect(wrapper.text()).toContain('Password changed')
 
+    wrapper.unmount()
+  })
+
+  it('routes passwordless accounts through verified email recovery', async () => {
+    vi.mocked(account.getAccountProfile).mockResolvedValue({ ...structuredClone(profile), password_enabled: false })
+    const wrapper = mount(AccountProfileView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.get('[data-tab="security"]').trigger('click')
+
+    expect(wrapper.find('[data-form="account-password"]').exists()).toBe(false)
+    expect(wrapper.get('a[href="/forgot-password?email=user%40example.test"]').text()).toContain('Send setup email')
+    wrapper.unmount()
+  })
+
+  it('requires the current password before exposing a TOTP enrollment secret', async () => {
+    vi.mocked(account.getAccountProfile).mockResolvedValue({ ...structuredClone(profile), totp_available: true })
+    vi.mocked(account.beginTOTPSetup).mockResolvedValue({
+      secret: 'JBSWY3DPEHPK3PXP',
+      provisioning_uri: 'otpauth://totp/AsterRouter:user@example.test?secret=JBSWY3DPEHPK3PXP',
+      expires_at: '2099-01-01T00:10:00Z'
+    })
+    const wrapper = mount(AccountProfileView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.get('[data-tab="security"]').trigger('click')
+
+    const setupButton = wrapper.findAll('button').find((button) => button.text().includes('Set up authenticator'))
+    expect(setupButton?.attributes('disabled')).toBeDefined()
+    await wrapper.get('#account-totp-current-password').setValue('current-password')
+    await setupButton!.trigger('click')
+    await flushPromises()
+
+    expect(account.beginTOTPSetup).toHaveBeenCalledWith('current-password')
+    expect(wrapper.text()).toContain('JBSWY3DPEHPK3PXP')
+    wrapper.unmount()
+  })
+
+  it('requires an existing factor before replacing recovery codes', async () => {
+    vi.mocked(account.getAccountProfile).mockResolvedValue({ ...structuredClone(profile), totp_enabled: true, totp_available: true })
+    vi.mocked(account.generateTOTPRecoveryCodes).mockResolvedValue({
+      access_token: 'totp-replacement-token',
+      expires_at: '2099-01-01T00:00:00Z',
+      codes: ['RECOV1-RECOV2']
+    })
+    const wrapper = mount(AccountProfileView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.get('[data-tab="security"]').trigger('click')
+
+    const regenerateButton = wrapper.findAll('button').find((button) => button.text().includes('Regenerate recovery codes'))
+    expect(regenerateButton?.attributes('disabled')).toBeDefined()
+    await wrapper.get('#account-recovery-totp-code').setValue('123456')
+    await regenerateButton!.trigger('click')
+    await flushPromises()
+
+    expect(account.generateTOTPRecoveryCodes).toHaveBeenCalledWith('123456')
+    expect(wrapper.text()).toContain('RECOV1-RECOV2')
+    expect(localStorage.getItem('asterrouter_admin_token')).toBe('totp-replacement-token')
     wrapper.unmount()
   })
 })

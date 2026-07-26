@@ -626,7 +626,7 @@ onMounted(loadWorkspace)
 
       <section class="panel method-panel generator-panel">
         <div class="panel-header"><div><span class="access-kicker generator-kicker">{{ t('accountAccess.methodTwo') }}</span><h2>{{ t('accountAccess.generateTitle') }}</h2><p>{{ t('accountAccess.generateHelp') }}</p></div></div>
-        <div class="panel-body method-body"><div><label>{{ t('accountAccess.configTarget') }}</label><div class="tool-tabs config-tabs"><button v-for="target in configTargets" :key="target.id" class="tool-tab" :class="{ active: configTarget === target.id }" type="button" @click="configTarget = target.id">{{ target.label }}</button></div></div><div class="config-window"><div class="config-output-header"><div class="config-file-name"><span class="window-dots"><i></i><i></i><i></i></span><code>{{ configFilename }}</code></div><div><button class="button secondary compact-button" type="button" @click="copyText(generatedConfig, 'config')"><Check v-if="copiedField === 'config'" :size="15" /><Copy v-else :size="15" />{{ t('common.copy') }}</button><button class="button secondary compact-button" type="button" @click="downloadConfig"><Download :size="15" />{{ t('common.download') }}</button></div></div><pre class="generated-config">{{ generatedConfig }}</pre></div><p v-if="protocolNotice" class="protocol-warning"><AlertTriangle :size="15" />{{ protocolNotice }}</p><p v-if="!canGenerate" class="config-gate"><AlertTriangle :size="15" />{{ t('accountAccess.generateGate') }}</p></div>
+        <div class="panel-body method-body"><div><label>{{ t('accountAccess.configTarget') }}</label><div class="tool-tabs config-tabs"><button v-for="target in configTargets" :key="target.id" class="tool-tab" :class="{ active: configTarget === target.id }" type="button" @click="configTarget = target.id">{{ target.label }}</button></div></div><div class="config-window"><div class="config-output-header"><div class="config-file-name"><span class="window-dots"><i></i><i></i><i></i></span><code>{{ configFilename }}</code></div><div><button class="button secondary compact-button" type="button" @click="copyText(generatedConfig, 'config')"><Check v-if="copiedField === 'config'" :size="15" /><Copy v-else :size="15" />{{ t('common.copy') }}</button><button class="button secondary compact-button" type="button" @click="downloadConfig"><Download :size="15" />{{ t('common.download') }}</button></div></div><pre class="generated-config">{{ generatedConfig }}</pre></div><p v-if="protocolNotice" class="protocol-supported"><Check :size="15" />{{ protocolNotice }}</p><p v-if="!canGenerate" class="config-gate"><AlertTriangle :size="15" />{{ t('accountAccess.generateGate') }}</p></div>
       </section>
     </template>
   </div>
@@ -669,7 +669,9 @@ onMounted(loadWorkspace)
 .download-menu > div { position: absolute; z-index: 4; top: calc(100% + 5px); right: 0; display: grid; min-width: 150px; padding: 6px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow-md); }
 .download-menu a { padding: 8px; border-radius: 5px; color: var(--text-secondary); font-size: 12px; text-decoration: none; }
 .download-menu a:hover { background: var(--surface-hover); }
-.compatibility-note, .protocol-warning, .config-gate { display: flex; align-items: flex-start; gap: 7px; margin: 0; color: var(--warning); font-size: 12px; }
+.compatibility-note, .protocol-supported, .config-gate { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: 12px; }
+.compatibility-note, .config-gate { color: var(--warning); }
+.protocol-supported { color: var(--success); }
 .compatibility-note { padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border)); border-radius: 7px; background: var(--warning-bg); }
 .import-step, .install-method { display: grid; gap: 10px; }
 .import-step label, .generator-panel label { color: var(--text-muted); font-size: 12px; }

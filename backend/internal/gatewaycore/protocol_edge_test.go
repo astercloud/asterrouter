@@ -24,6 +24,7 @@ func TestExtractCredentialUsesOneProtocolApprovedTransport(t *testing.T) {
 		{name: "bearer", protocol: ProtocolOpenAIChat, headers: http.Header{"Authorization": []string{"Bearer key-1"}}, wantToken: "key-1", transport: "authorization_bearer"},
 		{name: "signed context", protocol: ProtocolOpenAIChat, headers: http.Header{"Authorization": []string{"Aster-Context signed-1"}}, wantSigned: "signed-1", transport: "authorization_aster_context"},
 		{name: "anthropic", protocol: ProtocolAnthropicMessages, headers: http.Header{"X-Api-Key": []string{"key-2"}}, wantToken: "key-2", transport: "anthropic_x_api_key"},
+		{name: "anthropic count tokens", protocol: ProtocolAnthropicCountTokens, headers: http.Header{"X-Api-Key": []string{"key-count"}}, wantToken: "key-count", transport: "anthropic_x_api_key"},
 		{name: "gemini", protocol: ProtocolGeminiGenerate, headers: http.Header{"X-Goog-Api-Key": []string{"key-3"}}, wantToken: "key-3", transport: "gemini_x_goog_api_key"},
 		{name: "realtime browser", protocol: ProtocolRealtime, headers: http.Header{"Sec-Websocket-Protocol": []string{"realtime, openai-insecure-api-key.key-4"}}, wantToken: "key-4", transport: "realtime_subprotocol"},
 	}
@@ -38,6 +39,38 @@ func TestExtractCredentialUsesOneProtocolApprovedTransport(t *testing.T) {
 				t.Fatalf("credential = %+v", got)
 			}
 		})
+	}
+}
+
+func TestCanonicalizeAnthropicCountTokensProducesReadOnlyEnvelope(t *testing.T) {
+	raw := []byte(`{"model":"claude-model","system":"keep","messages":[{"role":"user","content":"hello"}],"tools":[{"name":"lookup","description":"Lookup","input_schema":{"type":"object"}}]}`)
+	got, err := CanonicalizeAnthropicCountTokens(raw, http.Header{"X-Request-Id": []string{"count-1"}})
+	if err != nil {
+		t.Fatalf("CanonicalizeAnthropicCountTokens(): %v", err)
+	}
+	if got.ID != "op_count-1" || got.ClientRequestID != "count-1" || got.Protocol != ProtocolAnthropicCountTokens || got.Operation != "count_tokens" || got.Modality != "text" || got.Lane != LaneDirect || got.Model != "claude-model" || got.Stream || got.MessageCount != 1 || got.Text == nil {
+		t.Fatalf("canonical count request = %+v", got)
+	}
+	if got.Text.Generation.MaxOutputTokens != nil || len(got.Fingerprint) != 64 {
+		t.Fatalf("count request retained generation state: %+v", got)
+	}
+	encoded, err := EncodeAnthropicCountTokensRequest(*got.Text, "claude-upstream")
+	if err != nil {
+		t.Fatalf("EncodeAnthropicCountTokensRequest(): %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"model":"claude-upstream"`)) || bytes.Contains(encoded, []byte(`"max_tokens"`)) || bytes.Contains(encoded, []byte(`"stream"`)) {
+		t.Fatalf("encoded count request = %s", encoded)
+	}
+}
+
+func TestCanonicalizeAnthropicCountTokensRejectsGenerationFields(t *testing.T) {
+	for _, raw := range []string{
+		`{"model":"claude-model","messages":[{"role":"user","content":"hello"}],"max_tokens":1}`,
+		`{"model":"claude-model","messages":[{"role":"user","content":"hello"}],"stream":true}`,
+	} {
+		if _, err := CanonicalizeAnthropicCountTokens([]byte(raw), nil); !errors.Is(err, ErrUnsupportedTextFeature) {
+			t.Fatalf("body=%s error=%v", raw, err)
+		}
 	}
 }
 

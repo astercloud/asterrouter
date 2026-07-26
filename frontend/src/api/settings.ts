@@ -9,7 +9,8 @@ function normalizePublicSettings<T extends PublicSettings>(settings: T): T {
     enabled_locales: stringListOrEmpty(settings.enabled_locales),
     legal_documents: listOrEmpty(settings.legal_documents),
     custom_endpoints: listOrEmpty(settings.custom_endpoints),
-    custom_menu_items: listOrEmpty(settings.custom_menu_items)
+		custom_menu_items: listOrEmpty(settings.custom_menu_items),
+		allowed_email_domains: stringListOrEmpty(settings.allowed_email_domains)
   }
 }
 
@@ -17,8 +18,8 @@ function normalizeAdminSettings(settings: AdminSettings): AdminSettings {
   return {
     ...normalizePublicSettings(settings),
     runtime_restart_reasons: stringListOrEmpty(settings.runtime_restart_reasons),
-    allowed_email_domains: stringListOrEmpty(settings.allowed_email_domains),
-    invitation_codes: stringListOrEmpty(settings.invitation_codes),
+		invitation_codes: stringListOrEmpty(settings.invitation_codes),
+		trusted_proxy_cidrs: stringListOrEmpty(settings.trusted_proxy_cidrs),
     email_templates: listOrEmpty(settings.email_templates),
     page_size_options: listOrEmpty(settings.page_size_options)
   }

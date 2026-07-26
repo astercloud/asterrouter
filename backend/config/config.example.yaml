@@ -63,6 +63,7 @@ server:
   plugins:
     cache-dir: "data/plugin-cache" # Downloaded plugin package cache
     active-dir: "" # Activated plugin runtime directory; derived from cache-dir when empty
+    data-dir: "" # Version-independent Sidecar plugin data directory; derived from cache-dir when empty
     host-url: "" # Plugin host callback URL; derived from http.listen when empty
 
   # Durable AI job infrastructure
@@ -93,6 +94,10 @@ server:
       access-key: "" # S3 access key
       secret-key: "" # S3 secret key
       path-style: false # Use path-style S3 addressing
+
+  # Operational metrics configuration
+  observability:
+    metrics-token: "" # Bearer token required to enable the Prometheus metrics endpoint
 
   # Backup, diagnostics, and process management
   maintenance:
