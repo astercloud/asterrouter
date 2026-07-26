@@ -4,12 +4,12 @@ import { captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './f
 type ClientCase = {
   id: 'codex' | 'claude_code' | 'openai_sdk' | 'anthropic_sdk'
   label: string
-  configMarker: string
+  configMarker: string | RegExp
   versions: string[]
 }
 
 const clients: ClientCase[] = [
-  { id: 'codex', label: 'Codex', configMarker: 'wire_api = "responses"', versions: ['0.145.0', '0.144.6'] },
+  { id: 'codex', label: 'Codex', configMarker: /wire_api\s*=\s*(['"])responses\1/, versions: ['0.145.0', '0.144.6'] },
   { id: 'claude_code', label: 'Claude Code', configMarker: 'ANTHROPIC_BASE_URL', versions: ['2.1.220', '1.0.128'] },
   { id: 'openai_sdk', label: 'OpenAI SDK', configMarker: 'OPENAI_BASE_URL', versions: ['6.49.0', '5.23.2', '2.48.0', '1.109.1'] },
   { id: 'anthropic_sdk', label: 'Anthropic SDK', configMarker: 'ANTHROPIC_BASE_URL', versions: ['0.115.0', '0.114.0', '0.120.0', '0.119.0'] }
