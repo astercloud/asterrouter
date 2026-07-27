@@ -177,7 +177,7 @@ func setMFAChallengeCookie(c *gin.Context, challenge string, expiresAt time.Time
 		Expires:  expiresAt.UTC(),
 		MaxAge:   max(1, int(time.Until(expiresAt).Seconds())),
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secureAuthCookie(c),
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -189,7 +189,7 @@ func clearExternalMFAChallengeCookie(c *gin.Context) {
 		Expires:  time.Unix(1, 0).UTC(),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secureAuthCookie(c),
 		SameSite: http.SameSiteLaxMode,
 	})
 }

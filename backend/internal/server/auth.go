@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/subtle"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -119,6 +120,31 @@ func verifyCookieSessionCSRF(c *gin.Context) bool {
 	return true
 }
 
+func secureAuthCookie(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return true
+	}
+	if c.Request.TLS != nil {
+		return true
+	}
+	forwardedProto, _, _ := strings.Cut(c.GetHeader("X-Forwarded-Proto"), ",")
+	if strings.EqualFold(strings.TrimSpace(forwardedProto), "https") {
+		return true
+	}
+
+	host := strings.TrimSpace(c.Request.Host)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	} else {
+		host = strings.Trim(host, "[]")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip == nil || !ip.IsLoopback()
+}
+
 func setExternalOAuthStateCookie(c *gin.Context, provider, state string) {
 	expiresAt := time.Now().UTC().Add(externalOAuthStateTTL)
 	http.SetCookie(c.Writer, &http.Cookie{
@@ -128,7 +154,7 @@ func setExternalOAuthStateCookie(c *gin.Context, provider, state string) {
 		Expires:  expiresAt,
 		MaxAge:   int(externalOAuthStateTTL / time.Second),
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secureAuthCookie(c),
 		SameSite: http.SameSiteLaxMode,
 	})
 	c.Header("Cache-Control", "no-store")
@@ -149,7 +175,7 @@ func clearExternalOAuthStateCookie(c *gin.Context, provider string) {
 		Expires:  time.Unix(1, 0).UTC(),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secureAuthCookie(c),
 		SameSite: http.SameSiteLaxMode,
 	})
 	c.Header("Cache-Control", "no-store")
@@ -165,8 +191,9 @@ func setCookieSession(c *gin.Context, result auth.LoginResult) (auth.LoginResult
 		return auth.LoginResult{}, err
 	}
 	maxAge := max(1, int(time.Until(result.ExpiresAt).Seconds()))
-	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookieName, Value: result.AccessToken, Path: "/", Expires: result.ExpiresAt.UTC(), MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
-	http.SetCookie(c.Writer, &http.Cookie{Name: csrfCookieName, Value: csrfToken, Path: "/", Expires: result.ExpiresAt.UTC(), MaxAge: maxAge, Secure: true, SameSite: http.SameSiteLaxMode})
+	secure := secureAuthCookie(c)
+	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookieName, Value: result.AccessToken, Path: "/", Expires: result.ExpiresAt.UTC(), MaxAge: maxAge, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(c.Writer, &http.Cookie{Name: csrfCookieName, Value: csrfToken, Path: "/", Expires: result.ExpiresAt.UTC(), MaxAge: maxAge, Secure: secure, SameSite: http.SameSiteLaxMode})
 	c.Header("Cache-Control", "no-store")
 	result.AccessToken = cookieSessionTokenMarker
 	return result, nil
@@ -174,8 +201,9 @@ func setCookieSession(c *gin.Context, result auth.LoginResult) (auth.LoginResult
 
 func clearCookieSession(c *gin.Context) {
 	expires := time.Unix(1, 0).UTC()
-	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookieName, Path: "/", Expires: expires, MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
-	http.SetCookie(c.Writer, &http.Cookie{Name: csrfCookieName, Path: "/", Expires: expires, MaxAge: -1, Secure: true, SameSite: http.SameSiteLaxMode})
+	secure := secureAuthCookie(c)
+	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookieName, Path: "/", Expires: expires, MaxAge: -1, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(c.Writer, &http.Cookie{Name: csrfCookieName, Path: "/", Expires: expires, MaxAge: -1, Secure: secure, SameSite: http.SameSiteLaxMode})
 }
 
 func role(c *gin.Context) string {
