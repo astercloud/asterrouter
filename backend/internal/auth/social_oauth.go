@@ -36,8 +36,11 @@ func NewSocialOAuthService(config SocialOAuthConfig) (*SocialOAuthService, error
 	if config.Enabled && (config.ClientID == "" || config.ClientSecret == "" || config.RedirectURL == "") {
 		return nil, fmt.Errorf("%s OAuth configuration is incomplete", config.Provider)
 	}
-	state, _ := NewOIDCService(OIDCConfig{Enabled: config.Enabled, IssuerURL: "https://" + config.Provider + ".com", ClientID: config.ClientID, RedirectURL: config.RedirectURL})
-	return &SocialOAuthService{config: config, state: state, client: http.DefaultClient}, nil
+	state, err := NewOIDCService(OIDCConfig{Enabled: config.Enabled, IssuerURL: "https://" + config.Provider + ".com", ClientID: config.ClientID, RedirectURL: config.RedirectURL})
+	if err != nil {
+		return nil, fmt.Errorf("initialize %s OAuth state: %w", config.Provider, err)
+	}
+	return &SocialOAuthService{config: config, state: state, client: newExternalIdentityHTTPClient()}, nil
 }
 
 func (s *SocialOAuthService) Begin(now time.Time) (OIDCState, error) { return s.state.Begin(now) }

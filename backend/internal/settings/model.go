@@ -228,6 +228,30 @@ type EmailTemplate struct {
 	HTML    string `json:"html"`
 }
 
+type EmailTemplateEventInfo struct {
+	Event        string   `json:"event"`
+	Placeholders []string `json:"placeholders"`
+}
+
+type EmailTemplateSummary struct {
+	Event      string `json:"event"`
+	Locale     string `json:"locale"`
+	Customized bool   `json:"customized"`
+}
+
+type EmailTemplateCatalog struct {
+	Events       []EmailTemplateEventInfo `json:"events"`
+	Locales      []string                 `json:"locales"`
+	Templates    []EmailTemplateSummary   `json:"templates"`
+	Placeholders []string                 `json:"placeholders"`
+}
+
+type EmailTemplateDetail struct {
+	EmailTemplate
+	Customized   bool     `json:"customized"`
+	Placeholders []string `json:"placeholders"`
+}
+
 type CustomEndpoint struct {
 	Name        string `json:"name"`
 	Endpoint    string `json:"endpoint"`

@@ -2,6 +2,7 @@ package settings
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -28,24 +29,109 @@ func TestServiceDefaults(t *testing.T) {
 	}
 }
 
-func TestSettingsAcceptBuiltInEmailTemplatesAndRejectInvalidSyntax(t *testing.T) {
+func TestEmailTemplatesListUpdateAndRestore(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), ServiceOptions{Version: "test", StorageMode: "memory"})
-	current, err := svc.Admin(t.Context())
+	catalog, err := svc.EmailTemplateCatalog(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, item := range auth.DefaultEmailTemplates() {
-		current.EmailTemplates = append(current.EmailTemplates, EmailTemplate{
-			Event: item.Event, Locale: item.Locale, Subject: item.Subject, HTML: item.HTML,
-		})
+	if len(catalog.Events) != 6 || len(catalog.Locales) != 2 || len(catalog.Templates) != 12 {
+		t.Fatalf("EmailTemplateCatalog() = %+v", catalog)
 	}
-	if _, err := svc.Update(t.Context(), current); err != nil {
-		t.Fatalf("Update(default email templates): %v", err)
+	detail, err := svc.EmailTemplate(t.Context(), "password_reset", "en-US")
+	if err != nil || detail.Event != "password_reset" || detail.Customized {
+		t.Fatalf("EmailTemplate() = %+v, %v", detail, err)
 	}
+	detail, err = svc.UpdateEmailTemplate(t.Context(), "password_reset", "en-US", "Custom {{.SiteName}}", "<p>{{.ActionURL}}</p>")
+	if err != nil || !detail.Customized || detail.Subject != "Custom {{.SiteName}}" {
+		t.Fatalf("UpdateEmailTemplate() = %+v, %v", detail, err)
+	}
+	admin, err := svc.Admin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin.EmailTemplates = nil
+	admin.SiteSubtitle = "Updated without a template snapshot"
+	if _, err := svc.Update(t.Context(), admin); err != nil {
+		t.Fatalf("Update() independent settings: %v", err)
+	}
+	detail, err = svc.EmailTemplate(t.Context(), "password_reset", "en-US")
+	if err != nil || detail.Subject != "Custom {{.SiteName}}" {
+		t.Fatalf("broad settings update replaced template: %+v, %v", detail, err)
+	}
+	detail, err = svc.RestoreEmailTemplate(t.Context(), "password_reset", "en-US")
+	if err != nil || detail.Customized || detail.Subject == "Custom {{.SiteName}}" {
+		t.Fatalf("RestoreEmailTemplate() = %+v, %v", detail, err)
+	}
+	if _, err := svc.UpdateEmailTemplate(t.Context(), "password_reset", "en-US", "{{.UnknownField}}", "<p>body</p>"); err == nil || !strings.Contains(err.Error(), "invalid email template") {
+		t.Fatalf("UpdateEmailTemplate(invalid syntax) error = %v", err)
+	}
+	if _, err := svc.EmailTemplate(t.Context(), "unknown", "en-US"); err == nil {
+		t.Fatal("EmailTemplate() accepted an unsupported event")
+	}
+}
 
-	current.EmailTemplates[0].Subject = "{{.UnknownField}}"
-	if _, err := svc.Update(t.Context(), current); err == nil || !strings.Contains(err.Error(), "invalid email template") {
-		t.Fatalf("Update(invalid email template) error = %v", err)
+func TestEmailTemplateUpdateDoesNotOverwriteConcurrentSettings(t *testing.T) {
+	repo := &conflictOnceSettingsRepository{MemoryRepository: NewMemoryRepository()}
+	if err := repo.SetMultiple(t.Context(), map[string]string{KeyEmailTemplates: "[]"}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory"})
+	_, err := svc.UpdateEmailTemplate(t.Context(), "balance_low", "en-US", "Custom {{.SiteName}}", "<p>{{.Amount}}</p>")
+	if !errors.Is(err, ErrSettingsChanged) {
+		t.Fatalf("UpdateEmailTemplate() error = %v", err)
+	}
+	values, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values[KeyEmailTemplates] != "[]" {
+		t.Fatalf("conflicting template update changed stored value: %s", values[KeyEmailTemplates])
+	}
+}
+
+func TestLegacyDefaultTemplatesAreNotReportedAsCustomized(t *testing.T) {
+	repo := NewMemoryRepository()
+	legacy, err := json.Marshal(auth.DefaultEmailTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMultiple(t.Context(), map[string]string{KeyEmailTemplates: string(legacy)}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory"})
+	catalog, err := svc.EmailTemplateCatalog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range catalog.Templates {
+		if item.Customized {
+			t.Fatalf("legacy default template was reported as customized: %+v", item)
+		}
+	}
+	detail, err := svc.EmailTemplate(t.Context(), "email_verification", "zh-CN")
+	if err != nil || detail.Customized {
+		t.Fatalf("EmailTemplate() = %+v, %v", detail, err)
+	}
+}
+
+func TestResolveSMTPConfigUsesUnsavedValuesAndStoredPassword(t *testing.T) {
+	repo := NewMemoryRepository()
+	if err := repo.SetMultiple(t.Context(), map[string]string{
+		KeySMTPHost: "saved.example.test", KeySMTPPort: "587", KeySMTPUsername: "saved-user",
+		KeySMTPPassword: "saved-secret", KeySMTPFrom: "saved@example.test", KeySMTPFromName: "Saved sender",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory"})
+	resolved, err := svc.ResolveSMTPConfig(t.Context(), SMTPSettings{
+		Host: "new.example.test", Port: 465, Username: "new-user", From: "new@example.test", FromName: "New sender", UseTLS: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Host != "new.example.test" || resolved.Port != 465 || resolved.Username != "new-user" || resolved.Password != "saved-secret" || resolved.From != "new@example.test" || !resolved.UseTLS {
+		t.Fatalf("ResolveSMTPConfig() = %+v", resolved)
 	}
 }
 
@@ -399,6 +485,22 @@ func TestMemoryReplaceIfUnchangedIsAtomic(t *testing.T) {
 		"missing": {Expected: "", Value: "new-value"},
 	}); !errors.Is(err, ErrSettingsChanged) {
 		t.Fatalf("ReplaceIfUnchanged(missing) error = %v", err)
+	}
+}
+
+func TestMemorySetIfAbsentDoesNotOverwrite(t *testing.T) {
+	repo := NewMemoryRepository()
+	inserted, err := repo.SetIfAbsent(t.Context(), "key", "first")
+	if err != nil || !inserted {
+		t.Fatalf("SetIfAbsent(first) = %v, %v", inserted, err)
+	}
+	inserted, err = repo.SetIfAbsent(t.Context(), "key", "second")
+	if err != nil || inserted {
+		t.Fatalf("SetIfAbsent(second) = %v, %v", inserted, err)
+	}
+	values, err := repo.GetAll(t.Context())
+	if err != nil || values["key"] != "first" {
+		t.Fatalf("GetAll() = %#v, %v", values, err)
 	}
 }
 

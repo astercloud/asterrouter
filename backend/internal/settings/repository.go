@@ -32,6 +32,7 @@ type ValueReplacement struct {
 type Repository interface {
 	GetAll(ctx context.Context) (map[string]string, error)
 	SetMultiple(ctx context.Context, values map[string]string) error
+	SetIfAbsent(ctx context.Context, key, value string) (bool, error)
 	ReplaceIfUnchanged(ctx context.Context, replacements map[string]ValueReplacement) error
 	ConsumeInvitationCode(ctx context.Context, code string) error
 	RestoreInvitationCode(ctx context.Context, code string) error
@@ -78,6 +79,16 @@ func (r *MemoryRepository) SetMultiple(_ context.Context, values map[string]stri
 		r.entries[key] = Entry{Key: key, Value: value, UpdatedAt: now}
 	}
 	return nil
+}
+
+func (r *MemoryRepository) SetIfAbsent(_ context.Context, key, value string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.entries[key]; exists {
+		return false, nil
+	}
+	r.entries[key] = Entry{Key: key, Value: value, UpdatedAt: time.Now().UTC()}
+	return true, nil
 }
 
 func (r *MemoryRepository) ReplaceIfUnchanged(_ context.Context, replacements map[string]ValueReplacement) error {
@@ -222,6 +233,19 @@ func (r *PostgresRepository) SetMultiple(ctx context.Context, values map[string]
 	}
 	err = tx.Commit()
 	return err
+}
+
+func (r *PostgresRepository) SetIfAbsent(ctx context.Context, key, value string) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `
+INSERT INTO settings (key, value, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (key) DO NOTHING
+`, key, value)
+	if err != nil {
+		return false, err
+	}
+	inserted, err := result.RowsAffected()
+	return inserted == 1, err
 }
 
 func (r *PostgresRepository) ReplaceIfUnchanged(ctx context.Context, replacements map[string]ValueReplacement) (err error) {

@@ -155,3 +155,24 @@ func TestPostgresReplaceIfUnchangedIsAtomicAndPersistent(t *testing.T) {
 		t.Fatalf("replacement did not persist: %#v", values)
 	}
 }
+
+func TestPostgresSetIfAbsentDoesNotOverwrite(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	repo, err := NewPostgresRepository(t.Context(), schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	inserted, err := repo.SetIfAbsent(t.Context(), "key", "first")
+	if err != nil || !inserted {
+		t.Fatalf("SetIfAbsent(first) = %v, %v", inserted, err)
+	}
+	inserted, err = repo.SetIfAbsent(t.Context(), "key", "second")
+	if err != nil || inserted {
+		t.Fatalf("SetIfAbsent(second) = %v, %v", inserted, err)
+	}
+	values, err := repo.GetAll(t.Context())
+	if err != nil || values["key"] != "first" {
+		t.Fatalf("GetAll() = %#v, %v", values, err)
+	}
+}

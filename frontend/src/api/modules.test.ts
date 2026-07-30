@@ -70,15 +70,26 @@ describe('API module contracts', () => {
     expect(client.put).toHaveBeenLastCalledWith('/admin/settings', payload)
     await settings.runRetentionCleanup()
     expect(client.post).toHaveBeenLastCalledWith('/admin/settings/retention/cleanup')
-    await settings.testSMTP('recipient@example.com')
-    expect(client.post).toHaveBeenLastCalledWith('/admin/settings/smtp/test', { recipient: 'recipient@example.com' })
+    const smtpConfig = { smtp_host: 'smtp.example.com', smtp_port: 465, smtp_username: 'mailer', smtp_password: '', smtp_from: 'sender@example.com', smtp_from_name: 'Router', smtp_use_tls: true }
+    await settings.testSMTPConnection(smtpConfig)
+    expect(client.post).toHaveBeenLastCalledWith('/admin/settings/smtp/test-connection', smtpConfig)
+    await settings.testSMTP('recipient@example.com', smtpConfig)
+    expect(client.post).toHaveBeenLastCalledWith('/admin/settings/smtp/test', { recipient: 'recipient@example.com', ...smtpConfig })
     await settings.getDefaultEmailTemplates()
     expect(client.get).toHaveBeenLastCalledWith('/admin/settings/email-templates/defaults')
+    await settings.getEmailTemplateCatalog()
+    expect(client.get).toHaveBeenLastCalledWith('/admin/settings/email-templates')
+    await settings.getEmailTemplate('password reset', 'zh-CN')
+    expect(client.get).toHaveBeenLastCalledWith('/admin/settings/email-templates/password%20reset/zh-CN')
+    await settings.updateEmailTemplate('password_reset', 'en-US', 'Subject', '<p>Body</p>')
+    expect(client.put).toHaveBeenLastCalledWith('/admin/settings/email-templates/password_reset/en-US', { subject: 'Subject', html: '<p>Body</p>' })
+    await settings.restoreEmailTemplate('password_reset', 'en-US')
+    expect(client.post).toHaveBeenLastCalledWith('/admin/settings/email-templates/password_reset/en-US/restore')
     await settings.previewEmailTemplate('Subject', '<p>Body</p>')
     expect(client.post).toHaveBeenLastCalledWith('/admin/settings/email-templates/preview', { subject: 'Subject', html: '<p>Body</p>' })
-    await settings.testEmailTemplate('recipient@example.com', 'Subject', '<p>Body</p>')
+    await settings.testEmailTemplate('recipient@example.com', 'Subject', '<p>Body</p>', smtpConfig)
     expect(client.post).toHaveBeenLastCalledWith('/admin/settings/email-templates/test', {
-      recipient: 'recipient@example.com', subject: 'Subject', html: '<p>Body</p>'
+      recipient: 'recipient@example.com', subject: 'Subject', html: '<p>Body</p>', ...smtpConfig
     })
     await settings.applySetupProfile('platform')
     expect(client.post).toHaveBeenLastCalledWith('/setup/profiles', {

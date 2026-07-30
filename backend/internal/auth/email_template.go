@@ -12,7 +12,12 @@ type EmailTemplateData struct {
 	SiteName, UserName, ActionURL, Title, Amount, Limit, Period, Message string
 }
 
-type EmailTemplateDefinition struct{ Event, Locale, Subject, HTML string }
+type EmailTemplateDefinition struct {
+	Event   string `json:"event"`
+	Locale  string `json:"locale"`
+	Subject string `json:"subject"`
+	HTML    string `json:"html"`
+}
 
 func DefaultEmailTemplates() []EmailTemplateDefinition {
 	return []EmailTemplateDefinition{

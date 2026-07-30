@@ -28,8 +28,11 @@ func NewDingTalkService(config DingTalkConfig) (*DingTalkService, error) {
 	if config.Enabled && (strings.TrimSpace(config.ClientID) == "" || strings.TrimSpace(config.ClientSecret) == "" || strings.TrimSpace(config.RedirectURL) == "") {
 		return nil, errors.New("DingTalk client id, client secret, and redirect URL are required")
 	}
-	state, _ := NewOIDCService(OIDCConfig{Enabled: config.Enabled, IssuerURL: "https://login.dingtalk.com", ClientID: config.ClientID, RedirectURL: config.RedirectURL})
-	return &DingTalkService{config: config, state: state, client: http.DefaultClient}, nil
+	state, err := NewOIDCService(OIDCConfig{Enabled: config.Enabled, IssuerURL: "https://login.dingtalk.com", ClientID: config.ClientID, RedirectURL: config.RedirectURL})
+	if err != nil {
+		return nil, fmt.Errorf("initialize DingTalk OAuth state: %w", err)
+	}
+	return &DingTalkService{config: config, state: state, client: newExternalIdentityHTTPClient()}, nil
 }
 
 func (s *DingTalkService) Begin(now time.Time) (OIDCState, error) { return s.state.Begin(now) }

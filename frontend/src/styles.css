@@ -77,9 +77,24 @@
 
 .email-template-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, .9fr); gap: 20px; }
 .code-input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.email-preview { display: grid; grid-template-rows: auto minmax(420px, 1fr); gap: 10px; min-width: 0; }
+.email-template-form { display: grid; align-content: start; gap: 16px; min-width: 0; }
+.email-template-context { display: grid; gap: 3px; padding: 12px 14px; border-left: 3px solid var(--primary-500); background: var(--surface-subtle); }
+.email-template-context strong { color: var(--text); font-size: 13px; }
+.email-template-context span { color: var(--text-muted); font-size: 12px; }
+.email-template-loading { min-height: 84px; display: grid; place-items: center; color: var(--text-muted); font-size: 13px; }
+.email-template-placeholders { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--border); background: var(--surface-subtle); }
+.email-template-placeholders > strong { color: var(--text); font-size: 13px; }
+.email-template-placeholders > span { color: var(--text-muted); font-size: 11px; }
+.email-template-placeholders > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.email-template-placeholders code { padding: 3px 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); font-size: 11px; }
+.email-template-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.email-template-test { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; padding-top: 16px; border-top: 1px solid var(--border); }
+.email-preview { display: grid; grid-template-rows: auto minmax(420px, 1fr) auto; gap: 10px; min-width: 0; }
 .email-preview iframe { width: 100%; height: 100%; min-height: 420px; border: 1px solid var(--border); background: #fff; }
+.smtp-test-controls { display: grid; grid-template-columns: minmax(240px, 1fr) auto; gap: 12px; align-items: end; }
+.smtp-test-controls .row-actions { margin: 0; }
 @media (max-width: 900px) { .email-template-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .email-template-test, .smtp-test-controls { grid-template-columns: 1fr; } .email-template-actions .button, .smtp-test-controls .button { width: 100%; } }
 .legal-page { min-height: 100vh; background: var(--bg); padding: 48px 20px; }
 .legal-document { width: min(820px, 100%); margin: 0 auto; }
 .legal-document h1 { margin: 32px 0 24px; font-size: 32px; }

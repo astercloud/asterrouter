@@ -206,6 +206,39 @@ export interface EmailTemplate {
 	html: string
 }
 
+export interface EmailTemplateEventInfo {
+	event: string
+	placeholders: string[]
+}
+
+export interface EmailTemplateSummary {
+	event: string
+	locale: 'en-US' | 'zh-CN'
+	customized: boolean
+}
+
+export interface EmailTemplateCatalog {
+	events: EmailTemplateEventInfo[]
+	locales: Array<'en-US' | 'zh-CN'>
+	templates: EmailTemplateSummary[]
+	placeholders: string[]
+}
+
+export interface EmailTemplateDetail extends EmailTemplate {
+	customized: boolean
+	placeholders: string[]
+}
+
+export interface SMTPTestConfig {
+	smtp_host: string
+	smtp_port: number
+	smtp_username: string
+	smtp_password?: string
+	smtp_from: string
+	smtp_from_name: string
+	smtp_use_tls: boolean
+}
+
 export interface CustomEndpoint { name: string; endpoint: string; description: string }
 export interface CustomMenuItem { id: string; label: string; url: string; open_in_new_tab: boolean }
 export interface AuthSourceDefault { enabled: boolean; balance_micros: number; concurrency: number; rpm: number }

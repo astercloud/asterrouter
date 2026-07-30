@@ -14,10 +14,15 @@ vi.mock('@/stores/app', () => ({
 vi.mock('@/api/settings', () => ({
   getAdminSettings: vi.fn(),
   getDefaultEmailTemplates: vi.fn(),
+  getEmailTemplate: vi.fn(),
+  getEmailTemplateCatalog: vi.fn(),
   previewEmailTemplate: vi.fn(),
+  restoreEmailTemplate: vi.fn(),
   runRetentionCleanup: vi.fn(),
   testEmailTemplate: vi.fn(),
   testSMTP: vi.fn(),
+  testSMTPConnection: vi.fn(),
+  updateEmailTemplate: vi.fn(),
   updateAdminSettings: vi.fn()
 }))
 
@@ -79,6 +84,14 @@ describe('AdminSettingsView', () => {
     setLocale('en-US')
     vi.mocked(settings.getAdminSettings).mockResolvedValue(structuredClone(loadedSettings) as never)
     vi.mocked(settings.getDefaultEmailTemplates).mockResolvedValue([])
+    vi.mocked(settings.getEmailTemplateCatalog).mockResolvedValue({
+      events: [{ event: 'email_verification', placeholders: ['{{.SiteName}}'] }],
+      locales: ['en-US'], templates: [{ event: 'email_verification', locale: 'en-US', customized: false }], placeholders: ['{{.SiteName}}']
+    })
+    vi.mocked(settings.getEmailTemplate).mockResolvedValue({
+      event: 'email_verification', locale: 'en-US', subject: 'Verify {{.SiteName}}', html: '<p>Verify</p>', customized: false, placeholders: ['{{.SiteName}}']
+    })
+    vi.mocked(settings.previewEmailTemplate).mockResolvedValue({ subject: 'Verify AsterRouter', html: '<p>Verify</p>' })
     vi.mocked(settings.updateAdminSettings).mockResolvedValue(structuredClone(loadedSettings) as never)
     vi.mocked(system.checkSystemUpdates).mockResolvedValue({ has_update: false, source: 'none' } as never)
     vi.mocked(system.listSystemBackups).mockResolvedValue([])
@@ -142,6 +155,8 @@ describe('AdminSettingsView', () => {
     await wrapper.get('#settings-tab-email').trigger('click')
     expect(fieldControl('SMTP Host', 'input').value).toBe('smtp.example.com')
     expect(fieldControl('Sender name', 'input').value).toBe('AsterRouter')
+    expect(wrapper.get('input[name="smtp-username"]').attributes('autocomplete')).toBe('off')
+    expect(wrapper.get('input[name="smtp-password"]').attributes('autocomplete')).toBe('new-password')
 
     await wrapper.get('[data-section="settings-save-bar"] button').trigger('click')
     await flushPromises()
@@ -158,6 +173,28 @@ describe('AdminSettingsView', () => {
       smtp_use_tls: true
     }))
 
+    wrapper.unmount()
+  })
+
+  it('tests the unsaved SMTP form values without exposing the stored password', async () => {
+    const wrapper = mount(AdminSettingsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.get('#settings-tab-email').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('input[name="smtp-host"]').setValue('smtp.unsaved.example')
+    await wrapper.get('input[name="smtp-username"]').setValue('unsaved-user')
+    await wrapper.get('input[name="smtp-password"]').setValue('new-secret')
+    await wrapper.findAll('.smtp-test-controls button')[0]!.trigger('click')
+    await flushPromises()
+    expect(settings.testSMTPConnection).toHaveBeenCalledWith(expect.objectContaining({
+      smtp_host: 'smtp.unsaved.example', smtp_username: 'unsaved-user', smtp_password: 'new-secret', smtp_use_tls: true
+    }))
+
+    await wrapper.get('.smtp-test-controls input[type="email"]').setValue('recipient@example.com')
+    await wrapper.findAll('.smtp-test-controls button')[1]!.trigger('click')
+    await flushPromises()
+    expect(settings.testSMTP).toHaveBeenCalledWith('recipient@example.com', expect.objectContaining({ smtp_host: 'smtp.unsaved.example' }))
     wrapper.unmount()
   })
 

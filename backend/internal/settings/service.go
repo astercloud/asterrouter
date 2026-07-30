@@ -113,6 +113,7 @@ func (s *Service) Update(ctx context.Context, in AdminSettings) (AdminSettings, 
 	if profileConfigurationChanged(current, in) {
 		return AdminSettings{}, errors.New("change the active deployment profile from the deployment switcher")
 	}
+	in.EmailTemplates = current.EmailTemplates
 	values, err := valuesFromAdminSettings(in)
 	if err != nil {
 		return AdminSettings{}, err
@@ -145,6 +146,9 @@ func (s *Service) Update(ctx context.Context, in AdminSettings) (AdminSettings, 
 	if strings.TrimSpace(in.BackupS3SecretKey) == "" && existing[KeyBackupS3SecretKey] != "" {
 		values[KeyBackupS3SecretKey] = existing[KeyBackupS3SecretKey]
 	}
+	// Templates have a dedicated compare-and-swap API. Excluding them from the
+	// broad settings write prevents a stale form from losing another edit.
+	delete(values, KeyEmailTemplates)
 	values, err = s.encryptValues(values)
 	if err != nil {
 		return AdminSettings{}, err
@@ -330,6 +334,236 @@ func (s *Service) SMTPConfig(ctx context.Context) (SMTPSettings, error) {
 		Username: values[KeySMTPUsername], Password: values[KeySMTPPassword],
 		From: values[KeySMTPFrom], FromName: values[KeySMTPFromName], UseTLS: parseBool(values[KeySMTPUseTLS]),
 	}, nil
+}
+
+func (s *Service) ResolveSMTPConfig(ctx context.Context, candidate SMTPSettings) (SMTPSettings, error) {
+	saved, err := s.SMTPConfig(ctx)
+	if err != nil {
+		return SMTPSettings{}, err
+	}
+	candidate.Host = strings.TrimSpace(candidate.Host)
+	candidate.Username = strings.TrimSpace(candidate.Username)
+	candidate.Password = strings.TrimSpace(candidate.Password)
+	candidate.From = strings.TrimSpace(candidate.From)
+	candidate.FromName = strings.TrimSpace(candidate.FromName)
+	if candidate.Host == "" {
+		candidate.Host = saved.Host
+	}
+	if candidate.Port <= 0 {
+		candidate.Port = saved.Port
+	}
+	if candidate.Username == "" {
+		candidate.Username = saved.Username
+	}
+	if candidate.Password == "" {
+		candidate.Password = saved.Password
+	}
+	if candidate.From == "" {
+		candidate.From = saved.From
+	}
+	if candidate.FromName == "" {
+		candidate.FromName = saved.FromName
+	}
+	if candidate.Port <= 0 {
+		candidate.Port = 587
+	}
+	if candidate.Host == "" {
+		return SMTPSettings{}, errors.New("smtp_host is required")
+	}
+	if candidate.Port > 65535 {
+		return SMTPSettings{}, errors.New("smtp_port must be between 1 and 65535")
+	}
+	return candidate, nil
+}
+
+var emailTemplatePlaceholders = map[string][]string{
+	"email_verification":    {"{{.SiteName}}", "{{.UserName}}", "{{.ActionURL}}"},
+	"password_reset":        {"{{.SiteName}}", "{{.ActionURL}}"},
+	"balance_low":           {"{{.SiteName}}", "{{.Amount}}"},
+	"quota_limit":           {"{{.SiteName}}", "{{.Period}}", "{{.Limit}}"},
+	"subscription_expiry":   {"{{.SiteName}}", "{{.Message}}"},
+	"customer_notification": {"{{.SiteName}}", "{{.Title}}", "{{.Message}}", "{{.ActionURL}}"},
+}
+
+func (s *Service) EmailTemplateCatalog(ctx context.Context) (EmailTemplateCatalog, error) {
+	custom, _, _, err := s.storedEmailTemplates(ctx)
+	if err != nil {
+		return EmailTemplateCatalog{}, err
+	}
+	customized := make(map[string]struct{}, len(custom))
+	for _, item := range custom {
+		customized[emailTemplateKey(item.Event, item.Locale)] = struct{}{}
+	}
+	events := make([]EmailTemplateEventInfo, 0, len(emailTemplatePlaceholders))
+	seenEvents := make(map[string]struct{}, len(emailTemplatePlaceholders))
+	summaries := make([]EmailTemplateSummary, 0, len(auth.DefaultEmailTemplates()))
+	placeholderSet := make(map[string]struct{})
+	placeholders := make([]string, 0, 8)
+	for _, item := range auth.DefaultEmailTemplates() {
+		if _, exists := seenEvents[item.Event]; !exists {
+			eventPlaceholders := append([]string(nil), emailTemplatePlaceholders[item.Event]...)
+			events = append(events, EmailTemplateEventInfo{Event: item.Event, Placeholders: eventPlaceholders})
+			seenEvents[item.Event] = struct{}{}
+			for _, placeholder := range eventPlaceholders {
+				if _, exists := placeholderSet[placeholder]; exists {
+					continue
+				}
+				placeholderSet[placeholder] = struct{}{}
+				placeholders = append(placeholders, placeholder)
+			}
+		}
+		_, isCustomized := customized[emailTemplateKey(item.Event, item.Locale)]
+		summaries = append(summaries, EmailTemplateSummary{Event: item.Event, Locale: item.Locale, Customized: isCustomized})
+	}
+	return EmailTemplateCatalog{Events: events, Locales: []string{"zh-CN", "en-US"}, Templates: summaries, Placeholders: placeholders}, nil
+}
+
+func (s *Service) EmailTemplate(ctx context.Context, event, locale string) (EmailTemplateDetail, error) {
+	official, err := officialEmailTemplate(event, locale)
+	if err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	custom, _, _, err := s.storedEmailTemplates(ctx)
+	if err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	for _, item := range custom {
+		if item.Event == official.Event && item.Locale == official.Locale {
+			return emailTemplateDetail(item, true), nil
+		}
+	}
+	return emailTemplateDetail(official, false), nil
+}
+
+func (s *Service) UpdateEmailTemplate(ctx context.Context, event, locale, subject, htmlBody string) (EmailTemplateDetail, error) {
+	official, err := officialEmailTemplate(event, locale)
+	if err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	nextTemplate := EmailTemplate{Event: official.Event, Locale: official.Locale, Subject: strings.TrimSpace(subject), HTML: strings.TrimSpace(htmlBody)}
+	if _, err := validateAndMarshalEmailTemplates([]EmailTemplate{nextTemplate}); err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	current, raw, exists, err := s.storedEmailTemplates(ctx)
+	if err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	if nextTemplate.Subject == official.Subject && nextTemplate.HTML == official.HTML {
+		next := removeEmailTemplate(current, official.Event, official.Locale)
+		if exists {
+			if err := s.replaceEmailTemplates(ctx, raw, true, next); err != nil {
+				return EmailTemplateDetail{}, err
+			}
+		}
+		return emailTemplateDetail(official, false), nil
+	}
+	replaced := false
+	for index := range current {
+		if current[index].Event == official.Event && current[index].Locale == official.Locale {
+			current[index] = nextTemplate
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		current = append(current, nextTemplate)
+	}
+	if err := s.replaceEmailTemplates(ctx, raw, exists, current); err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	return emailTemplateDetail(nextTemplate, true), nil
+}
+
+func (s *Service) RestoreEmailTemplate(ctx context.Context, event, locale string) (EmailTemplateDetail, error) {
+	official, err := officialEmailTemplate(event, locale)
+	if err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	current, raw, exists, err := s.storedEmailTemplates(ctx)
+	if err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	if !exists {
+		return emailTemplateDetail(official, false), nil
+	}
+	next := removeEmailTemplate(current, official.Event, official.Locale)
+	if err := s.replaceEmailTemplates(ctx, raw, true, next); err != nil {
+		return EmailTemplateDetail{}, err
+	}
+	return emailTemplateDetail(official, false), nil
+}
+
+func (s *Service) storedEmailTemplates(ctx context.Context) ([]EmailTemplate, string, bool, error) {
+	values, err := s.repo.GetAll(ctx)
+	if err != nil {
+		return nil, "", false, err
+	}
+	raw, exists := values[KeyEmailTemplates]
+	if !exists || strings.TrimSpace(raw) == "" {
+		return []EmailTemplate{}, raw, exists, nil
+	}
+	var templates []EmailTemplate
+	if err := json.Unmarshal([]byte(raw), &templates); err != nil {
+		return nil, raw, true, fmt.Errorf("decode email templates: %w", err)
+	}
+	if _, err := validateAndMarshalEmailTemplates(templates); err != nil {
+		return nil, raw, true, err
+	}
+	overrides := make([]EmailTemplate, 0, len(templates))
+	for _, item := range templates {
+		official, err := officialEmailTemplate(item.Event, item.Locale)
+		if err != nil || item.Subject != official.Subject || item.HTML != official.HTML {
+			overrides = append(overrides, item)
+		}
+	}
+	return overrides, raw, true, nil
+}
+
+func (s *Service) replaceEmailTemplates(ctx context.Context, expected string, exists bool, templates []EmailTemplate) error {
+	encoded, err := validateAndMarshalEmailTemplates(templates)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		inserted, err := s.repo.SetIfAbsent(ctx, KeyEmailTemplates, string(encoded))
+		if err != nil {
+			return err
+		}
+		if !inserted {
+			return ErrSettingsChanged
+		}
+		return nil
+	}
+	return s.repo.ReplaceIfUnchanged(ctx, map[string]ValueReplacement{KeyEmailTemplates: {Expected: expected, Value: string(encoded)}})
+}
+
+func officialEmailTemplate(event, locale string) (EmailTemplate, error) {
+	event = strings.TrimSpace(event)
+	locale = strings.TrimSpace(locale)
+	for _, item := range auth.DefaultEmailTemplates() {
+		if item.Event == event && item.Locale == locale {
+			return EmailTemplate{Event: item.Event, Locale: item.Locale, Subject: item.Subject, HTML: item.HTML}, nil
+		}
+	}
+	return EmailTemplate{}, fmt.Errorf("unsupported email template %q", emailTemplateKey(event, locale))
+}
+
+func emailTemplateDetail(template EmailTemplate, customized bool) EmailTemplateDetail {
+	return EmailTemplateDetail{EmailTemplate: template, Customized: customized, Placeholders: append([]string(nil), emailTemplatePlaceholders[template.Event]...)}
+}
+
+func emailTemplateKey(event, locale string) string {
+	return event + ":" + locale
+}
+
+func removeEmailTemplate(templates []EmailTemplate, event, locale string) []EmailTemplate {
+	next := make([]EmailTemplate, 0, len(templates))
+	for _, item := range templates {
+		if item.Event != event || item.Locale != locale {
+			next = append(next, item)
+		}
+	}
+	return next
 }
 
 func (s *Service) RegistrationPolicy(ctx context.Context) (RegistrationPolicy, error) {

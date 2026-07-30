@@ -1189,67 +1189,7 @@ func New(opts Options) http.Handler {
 		}
 		httpx.OK(c, result)
 	})
-	admin.POST("/settings/smtp/test", func(c *gin.Context) {
-		var req struct {
-			Recipient string `json:"recipient"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil || !strings.Contains(req.Recipient, "@") {
-			httpx.Error(c, http.StatusBadRequest, 1402, "valid recipient is required")
-			return
-		}
-		smtpSettings, err := opts.SettingsService.SMTPConfig(c.Request.Context())
-		if err != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1501, err.Error())
-			return
-		}
-		mailer := auth.SMTPMailer{Config: smtpConfig(smtpSettings)}
-		if err := mailer.Send(c.Request.Context(), strings.TrimSpace(req.Recipient), "AsterRouter SMTP test", "SMTP configuration is working."); err != nil {
-			httpx.Error(c, http.StatusBadGateway, 1502, err.Error())
-			return
-		}
-		httpx.OK(c, gin.H{"sent": true})
-	})
-	admin.GET("/settings/email-templates/defaults", func(c *gin.Context) { httpx.OK(c, auth.DefaultEmailTemplates()) })
-	admin.POST("/settings/email-templates/preview", func(c *gin.Context) {
-		var req struct {
-			Subject string `json:"subject"`
-			HTML    string `json:"html"`
-		}
-		if c.ShouldBindJSON(&req) != nil {
-			httpx.Error(c, http.StatusBadRequest, 1402, "invalid template payload")
-			return
-		}
-		data := auth.EmailTemplateData{SiteName: "AsterRouter", UserName: "Enterprise User", ActionURL: "https://example.test/action", Amount: "100.00", Limit: "100000", Period: "monthly", Message: "Access expires in 7 days."}
-		subject, htmlBody, err := auth.RenderEmailTemplate(req.Subject, req.HTML, data)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1420, err.Error())
-			return
-		}
-		httpx.OK(c, gin.H{"subject": subject, "html": htmlBody})
-	})
-	admin.POST("/settings/email-templates/test", func(c *gin.Context) {
-		var req struct{ Recipient, Subject, HTML string }
-		if c.ShouldBindJSON(&req) != nil || !strings.Contains(req.Recipient, "@") {
-			httpx.Error(c, http.StatusBadRequest, 1402, "valid recipient is required")
-			return
-		}
-		data := auth.EmailTemplateData{SiteName: "AsterRouter", UserName: "Enterprise User", ActionURL: "https://example.test/action", Amount: "100.00", Limit: "100000", Period: "monthly", Message: "Access expires in 7 days."}
-		subject, htmlBody, err := auth.RenderEmailTemplate(req.Subject, req.HTML, data)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1420, err.Error())
-			return
-		}
-		smtpSettings, err := opts.SettingsService.SMTPConfig(c.Request.Context())
-		if err != nil {
-			httpx.Error(c, http.StatusServiceUnavailable, 1501, err.Error())
-			return
-		}
-		if err := (auth.SMTPMailer{Config: smtpConfig(smtpSettings)}).SendHTML(c.Request.Context(), req.Recipient, subject, htmlBody); err != nil {
-			httpx.Error(c, http.StatusBadGateway, 1502, err.Error())
-			return
-		}
-		httpx.OK(c, gin.H{"sent": true})
-	})
+	registerEmailSettings(admin, opts.SettingsService)
 
 	portal := api.Group("/portal")
 	portal.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))

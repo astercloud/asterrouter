@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { AlertTriangle, Building2, Check, Database, Download, FileText, KeyRound, Laptop, Mail, PanelsTopLeft, Power, RadioTower, RefreshCw, RotateCcw, Save, ServerCog, ShieldCheck, SlidersHorizontal, ToggleLeft, UserRound } from '@lucide/vue'
+import { AlertTriangle, Building2, Check, Database, Download, FileText, KeyRound, Laptop, Mail, PanelsTopLeft, PlugZap, Power, RadioTower, RefreshCw, RotateCcw, Save, Send, ServerCog, ShieldCheck, SlidersHorizontal, ToggleLeft, UserRound } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
-import { getAdminSettings, getDefaultEmailTemplates, previewEmailTemplate, runRetentionCleanup, testEmailTemplate, testSMTP, updateAdminSettings } from '@/api/settings'
+import { getAdminSettings, runRetentionCleanup, testSMTP, testSMTPConnection, updateAdminSettings } from '@/api/settings'
 import {
   checkSystemUpdates,
   createDiagnosticBundle,
@@ -21,7 +21,8 @@ import {
   updateSystemProfiles
 } from '@/api/system'
 import { useAppStore } from '@/stores/app'
-import type { AdminSettings, S3BackupObject, SystemArchiveInfo, SystemUpdateInfo } from '@/types'
+import type { AdminSettings, S3BackupObject, SMTPTestConfig, SystemArchiveInfo, SystemUpdateInfo } from '@/types'
+import EmailTemplateEditor from './EmailTemplateEditor.vue'
 
 const { t } = useI18n()
 const app = useAppStore()
@@ -40,11 +41,9 @@ type SettingsTab = 'general' | 'terms' | 'features' | 'security' | 'defaults' | 
 const activeSettingsTab = ref<SettingsTab>('general')
 const smtpTestRecipient = ref('')
 const smtpTesting = ref(false)
+const smtpConnectionTesting = ref(false)
 const s3Testing = ref(false)
 const retentionCleaning = ref(false)
-const selectedEmailTemplate = ref(0)
-const emailPreview = ref({ subject: '', html: '' })
-const emailTemplateRecipient = ref('')
 const profileSwitching = ref('')
 
 const deploymentProfiles = [
@@ -220,6 +219,15 @@ const gatewayBaseUrl = computed(() => {
   const base = form.public_base_url || window.location.origin
   return `${base.replace(/\/$/, '')}${form.gateway_base_path}`
 })
+const smtpTestConfig = computed<SMTPTestConfig>(() => ({
+	smtp_host: form.smtp_host,
+	smtp_port: form.smtp_port,
+	smtp_username: form.smtp_username,
+	smtp_password: form.smtp_password,
+	smtp_from: form.smtp_from,
+	smtp_from_name: form.smtp_from_name,
+	smtp_use_tls: form.smtp_use_tls
+}))
 const allowedEmailDomainsText = computed({
 	get: () => form.allowed_email_domains.join('\n'),
 	set: (value: string) => { form.allowed_email_domains = parseSettingsList(value) }
@@ -322,7 +330,6 @@ async function load() {
   error.value = ''
   try {
     assignSettings(await getAdminSettings())
-	await ensureEmailTemplates()
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -335,13 +342,27 @@ async function runSMTPTest() {
   error.value = ''
   message.value = ''
   try {
-    await testSMTP(smtpTestRecipient.value)
-    message.value = 'SMTP 测试邮件已发送'
+    await testSMTP(smtpTestRecipient.value, smtpTestConfig.value)
+    message.value = t('settings.smtpTestSent')
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
     smtpTesting.value = false
   }
+}
+
+async function runSMTPConnectionTest() {
+	smtpConnectionTesting.value = true
+	error.value = ''
+	message.value = ''
+	try {
+		await testSMTPConnection(smtpTestConfig.value)
+		message.value = t('settings.smtpConnectionSucceeded')
+	} catch (err) {
+		error.value = err instanceof Error ? err.message : t('common.failed')
+	} finally {
+		smtpConnectionTesting.value = false
+	}
 }
 
 async function runS3Test() {
@@ -355,30 +376,6 @@ async function runS3Test() {
   } finally {
     s3Testing.value = false
   }
-}
-
-async function ensureEmailTemplates() {
-  if (!form.email_templates.length) form.email_templates = await getDefaultEmailTemplates()
-}
-
-async function runEmailPreview() {
-  const template = form.email_templates[selectedEmailTemplate.value]
-  if (template) emailPreview.value = await previewEmailTemplate(template.subject, template.html)
-}
-
-async function restoreEmailTemplate() {
-  const current = form.email_templates[selectedEmailTemplate.value]
-  if (!current) return
-  const defaults = await getDefaultEmailTemplates()
-  const official = defaults.find(item => item.event === current.event && item.locale === current.locale)
-  if (official) form.email_templates[selectedEmailTemplate.value] = { ...official }
-  await runEmailPreview()
-}
-
-async function runEmailTemplateTest() {
-  const template = form.email_templates[selectedEmailTemplate.value]
-  if (template) await testEmailTemplate(emailTemplateRecipient.value, template.subject, template.html)
-  message.value = '模板测试邮件已发送'
 }
 
 async function refreshUpdates(force = false) {
@@ -674,9 +671,9 @@ onMounted(async () => {
 
       <div v-if="activeSettingsTab === 'defaults'" class="panel"><div class="panel-header"><ShieldCheck :size="18"/><h2>按认证来源默认值</h2></div><div class="panel-body auth-provider-list"><section v-for="source in ['local','oidc','feishu','dingtalk','github','google']" :key="source" class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ source }}</strong><p>覆盖该身份源首次创建用户时的全局默认值。</p></div><label class="switch"><input v-model="form.auth_source_defaults[source].enabled" type="checkbox"/><span></span></label></div><div v-if="form.auth_source_defaults[source].enabled" class="auth-provider-config auth-credential-grid"><div class="field"><label>余额（微美元）</label><input v-model.number="form.auth_source_defaults[source].balance_micros" type="number" min="0"/></div><div class="field"><label>并发</label><input v-model.number="form.auth_source_defaults[source].concurrency" type="number" min="0"/></div><div class="field"><label>RPM</label><input v-model.number="form.auth_source_defaults[source].rpm" type="number" min="0"/></div></div></section></div></div>
 
-      <div v-if="activeSettingsTab === 'email'" class="panel"><div class="panel-header"><Mail :size="18"/><h2>{{ t('settings.emailSettings') }}</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>SMTP Host</label><input v-model="form.smtp_host"/></div><div class="field"><label>SMTP Port</label><input v-model.number="form.smtp_port" type="number" min="1" max="65535"/></div><div class="field"><label>{{ t('auth.username') }}</label><input v-model="form.smtp_username"/></div><div class="field"><label>{{ t('auth.password') }}</label><input v-model="form.smtp_password" type="password" :placeholder="form.smtp_configured?t('plugins.keepSecret'):''"/></div><div class="field"><label>{{ t('settings.smtpFrom') }}</label><input v-model="form.smtp_from" type="email"/></div><div class="field"><label>{{ t('settings.smtpFromName') }}</label><input v-model="form.smtp_from_name"/></div></div><div class="auth-provider-header"><div><strong>{{ t('settings.smtpImplicitTLS') }}</strong><p>{{ t('settings.smtpImplicitTLSHelp') }}</p></div><label class="switch"><input v-model="form.smtp_use_tls" type="checkbox"/><span></span></label></div><div class="auth-provider-config"><div class="field"><label>{{ t('settings.smtpTestRecipient') }}</label><input v-model="smtpTestRecipient" type="email" placeholder="admin@example.com"/></div><button class="button secondary" type="button" :disabled="smtpTesting || !smtpTestRecipient" @click="runSMTPTest">{{ smtpTesting ? t('common.loading') : t('settings.smtpSendTest') }}</button></div></div></div>
+      <div v-if="activeSettingsTab === 'email'" class="panel"><div class="panel-header"><Mail :size="18"/><h2>{{ t('settings.emailSettings') }}</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>SMTP Host</label><input v-model="form.smtp_host" name="smtp-host" autocomplete="off"/></div><div class="field"><label>SMTP Port</label><input v-model.number="form.smtp_port" name="smtp-port" type="number" min="1" max="65535"/></div><div class="field"><label>{{ t('auth.username') }}</label><input v-model="form.smtp_username" name="smtp-username" autocomplete="off"/></div><div class="field"><label>{{ t('auth.password') }}</label><input v-model="form.smtp_password" name="smtp-password" type="password" autocomplete="new-password" :placeholder="form.smtp_configured?t('plugins.keepSecret'):''"/></div><div class="field"><label>{{ t('settings.smtpFrom') }}</label><input v-model="form.smtp_from" name="smtp-from" type="email" autocomplete="off"/></div><div class="field"><label>{{ t('settings.smtpFromName') }}</label><input v-model="form.smtp_from_name" name="smtp-from-name" autocomplete="off"/></div></div><div class="auth-provider-header"><div><strong>{{ t('settings.smtpImplicitTLS') }}</strong><p>{{ t('settings.smtpImplicitTLSHelp') }}</p></div><label class="switch"><input v-model="form.smtp_use_tls" type="checkbox"/><span></span></label></div><div class="auth-provider-config smtp-test-controls"><div class="field"><label>{{ t('settings.smtpTestRecipient') }}</label><input v-model="smtpTestRecipient" type="email" autocomplete="off" placeholder="admin@example.com"/></div><div class="row-actions"><button class="button secondary" type="button" :disabled="smtpConnectionTesting || !form.smtp_host" @click="runSMTPConnectionTest"><PlugZap :size="16"/>{{ smtpConnectionTesting ? t('common.loading') : t('settings.smtpTestConnection') }}</button><button class="button secondary" type="button" :disabled="smtpTesting || !smtpTestRecipient" @click="runSMTPTest"><Send :size="16"/>{{ smtpTesting ? t('common.loading') : t('settings.smtpSendTest') }}</button></div></div></div></div>
 
-      <div v-if="activeSettingsTab === 'email' && form.email_templates.length" class="panel"><div class="panel-header"><FileText :size="18"/><h2>邮件通知模板</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>事件与语言</label><select v-model.number="selectedEmailTemplate" @change="runEmailPreview"><option v-for="(item,index) in form.email_templates" :key="item.event+item.locale" :value="index">{{ item.event }} / {{ item.locale }}</option></select></div><div class="field"><label>测试收件邮箱</label><input v-model="emailTemplateRecipient" type="email"/></div></div><div v-if="form.email_templates[selectedEmailTemplate]" class="email-template-grid"><div><div class="field"><label>主题</label><input v-model="form.email_templates[selectedEmailTemplate].subject"/></div><div class="field"><label>HTML 模板</label><textarea v-model="form.email_templates[selectedEmailTemplate].html" rows="18" class="code-input"/></div><div class="hint">可用变量：<code v-pre>{{.SiteName}}</code> <code v-pre>{{.UserName}}</code> <code v-pre>{{.ActionURL}}</code> <code v-pre>{{.Amount}}</code> <code v-pre>{{.Limit}}</code> <code v-pre>{{.Period}}</code> <code v-pre>{{.Message}}</code></div><div class="status-line"><button class="button secondary" type="button" @click="runEmailPreview">预览</button><button class="button secondary" type="button" @click="restoreEmailTemplate">恢复官方模板</button><button class="button" type="button" :disabled="!emailTemplateRecipient" @click="runEmailTemplateTest">测试发送</button></div></div><div class="email-preview"><strong>{{ emailPreview.subject || '邮件预览' }}</strong><iframe sandbox="" :srcdoc="emailPreview.html" title="邮件预览"></iframe></div></div></div></div>
+      <EmailTemplateEditor v-if="activeSettingsTab === 'email'" :smtp-config="smtpTestConfig" />
 
       <div v-if="activeSettingsTab === 'gateway'" class="panel">
         <div class="panel-header">
