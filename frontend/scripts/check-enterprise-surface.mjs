@@ -4,7 +4,7 @@ import { dirname, extname, join, relative, resolve } from 'node:path'
 
 const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repositoryRoot = resolve(frontendRoot, '..')
-const scanRoots = ['backend', 'frontend/src', 'frontend/e2e', 'deploy', 'scripts']
+const scanRoots = ['.github/workflows', 'backend', 'frontend/src', 'frontend/e2e', 'deploy', 'scripts']
 const textExtensions = new Set(['.go', '.js', '.mjs', '.sql', '.sh', '.ts', '.vue', '.yaml', '.yml'])
 const currentScript = 'frontend/scripts/check-enterprise-surface.mjs'
 const generatedDirectories = new Set([

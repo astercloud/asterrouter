@@ -93,7 +93,7 @@ jobs:
           PGPASSWORD: asterrouter
         run: |
           set -euo pipefail
-          for database in platform_setup enterprise relay_operator personal platform; do
+          for database in enterprise_setup enterprise; do
             psql --host=127.0.0.1 --username=asterrouter --dbname=postgres \
               --command="CREATE DATABASE asterrouter_release_test_journey_${database}"
           done

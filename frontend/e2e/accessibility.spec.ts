@@ -70,7 +70,7 @@ test('@smoke @j09 enterprise member sessions are isolated and keyboard-operable'
   await page.keyboard.press('Enter')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
 
-  const usageLink = page.getByRole('link', { name: 'Usage', exact: true })
+  const usageLink = page.getByRole('main').getByRole('link', { name: 'Usage', exact: true })
   await focusWithTab(page, usageLink)
   await page.keyboard.press('Enter')
   await expect(page).toHaveURL(/\/portal\/usage$/)
