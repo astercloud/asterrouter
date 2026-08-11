@@ -5,32 +5,25 @@ import {
   ChevronLeft,
   ChevronRight,
 	ExternalLink,
-	KeyRound,
-	Laptop,
 	Moon,
-	PanelsTopLeft,
 	Puzzle,
-	RadioTower,
   Sun,
-	UserRound,
   X
 } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import TopBar from '@/components/TopBar.vue'
-import { getPluginCatalog, getPluginFrontendContribution } from '@/api/plugins'
+import { getPluginCatalog, getPluginWorkbench } from '@/api/plugins'
 import { useAppStore } from '@/stores/app'
-import { useAuthStore } from '@/stores/auth'
-import { canAccessSurface } from '@/router/surfaces'
 
-interface SurfaceNavItem {
+interface ProductNavItem {
   to: string
   label: string
   icon: Component
 }
 
-interface SurfaceNavGroup {
+interface ProductNavGroup {
   label: string
-  items: SurfaceNavItem[]
+  items: ProductNavItem[]
 }
 
 interface InstalledPluginNavItem {
@@ -45,8 +38,8 @@ const props = withDefaults(
   defineProps<{
     homeTo: string
     navLabel: string
-    navGroups: SurfaceNavGroup[]
-    surface: 'personal' | 'relay_operator' | 'enterprise' | 'platform' | 'portal' | 'customer'
+    navGroups: ProductNavGroup[]
+    entry: 'console' | 'portal'
     brandMark?: string
     storageKey?: string
   }>(),
@@ -58,7 +51,6 @@ const props = withDefaults(
 
 const { t } = useI18n()
 const app = useAppStore()
-const auth = useAuthStore()
 const route = useRoute()
 const collapsed = ref(localStorage.getItem(props.storageKey) === 'true')
 const mobileOpen = ref(false)
@@ -66,51 +58,24 @@ const darkMode = ref(document.documentElement.dataset.theme === 'dark')
 const installedPluginLinks = ref<InstalledPluginNavItem[]>([])
 
 const version = computed(() => app.publicSettings?.version || 'Dev')
-const enabledProfiles = computed(() => app.publicSettings?.enabled_profiles || [])
-const surfaceLinks = computed(() => {
-  const links: SurfaceNavItem[] = []
-	if (props.surface !== 'personal' && enabledProfiles.value.includes('personal') && canAccessSurface(auth.user, 'personal')) {
-    links.push({ to: '/console/overview', label: 'nav.console', icon: Laptop })
-  }
-	if (props.surface !== 'relay_operator' && enabledProfiles.value.includes('relay_operator') && canAccessSurface(auth.user, 'relay_operator')) {
-    links.push({ to: '/operator/overview', label: 'nav.operator', icon: RadioTower })
-  }
-	if (props.surface !== 'customer' && enabledProfiles.value.includes('relay_operator') && canAccessSurface(auth.user, 'customer')) {
-    links.push({ to: '/customer/overview', label: 'nav.customer', icon: UserRound })
-  }
-	if (enabledProfiles.value.includes('enterprise')) {
-		if (props.surface !== 'enterprise' && canAccessSurface(auth.user, 'enterprise')) {
-      links.push({ to: '/admin/dashboard', label: 'nav.admin', icon: PanelsTopLeft })
-    }
-		if (props.surface !== 'portal' && canAccessSurface(auth.user, 'portal')) {
-      links.push({ to: '/portal/overview', label: 'nav.portal', icon: KeyRound })
-    }
-  }
-	if (props.surface !== 'platform' && enabledProfiles.value.includes('platform') && canAccessSurface(auth.user, 'platform')) {
-    links.push({ to: '/platform/overview', label: 'nav.platformConsole', icon: PanelsTopLeft })
-  }
-  return links
-})
 const customMenuItems = computed(() => app.publicSettings?.custom_menu_items || [])
 
 async function loadInstalledPluginLinks() {
-  if (props.surface !== 'personal') return
+  if (props.entry !== 'console') return
   try {
     const catalog = await getPluginCatalog()
     const candidates = catalog.plugins.filter((plugin) =>
       plugin.status === 'enabled' &&
-      plugin.surfaces.includes('personal') &&
       plugin.packages?.some((pkg) => pkg.install_status === 'installed')
     )
     const results = await Promise.allSettled(candidates.map(async (plugin) => {
-      const contribution = await getPluginFrontendContribution(plugin.plugin_id)
-      const surface = contribution.surfaces?.find((item) => item.surface === 'console.plugins')
-      if (!surface) return null
+      const manifest = await getPluginWorkbench(plugin.plugin_id)
+      if (!manifest.workbench?.asset) return null
       return {
         pluginID: plugin.plugin_id,
-        label: surface.title || plugin.name,
+        label: manifest.workbench.title || plugin.name,
         description: plugin.description,
-        to: `/console/plugins/${encodeURIComponent(plugin.plugin_id)}/workbench`,
+        to: `/console/system/plugins/${encodeURIComponent(plugin.plugin_id)}/workbench`,
         icon: Puzzle
       }
     }))
@@ -146,7 +111,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="app-shell admin-layout" :class="[{ 'sidebar-is-collapsed': collapsed }, `surface-${surface}`]">
+  <div class="app-shell admin-layout" :class="[{ 'sidebar-is-collapsed': collapsed }, `entry-${entry}`]">
     <aside class="sidebar admin-sidebar" :class="{ collapsed, 'mobile-open': mobileOpen }">
       <div class="sidebar-header sidebar-brand-row">
         <RouterLink class="sidebar-brand-link" :to="homeTo">
@@ -164,7 +129,7 @@ onMounted(() => {
 
       <nav class="sidebar-nav" :aria-label="t(navLabel)">
 		<template v-for="group in navGroups" :key="group.label">
-		<section v-if="installedPluginLinks.length && props.surface === 'personal' && group.label === 'nav.inference'" class="sidebar-section sidebar-installed-plugins" data-installed-plugin-navigation>
+		<section v-if="installedPluginLinks.length && props.entry === 'console' && group.label === 'nav.systemManagement'" class="sidebar-section sidebar-installed-plugins" data-installed-plugin-navigation>
 		  <p class="sidebar-section-title">
 		    <span>{{ t('nav.installedPlugins') }}</span>
 		    <span class="sidebar-plugin-count" aria-hidden="true">{{ installedPluginLinks.length }}</span>
@@ -194,19 +159,6 @@ onMounted(() => {
           </RouterLink>
 		</section>
 		</template>
-		<section v-if="surfaceLinks.length" class="sidebar-section sidebar-workspaces">
-          <p class="sidebar-section-title">{{ t('nav.workspaces') }}</p>
-          <RouterLink
-            v-for="link in surfaceLinks"
-            :key="link.to"
-            class="sidebar-link nav-item"
-            :to="link.to"
-            :title="collapsed ? t(link.label) : undefined"
-          >
-            <component :is="link.icon" :size="19" />
-            <span>{{ t(link.label) }}</span>
-          </RouterLink>
-        </section>
 		<section v-if="customMenuItems.length" class="sidebar-section"><p class="sidebar-section-title">企业链接</p><template v-for="item in customMenuItems" :key="item.id"><RouterLink v-if="item.url.startsWith('/') && !item.open_in_new_tab" class="sidebar-link nav-item" :to="item.url"><ExternalLink :size="19"/><span>{{ item.label }}</span></RouterLink><a v-else class="sidebar-link nav-item" :href="item.url" :target="item.open_in_new_tab?'_blank':undefined" :rel="item.open_in_new_tab?'noopener noreferrer':undefined"><ExternalLink :size="19"/><span>{{ item.label }}</span></a></template></section>
       </nav>
 

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { captureBrowserErrors, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
+import { captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './fixtures'
 
 // Candidate-package journeys use one external origin instead of the local dev
 // server. Keep health assertions on that same origin.
@@ -7,16 +7,9 @@ const backendURL = process.env.ASTER_E2E_EXTERNAL_URL || `http://127.0.0.1:${pro
 const expectedDemoMode = process.env.ASTER_E2E_EXPECT_DEMO_MODE === undefined
   ? true
   : process.env.ASTER_E2E_EXPECT_DEMO_MODE === 'true'
-const expectedProfile = process.env.ASTER_E2E_EXPECT_PROFILE || ''
-const profileJourney: Record<string, { path: string; heading: string }> = {
-  personal: { path: '/console/overview', heading: 'Personal Console' },
-  relay_operator: { path: '/operator/overview', heading: 'Relay Operator Console' },
-  enterprise: { path: '/admin/dashboard', heading: 'Overview' },
-  platform: { path: '/platform/overview', heading: 'Platform overview' }
-}
-const activeJourney = profileJourney[expectedProfile] || profileJourney.personal
+const managementEntry = { path: '/console/workbench', heading: 'Overview' }
 
-test('@smoke @surface-smoke backend health and public settings are ready', async ({ request }) => {
+test('@smoke @enterprise-smoke backend health and public settings are ready', async ({ request }) => {
   const health = await request.get(`${backendURL}/health`)
   expect(health.status()).toBe(200)
   await expect(health.json()).resolves.toMatchObject({ data: { status: 'ok' } })
@@ -29,14 +22,11 @@ test('@smoke @surface-smoke backend health and public settings are ready', async
   expect(settings.status()).toBe(200)
   const settingsBody = await settings.json()
   expect(settingsBody).toMatchObject({ data: { demo_mode: expectedDemoMode, setup_completed: true } })
-  if (expectedProfile) {
-    expect(settingsBody.data).toMatchObject({ default_profile: expectedProfile, enabled_profiles: [expectedProfile] })
-  }
 })
 
-test('@smoke @surface-smoke anonymous protected navigation redirects to login', async ({ page }) => {
+test('@smoke @enterprise-smoke anonymous protected navigation redirects to login', async ({ page }) => {
   const errors = captureBrowserErrors(page)
-  const protectedPath = `${activeJourney.path}?status=active`
+  const protectedPath = `${managementEntry.path}?status=active`
   await page.goto(protectedPath)
 
   await expect(page).toHaveURL(/\/login\?redirect=/)
@@ -52,81 +42,30 @@ test('@smoke @surface-smoke anonymous protected navigation redirects to login', 
   expect(errors).toEqual([])
 })
 
-test('@smoke @surface-smoke login persists and opens the enabled deployment surface', async ({ page }) => {
+test('@smoke @enterprise-smoke login persists and opens the enterprise management console', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
 
   await page.reload()
   await page.waitForLoadState('networkidle')
-  await expect(page).toHaveURL(new RegExp(`${activeJourney.path}$`))
-  await expect(page.getByRole('heading', { level: 1, name: activeJourney.heading })).toBeVisible()
-
-  const additionalSurfaces = expectedProfile
-    ? []
-    : ['/operator/overview', '/admin/dashboard', '/portal/overview', '/platform/overview']
-  for (const path of additionalSurfaces) {
-    await page.goto(path)
-    await page.waitForLoadState('networkidle')
-    await expect(page).toHaveURL(new RegExp(`${path}$`))
-    await expect(page.locator('main')).toBeVisible()
-  }
+  await expect(page).toHaveURL(new RegExp(`${managementEntry.path}$`))
+  await expect(page.getByRole('heading', { level: 1, name: managementEntry.heading })).toBeVisible()
   expect(errors).toEqual([])
 })
 
-test('@smoke @surface-smoke settings can switch between all product modes', async ({ page }, testInfo) => {
-  test.setTimeout(60_000)
-  test.skip(Boolean(process.env.CI), 'Profile mutation is covered outside CI; CI keeps global deployment state stable.')
-  test.skip(testInfo.project.name !== 'chromium-desktop', 'The profile mutation contract runs once; responsive layout is covered separately.')
-
+test('@enterprise-smoke application credential editor exposes enterprise ownership only', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
-  const token = await loginTestPrincipal(page)
-  const headers = { Authorization: `Bearer ${token}` }
-  const allProfiles = ['enterprise', 'personal', 'relay_operator', 'platform']
-  const originalProfile = expectedProfile || 'personal'
-  const targetProfile = originalProfile === 'enterprise' ? 'personal' : 'enterprise'
-  const targetJourney = profileJourney[targetProfile]
-  const switchedProfiles = [targetProfile]
-  const originalProfiles = expectedDemoMode ? allProfiles : [originalProfile]
+  await page.goto('/console/applications/credentials')
 
-  await page.goto('/admin/settings')
-  await page.getByRole('tab', { name: 'Deployment & gateway' }).click()
-  await expect(page.getByText(expectedDemoMode ? 'Switch demo experience' : 'Switch deployment profile')).toBeVisible()
-  await expect(page.locator('button[data-profile]')).toHaveCount(4)
-  if (process.env.CI) {
-    expect(errors).toEqual([])
-    return
-  }
-
-  try {
-    await page.evaluate(() => {
-      (window as Window & { __asterProfileSwitchPage?: string }).__asterProfileSwitchPage = 'before-switch'
-    })
-    await page.locator(`button[data-profile="${targetProfile}"]`).click()
-    await expect(page).toHaveURL(new RegExp(`${targetJourney.path}$`))
-    await expect.poll(() => page.evaluate(
-      () => (window as Window & { __asterProfileSwitchPage?: string }).__asterProfileSwitchPage
-    )).toBeUndefined()
-    const sidebarNavigation = page.locator('aside nav.sidebar-nav')
-    await expect(sidebarNavigation.locator('a[href="/console/overview"]')).toHaveCount(targetProfile === 'personal' ? 1 : 0)
-    await expect(sidebarNavigation.locator('a[href="/operator/overview"]')).toHaveCount(0)
-    await expect(sidebarNavigation.locator('a[href="/admin/dashboard"]')).toHaveCount(targetProfile === 'enterprise' ? 1 : 0)
-    await expect(sidebarNavigation.locator('a[href="/platform/overview"]')).toHaveCount(targetProfile === 'platform' ? 1 : 0)
-    await page.getByRole('button', { name: 'Account menu' }).click()
-    await expect(page.locator('.account-dropdown button')).toHaveCount(targetProfile === 'enterprise' ? 3 : 2)
-    const settings = await page.request.get('/api/v1/settings/public')
-    await expect(settings.json()).resolves.toMatchObject({ data: { default_profile: targetProfile, enabled_profiles: switchedProfiles } })
-  } finally {
-    await page.request.put('/api/v1/system/profiles', {
-      headers,
-      data: { enabled_profiles: originalProfiles, default_profile: originalProfile }
-    })
-  }
-
+  await page.getByRole('button', { name: 'New workspace key' }).click()
+  const keyTypeField = page.locator('.field').filter({ hasText: 'Key type' }).locator('select')
+  await expect(keyTypeField.locator('option')).toHaveText(['workspace', 'user', 'service'])
+  await expect(page.getByText('Customer ID')).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
-test('@smoke @surface-smoke locale, theme, and responsive layout remain usable', async ({ page }) => {
+test('@smoke @enterprise-smoke locale, theme, and responsive layout remain usable', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
 

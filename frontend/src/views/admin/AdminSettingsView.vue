@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { AlertTriangle, Building2, Check, Database, Download, FileText, KeyRound, Laptop, Mail, PanelsTopLeft, PlugZap, Power, RadioTower, RefreshCw, RotateCcw, Save, Send, ServerCog, ShieldCheck, SlidersHorizontal, ToggleLeft, UserRound } from '@lucide/vue'
+import { AlertTriangle, Database, Download, FileText, KeyRound, Mail, PlugZap, Power, RefreshCw, RotateCcw, Save, Send, ServerCog, ShieldCheck, SlidersHorizontal, ToggleLeft, UserRound } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import { getAdminSettings, runRetentionCleanup, testSMTP, testSMTPConnection, updateAdminSettings } from '@/api/settings'
 import {
@@ -17,8 +17,7 @@ import {
   restoreSystemBackup,
 	restoreS3Backup,
 	testBackupS3,
-  rollbackSystemUpdate,
-  updateSystemProfiles
+  rollbackSystemUpdate
 } from '@/api/system'
 import { useAppStore } from '@/stores/app'
 import type { AdminSettings, S3BackupObject, SMTPTestConfig, SystemArchiveInfo, SystemUpdateInfo } from '@/types'
@@ -44,14 +43,6 @@ const smtpTesting = ref(false)
 const smtpConnectionTesting = ref(false)
 const s3Testing = ref(false)
 const retentionCleaning = ref(false)
-const profileSwitching = ref('')
-
-const deploymentProfiles = [
-  { id: 'enterprise', title: 'setup.enterprise', desc: 'setup.enterpriseDesc', owner: 'setup.enterpriseOwner', route: '/admin/dashboard', icon: Building2 },
-  { id: 'personal', title: 'setup.personal', desc: 'setup.personalDesc', owner: 'setup.personalOwner', route: '/console/overview', icon: Laptop },
-  { id: 'relay_operator', title: 'setup.relay', desc: 'setup.relayDesc', owner: 'setup.relayOwner', route: '/operator/overview', icon: RadioTower },
-  { id: 'platform', title: 'setup.platform', desc: 'setup.platformDesc', owner: 'setup.platformOwner', route: '/platform/overview', icon: PanelsTopLeft }
-] as const
 
 const settingsTabs = [
   { id: 'general', label: 'settings.general', icon: SlidersHorizontal },
@@ -115,8 +106,6 @@ const form = reactive<AdminSettings>({
   public_base_url: '',
   api_base_url: '/api/v1',
   gateway_base_path: '/v1',
-  default_profile: '',
-  enabled_profiles: [],
   setup_completed: false,
   default_locale: 'en-US',
   enabled_locales: ['en-US', 'zh-CN'],
@@ -177,10 +166,9 @@ const form = reactive<AdminSettings>({
 	turnstile_site_key: '',
 	turnstile_secret_key: '',
 	turnstile_configured: false,
-	default_balance_micros: 0,
 	default_concurrency: 5,
 	default_rpm: 0,
-	auth_source_defaults: Object.fromEntries(['local','oidc','feishu','dingtalk','github','google'].map(source => [source, { enabled: false, balance_micros: 0, concurrency: 5, rpm: 0 }])),
+	auth_source_defaults: Object.fromEntries(['local','oidc','feishu','dingtalk','github','google'].map(source => [source, { enabled: false, concurrency: 5, rpm: 0 }])),
 	smtp_host: '',
 	smtp_port: 587,
 	smtp_username: '',
@@ -247,36 +235,6 @@ function parseSettingsList(value: string): string[] {
 	return [...new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))]
 }
 
-function profileLabel(profile: string): string {
-  if (profile === 'personal') return t('setup.personal')
-  if (profile === 'relay_operator') return t('setup.relay')
-  if (profile === 'enterprise') return t('setup.enterprise')
-  if (profile === 'platform') return t('setup.platform')
-  return profile
-}
-
-async function switchProfile(profile: string) {
-  if (profileSwitching.value || form.default_profile === profile) return
-  const target = deploymentProfiles.find((item) => item.id === profile)
-  if (!target) return
-
-  profileSwitching.value = profile
-  error.value = ''
-  message.value = ''
-  try {
-    const next = await updateSystemProfiles([profile], profile)
-    form.enabled_profiles = [...next.enabled_profiles]
-    form.default_profile = next.default_profile
-    await app.loadPublicSettings()
-    message.value = t(form.demo_mode ? 'settings.demoProfileSwitched' : 'settings.profileSwitched', { profile: profileLabel(profile) })
-    window.location.assign(target.route)
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : t('common.failed')
-  } finally {
-    profileSwitching.value = ''
-  }
-}
-
 const updateState = computed(() => {
   if (!updateInfo.value) return t('settings.updateUnknown')
   if (updateInfo.value.has_update) return t('settings.updateAvailable')
@@ -304,7 +262,7 @@ function assignSettings(data: AdminSettings) {
 	form.allowed_email_domains ||= []
 	form.invitation_codes ||= []
 	form.trusted_proxy_cidrs ||= []
-	for (const source of ['local','oidc','feishu','dingtalk','github','google']) form.auth_source_defaults[source] ||= { enabled: false, balance_micros: 0, concurrency: 5, rpm: 0 }
+	for (const source of ['local','oidc','feishu','dingtalk','github','google']) form.auth_source_defaults[source] ||= { enabled: false, concurrency: 5, rpm: 0 }
 }
 
 function addLegalDocument() {
@@ -667,9 +625,9 @@ onMounted(async () => {
 
       <div v-if="activeSettingsTab === 'features'" class="panel"><div class="panel-header"><ShieldCheck :size="18"/><h2>网关运行能力</h2></div><div class="panel-body auth-provider-list"><section class="auth-provider-card"><div class="auth-provider-header"><div><strong>渠道监控</strong><p>定期探测稳定 API 上游的连通性与响应状态。</p></div><label class="switch"><input v-model="form.channel_monitor_enabled" type="checkbox"/><span></span></label></div><div v-if="form.channel_monitor_enabled" class="auth-provider-config"><div class="field"><label>检测间隔（秒）</label><input v-model.number="form.channel_monitor_interval_seconds" type="number" min="30" max="86400"/></div></div></section><section class="auth-provider-card"><div class="auth-provider-header"><div><strong>可用渠道</strong><p>向授权用户展示当前可用的模型与 API 渠道。</p></div><label class="switch"><input v-model="form.available_channels_enabled" type="checkbox"/><span></span></label></div></section><section class="auth-provider-card"><div class="auth-provider-header"><div><strong>风险控制中心</strong><p>启用网关异常行为识别与处置策略。</p></div><label class="switch"><input v-model="form.risk_control_enabled" type="checkbox"/><span></span></label></div><div v-if="form.risk_control_enabled" class="auth-provider-config"><div class="auth-provider-header"><div><strong>异常会话自动屏蔽</strong><p>临时屏蔽触发风险规则的会话。</p></div><label class="switch"><input v-model="form.cyber_session_block_enabled" type="checkbox"/><span></span></label></div><div v-if="form.cyber_session_block_enabled" class="field"><label>屏蔽时长（秒）</label><input v-model.number="form.cyber_session_block_ttl_seconds" type="number" min="60" max="2592000"/></div></div></section></div></div>
 
-      <div v-if="activeSettingsTab === 'defaults'" class="panel"><div class="panel-header"><UserRound :size="18"/><h2>{{ t('settings.userDefaults') }}</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>{{ t('settings.defaultBalance') }}</label><input v-model.number="form.default_balance_micros" type="number" min="0"/></div><div class="field"><label>{{ t('settings.defaultConcurrency') }}</label><input v-model.number="form.default_concurrency" type="number" min="0"/></div><div class="field"><label>{{ t('settings.defaultRpm') }}</label><input v-model.number="form.default_rpm" type="number" min="0"/></div></div></div></div>
+      <div v-if="activeSettingsTab === 'defaults'" class="panel"><div class="panel-header"><UserRound :size="18"/><h2>{{ t('settings.userDefaults') }}</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>{{ t('settings.defaultConcurrency') }}</label><input v-model.number="form.default_concurrency" type="number" min="0"/></div><div class="field"><label>{{ t('settings.defaultRpm') }}</label><input v-model.number="form.default_rpm" type="number" min="0"/></div></div></div></div>
 
-      <div v-if="activeSettingsTab === 'defaults'" class="panel"><div class="panel-header"><ShieldCheck :size="18"/><h2>按认证来源默认值</h2></div><div class="panel-body auth-provider-list"><section v-for="source in ['local','oidc','feishu','dingtalk','github','google']" :key="source" class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ source }}</strong><p>覆盖该身份源首次创建用户时的全局默认值。</p></div><label class="switch"><input v-model="form.auth_source_defaults[source].enabled" type="checkbox"/><span></span></label></div><div v-if="form.auth_source_defaults[source].enabled" class="auth-provider-config auth-credential-grid"><div class="field"><label>余额（微美元）</label><input v-model.number="form.auth_source_defaults[source].balance_micros" type="number" min="0"/></div><div class="field"><label>并发</label><input v-model.number="form.auth_source_defaults[source].concurrency" type="number" min="0"/></div><div class="field"><label>RPM</label><input v-model.number="form.auth_source_defaults[source].rpm" type="number" min="0"/></div></div></section></div></div>
+      <div v-if="activeSettingsTab === 'defaults'" class="panel"><div class="panel-header"><ShieldCheck :size="18"/><h2>按认证来源默认值</h2></div><div class="panel-body auth-provider-list"><section v-for="source in ['local','oidc','feishu','dingtalk','github','google']" :key="source" class="auth-provider-card"><div class="auth-provider-header"><div><strong>{{ source }}</strong><p>覆盖该身份源首次创建用户时的全局默认值。</p></div><label class="switch"><input v-model="form.auth_source_defaults[source].enabled" type="checkbox"/><span></span></label></div><div v-if="form.auth_source_defaults[source].enabled" class="auth-provider-config auth-credential-grid"><div class="field"><label>并发</label><input v-model.number="form.auth_source_defaults[source].concurrency" type="number" min="0"/></div><div class="field"><label>RPM</label><input v-model.number="form.auth_source_defaults[source].rpm" type="number" min="0"/></div></div></section></div></div>
 
       <div v-if="activeSettingsTab === 'email'" class="panel"><div class="panel-header"><Mail :size="18"/><h2>{{ t('settings.emailSettings') }}</h2></div><div class="panel-body"><div class="auth-credential-grid"><div class="field"><label>SMTP Host</label><input v-model="form.smtp_host" name="smtp-host" autocomplete="off"/></div><div class="field"><label>SMTP Port</label><input v-model.number="form.smtp_port" name="smtp-port" type="number" min="1" max="65535"/></div><div class="field"><label>{{ t('auth.username') }}</label><input v-model="form.smtp_username" name="smtp-username" autocomplete="off"/></div><div class="field"><label>{{ t('auth.password') }}</label><input v-model="form.smtp_password" name="smtp-password" type="password" autocomplete="new-password" :placeholder="form.smtp_configured?t('plugins.keepSecret'):''"/></div><div class="field"><label>{{ t('settings.smtpFrom') }}</label><input v-model="form.smtp_from" name="smtp-from" type="email" autocomplete="off"/></div><div class="field"><label>{{ t('settings.smtpFromName') }}</label><input v-model="form.smtp_from_name" name="smtp-from-name" autocomplete="off"/></div></div><div class="auth-provider-header"><div><strong>{{ t('settings.smtpImplicitTLS') }}</strong><p>{{ t('settings.smtpImplicitTLSHelp') }}</p></div><label class="switch"><input v-model="form.smtp_use_tls" type="checkbox"/><span></span></label></div><div class="auth-provider-config smtp-test-controls"><div class="field"><label>{{ t('settings.smtpTestRecipient') }}</label><input v-model="smtpTestRecipient" type="email" autocomplete="off" placeholder="admin@example.com"/></div><div class="row-actions"><button class="button secondary" type="button" :disabled="smtpConnectionTesting || !form.smtp_host" @click="runSMTPConnectionTest"><PlugZap :size="16"/>{{ smtpConnectionTesting ? t('common.loading') : t('settings.smtpTestConnection') }}</button><button class="button secondary" type="button" :disabled="smtpTesting || !smtpTestRecipient" @click="runSMTPTest"><Send :size="16"/>{{ smtpTesting ? t('common.loading') : t('settings.smtpSendTest') }}</button></div></div></div></div>
 
@@ -681,34 +639,6 @@ onMounted(async () => {
           <h2>{{ t('settings.deployment') }}</h2>
         </div>
         <div class="panel-body">
-          <div class="notice" :class="{ success: form.demo_mode }">
-            <strong>{{ t(form.demo_mode ? 'settings.demoProfileSwitchTitle' : 'settings.profileSwitchTitle') }}</strong>
-            <span>{{ t(form.demo_mode ? 'settings.demoProfileSwitchHelp' : 'settings.profileSwitchHelp') }}</span>
-          </div>
-          <div class="setup-grid">
-            <button
-              v-for="profile in deploymentProfiles"
-              :key="profile.id"
-              class="profile-card"
-              :class="{ active: form.default_profile === profile.id, primary: form.default_profile === profile.id }"
-              type="button"
-              :data-profile="profile.id"
-              :aria-pressed="form.default_profile === profile.id"
-              :disabled="Boolean(profileSwitching)"
-              @click="switchProfile(profile.id)"
-            >
-              <span class="profile-card-topline">
-                <component :is="profile.icon" :size="28" aria-hidden="true" />
-                <span class="profile-check" :class="{ active: form.default_profile === profile.id }">
-                  <Check v-if="form.default_profile === profile.id" :size="15" aria-hidden="true" />
-                </span>
-              </span>
-              <h2>{{ t(profile.title) }}</h2>
-              <p>{{ t(profile.desc) }}</p>
-              <span class="profile-owner">{{ t(profile.owner) }}</span>
-              <span class="profile-route">{{ profile.route }}</span>
-            </button>
-          </div>
           <div class="field">
             <label>{{ t('settings.gatewayBasePath') }}</label>
             <input v-model="form.gateway_base_path" />

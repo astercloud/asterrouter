@@ -5,7 +5,7 @@ import { apiKeyLifecycleClass, apiKeyLifecycleStatus, canDisableAPIKey, canRotat
 function key(overrides: Partial<APIKeyRecord> = {}): APIKeyRecord {
   return {
     id: 'key-1', name: 'Key', fingerprint: 'fingerprint', prefix: 'ar_key', status: 'active', key_type: 'service',
-    customer_id: '', owner_user_id: '', profile_scope: '', platform_tenant_id: '', gateway_principal_id: '', tenant_id: '',
+	owner_user_id: '', application_id: '', gateway_principal_id: '',
     principal_type: '', principal_reference: '', policy_id: '', scopes: [], model_allowlist: [], allowed_modalities: [],
     allowed_operations: [], qps_limit: 0, rpm_limit: 0, tpm_limit: 0, concurrency_limit: 0, monthly_token_limit: 0,
     monthly_budget_micros: 0, monthly_image_limit: 0, monthly_video_seconds_limit: 0, monthly_audio_seconds_limit: 0,

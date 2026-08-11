@@ -2,7 +2,6 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n, { setLocale } from '@/i18n'
 import * as control from '@/api/control'
-import * as platform from '@/api/platform'
 import type { AIJobAdminDetail, AIJobAdminRecord } from '@/types'
 import AdminAIJobsView from './AdminAIJobsView.vue'
 
@@ -15,17 +14,8 @@ vi.mock('@/api/control', () => ({
   scheduleAIJobAttemptReconciliation: vi.fn()
 }))
 
-vi.mock('@/api/platform', () => ({
-  cancelPlatformAIJob: vi.fn(),
-  getPlatformAIJob: vi.fn(),
-  getPlatformAIJobRuntime: vi.fn(),
-  getPlatformAIJobSummary: vi.fn(),
-  getPlatformAIJobs: vi.fn(),
-  schedulePlatformAIJobAttemptReconciliation: vi.fn()
-}))
-
 const job: AIJobAdminRecord = {
-  id: 'job-1', operation_id: 'operation-1', profile_scope: 'platform', tenant_id: 'tenant-1', protocol: 'aster_jobs',
+	 id: 'job-1', operation_id: 'operation-1', application_id: 'application-1', protocol: 'aster_jobs',
   operation: 'image_generation', modality: 'image', model: 'image-model', artifact_policy: 'managed', status: 'queued',
   status_version: 1, priority: 10, next_eligible_at: '2026-07-15T10:00:00Z', created_at: '2026-07-15T10:00:00Z',
   updated_at: '2026-07-15T10:00:00Z', expires_at: '2026-07-16T10:00:00Z'
@@ -55,15 +45,6 @@ describe('AdminAIJobsView', () => {
     vi.mocked(control.getAIJob).mockResolvedValue(detail)
     vi.mocked(control.cancelAIJob).mockResolvedValue({ job_id: job.id, status: 'canceled', changed: true, updated_at: job.updated_at })
     vi.mocked(control.scheduleAIJobAttemptReconciliation).mockResolvedValue({ job_id: job.id, attempt_id: 'attempt-1', status: 'scheduled', scheduled_at: job.updated_at })
-    vi.mocked(platform.getPlatformAIJobs).mockResolvedValue([job])
-    vi.mocked(platform.getPlatformAIJobSummary).mockResolvedValue({ total: 1, by_status: { queued: 1 } })
-    vi.mocked(platform.getPlatformAIJobRuntime).mockResolvedValue({
-      running: true, queue_driver: 'redis', worker_id: 'platform-worker',
-      scheduler: { runs: 4, errors: 0 }, delivery: { runs: 4, errors: 0 }, reconciler: { runs: 3, errors: 0 }, rebuilder: { runs: 2, errors: 0 }
-    })
-    vi.mocked(platform.getPlatformAIJob).mockResolvedValue(detail)
-    vi.mocked(platform.cancelPlatformAIJob).mockResolvedValue({ job_id: job.id, status: 'canceled', changed: true, updated_at: job.updated_at })
-    vi.mocked(platform.schedulePlatformAIJobAttemptReconciliation).mockResolvedValue({ job_id: job.id, attempt_id: 'attempt-1', status: 'scheduled', scheduled_at: job.updated_at })
   })
 
   it('renders runtime and schedules safe job actions', async () => {
@@ -92,23 +73,6 @@ describe('AdminAIJobsView', () => {
     expect(control.cancelAIJob).toHaveBeenCalledWith(job.id)
     expect(confirm).toHaveBeenCalledTimes(2)
     vi.unstubAllGlobals()
-    wrapper.unmount()
-  })
-
-  it('uses the explicit platform operations when mounted for the platform surface', async () => {
-    const wrapper = mount(AdminAIJobsView, { props: { surface: 'platform' }, global: { plugins: [i18n] } })
-    await flushPromises()
-
-    expect(platform.getPlatformAIJobs).toHaveBeenCalledOnce()
-    expect(platform.getPlatformAIJobSummary).toHaveBeenCalledOnce()
-    expect(platform.getPlatformAIJobRuntime).toHaveBeenCalledOnce()
-    expect(control.getAIJobs).not.toHaveBeenCalled()
-    expect(wrapper.get('.ai-runtime-strip').text()).toContain('redis')
-
-    await wrapper.get('button[aria-label="Details"]').trigger('click')
-    await flushPromises()
-    expect(platform.getPlatformAIJob).toHaveBeenCalledWith(job.id)
-    expect(control.getAIJob).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

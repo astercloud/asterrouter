@@ -49,13 +49,13 @@ export async function verifyOnboardingClient(id: string, request: ClientVerifica
 }
 
 export async function getOnboardingAPIKey(id: string): Promise<APIKeyRecord> {
-  return (await apiClient.get<APIKeyRecord>(`/admin/api-keys/${encodeURIComponent(id)}`)).data
+  return (await apiClient.get<APIKeyRecord>(`/console/api-keys/${encodeURIComponent(id)}`)).data
 }
 
 export async function getAPIKeyClientConfig(id: string, client: OnboardingClient, model: string): Promise<APIKeyClientConfig> {
-  return (await apiClient.get<APIKeyClientConfig>(`/admin/api-keys/${encodeURIComponent(id)}/client-config`, { params: { client, model } })).data
+  return (await apiClient.get<APIKeyClientConfig>(`/console/api-keys/${encodeURIComponent(id)}/client-config`, { params: { client, model } })).data
 }
 
 export async function verifyAPIKeyClient(id: string, request: ClientVerificationRequest, idempotencyKey: string): Promise<ClientVerificationResult> {
-  return (await apiClient.post<ClientVerificationResult>(`/admin/api-keys/${encodeURIComponent(id)}/client-verifications`, request, idempotencyHeaders(idempotencyKey))).data
+  return (await apiClient.post<ClientVerificationResult>(`/console/api-keys/${encodeURIComponent(id)}/client-verifications`, request, idempotencyHeaders(idempotencyKey))).data
 }

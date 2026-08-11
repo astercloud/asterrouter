@@ -48,16 +48,16 @@ describe('onboarding API contracts', () => {
     expect(client.post).toHaveBeenLastCalledWith('/onboarding/sessions/session-1/api-key', apiKey)
 
     await getOnboardingAPIKey('key / 1')
-    expect(client.get).toHaveBeenLastCalledWith('/admin/api-keys/key%20%2F%201')
+    expect(client.get).toHaveBeenLastCalledWith('/console/api-keys/key%20%2F%201')
 
     await getAPIKeyClientConfig('key / 1', 'codex', 'public-model')
-    expect(client.get).toHaveBeenLastCalledWith('/admin/api-keys/key%20%2F%201/client-config', { params: { client: 'codex', model: 'public-model' } })
+    expect(client.get).toHaveBeenLastCalledWith('/console/api-keys/key%20%2F%201/client-config', { params: { client: 'codex', model: 'public-model' } })
 
     const verification = { client: 'codex', model: 'public-model', credential: 'credential' } as const
     await verifyOnboardingClient('session / 1', verification, 'verify-idempotency')
     expect(client.post).toHaveBeenLastCalledWith('/onboarding/sessions/session%20%2F%201/verification', verification, { headers: { 'Idempotency-Key': 'verify-idempotency' } })
 
     await verifyAPIKeyClient('key / 1', verification, 'standalone-idempotency')
-    expect(client.post).toHaveBeenLastCalledWith('/admin/api-keys/key%20%2F%201/client-verifications', verification, { headers: { 'Idempotency-Key': 'standalone-idempotency' } })
+    expect(client.post).toHaveBeenLastCalledWith('/console/api-keys/key%20%2F%201/client-verifications', verification, { headers: { 'Idempotency-Key': 'standalone-idempotency' } })
   })
 })

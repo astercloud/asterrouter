@@ -109,7 +109,6 @@ describe('auth store', () => {
       avatar_data_url: 'data:image/png;base64,AA==',
       status: 'active',
       role: 'developer',
-      balance_micros: 0,
       concurrency_limit: 1,
       rpm_limit: 10,
       auth_identities: [],

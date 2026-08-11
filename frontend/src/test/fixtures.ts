@@ -18,8 +18,6 @@ export function makePublicSettings(overrides: Partial<PublicSettings> = {}): Pub
     public_base_url: 'http://localhost:8080',
     api_base_url: '/api/v1',
     gateway_base_path: '/v1',
-    default_profile: 'enterprise',
-    enabled_profiles: ['enterprise'],
     setup_completed: true,
     default_locale: 'en-US',
     enabled_locales: ['en-US', 'zh-CN'],

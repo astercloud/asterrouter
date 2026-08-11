@@ -1,15 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { adminPost, captureBrowserErrors, controlAPI, envelope, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
 
-function modelPaths(): { providers: string; accounts: string; routes: string } {
-  switch (process.env.ASTER_E2E_EXPECT_PROFILE) {
-    case 'enterprise':
-      return { providers: '/admin/providers', accounts: '/admin/provider-accounts', routes: '/admin/model-routes' }
-    case 'relay_operator':
-      return { providers: '/operator/providers', accounts: '/operator/resources', routes: '/operator/model-routes' }
-    default:
-      return { providers: '/console/providers', accounts: '/console/resources', routes: '/console/model-routes' }
-  }
+const modelPaths = {
+  providers: '/console/model-services/providers',
+  accounts: '/console/model-services/accounts',
+  routes: '/console/model-services/routes'
 }
 
 test('new provider account persists empty before automatic discovery and explicit apply', async ({ page }, testInfo) => {
@@ -28,7 +23,7 @@ test('new provider account persists empty before automatic discovery and explici
     priority: 10
   })
 
-  await page.goto(modelPaths().accounts)
+  await page.goto(modelPaths.accounts)
   await page.getByRole('button', { name: 'New route resource' }).click()
   const createDialog = page.getByRole('dialog', { name: 'New route resource' })
   await createDialog.locator('.field').filter({ hasText: 'Provider connection' }).getByRole('combobox').selectOption(provider.id)
@@ -60,11 +55,10 @@ test('new provider account persists empty before automatic discovery and explici
   expect(browserErrors).toEqual([])
 })
 
-test('model inventory and bulk routes stay auditable across responsive surfaces', async ({ page }, testInfo) => {
+test('model inventory and bulk routes stay auditable across responsive layouts', async ({ page }, testInfo) => {
   const browserErrors = captureBrowserErrors(page)
   await loginDemo(page)
-  const paths = modelPaths()
-  await page.goto(paths.providers)
+  await page.goto(modelPaths.providers)
   await page.getByRole('button', { name: 'New provider' }).click()
   const providerDialog = page.getByRole('dialog', { name: 'New provider' })
   await expect(providerDialog).toBeVisible()
@@ -131,7 +125,7 @@ test('model inventory and bulk routes stay auditable across responsive surfaces'
     status: 'active'
   })
 
-  await page.goto(paths.accounts)
+  await page.goto(modelPaths.accounts)
   const accountRow = page.getByRole('row').filter({ hasText: `Model inventory account ${runID}` })
   await expect(accountRow).toBeVisible()
   await accountRow.getByRole('button', { name: 'Edit' }).click()
@@ -173,7 +167,7 @@ test('model inventory and bulk routes stay auditable across responsive surfaces'
   await darkAccountDialog.getByRole('button', { name: '关闭' }).click()
 
   await page.getByLabel('语言').selectOption('en-US')
-  await page.goto(paths.routes)
+  await page.goto(modelPaths.routes)
   await page.getByRole('button', { name: 'Bulk match models' }).click()
   const routeDialog = page.getByRole('dialog', { name: 'Bulk match models' })
   await routeDialog.getByLabel('Provider account').selectOption(account.id)

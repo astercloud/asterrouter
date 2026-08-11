@@ -6,12 +6,14 @@ import {
   createRoleBinding,
   createWorkspaceUser,
   deleteRoleBinding,
-	getDepartments,
+  getApplications,
+  getDepartments,
+  getOrganizationGroups,
   getRoleBindings,
   getWorkspaceUsers,
   updateWorkspaceUser
 } from '@/api/control'
-import type { Department, RoleBinding, RoleBindingRequest, WorkspaceUser, WorkspaceUserRequest } from '@/types'
+import type { Application, Department, OrganizationGroup, RoleBinding, RoleBindingRequest, RoleScopeType, WorkspaceUser, WorkspaceUserRequest } from '@/types'
 
 type UserView = 'directory' | 'access'
 
@@ -25,14 +27,18 @@ const statusFilter = ref('')
 const users = ref<WorkspaceUser[]>([])
 const roleBindings = ref<RoleBinding[]>([])
 const departments = ref<Department[]>([])
+const groups = ref<OrganizationGroup[]>([])
+const applications = ref<Application[]>([])
 const userModalOpen = ref(false)
 const bindingModalOpen = ref(false)
 const editingUser = ref<WorkspaceUser | null>(null)
 const activeView = ref<UserView>('directory')
 
 const roleOptions = ['super_admin', 'platform_admin', 'key_manager', 'read_only_auditor', 'developer']
-const resourceScopeOptions = ['dashboard', 'routing', 'providers', 'api_keys', 'usage', 'traces', 'alerts', 'identity', 'policies', 'audit', 'exports', 'plugins', 'settings', 'system']
-const surfaceScopeOptions = ['personal', 'relay_operator', 'enterprise', 'platform', 'portal']
+const resourceScopeOptions = [
+  'dashboard', 'routing', 'providers', 'api_keys', 'usage', 'traces', 'ai_jobs', 'artifacts', 'alerts',
+  'identity', 'applications', 'policies', 'audit', 'exports', 'plugins', 'settings', 'system'
+]
 
 const userForm = reactive<WorkspaceUserRequest>({
   email: '',
@@ -44,7 +50,7 @@ const userForm = reactive<WorkspaceUserRequest>({
 const bindingForm = reactive<RoleBindingRequest>({
   user_id: '',
   role: 'developer',
-  scope_type: 'global',
+  scope_type: 'organization',
   scope_id: ''
 })
 
@@ -110,7 +116,7 @@ function openCreateBinding(user?: WorkspaceUser) {
   Object.assign(bindingForm, {
     user_id: user?.id || users.value[0]?.id || '',
     role: user?.role || 'developer',
-    scope_type: 'global',
+    scope_type: 'organization',
     scope_id: ''
   })
   bindingModalOpen.value = true
@@ -153,12 +159,12 @@ function statusLabel(status: string): string {
   return status === 'active' ? t('users.activeStatus') : t('users.disabledStatus')
 }
 
-function scopeTypeLabel(scopeType: string): string {
-  if (scopeType === 'global') return t('users.globalScope')
-  if (scopeType === 'resource') return t('users.resourceScope')
-  if (scopeType === 'surface') return t('users.surfaceScope')
-  if (scopeType === 'department') return t('users.departmentScope')
-  return scopeType
+function scopeTypeLabel(scopeType: RoleScopeType): string {
+  return t(`users.scopes.${scopeType}`)
+}
+
+function resourceLabel(resource: string): string {
+  return resourceScopeOptions.includes(resource) ? t(`users.resources.${resource}`) : resource
 }
 
 function formatDate(value: string): string {
@@ -166,7 +172,11 @@ function formatDate(value: string): string {
 }
 
 function scopeLabel(binding: RoleBinding): string {
-  if (binding.scope_type === 'global') return t('users.globalScope')
+  if (binding.scope_type === 'organization') return t('users.scopes.organization')
+  if (binding.scope_type === 'department') return departments.value.find((item) => item.id === binding.scope_id)?.name || binding.scope_id
+  if (binding.scope_type === 'group') return groups.value.find((item) => item.id === binding.scope_id)?.name || binding.scope_id
+  if (binding.scope_type === 'application') return applications.value.find((item) => item.id === binding.scope_id)?.name || binding.scope_id
+  if (binding.scope_type === 'resource') return resourceLabel(binding.scope_id)
   return binding.scope_id || binding.scope_type
 }
 
@@ -184,10 +194,14 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [userData, bindingData, departmentData] = await Promise.all([getWorkspaceUsers(), getRoleBindings(), getDepartments()])
+    const [userData, bindingData, departmentData, groupData, applicationData] = await Promise.all([
+      getWorkspaceUsers(), getRoleBindings(), getDepartments(), getOrganizationGroups(), getApplications()
+    ])
     users.value = userData
     roleBindings.value = bindingData
-		departments.value = departmentData
+    departments.value = departmentData
+    groups.value = groupData
+    applications.value = applicationData
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
@@ -223,7 +237,7 @@ async function saveBinding() {
   try {
     await createRoleBinding({
       ...bindingForm,
-      scope_id: bindingForm.scope_type === 'global' ? '' : bindingForm.scope_id
+      scope_id: bindingForm.scope_type === 'organization' ? '' : bindingForm.scope_id
     })
     message.value = t('users.bindingCreated')
     closeBindingModal()
@@ -526,21 +540,28 @@ onMounted(load)
           <div class="field">
             <label for="binding-scope">{{ t('users.scope') }}</label>
             <select id="binding-scope" v-model="bindingForm.scope_type" @change="bindingForm.scope_id = ''">
-              <option value="global">{{ t('users.globalScope') }}</option>
-              <option value="resource">{{ t('users.resourceScope') }}</option>
-              <option value="surface">{{ t('users.surfaceScope') }}</option>
-              <option value="department">{{ t('users.departmentScope') }}</option>
+              <option value="organization">{{ t('users.scopes.organization') }}</option>
+              <option value="department">{{ t('users.scopes.department') }}</option>
+              <option value="group">{{ t('users.scopes.group') }}</option>
+              <option value="application">{{ t('users.scopes.application') }}</option>
+              <option value="resource">{{ t('users.scopes.resource') }}</option>
             </select>
           </div>
-          <div v-if="bindingForm.scope_type !== 'global'" class="field form-span-2">
+          <div v-if="bindingForm.scope_type !== 'organization'" class="field form-span-2">
             <label for="binding-target">{{ t('users.scopeTarget') }}</label>
             <select id="binding-target" v-model="bindingForm.scope_id" required>
               <option value="" disabled>{{ t('users.selectScopeTarget') }}</option>
               <template v-if="bindingForm.scope_type === 'department'">
                 <option v-for="department in departments" :key="department.id" :value="department.id">{{ department.name }}</option>
               </template>
-              <template v-else>
-                <option v-for="scope in bindingForm.scope_type === 'resource' ? resourceScopeOptions : surfaceScopeOptions" :key="scope" :value="scope">{{ scope }}</option>
+              <template v-else-if="bindingForm.scope_type === 'group'">
+                <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+              </template>
+              <template v-else-if="bindingForm.scope_type === 'application'">
+                <option v-for="application in applications" :key="application.id" :value="application.id">{{ application.name }}</option>
+              </template>
+              <template v-else-if="bindingForm.scope_type === 'resource'">
+                <option v-for="resource in resourceScopeOptions" :key="resource" :value="resource">{{ resourceLabel(resource) }}</option>
               </template>
             </select>
           </div>

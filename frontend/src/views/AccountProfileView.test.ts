@@ -30,7 +30,6 @@ const profile: AccountProfile = {
   avatar_data_url: '',
   status: 'active',
   role: 'developer',
-  balance_micros: 1200,
   concurrency_limit: 5,
   rpm_limit: 60,
   auth_identities: [],

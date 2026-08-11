@@ -1,14 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { getPublicSettings } from '@/api/settings'
-import type { PublicSettings } from '@/types'
-import { defaultSurfaceRoute, surfaceForPath, canAccessSurface } from './surfaces'
+import type { AuthUser, PublicSettings } from '@/types'
+import { canAccessEntry, entryForUser, productEntryForPath } from './access'
 
 const EntryRedirectView = () => import('@/views/EntryRedirectView.vue')
 const LoginView = () => import('@/views/LoginView.vue')
 const LegalDocumentView = () => import('@/views/LegalDocumentView.vue')
 const AccountProfileView = () => import('@/views/AccountProfileView.vue')
 const SetupView = () => import('@/views/SetupView.vue')
-const AdminShell = () => import('@/views/admin/AdminShell.vue')
+const ConsoleShell = () => import('@/views/console/ConsoleShell.vue')
+const PortalShell = () => import('@/views/portal/PortalShell.vue')
+
 const AdminOnboardingView = () => import('@/views/admin/AdminOnboardingView.vue')
 const AdminApiKeysView = () => import('@/views/admin/AdminApiKeysView.vue')
 const AdminAlertsView = () => import('@/views/admin/AdminAlertsView.vue')
@@ -36,33 +38,9 @@ const AdminRoutingGroupsView = () => import('@/views/admin/AdminRoutingGroupsVie
 const AdminSettingsView = () => import('@/views/admin/AdminSettingsView.vue')
 const AdminUsageView = () => import('@/views/admin/AdminUsageView.vue')
 const AdminUsersView = () => import('@/views/admin/AdminUsersView.vue')
-const ConsoleHomeView = () => import('@/views/console/ConsoleHomeView.vue')
-const ConsoleShell = () => import('@/views/console/ConsoleShell.vue')
-const CustomerBillingView = () => import('@/views/customer/CustomerBillingView.vue')
-const CustomerHomeView = () => import('@/views/customer/CustomerHomeView.vue')
-const CustomerNotificationSettingsView = () => import('@/views/customer/CustomerNotificationSettingsView.vue')
-const CustomerShell = () => import('@/views/customer/CustomerShell.vue')
-const OperatorHomeView = () => import('@/views/operator/OperatorHomeView.vue')
-const OperatorShell = () => import('@/views/operator/OperatorShell.vue')
-const OperatorCustomersView = () => import('@/views/operator/OperatorCustomersView.vue')
-const OperatorGroupsView = () => import('@/views/operator/OperatorGroupsView.vue')
-const OperatorPlansView = () => import('@/views/operator/OperatorPlansView.vue')
-const OperatorBalancesView = () => import('@/views/operator/OperatorBalancesView.vue')
-const OperatorPricingView = () => import('@/views/operator/OperatorPricingView.vue')
-const OperatorRiskView = () => import('@/views/operator/OperatorRiskView.vue')
-const OperatorNoticesView = () => import('@/views/operator/OperatorNoticesView.vue')
-const OperatorUsageView = () => import('@/views/operator/OperatorUsageView.vue')
-const OperatorKeysView = () => import('@/views/operator/OperatorKeysView.vue')
 const PortalHomeView = () => import('@/views/portal/PortalHomeView.vue')
 const PortalIntegrationView = () => import('@/views/portal/PortalIntegrationView.vue')
 const PortalKeysView = () => import('@/views/portal/PortalKeysView.vue')
-const PortalShell = () => import('@/views/portal/PortalShell.vue')
-const PlatformShell = () => import('@/views/platform/PlatformShell.vue')
-const PlatformHomeView = () => import('@/views/platform/PlatformHomeView.vue')
-const PlatformKeysView = () => import('@/views/platform/PlatformKeysView.vue')
-const PlatformTenantsView = () => import('@/views/platform/PlatformTenantsView.vue')
-const PlatformIntegrationsView = () => import('@/views/platform/PlatformIntegrationsView.vue')
-const PlatformUsageSinksView = () => import('@/views/platform/PlatformUsageSinksView.vue')
 
 let publicSettingsCache: PublicSettings | null = null
 
@@ -85,9 +63,9 @@ async function loadPublicSettings(): Promise<PublicSettings | null> {
   }
 }
 
-function storedUser() {
+function storedUser(): AuthUser | null {
   try {
-    return JSON.parse(localStorage.getItem('asterrouter_admin_user') || 'null')
+    return JSON.parse(localStorage.getItem('asterrouter_admin_user') || 'null') as AuthUser | null
   } catch {
     return null
   }
@@ -95,18 +73,7 @@ function storedUser() {
 
 function defaultEntry(settings: PublicSettings | null): string {
   if (!settings?.setup_completed) return '/setup'
-  return defaultSurfaceRoute(settings.enabled_profiles, settings.default_profile, storedUser())
-}
-
-function surfaceAllowed(path: string, settings: PublicSettings | null): boolean {
-  if (!settings?.setup_completed) return path === '/setup'
-  if (path.startsWith('/console')) return settings.enabled_profiles.includes('personal')
-  if (path.startsWith('/operator')) return settings.enabled_profiles.includes('relay_operator')
-  if (path.startsWith('/customer')) return settings.enabled_profiles.includes('relay_operator')
-  if (path.startsWith('/portal')) return settings.enabled_profiles.includes('enterprise')
-  if (path.startsWith('/admin')) return settings.enabled_profiles.includes('enterprise')
-  if (path.startsWith('/platform')) return settings.enabled_profiles.includes('platform')
-  return true
+  return entryForUser(storedUser())
 }
 
 const router = createRouter({
@@ -114,110 +81,47 @@ const router = createRouter({
   routes: [
     { path: '/', component: EntryRedirectView },
     { path: '/login', component: LoginView, meta: { titleKey: 'auth.signIn', descriptionKey: 'auth.signInToAccount' } },
-		{ path: '/register', component: LoginView, meta: { titleKey: 'auth.createAccount', descriptionKey: 'auth.registrationHelp' } },
-		{ path: '/forgot-password', component: LoginView, meta: { titleKey: 'auth.forgotPassword', descriptionKey: 'auth.resetEmailHelp' } },
-		{ path: '/resend-verification', component: LoginView, meta: { titleKey: 'auth.resendVerification', descriptionKey: 'auth.resendVerificationHelp' } },
-		{ path: '/reset-password', component: LoginView, meta: { titleKey: 'auth.resetPassword', descriptionKey: 'auth.resetPasswordHelp' } },
-		{ path: '/verify-email', component: LoginView, meta: { titleKey: 'auth.verifyEmail', descriptionKey: 'auth.verifyEmailHelp' } },
+    { path: '/register', component: LoginView, meta: { titleKey: 'auth.createAccount', descriptionKey: 'auth.registrationHelp' } },
+    { path: '/forgot-password', component: LoginView, meta: { titleKey: 'auth.forgotPassword', descriptionKey: 'auth.resetEmailHelp' } },
+    { path: '/resend-verification', component: LoginView, meta: { titleKey: 'auth.resendVerification', descriptionKey: 'auth.resendVerificationHelp' } },
+    { path: '/reset-password', component: LoginView, meta: { titleKey: 'auth.resetPassword', descriptionKey: 'auth.resetPasswordHelp' } },
+    { path: '/verify-email', component: LoginView, meta: { titleKey: 'auth.verifyEmail', descriptionKey: 'auth.verifyEmailHelp' } },
     { path: '/setup', component: SetupView, meta: { titleKey: 'setup.title', descriptionKey: 'setup.subtitle' } },
     {
       path: '/console',
       component: ConsoleShell,
       children: [
-        { path: '', redirect: '/console/overview' },
-        { path: 'overview', component: ConsoleHomeView, meta: { titleKey: 'console.overview', descriptionKey: 'console.subtitle', consolePanel: 'overview' } },
-        { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
-        { path: 'models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
-        { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
-        { path: 'gateway-simulator', component: AdminGatewaySimulatorView, meta: { titleKey: 'admin.gatewaySimulator', descriptionKey: 'gatewaySimulator.subtitle' } },
-        { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
-        { path: 'plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
-        { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
-        { path: 'resources', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
-        { path: 'keys', component: AdminApiKeysView, meta: { titleKey: 'console.keys', descriptionKey: 'console.keySummary' } },
-        { path: 'usage', component: AdminUsageView, meta: { titleKey: 'console.usage', descriptionKey: 'console.usageHelp' } },
-        { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
-		{ path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
-        { path: ':pathMatch(.*)*', redirect: '/console/overview' }
-      ]
-    },
-    {
-      path: '/operator',
-      component: OperatorShell,
-      children: [
-        { path: '', redirect: '/operator/overview' },
-        { path: 'overview', component: OperatorHomeView, meta: { titleKey: 'operator.overview', descriptionKey: 'operator.subtitle', operatorPanel: 'overview' } },
-        { path: 'customers', component: OperatorCustomersView, meta: { titleKey: 'operatorDomain.customers', descriptionKey: 'operatorDomain.customersHelp' } },
-        { path: 'customer-keys', component: OperatorKeysView, meta: { titleKey: 'operatorDomain.keyList', descriptionKey: 'operatorDomain.keySummary' } },
-        { path: 'customer-groups', component: OperatorGroupsView, meta: { titleKey: 'operatorDomain.groups', descriptionKey: 'operatorDomain.groupsHelp' } },
-        { path: 'plans', component: OperatorPlansView, meta: { titleKey: 'operatorDomain.plans', descriptionKey: 'operatorDomain.plansHelp' } },
-        { path: 'balances', component: OperatorBalancesView, meta: { titleKey: 'operatorDomain.balances', descriptionKey: 'operatorDomain.balancesHelp' } },
-        { path: 'pricing', component: OperatorPricingView, meta: { titleKey: 'operatorDomain.pricing', descriptionKey: 'operatorDomain.pricingHelp' } },
-        { path: 'risk', component: OperatorRiskView, meta: { titleKey: 'operatorDomain.risk', descriptionKey: 'operatorDomain.riskHelp' } },
-        { path: 'notices', component: OperatorNoticesView, meta: { titleKey: 'operatorDomain.notices', descriptionKey: 'operatorDomain.noticesHelp' } },
-        { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
-        { path: 'models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
-        { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
-        { path: 'gateway-simulator', component: AdminGatewaySimulatorView, meta: { titleKey: 'admin.gatewaySimulator', descriptionKey: 'gatewaySimulator.subtitle' } },
-        { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'operator.groupList', descriptionKey: 'operator.groupSummary' } },
-        { path: 'resources', component: AdminProviderAccountsView, meta: { titleKey: 'operator.resourceList', descriptionKey: 'operator.resourceSummary' } },
-        { path: 'usage', component: OperatorUsageView, meta: { titleKey: 'operator.traffic', descriptionKey: 'operator.trafficHelp' } },
-        { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
-        { path: 'plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
-        { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
-		{ path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
-        { path: ':pathMatch(.*)*', redirect: '/operator/overview' }
-      ]
-    },
-    {
-      path: '/admin',
-      component: AdminShell,
-      children: [
-        { path: '', redirect: '/admin/dashboard' },
-        { path: 'dashboard', component: AdminDashboardView, meta: { titleKey: 'admin.overview', descriptionKey: 'dashboard.subtitle' } },
-		{ path: 'onboarding', component: AdminOnboardingView, meta: { titleKey: 'admin.onboarding', descriptionKey: 'onboarding.subtitle' } },
-        { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
-        { path: 'gateway-models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
-        { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
-        { path: 'gateway-simulator', component: AdminGatewaySimulatorView, meta: { titleKey: 'admin.gatewaySimulator', descriptionKey: 'gatewaySimulator.subtitle' } },
-        { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
-        { path: 'provider-accounts', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
-        { path: 'pricing', component: AdminPricingView, meta: { titleKey: 'pricingRules.adminTitle', descriptionKey: 'pricingRules.adminSubtitle' } },
-        { path: 'effective-pricing', component: AdminEffectivePricingView, meta: { titleKey: 'admin.effectivePricing', descriptionKey: 'effectivePricing.subtitle' } },
-        { path: 'users', component: AdminUsersView, meta: { titleKey: 'admin.users', descriptionKey: 'users.subtitle' } },
-        { path: 'departments', component: AdminDepartmentsView, meta: { titleKey: 'admin.departments', descriptionKey: 'departments.subtitle' } },
-				{ path: 'organization-groups', component: AdminOrganizationGroupsView, meta: { titleKey: 'organizationGroups.title', descriptionKey: 'organizationGroups.subtitle' } },
-        { path: 'policies', component: AdminPoliciesView, meta: { titleKey: 'admin.policies', descriptionKey: 'policies.subtitle' } },
-        { path: 'api-keys', component: AdminApiKeysView, meta: { titleKey: 'admin.apiKeys', descriptionKey: 'apiKeys.subtitle' } },
-        { path: 'usage', component: AdminUsageView, meta: { titleKey: 'admin.usage', descriptionKey: 'usage.subtitle' } },
-        { path: 'supply', component: AdminSupplyView, meta: { titleKey: 'admin.supply', descriptionKey: 'supply.subtitle' } },
-        { path: 'cost-allocation', component: AdminCostAllocationView, meta: { titleKey: 'admin.costAllocation', descriptionKey: 'costAllocation.subtitle' } },
-        { path: 'traces', component: AdminGatewayTracesView, meta: { titleKey: 'admin.traces', descriptionKey: 'traces.subtitle' } },
-        { path: 'alerts', component: AdminAlertsView, meta: { titleKey: 'admin.alerts', descriptionKey: 'alerts.subtitle' } },
-        { path: 'artifacts', component: AdminArtifactsView, meta: { titleKey: 'admin.artifacts', descriptionKey: 'artifactOps.subtitle' } },
-        { path: 'ai-jobs', component: AdminAIJobsView, meta: { titleKey: 'admin.aiJobs', descriptionKey: 'aiJobOps.subtitle' } },
-        { path: 'exports', component: AdminExportJobsView, meta: { titleKey: 'admin.exports', descriptionKey: 'exports.subtitle' } },
-        { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
-        { path: 'plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
-        { path: 'audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },
-        { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
-		{ path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
-        { path: ':pathMatch(.*)*', redirect: '/admin/dashboard' }
-      ]
-    },
-    {
-      path: '/customer',
-      component: CustomerShell,
-      children: [
-        { path: '', redirect: '/customer/overview' },
-        { path: 'overview', component: CustomerHomeView, meta: { titleKey: 'customer.overview', descriptionKey: 'customer.subtitle', customerPanel: 'overview' } },
-        { path: 'keys', component: PortalKeysView, meta: { titleKey: 'customer.keys', descriptionKey: 'customer.keySummary' } },
-        { path: 'integration', component: PortalIntegrationView, meta: { titleKey: 'customer.integration', descriptionKey: 'customer.integrationHelp' } },
-        { path: 'usage', component: CustomerHomeView, meta: { titleKey: 'customer.usage', descriptionKey: 'customer.usageHelp', customerPanel: 'usage' } },
-        { path: 'billing', component: CustomerBillingView, meta: { titleKey: 'customer.billing', descriptionKey: 'customer.billingHelp' } },
-		{ path: 'notifications', component: CustomerNotificationSettingsView, meta: { titleKey: 'customer.notificationSettings', descriptionKey: 'customer.notificationSettingsHelp' } },
-		{ path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
-        { path: ':pathMatch(.*)*', redirect: '/customer/overview' }
+        { path: '', redirect: '/console/workbench' },
+        { path: 'workbench', component: AdminDashboardView, meta: { titleKey: 'console.workbench', descriptionKey: 'console.workbenchSubtitle' } },
+        { path: 'applications', component: AdminOnboardingView, meta: { titleKey: 'console.applications', descriptionKey: 'console.applicationsSubtitle' } },
+        { path: 'applications/credentials', component: AdminApiKeysView, meta: { titleKey: 'console.credentials', descriptionKey: 'apiKeys.subtitle' } },
+        { path: 'model-services', component: AdminGatewayModelsView, meta: { titleKey: 'console.modelServices', descriptionKey: 'console.modelServicesSubtitle' } },
+        { path: 'model-services/providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
+        { path: 'model-services/accounts', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
+        { path: 'model-services/routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
+        { path: 'model-services/route-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
+        { path: 'model-services/simulator', component: AdminGatewaySimulatorView, meta: { titleKey: 'admin.gatewaySimulator', descriptionKey: 'gatewaySimulator.subtitle' } },
+        { path: 'model-services/pricing', component: AdminPricingView, meta: { titleKey: 'pricingRules.adminTitle', descriptionKey: 'pricingRules.adminSubtitle' } },
+        { path: 'model-services/effective-pricing', component: AdminEffectivePricingView, meta: { titleKey: 'admin.effectivePricing', descriptionKey: 'effectivePricing.subtitle' } },
+        { path: 'policies/access', component: AdminPoliciesView, meta: { titleKey: 'policy.access.title', descriptionKey: 'policy.access.subtitle' } },
+        { path: 'policies/routing', component: AdminRoutingGroupsView, meta: { titleKey: 'policy.routing.title', descriptionKey: 'policy.routing.subtitle' } },
+        { path: 'usage', component: AdminUsageView, meta: { titleKey: 'console.usageCost', descriptionKey: 'console.usageCostSubtitle' } },
+        { path: 'usage/supply', component: AdminSupplyView, meta: { titleKey: 'admin.supply', descriptionKey: 'supply.subtitle' } },
+        { path: 'usage/cost-allocation', component: AdminCostAllocationView, meta: { titleKey: 'admin.costAllocation', descriptionKey: 'costAllocation.subtitle' } },
+        { path: 'usage/traces', component: AdminGatewayTracesView, meta: { titleKey: 'admin.traces', descriptionKey: 'traces.subtitle' } },
+        { path: 'usage/alerts', component: AdminAlertsView, meta: { titleKey: 'admin.alerts', descriptionKey: 'alerts.subtitle' } },
+        { path: 'usage/artifacts', component: AdminArtifactsView, meta: { titleKey: 'admin.artifacts', descriptionKey: 'artifactOps.subtitle' } },
+        { path: 'usage/jobs', component: AdminAIJobsView, meta: { titleKey: 'admin.aiJobs', descriptionKey: 'aiJobOps.subtitle' } },
+        { path: 'usage/exports', component: AdminExportJobsView, meta: { titleKey: 'admin.exports', descriptionKey: 'exports.subtitle' } },
+        { path: 'organization', component: AdminUsersView, meta: { titleKey: 'console.organization', descriptionKey: 'console.organizationSubtitle' } },
+        { path: 'organization/departments', component: AdminDepartmentsView, meta: { titleKey: 'admin.departments', descriptionKey: 'departments.subtitle' } },
+        { path: 'organization/groups', component: AdminOrganizationGroupsView, meta: { titleKey: 'organizationGroups.title', descriptionKey: 'organizationGroups.subtitle' } },
+        { path: 'system', component: AdminSettingsView, meta: { titleKey: 'console.system', descriptionKey: 'console.systemSubtitle' } },
+        { path: 'system/plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
+        { path: 'system/plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
+        { path: 'system/audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },
+        { path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
+        { path: ':pathMatch(.*)*', redirect: '/console/workbench' }
       ]
     },
     {
@@ -226,43 +130,11 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/portal/overview' },
         { path: 'overview', component: PortalHomeView, meta: { titleKey: 'portal.overview', descriptionKey: 'portal.subtitle', portalPanel: 'overview' } },
-        { path: 'integration', component: PortalIntegrationView, meta: { titleKey: 'portal.integrationGuide', descriptionKey: 'portal.gatewayHelp', portalPanel: 'integration' } },
-        { path: 'keys', component: PortalKeysView, meta: { titleKey: 'portal.myKeys', descriptionKey: 'portal.keySummary', portalPanel: 'keys' } },
+        { path: 'applications', component: PortalKeysView, meta: { titleKey: 'portal.applications', descriptionKey: 'portal.applicationsSubtitle' } },
+        { path: 'access', component: PortalIntegrationView, meta: { titleKey: 'portal.access', descriptionKey: 'portal.accessSubtitle' } },
         { path: 'usage', component: PortalHomeView, meta: { titleKey: 'portal.usage', descriptionKey: 'portal.usageHelp', portalPanel: 'usage' } },
-        { path: 'alerts', component: PortalHomeView, meta: { titleKey: 'portal.alerts', descriptionKey: 'portal.alertsHelp', portalPanel: 'alerts' } },
-        { path: 'traces', component: PortalHomeView, meta: { titleKey: 'portal.recentTraces', descriptionKey: 'portal.traceHelp', portalPanel: 'traces' } },
-		{ path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
-        { path: ':pathMatch(.*)*', redirect: '/portal/overview' }
-      ]
-    },
-    {
-      path: '/platform',
-      component: PlatformShell,
-      children: [
-        { path: '', redirect: '/platform/overview' },
-        { path: 'overview', component: PlatformHomeView, meta: { titleKey: 'platform.overview', descriptionKey: 'platform.subtitle' } },
-        { path: 'tenants', component: PlatformTenantsView, meta: { titleKey: 'platform.tenants', descriptionKey: 'platform.tenantsSubtitle' } },
-        { path: 'integrations', component: PlatformIntegrationsView, meta: { titleKey: 'platform.integrations', descriptionKey: 'platform.integrationsSubtitle' } },
-        { path: 'usage-sinks', component: PlatformUsageSinksView, meta: { titleKey: 'platform.usageSinks', descriptionKey: 'platform.usageSinksSubtitle' } },
-        { path: 'providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
-        { path: 'gateway-models', component: AdminGatewayModelsView, meta: { titleKey: 'admin.gatewayModels', descriptionKey: 'gatewayModels.subtitle' } },
-        { path: 'model-routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },
-        { path: 'routing-groups', component: AdminRoutingGroupsView, meta: { titleKey: 'admin.routingGroups', descriptionKey: 'routingGroups.subtitle' } },
-        { path: 'provider-accounts', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
-        { path: 'pricing', component: AdminPricingView, props: { surface: 'platform' }, meta: { titleKey: 'pricingRules.platformTitle', descriptionKey: 'pricingRules.platformSubtitle' } },
-        { path: 'policies', component: AdminPoliciesView, meta: { titleKey: 'admin.policies', descriptionKey: 'policies.subtitle' } },
-        { path: 'api-keys', component: PlatformKeysView, meta: { titleKey: 'admin.apiKeys', descriptionKey: 'platform.keySubtitle' } },
-        { path: 'usage', component: AdminUsageView, meta: { titleKey: 'admin.usage', descriptionKey: 'usage.subtitle' } },
-        { path: 'traces', component: AdminGatewayTracesView, meta: { titleKey: 'admin.traces', descriptionKey: 'traces.subtitle' } },
-        { path: 'alerts', component: AdminAlertsView, meta: { titleKey: 'admin.alerts', descriptionKey: 'alerts.subtitle' } },
-        { path: 'artifacts', component: AdminArtifactsView, props: { surface: 'platform' }, meta: { titleKey: 'admin.artifacts', descriptionKey: 'artifactOps.subtitle' } },
-        { path: 'ai-jobs', component: AdminAIJobsView, props: { surface: 'platform' }, meta: { titleKey: 'admin.aiJobs', descriptionKey: 'aiJobOps.subtitle' } },
-        { path: 'audit', component: AdminAuditView, meta: { titleKey: 'admin.audit', descriptionKey: 'audit.subtitle' } },
-        { path: 'plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
-        { path: 'plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
-        { path: 'settings', component: AdminSettingsView, meta: { titleKey: 'admin.settings', descriptionKey: 'admin.subtitle' } },
         { path: 'account', component: AccountProfileView, meta: { titleKey: 'account.title', descriptionKey: 'account.subtitle' } },
-        { path: ':pathMatch(.*)*', redirect: '/platform/overview' }
+        { path: ':pathMatch(.*)*', redirect: '/portal/overview' }
       ]
     },
     { path: '/legal/:slug', component: LegalDocumentView },
@@ -274,34 +146,22 @@ router.beforeEach(async (to) => {
   const token = localStorage.getItem('asterrouter_admin_token')
   const settings = await loadPublicSettings()
   const entry = defaultEntry(settings)
-  if (to.path === '/') {
-    return entry
-  }
-	const publicAuthPath = ['/login', '/register', '/forgot-password', '/resend-verification', '/reset-password', '/verify-email'].includes(to.path)
-	if (publicAuthPath) {
-		if (!settings?.setup_completed) return '/setup'
-		if (token && ['/login', '/register', '/forgot-password', '/resend-verification'].includes(to.path) && entry !== '/login') return entry
-		return true
-	}
-  if (to.path === '/setup') {
-    if (settings?.setup_completed) {
-      return entry
-    }
+  if (to.path === '/') return entry
+
+  const publicAuthPath = ['/login', '/register', '/forgot-password', '/resend-verification', '/reset-password', '/verify-email'].includes(to.path)
+  if (publicAuthPath) {
+    if (!settings?.setup_completed) return '/setup'
+    if (token && ['/login', '/register', '/forgot-password', '/resend-verification'].includes(to.path)) return entry
     return true
   }
-	if (to.path.startsWith('/legal/')) return true
-  if (!settings?.setup_completed) {
-    return '/setup'
-  }
-  if (!surfaceAllowed(to.path, settings)) {
-    return entry
-  }
-  if ((to.path.startsWith('/admin') || to.path.startsWith('/portal') || to.path.startsWith('/console') || to.path.startsWith('/operator') || to.path.startsWith('/customer') || to.path.startsWith('/platform')) && !token) {
-    return { path: '/login', query: { redirect: to.fullPath } }
-  }
-	const user = storedUser()
-	const targetSurface = surfaceForPath(to.path)
-	if (user && targetSurface && !canAccessSurface(user, targetSurface)) return entry
+  if (to.path === '/setup') return settings?.setup_completed ? entry : true
+  if (to.path.startsWith('/legal/')) return true
+  if (!settings?.setup_completed) return '/setup'
+
+  const targetEntry = productEntryForPath(to.path)
+  if (targetEntry && !token) return { path: '/login', query: { redirect: to.fullPath } }
+  const user = storedUser()
+  if (user && targetEntry && !canAccessEntry(user, targetEntry)) return entry
   return true
 })
 

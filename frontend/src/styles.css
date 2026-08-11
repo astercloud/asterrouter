@@ -940,19 +940,6 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
-.surface-customer .admin-main > .content:not(.account-page) {
-  display: grid;
-  width: 100%;
-  max-width: 1480px;
-  margin-inline: auto;
-  padding: 36px 40px 56px;
-  gap: 24px;
-}
-
-.surface-customer .admin-main > .content:not(.account-page) > .page-header {
-  margin-bottom: 0;
-}
-
 .crud-page {
   display: grid;
   gap: 16px;
@@ -3118,381 +3105,209 @@ button.pill:hover {
   line-height: 1.65;
 }
 
-.onboarding-page {
-  display: grid;
-  gap: 20px;
+.application-page {
+  width: min(1440px, 100%);
+  margin-inline: auto;
 }
 
-.onboarding-page .page-header {
-  margin-bottom: 0;
+.application-toolbar .search-box {
+  width: min(480px, 100%);
 }
 
-.onboarding-progress {
-  display: grid;
-  grid-template-columns: auto minmax(24px, 1fr) auto minmax(24px, 1fr) auto minmax(24px, 1fr) auto;
+.application-toolbar-actions {
+  display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
-  min-width: 0;
 }
 
-.onboarding-progress-step {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
+.application-result-count {
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 650;
-}
-
-.onboarding-progress-step > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.onboarding-progress-step.active,
-.onboarding-progress-step.done {
-  color: var(--text);
+.application-list-panel .panel-body {
+  padding: 0;
 }
 
-.onboarding-progress-icon {
-  display: inline-flex;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  background: var(--surface);
+.application-table {
+  min-width: 920px;
 }
 
-.onboarding-progress-step.active .onboarding-progress-icon {
-  border-color: var(--primary-500);
-  color: var(--primary-600);
-  box-shadow: 0 0 0 3px var(--focus-ring);
+.application-table th:first-child,
+.application-table td:first-child {
+  width: 26%;
 }
 
-.onboarding-progress-step.done .onboarding-progress-icon {
-  border-color: var(--success);
-  background: var(--success-bg);
-  color: var(--success);
+.application-table th:last-child,
+.application-table td:last-child {
+  width: 68px;
+  text-align: right;
 }
 
-.onboarding-progress-line {
-  height: 1px;
-  background: var(--border-strong);
-}
-
-.onboarding-progress-line.done {
-  background: var(--success);
-}
-
-.onboarding-panel {
-  width: 100%;
-}
-
-.onboarding-section-heading,
-.onboarding-config-header,
-.onboarding-secret-band,
-.onboarding-result {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.onboarding-section-heading h2 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.onboarding-section-heading p {
-  margin: 4px 0 0;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.onboarding-page .field-wide {
-  grid-column: 1 / -1;
-}
-
-.onboarding-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 4px;
-}
-
-.onboarding-notice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  margin: 0;
-}
-
-.onboarding-notice code {
-  font-size: 11px;
-}
-
-.onboarding-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 120px;
-  color: var(--text-muted);
-}
-
-.onboarding-verification {
-  gap: 20px;
-}
-
-.onboarding-client-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--surface-muted);
-}
-
-.onboarding-client-tabs button {
-  min-height: 38px;
-  overflow: hidden;
-  padding: 0 10px;
-  border: 0;
-  border-radius: calc(var(--radius-control) - 2px);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.onboarding-client-tabs button.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-sm);
-}
-
-.onboarding-client-tabs button:focus-visible {
-  outline: 2px solid var(--primary-500);
-  outline-offset: 1px;
-}
-
-.onboarding-secret-band,
-.onboarding-compatibility-band,
-.onboarding-config-band,
-.onboarding-result {
-  padding: 16px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-
-.onboarding-secret-band > div:first-child,
-.onboarding-config-header > div,
-.onboarding-result > div {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 10px;
-}
-
-.onboarding-secret-band span,
-.onboarding-config-header span,
-.onboarding-result div {
-  display: grid;
-  gap: 2px;
-}
-
-.onboarding-secret-band small,
-.onboarding-config-header small,
-.onboarding-result span {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.onboarding-secret-value {
-  display: grid;
-  grid-template-columns: minmax(180px, 420px) 36px 36px;
-  gap: 6px;
-}
-
-.onboarding-secret-value input {
-  min-width: 0;
-  height: 36px;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-  background: var(--surface);
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.onboarding-config-band {
-  display: grid;
-  gap: 12px;
-}
-
-.onboarding-compatibility-band {
-  display: grid;
-  gap: 12px;
-}
-
-.onboarding-compatibility-header,
-.onboarding-compatibility-header > div {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.onboarding-compatibility-header > div {
-  justify-content: flex-start;
-}
-
-.onboarding-compatibility-header > div > span {
-  display: grid;
-  gap: 2px;
-}
-
-.onboarding-compatibility-header small,
-.onboarding-compatibility-record span,
-.onboarding-compatibility-record small {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.onboarding-compatibility-records {
-  display: grid;
-  border-top: 1px solid var(--border);
-}
-
-.onboarding-compatibility-record {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 5px 12px;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.onboarding-compatibility-version {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.onboarding-compatibility-version strong,
-.onboarding-compatibility-version span {
-  overflow-wrap: anywhere;
-}
-
-.onboarding-compatibility-record > small {
-  grid-column: 1 / -1;
-}
-
-.onboarding-compatibility-record .onboarding-compatibility-limitation {
-  color: var(--warning);
-}
-
-.onboarding-config-band .onboarding-loading {
-  min-height: 96px;
-}
-
-.onboarding-config-band .code-block {
-  max-height: 320px;
-}
-
-.onboarding-result {
-  justify-content: flex-start;
-}
-
-.onboarding-result.success {
-  color: var(--success);
-}
-
-.onboarding-result.failed {
-  color: var(--danger);
-}
-
-.onboarding-result .button {
+.application-table .application-cell-actions .icon-button {
   margin-left: auto;
 }
 
-@media (max-width: 900px) {
-  .onboarding-progress {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+.application-reference {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-empty {
+  height: 280px;
+  text-align: center;
+}
+
+.application-empty strong,
+.application-empty span {
+  display: block;
+}
+
+.application-empty strong {
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.application-empty span {
+  color: var(--text-muted);
+}
+
+.application-empty .button {
+  margin-top: 18px;
+}
+
+.application-modal {
+  width: min(680px, 100%);
+}
+
+.application-form {
+  display: grid;
+  min-height: 0;
+}
+
+.application-form-grid {
+  gap: 16px;
+}
+
+.application-form-wide {
+  grid-column: 1 / -1;
+}
+
+.application-form .field small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .application-toolbar,
+  .application-toolbar-actions {
+    align-items: stretch;
   }
 
-  .onboarding-progress-line {
+  .application-toolbar-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .application-result-count {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+  }
+
+  .application-toolbar-actions select {
+    width: auto;
+    flex: 1 1 150px;
+  }
+
+  .application-table {
+    min-width: 0;
+  }
+
+  .application-table thead {
     display: none;
   }
 
-  .onboarding-progress-step {
-    justify-content: center;
-  }
-
-  .onboarding-progress-step > span:last-child {
-    white-space: normal;
-  }
-
-  .onboarding-client-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .onboarding-secret-band {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .onboarding-compatibility-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .onboarding-secret-value {
-    grid-template-columns: minmax(0, 1fr) 36px 36px;
-  }
-}
-
-@media (max-width: 560px) {
-  .onboarding-progress {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .onboarding-progress-step {
-    justify-content: flex-start;
-  }
-
-  .onboarding-section-heading,
-  .onboarding-result {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .onboarding-result .button {
+  .application-table tbody,
+  .application-table tr,
+  .application-table td {
+    display: block;
     width: 100%;
+  }
+
+  .application-table tr {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .application-table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .application-table td,
+  .application-table th:first-child,
+  .application-table td:first-child,
+  .application-table th:last-child,
+  .application-table td:last-child {
+    display: grid;
+    width: 100%;
+    grid-template-columns: minmax(96px, 34%) minmax(0, 1fr);
+    gap: 12px;
+    padding: 8px 0;
+    border: 0;
+    text-align: left;
+  }
+
+  .application-table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .application-table td.application-cell-primary {
+    display: block;
+    padding-top: 0;
+  }
+
+  .application-table td.application-cell-primary::before,
+  .application-empty::before {
+    display: none;
+  }
+
+  .application-table .application-cell-primary strong {
+    font-size: 14px;
+  }
+
+  .application-table .application-cell-actions .icon-button {
     margin-left: 0;
   }
 
-  .onboarding-compatibility-record {
-    grid-template-columns: minmax(0, 1fr);
+  .application-reference {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
-  .onboarding-compatibility-record > small {
+  .application-empty {
+    display: table-cell;
+    height: 220px;
+    padding: 28px 18px;
+    text-align: center;
+  }
+
+  .application-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .application-form-wide {
     grid-column: auto;
-  }
-
-  .onboarding-actions .button {
-    width: 100%;
   }
 }
 
@@ -4154,9 +3969,6 @@ button.pill:hover {
     align-items: flex-start;
   }
 
-  .surface-customer .admin-main > .content:not(.account-page) {
-    padding: 24px 20px 40px;
-  }
 }
 
 @media (max-width: 640px) {
@@ -4298,41 +4110,6 @@ button.pill:hover {
 
   .plugin-launcher-item .button {
     width: 100%;
-  }
-
-  .surface-customer .admin-main > .content:not(.account-page) {
-    gap: 20px;
-    padding: 20px 14px 32px;
-  }
-
-  .surface-customer .content .button,
-  .surface-customer .content .icon-button,
-  .surface-customer .content button,
-  .surface-customer .content input,
-  .surface-customer .content select {
-    min-height: 44px;
-  }
-
-  .surface-customer .content .icon-button {
-    min-width: 44px;
-  }
-
-  .surface-customer .content .billing-kind-tabs button,
-  .surface-customer .content .billing-filters input,
-  .surface-customer .content .download-button-grid .button,
-  .surface-customer .content .download-menu a {
-    min-height: 44px;
-  }
-
-  .surface-customer .topbar .mobile-menu-button,
-  .surface-customer .topbar .locale-control,
-  .surface-customer .topbar .locale-control select,
-  .surface-customer .topbar .account-trigger {
-    min-height: 44px;
-  }
-
-  .surface-customer .topbar .mobile-menu-button {
-    min-width: 44px;
   }
 
   .page-header h1 {

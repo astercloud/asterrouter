@@ -58,7 +58,6 @@ const form = reactive<APIKeyCreateRequest>({
   artifact_policy: 'proxy_only',
   expires_at: '',
   key_type: 'workspace',
-  customer_id: '',
   owner_user_id: ''
 })
 
@@ -72,7 +71,7 @@ const filteredKeys = computed(() => {
     if (statusFilter.value && apiKeyLifecycleStatus(key) !== statusFilter.value) return false
     if (!keyword) return true
     const policy = key.policy_id ? policyByID.value.get(key.policy_id)?.name || key.policy_id : ''
-    return [key.name, key.fingerprint, key.prefix, key.key_type, key.owner_user_id, key.customer_id, policy, key.model_allowlist.join(' ')].some((value) =>
+    return [key.name, key.fingerprint, key.prefix, key.key_type, key.owner_user_id, policy, key.model_allowlist.join(' ')].some((value) =>
       value.toLowerCase().includes(keyword)
     )
   })
@@ -104,7 +103,6 @@ function openCreate() {
     artifact_policy: 'proxy_only',
     expires_at: '',
     key_type: 'workspace',
-    customer_id: '',
     owner_user_id: ''
   })
   keyStatus.value = 'active'
@@ -125,7 +123,6 @@ function openEdit(key: APIKeyRecord) {
     artifact_policy: key.artifact_policy || 'proxy_only',
     expires_at: dateInputValue(key.expires_at),
     key_type: key.key_type,
-    customer_id: key.customer_id,
     owner_user_id: key.owner_user_id
   })
   keyStatus.value = key.status
@@ -194,7 +191,6 @@ async function save() {
         expires_at: form.expires_at,
         status: keyStatus.value,
         key_type: form.key_type,
-        customer_id: form.customer_id,
         owner_user_id: form.owner_user_id
       })
       message.value = t('apiKeys.updated')
@@ -349,7 +345,7 @@ onMounted(load)
             <tr v-for="key in filteredKeys" :key="key.id">
               <td>
                 <strong>{{ key.name }}</strong>
-                <span>{{ key.key_type }} · {{ key.owner_user_id || key.customer_id || key.prefix }}</span>
+                <span>{{ key.key_type }} · {{ key.owner_user_id || key.prefix }}</span>
               </td>
               <td>{{ key.fingerprint }}</td>
               <td><span class="pill" :class="apiKeyLifecycleClass(key)">{{ t(apiKeyLifecycleLabelKey(key)) }}</span></td>
@@ -421,7 +417,6 @@ onMounted(load)
             <select v-model="form.key_type">
               <option value="workspace">workspace</option>
               <option value="user">user</option>
-              <option value="customer">customer</option>
               <option value="service">service</option>
             </select>
           </div>
@@ -431,10 +426,6 @@ onMounted(load)
               <option value="" disabled>{{ t('apiKeys.selectOwner') }}</option>
               <option v-for="user in users.filter((item) => item.status === 'active')" :key="user.id" :value="user.id">{{ user.display_name || user.email }} · {{ user.email }}</option>
             </select>
-          </div>
-          <div v-else-if="form.key_type === 'customer'" class="field">
-            <label>{{ t('apiKeys.customerId') }}</label>
-            <input v-model="form.customer_id" required />
           </div>
           <div class="field form-span-2">
             <label>{{ t('apiKeys.models') }}</label>
@@ -530,7 +521,7 @@ onMounted(load)
           <div class="detail-grid">
             <div>
               <label>{{ t('apiKeys.scope') }}</label>
-              <p>{{ selectedKey.key_type }} · {{ selectedKey.owner_user_id || selectedKey.customer_id || t('apiKeys.defaultScope') }}</p>
+              <p>{{ selectedKey.key_type }} · {{ selectedKey.owner_user_id || t('apiKeys.defaultScope') }}</p>
             </div>
             <div>
               <label>{{ t('providers.status') }}</label>

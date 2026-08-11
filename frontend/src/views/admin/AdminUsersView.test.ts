@@ -9,7 +9,9 @@ vi.mock('@/api/control', () => ({
   createRoleBinding: vi.fn(),
   createWorkspaceUser: vi.fn(),
   deleteRoleBinding: vi.fn(),
+  getApplications: vi.fn(),
   getDepartments: vi.fn(),
+  getOrganizationGroups: vi.fn(),
   getRoleBindings: vi.fn(),
   getWorkspaceUsers: vi.fn(),
   updateWorkspaceUser: vi.fn()
@@ -29,7 +31,7 @@ const binding: RoleBinding = {
   id: 'binding-admin',
   user_id: user.id,
   role: 'super_admin',
-  scope_type: 'global',
+  scope_type: 'organization',
   scope_id: '',
   created_at: '2026-07-14T00:00:00Z',
   updated_at: '2026-07-14T00:00:00Z'
@@ -42,6 +44,8 @@ describe('AdminUsersView', () => {
     vi.mocked(control.getWorkspaceUsers).mockResolvedValue([user])
     vi.mocked(control.getRoleBindings).mockResolvedValue([binding])
     vi.mocked(control.getDepartments).mockResolvedValue([])
+    vi.mocked(control.getOrganizationGroups).mockResolvedValue([])
+    vi.mocked(control.getApplications).mockResolvedValue([])
   })
 
   it('uses user-management language and separates users from role assignments', async () => {
@@ -60,7 +64,12 @@ describe('AdminUsersView', () => {
     expect(wrapper.get('[data-section="user-access"]').isVisible()).toBe(true)
     expect(wrapper.find('[data-section="user-directory"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('角色授权')
-    expect(wrapper.text()).toContain('全局')
+    expect(wrapper.text()).toContain('整个组织')
+
+    await wrapper.get('[data-section="user-access"] .button').trigger('click')
+    const scopeOptions = wrapper.findAll('#binding-scope option').map((option) => option.text())
+    expect(scopeOptions).toEqual(['整个组织', '部门', '用户组', '应用', '功能资源'])
+    expect(wrapper.text()).not.toContain('工作台范围')
 
     wrapper.unmount()
   })

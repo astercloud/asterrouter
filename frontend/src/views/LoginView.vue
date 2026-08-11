@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
 import { availableLocales, getLocale, setLocale, type LocaleCode } from '@/i18n'
 import { forgotPassword, register, resendVerification, resetPassword, verifyEmail } from '@/api/auth'
-import { defaultSurfaceRoute } from '@/router/surfaces'
+import { entryForUser } from '@/router/access'
 
 type AuthMode = 'login' | 'register' | 'forgot' | 'reset' | 'verify' | 'resend'
 
@@ -210,8 +210,7 @@ function resetHumanVerification() {
 }
 
 function defaultEntry(): string {
-  const settings = app.publicSettings
-  return defaultSurfaceRoute(settings?.enabled_profiles || [], settings?.default_profile || '', auth.user)
+  return entryForUser(auth.user)
 }
 
 function changeLocale(event: Event) {

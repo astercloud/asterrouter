@@ -3,10 +3,8 @@ import { captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './f
 
 test('email settings manage SMTP credentials and localized templates', async ({ page }, testInfo) => {
   const errors = captureBrowserErrors(page)
-  const settingsSurfaces: Record<string, string> = { enterprise: 'admin', personal: 'console', relay_operator: 'operator', platform: 'platform' }
-  const settingsSurface = settingsSurfaces[process.env.ASTER_E2E_EXPECT_PROFILE || 'personal'] || 'console'
   await loginDemo(page)
-  await page.goto(`/${settingsSurface}/settings`)
+  await page.goto('/console/system')
   await page.getByRole('tab', { name: 'Email settings' }).click()
 
   const editor = page.locator('.email-template-editor')

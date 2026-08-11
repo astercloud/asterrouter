@@ -14,9 +14,7 @@ import {
   updatePricingRuleDraft,
   validatePricingRule
 } from '@/api/control'
-import { listOperatorResource } from '@/api/operator'
 import type {
-  OperatorPlan,
   PricingEvaluation,
   PricingPurpose,
   PricingRule,
@@ -24,12 +22,10 @@ import type {
   PricingRuleTestCase,
   PricingScopeType,
   PricingSimulationResult,
-  PricingSurface,
   PricingValidationResult
 } from '@/types'
 
 const props = defineProps<{
-  surface: PricingSurface
   title: string
   subtitle: string
 }>()
@@ -41,16 +37,13 @@ const error = ref('')
 const notice = ref('')
 const rules = ref<PricingRule[]>([])
 const detail = ref<PricingRuleDetail | null>(null)
-const plans = ref<OperatorPlan[]>([])
 const createOpen = ref(false)
 const activeTab = ref<'editor' | 'simulation' | 'history' | 'evaluation'>('editor')
 const validation = ref<PricingValidationResult | null>(null)
 const simulation = ref<PricingSimulationResult | null>(null)
 const evaluation = ref<PricingEvaluation | null>(null)
 const evaluationID = ref('')
-const acknowledgeImpact = ref(false)
-
-const filters = reactive({ purpose: '' as '' | PricingPurpose, status: '', model: '' })
+const filters = reactive({ status: '', model: '' })
 const editor = reactive({ name: '', authoring_mode: 'raw' as 'visual' | 'raw', expression: '', test_cases: '[]' })
 const createForm = reactive({
   name: '', purpose: 'usage_cost' as PricingPurpose, scope_type: 'global' as PricingScopeType,
@@ -70,12 +63,7 @@ const simulationFacts = ref(JSON.stringify({
   phase: 'estimate'
 }, null, 2))
 
-const purposeLocked = computed(() => props.surface !== 'admin')
-const selectedPurpose = computed(() => detail.value?.rule.purpose || createForm.purpose)
-const canPublish = computed(() => Boolean(
-  detail.value?.draft &&
-  (detail.value.rule.purpose !== 'customer_charge' || acknowledgeImpact.value)
-))
+const canPublish = computed(() => Boolean(detail.value?.draft))
 
 function showError(err: unknown) {
   error.value = err instanceof Error ? err.message : t('common.failed')
@@ -103,12 +91,11 @@ function applyDetail(value: PricingRuleDetail) {
   validation.value = null
   simulation.value = null
   evaluation.value = null
-  acknowledgeImpact.value = false
 }
 
 async function selectRule(id: string) {
   try {
-    applyDetail(await getPricingRule(props.surface, id))
+    applyDetail(await getPricingRule(id))
   } catch (err) {
     showError(err)
   }
@@ -119,10 +106,9 @@ async function load() {
   error.value = ''
   try {
     const params: Record<string, string> = {}
-    if (filters.purpose && props.surface === 'admin') params.purpose = filters.purpose
     if (filters.status) params.status = filters.status
     if (filters.model.trim()) params.model = filters.model.trim()
-    rules.value = await getPricingRules(props.surface, params)
+    rules.value = await getPricingRules(params)
     const selectedID = detail.value?.rule.id
     const next = rules.value.find((rule) => rule.id === selectedID) || rules.value[0]
     if (next) await selectRule(next.id)
@@ -137,7 +123,7 @@ async function load() {
 function openCreate() {
   Object.assign(createForm, {
     name: '',
-    purpose: props.surface === 'operator' ? 'customer_charge' : 'usage_cost',
+    purpose: 'usage_cost',
     scope_type: 'global',
     scope_id: '',
     model: '*',
@@ -151,13 +137,11 @@ function openCreate() {
 async function createRule() {
   saving.value = true
   try {
-    const purpose: PricingPurpose = props.surface === 'operator' ? 'customer_charge' : props.surface === 'platform' ? 'usage_cost' : createForm.purpose
-    const scopeType: PricingScopeType = purpose === 'usage_cost' || props.surface === 'platform' ? 'global' : createForm.scope_type
-    const created = await createPricingRule(props.surface, {
-      name: createForm.name,
-      purpose,
-      scope_type: scopeType,
-      scope_id: scopeType === 'global' ? '' : createForm.scope_id,
+	const created = await createPricingRule({
+		name: createForm.name,
+		purpose: 'usage_cost',
+		scope_type: 'global',
+		scope_id: '',
       model: createForm.model,
       currency: 'USD',
       authoring_mode: createForm.authoring_mode,
@@ -177,7 +161,7 @@ async function createRule() {
 
 async function runValidation(): Promise<PricingValidationResult | null> {
   try {
-    validation.value = await validatePricingRule(props.surface, editor.expression, parseTestCases(editor.test_cases))
+    validation.value = await validatePricingRule(editor.expression, parseTestCases(editor.test_cases))
     if (validation.value.valid) showNotice('pricingRules.validationPassed')
     else error.value = t('pricingRules.validationFailed')
     return validation.value
@@ -191,7 +175,7 @@ async function saveDraft(): Promise<PricingRuleDetail | null> {
   if (!detail.value) return null
   saving.value = true
   try {
-    const updated = await updatePricingRuleDraft(props.surface, detail.value.rule.id, {
+    const updated = await updatePricingRuleDraft(detail.value.rule.id, {
       expected_lock_version: detail.value.rule.lock_version,
       name: editor.name,
       currency: 'USD',
@@ -218,12 +202,11 @@ async function publishRule() {
   if (!checked?.valid || !checked.expression_hash) return
   saving.value = true
   try {
-    const published = await publishPricingRule(props.surface, updated.rule.id, {
+    const published = await publishPricingRule(updated.rule.id, {
       draft_version_id: updated.draft.id,
       expected_lock_version: updated.rule.lock_version,
       expected_active_version_id: updated.rule.active_version_id || '',
-      expression_hash: checked.expression_hash,
-      acknowledge_customer_impact: acknowledgeImpact.value
+		expression_hash: checked.expression_hash
     })
     applyDetail(published)
     rules.value = rules.value.map((rule) => rule.id === published.rule.id ? published.rule : rule)
@@ -238,7 +221,7 @@ async function publishRule() {
 async function disableRule() {
   if (!detail.value || !window.confirm(t('pricingRules.confirmDisable'))) return
   try {
-    await disablePricingRule(props.surface, detail.value.rule.id, detail.value.rule.lock_version)
+    await disablePricingRule(detail.value.rule.id, detail.value.rule.lock_version)
     await load()
     showNotice('pricingRules.disabledSuccess')
   } catch (err) {
@@ -249,7 +232,7 @@ async function disableRule() {
 async function activateVersion(versionID: string) {
   if (!detail.value || !window.confirm(t('pricingRules.confirmActivate'))) return
   try {
-    await activatePricingRuleVersion(props.surface, detail.value.rule.id, versionID, detail.value.rule.lock_version)
+    await activatePricingRuleVersion(detail.value.rule.id, versionID, detail.value.rule.lock_version)
     await selectRule(detail.value.rule.id)
     showNotice('pricingRules.activated')
   } catch (err) {
@@ -259,7 +242,7 @@ async function activateVersion(versionID: string) {
 
 async function runSimulation() {
   try {
-    simulation.value = await simulatePricingRule(props.surface, {
+    simulation.value = await simulatePricingRule({
       rule_version_id: '', expression: editor.expression, currency: 'USD', facts: JSON.parse(simulationFacts.value)
     })
     error.value = ''
@@ -271,7 +254,7 @@ async function runSimulation() {
 async function lookupEvaluation() {
   if (!evaluationID.value.trim()) return
   try {
-    evaluation.value = await getPricingEvaluation(props.surface, evaluationID.value.trim())
+    evaluation.value = await getPricingEvaluation(evaluationID.value.trim())
     error.value = ''
   } catch (err) {
     showError(err)
@@ -286,12 +269,7 @@ function date(value?: string): string {
   return value ? new Date(value).toLocaleString() : '-'
 }
 
-onMounted(async () => {
-  if (props.surface === 'operator') {
-    try { plans.value = await listOperatorResource<OperatorPlan>('plans') } catch { plans.value = [] }
-  }
-  await load()
-})
+onMounted(load)
 </script>
 
 <template>
@@ -305,11 +283,6 @@ onMounted(async () => {
     </section>
 
     <section class="table-toolbar pricing-filters">
-      <select v-if="!purposeLocked" v-model="filters.purpose" @change="load">
-        <option value="">{{ t('pricingRules.allPurposes') }}</option>
-        <option value="usage_cost">{{ t('pricingRules.usageCost') }}</option>
-        <option value="customer_charge">{{ t('pricingRules.customerCharge') }}</option>
-      </select>
       <select v-model="filters.status" @change="load">
         <option value="">{{ t('pricingRules.allStatuses') }}</option>
         <option value="active">{{ t('pricingRules.active') }}</option>
@@ -332,7 +305,7 @@ onMounted(async () => {
           @click="selectRule(rule.id)"
         >
           <span><strong>{{ rule.name }}</strong><small>{{ rule.model }}</small></span>
-          <span><i class="pill" :class="rule.status === 'active' ? 'status-success' : ''">{{ t(`pricingRules.${rule.status}`) }}</i><small>{{ t(`pricingRules.${rule.purpose === 'usage_cost' ? 'usageCost' : 'customerCharge'}`) }}</small></span>
+			<span><i class="pill" :class="rule.status === 'active' ? 'status-success' : ''">{{ t(`pricingRules.${rule.status}`) }}</i><small>{{ t('pricingRules.usageCost') }}</small></span>
         </button>
         <div v-if="!loading && !rules.length" class="empty-state">{{ t('pricingRules.noRules') }}</div>
       </aside>
@@ -341,7 +314,7 @@ onMounted(async () => {
         <header class="pricing-workspace-header">
           <div>
             <div class="pricing-title-line"><h2>{{ detail.rule.name }}</h2><span class="pill" :class="detail.rule.status === 'active' ? 'status-success' : ''">{{ t(`pricingRules.${detail.rule.status}`) }}</span></div>
-            <p>{{ detail.rule.model }} · {{ t(`pricingRules.${detail.rule.purpose === 'usage_cost' ? 'usageCost' : 'customerCharge'}`) }} · {{ detail.rule.scope_type === 'global' ? t('pricingRules.global') : detail.rule.scope_id }}</p>
+			<p>{{ detail.rule.model }} · {{ t('pricingRules.usageCost') }} · {{ t('pricingRules.global') }}</p>
           </div>
           <span class="lock-version">{{ t('pricingRules.lockVersion') }} {{ detail.rule.lock_version }}</span>
         </header>
@@ -370,7 +343,6 @@ onMounted(async () => {
             <ul v-if="validation.errors.length"><li v-for="item in validation.errors" :key="`${item.code}-${item.line}-${item.column}`"><code>{{ item.code }}</code> {{ item.message }}</li></ul>
           </section>
 
-          <label v-if="selectedPurpose === 'customer_charge'" class="check-row"><input v-model="acknowledgeImpact" type="checkbox" />{{ t('pricingRules.acknowledgeImpact') }}</label>
           <div class="editor-actions">
             <button class="button secondary" type="button" @click="runValidation"><CheckCircle2 :size="17" />{{ t('pricingRules.validate') }}</button>
             <button class="button secondary" type="submit" :disabled="saving"><Save :size="17" />{{ t('pricingRules.saveDraft') }}</button>
@@ -411,9 +383,8 @@ onMounted(async () => {
         <div class="modal-body form-grid">
           <div class="field"><label for="pricing-create-name">{{ t('pricingRules.name') }}</label><input id="pricing-create-name" v-model="createForm.name" required /></div>
           <div class="field"><label for="pricing-create-model">{{ t('pricingRules.model') }}</label><input id="pricing-create-model" v-model="createForm.model" required /></div>
-          <div class="field"><label for="pricing-create-purpose">{{ t('pricingRules.purpose') }}</label><select id="pricing-create-purpose" v-model="createForm.purpose" :disabled="purposeLocked"><option value="usage_cost">{{ t('pricingRules.usageCost') }}</option><option value="customer_charge">{{ t('pricingRules.customerCharge') }}</option></select></div>
-          <div class="field"><label for="pricing-create-scope">{{ t('pricingRules.scope') }}</label><select id="pricing-create-scope" v-model="createForm.scope_type" :disabled="createForm.purpose === 'usage_cost' || surface === 'platform'"><option value="global">{{ t('pricingRules.global') }}</option><option value="operator_plan">{{ t('pricingRules.operatorPlan') }}</option></select></div>
-          <div v-if="createForm.scope_type === 'operator_plan'" class="field field-wide"><label for="pricing-create-plan">{{ t('pricingRules.plan') }}</label><select v-if="surface === 'operator' && plans.length" id="pricing-create-plan" v-model="createForm.scope_id" required><option value="" disabled>{{ t('pricingRules.selectPlan') }}</option><option v-for="plan in plans" :key="plan.id" :value="plan.id">{{ plan.name }}</option></select><input v-else id="pricing-create-plan" v-model="createForm.scope_id" required /></div>
+		<div class="field"><label>{{ t('pricingRules.purpose') }}</label><strong>{{ t('pricingRules.usageCost') }}</strong></div>
+		<div class="field"><label>{{ t('pricingRules.scope') }}</label><strong>{{ t('pricingRules.global') }}</strong></div>
           <div class="field field-wide"><label for="pricing-create-expression">{{ t('pricingRules.expression') }}</label><textarea id="pricing-create-expression" v-model="createForm.expression" class="code-editor" rows="7" required spellcheck="false" /></div>
           <div class="field field-wide"><label for="pricing-create-tests">{{ t('pricingRules.testCases') }}</label><textarea id="pricing-create-tests" v-model="createForm.test_cases" class="code-editor" rows="5" spellcheck="false" /></div>
         </div>

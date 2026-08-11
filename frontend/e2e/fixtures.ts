@@ -9,30 +9,15 @@ type PricingRuleDetail = {
 
 type PricingRuleInput = {
   name: string
-  purpose: 'usage_cost' | 'customer_charge'
-  scope_type: 'global' | 'operator_plan'
+  purpose: 'usage_cost'
+  scope_type: 'global'
   scope_id: string
   model: string
   expression: string
 }
 
-const controlSurfaceForProfile: Record<string, string> = {
-  enterprise: 'admin',
-  personal: 'console',
-  relay_operator: 'operator',
-  platform: 'platform'
-}
-
-const demoEntryForProfile: Record<string, { path: string; heading: string }> = {
-  enterprise: { path: '/admin/dashboard', heading: 'Overview' },
-  personal: { path: '/console/overview', heading: 'Personal Console' },
-  relay_operator: { path: '/operator/overview', heading: 'Relay Operator Console' },
-  platform: { path: '/platform/overview', heading: 'Platform overview' }
-}
-
 export function controlAPI(path = ''): string {
-  const surface = process.env.ASTER_E2E_CONTROL_SURFACE || controlSurfaceForProfile[process.env.ASTER_E2E_EXPECT_PROFILE || ''] || 'admin'
-  return `/api/v1/${surface}${path}`
+  return `/api/v1/console${path}`
 }
 
 export async function envelope<T>(response: APIResponse, expectedStatus = 200): Promise<T> {
@@ -59,11 +44,10 @@ async function pricingData<T>(response: APIResponse): Promise<T> {
 export async function createPublishedPricingRule(
   page: Page,
   token: string,
-  surface: 'admin' | 'operator',
   input: PricingRuleInput
 ): Promise<PricingRuleDetail> {
   const headers = { Authorization: `Bearer ${token}` }
-  const detail = await pricingData<PricingRuleDetail>(await page.request.post(`/api/v1/${surface}/pricing-rules`, {
+  const detail = await pricingData<PricingRuleDetail>(await page.request.post('/api/v1/console/pricing-rules', {
     headers,
     data: {
       ...input,
@@ -73,14 +57,13 @@ export async function createPublishedPricingRule(
     }
   }))
   expect(detail.draft).toBeDefined()
-  return pricingData<PricingRuleDetail>(await page.request.post(`/api/v1/${surface}/pricing-rules/${detail.rule.id}/publish`, {
+  return pricingData<PricingRuleDetail>(await page.request.post(`/api/v1/console/pricing-rules/${detail.rule.id}/publish`, {
     headers,
     data: {
       draft_version_id: detail.draft!.id,
       expected_lock_version: detail.rule.lock_version,
       expected_active_version_id: detail.rule.active_version_id || '',
-      expression_hash: detail.draft!.expression_hash,
-      acknowledge_customer_impact: input.purpose === 'customer_charge'
+      expression_hash: detail.draft!.expression_hash
     }
   }))
 }
@@ -99,7 +82,7 @@ export function loginTestPrincipal(page: Page): Promise<string> {
 export async function registerUsers(
   page: Page,
   adminToken: string,
-  users: Array<{ email: string; password: string; displayName: string; balanceMicros?: number }>
+  users: Array<{ email: string; password: string; displayName: string }>
 ): Promise<Array<{ id: string; email: string }>> {
   const headers = { Authorization: `Bearer ${adminToken}` }
   const settings = await envelope<Record<string, unknown>>(await page.request.get(controlAPI('/settings'), { headers }))
@@ -111,8 +94,7 @@ export async function registerUsers(
         data: {
           ...settings,
           registration_enabled: true,
-          email_verify_enabled: false,
-          default_balance_micros: user.balanceMicros ?? settings.default_balance_micros
+          email_verify_enabled: false
         }
       }))
       const result = await envelope<{ user_id: string }>(await page.request.post('/api/v1/auth/register', {
@@ -205,9 +187,8 @@ export async function loginDemo(page: Page): Promise<void> {
   const demoButton = page.getByRole('button', { name: 'Try the demo' })
   await expect(demoButton).toBeVisible()
   await demoButton.click()
-  const entry = demoEntryForProfile[process.env.ASTER_E2E_EXPECT_PROFILE || ''] || demoEntryForProfile.personal
-  await expect(page).toHaveURL(new RegExp(`${entry.path}$`))
-  await expect(page.getByRole('heading', { level: 1, name: entry.heading })).toBeVisible()
+  await expect(page).toHaveURL(/\/console\/workbench$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
 }
 
 export async function expectNoHorizontalOverflow(page: Page): Promise<void> {

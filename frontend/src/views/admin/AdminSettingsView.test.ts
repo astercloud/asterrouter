@@ -41,7 +41,6 @@ vi.mock('@/api/system', () => ({
   restoreSystemBackup: vi.fn(),
   rollbackSystemUpdate: vi.fn(),
   testBackupS3: vi.fn(),
-  updateSystemProfiles: vi.fn()
 }))
 
 const loadedSettings = {
@@ -49,8 +48,6 @@ const loadedSettings = {
   storage_mode: 'memory',
   public_base_url: 'https://router.example.test',
   gateway_base_path: '/v1',
-  default_profile: 'enterprise',
-  enabled_profiles: ['enterprise'],
   demo_mode: false,
   email_templates: [],
   runtime_restart_required: false,
@@ -96,7 +93,7 @@ describe('AdminSettingsView', () => {
     vi.mocked(system.checkSystemUpdates).mockResolvedValue({ has_update: false, source: 'none' } as never)
     vi.mocked(system.listSystemBackups).mockResolvedValue([])
     vi.mocked(system.listS3Backups).mockResolvedValue([])
-    window.history.replaceState({}, '', '/admin/settings')
+    window.history.replaceState({}, '', '/console/system')
   })
 
   it('opens on general settings and supports keyboard tab navigation', async () => {
@@ -116,12 +113,12 @@ describe('AdminSettingsView', () => {
     wrapper.unmount()
   })
 
-  it('keeps all four deployment modes and a save action available from the current section', async () => {
+  it('keeps gateway settings and a save action without deployment mode switching', async () => {
     const wrapper = mount(AdminSettingsView, { global: { plugins: [i18n] } })
     await flushPromises()
 
     await wrapper.get('#settings-tab-gateway').trigger('click')
-    expect(wrapper.findAll('.profile-card')).toHaveLength(4)
+    expect(wrapper.findAll('input[type="radio"], input[name*="profile" i], input[name*="deployment" i]')).toHaveLength(0)
     const saveBar = wrapper.get('[data-section="settings-save-bar"]')
     expect(saveBar.text()).toContain('Deployment & gateway')
     expect(saveBar.text()).toContain('Save settings')
@@ -195,26 +192,6 @@ describe('AdminSettingsView', () => {
     await wrapper.findAll('.smtp-test-controls button')[1]!.trigger('click')
     await flushPromises()
     expect(settings.testSMTP).toHaveBeenCalledWith('recipient@example.com', expect.objectContaining({ smtp_host: 'smtp.unsaved.example' }))
-    wrapper.unmount()
-  })
-
-  it('switches an installed non-demo instance to one profile and opens its workspace', async () => {
-    vi.mocked(system.updateSystemProfiles).mockResolvedValue({
-      enabled_profiles: ['relay_operator'],
-      default_profile: 'relay_operator'
-    })
-    const wrapper = mount(AdminSettingsView, { global: { plugins: [i18n] } })
-    await flushPromises()
-
-    await wrapper.get('#settings-tab-gateway').trigger('click')
-    await wrapper.get('[data-profile="relay_operator"]').trigger('click')
-    await flushPromises()
-
-    expect(system.updateSystemProfiles).toHaveBeenCalledWith(['relay_operator'], 'relay_operator')
-    expect(loadPublicSettingsMock).toHaveBeenCalledTimes(1)
-    expect(wrapper.get('[data-profile="relay_operator"]').attributes('aria-pressed')).toBe('true')
-    expect(window.location.pathname).toBe('/operator/overview')
-
     wrapper.unmount()
   })
 })

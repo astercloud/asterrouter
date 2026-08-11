@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Activity, BellRing, Code2, Gauge, KeyRound, Route } from '@lucide/vue'
-import SurfaceShell from '@/components/SurfaceShell.vue'
+import { Activity, Code2, Gauge, KeyRound, UserRound } from '@lucide/vue'
+import ProductShell from '@/components/ProductShell.vue'
 
 const navGroups = [
   {
@@ -10,21 +10,20 @@ const navGroups = [
   {
     label: 'nav.selfService',
     items: [
-      { to: '/portal/integration', label: 'portal.integrationGuide', icon: Code2 },
-      { to: '/portal/keys', label: 'portal.myKeys', icon: KeyRound }
+      { to: '/portal/applications', label: 'portal.applications', icon: KeyRound },
+      { to: '/portal/access', label: 'portal.access', icon: Code2 }
     ]
   },
   {
     label: 'nav.activity',
     items: [
       { to: '/portal/usage', label: 'portal.usage', icon: Activity },
-      { to: '/portal/alerts', label: 'portal.alerts', icon: BellRing },
-      { to: '/portal/traces', label: 'portal.recentTraces', icon: Route }
+      { to: '/portal/account', label: 'account.title', icon: UserRound }
     ]
   }
 ]
 </script>
 
 <template>
-  <SurfaceShell home-to="/portal/overview" nav-label="nav.portal" surface="portal" :nav-groups="navGroups" />
+  <ProductShell home-to="/portal/overview" nav-label="nav.portal" entry="portal" :nav-groups="navGroups" />
 </template>

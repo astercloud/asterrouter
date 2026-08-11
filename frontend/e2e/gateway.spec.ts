@@ -21,7 +21,7 @@ async function invokeWithSyntheticUsage(page: Page, key: string, model: string, 
 }
 
 async function policyAlert(page: Page, adminToken: string, keyID: string, type: string): Promise<PolicyAlert> {
-  const alerts = await envelope<PolicyAlert[]>(await page.request.get(`/api/v1/admin/alerts?type=${type}&resource_type=api_key&limit=100`, {
+  const alerts = await envelope<PolicyAlert[]>(await page.request.get(`/api/v1/console/alerts?type=${type}&resource_type=api_key&limit=100`, {
     headers: { Authorization: `Bearer ${adminToken}` }
   }))
   const alert = alerts.find((item) => item.resource_id === keyID)
@@ -31,7 +31,7 @@ async function policyAlert(page: Page, adminToken: string, keyID: string, type: 
 
 async function expectUsageCost(page: Page, adminToken: string, keyID: string, expectedCostMicros: number) {
   await expect.poll(async () => {
-    const usage = await envelope<{ recent: Array<Record<string, unknown>> }>(await page.request.get('/api/v1/admin/usage?limit=100', {
+    const usage = await envelope<{ recent: Array<Record<string, unknown>> }>(await page.request.get('/api/v1/console/usage?limit=100', {
       headers: { Authorization: `Bearer ${adminToken}` }
     }))
     return usage.recent
@@ -78,7 +78,7 @@ test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }
   expect(streamingBody).toContain('"id":"e2e-stream"')
   expect(streamingBody).toContain('data: [DONE]')
 
-  const usage = await envelope<{ recent: Array<Record<string, unknown>> }>(await page.request.get('/api/v1/admin/usage?limit=100', {
+  const usage = await envelope<{ recent: Array<Record<string, unknown>> }>(await page.request.get('/api/v1/console/usage?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
   expect(usage.recent).toContainEqual(expect.objectContaining({
@@ -90,7 +90,7 @@ test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }
     output_tokens: 11
   }))
 
-  const traces = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/admin/gateway-traces?limit=100', {
+  const traces = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/console/gateway-traces?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
   const forwardedTraces = traces.filter((trace) =>
@@ -110,7 +110,7 @@ test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }
     http_status: 200
   }))
 
-  const audit = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/admin/audit-logs?limit=100', {
+  const audit = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/console/audit-logs?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
   expect(audit).toContainEqual(expect.objectContaining({ action: 'invoke', resource_type: 'gateway_call' }))
@@ -150,7 +150,7 @@ test('@smoke @j05 quota and budget warn, deduplicate, escalate, and reject with 
 
   const budgetModel = `e2e-budget-${runID}`
   await createGatewayFixture(page, token, `${runID}-budget`, budgetModel)
-  await createPublishedPricingRule(page, token, 'admin', {
+  await createPublishedPricingRule(page, token, {
     name: `E2E usage cost ${runID}`,
     purpose: 'usage_cost',
     scope_type: 'global',
@@ -197,20 +197,20 @@ test('@smoke @j05 quota and budget warn, deduplicate, escalate, and reject with 
     error: { type: 'budget_hold_failed' }
   })
 
-  const usage = await envelope<{ recent: Array<Record<string, unknown>> }>(await page.request.get('/api/v1/admin/usage?limit=100', {
+  const usage = await envelope<{ recent: Array<Record<string, unknown>> }>(await page.request.get('/api/v1/console/usage?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
   expect(usage.recent).toContainEqual(expect.objectContaining({ api_key_id: quotaKey.record.id, model: quotaModel, status: 'error', error_type: 'quota_exceeded' }))
   expect(usage.recent).toContainEqual(expect.objectContaining({ api_key_id: budgetKey.record.id, model: budgetModel, status: 'error', error_type: 'budget_hold_failed' }))
   expect(usage.recent.filter((item) => item.api_key_id === budgetKey.record.id).reduce((sum, item) => sum + Number(item.usage_cost_micros || 0), 0)).toBe(4_000_000)
 
-  const traces = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/admin/gateway-traces?limit=100', {
+  const traces = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/console/gateway-traces?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
   expect(traces).toContainEqual(expect.objectContaining({ api_key_id: quotaKey.record.id, model: quotaModel, status: 'error', http_status: 429, error_type: 'quota_exceeded' }))
   expect(traces).toContainEqual(expect.objectContaining({ api_key_id: budgetKey.record.id, model: budgetModel, status: 'error', http_status: 402, error_type: 'budget_hold_failed' }))
 
-  const audit = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/admin/audit-logs?limit=100', {
+  const audit = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/console/audit-logs?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
   expect(audit).toContainEqual(expect.objectContaining({ action: 'invoke', resource_type: 'gateway_call', summary: expect.stringContaining('status=policy_rejected') }))
@@ -282,7 +282,7 @@ test('@smoke @j04 failed primary route falls back and records attempts', async (
   expect(completion.status()).toBe(200)
   await expect(completion.json()).resolves.toMatchObject({ id: 'e2e-completion' })
 
-  const traces = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/admin/gateway-traces?limit=100', {
+  const traces = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/console/gateway-traces?limit=100', {
     headers: { Authorization: `Bearer ${token}` }
   }))
   const trace = traces.find((item) => item.api_key_id === workspaceKey.record.id && item.model === publicModel)

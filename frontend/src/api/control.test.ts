@@ -19,7 +19,7 @@ describe('control API contracts', () => {
     client.post.mockResolvedValue({ data: {} })
     client.put.mockResolvedValue({ data: {} })
     client.delete.mockResolvedValue({ data: {} })
-    window.history.replaceState({}, '', '/admin/dashboard')
+    window.history.replaceState({}, '', '/console/dashboard')
   })
 
   it('normalizes nullable account inventory and routing collections', async () => {
@@ -48,10 +48,11 @@ describe('control API contracts', () => {
   it('normalizes nullable collections used by every admin list page', async () => {
     const loads: Array<() => Promise<unknown[]>> = [
       control.getDepartments,
+      control.getApplications,
       control.getOrganizationGroups,
       control.getWorkspaceUsers,
       control.getRoleBindings,
-      () => control.getPricingRules('admin'),
+      () => control.getPricingRules(),
       control.getAuditLogs,
       control.getAlerts,
       control.getGatewayTraces,
@@ -143,102 +144,105 @@ describe('control API contracts', () => {
   it('uses admin CRUD endpoint contracts', async () => {
     const payload = { synthetic: true } as never
     const cases: Array<{ run: () => Promise<unknown>; method: ClientMethod; args: unknown[] }> = [
-      { run: () => control.getDashboard(), method: 'get', args: ['/admin/dashboard'] },
-      { run: () => control.getProviders(), method: 'get', args: ['/admin/providers'] },
-      { run: () => control.getProviderHealthChecks(), method: 'get', args: ['/admin/provider-health-checks'] },
-      { run: () => control.createProvider(payload), method: 'post', args: ['/admin/providers', payload] },
-      { run: () => control.updateProvider('provider-1', payload), method: 'put', args: ['/admin/providers/provider-1', payload] },
-      { run: () => control.checkProvider('provider-1'), method: 'post', args: ['/admin/providers/provider-1/check'] },
-      { run: () => control.getDepartments(), method: 'get', args: ['/admin/departments'] },
-      { run: () => control.createDepartment(payload), method: 'post', args: ['/admin/departments', payload] },
-      { run: () => control.updateDepartment('department-1', payload), method: 'put', args: ['/admin/departments/department-1', payload] },
-      { run: () => control.getOrganizationGroups(), method: 'get', args: ['/admin/organization-groups'] },
-      { run: () => control.createOrganizationGroup(payload), method: 'post', args: ['/admin/organization-groups', payload] },
-      { run: () => control.updateOrganizationGroup('organization-1', payload), method: 'put', args: ['/admin/organization-groups/organization-1', payload] },
-      { run: () => control.deleteOrganizationGroup('organization-1'), method: 'delete', args: ['/admin/organization-groups/organization-1'] },
-      { run: () => control.getGovernancePolicies(), method: 'get', args: ['/admin/policies'] },
-      { run: () => control.createGovernancePolicy(payload), method: 'post', args: ['/admin/policies', payload] },
-      { run: () => control.updateGovernancePolicy('policy-1', payload), method: 'put', args: ['/admin/policies/policy-1', payload] },
-      { run: () => control.getWorkspaceUsers(), method: 'get', args: ['/admin/users'] },
-      { run: () => control.createWorkspaceUser(payload), method: 'post', args: ['/admin/users', payload] },
-      { run: () => control.updateWorkspaceUser('user-1', payload), method: 'put', args: ['/admin/users/user-1', payload] },
-      { run: () => control.getRoleBindings(), method: 'get', args: ['/admin/role-bindings'] },
-      { run: () => control.createRoleBinding(payload), method: 'post', args: ['/admin/role-bindings', payload] },
-      { run: () => control.deleteRoleBinding('binding-1'), method: 'delete', args: ['/admin/role-bindings/binding-1'] },
-      { run: () => control.getRoutingGroups(), method: 'get', args: ['/admin/routing-groups'] },
-      { run: () => control.createRoutingGroup(payload), method: 'post', args: ['/admin/routing-groups', payload] },
-      { run: () => control.updateRoutingGroup('group-1', payload), method: 'put', args: ['/admin/routing-groups/group-1', payload] },
-      { run: () => control.getProviderAccounts(), method: 'get', args: ['/admin/provider-accounts'] },
-      { run: () => control.getProviderAccountHealthChecks(), method: 'get', args: ['/admin/provider-account-health-checks'] },
-      { run: () => control.createProviderAccount(payload), method: 'post', args: ['/admin/provider-accounts', payload] },
-      { run: () => control.updateProviderAccount('account-1', payload), method: 'put', args: ['/admin/provider-accounts/account-1', payload] },
-      { run: () => control.checkProviderAccount('account-1'), method: 'post', args: ['/admin/provider-accounts/account-1/check'] },
-      { run: () => control.getProviderAccountModelInventory('account-1'), method: 'get', args: ['/admin/provider-accounts/account-1/models'] },
-      { run: () => control.discoverProviderAccountModels('account-1'), method: 'post', args: ['/admin/provider-accounts/account-1/models/discover'] },
+      { run: () => control.getDashboard(), method: 'get', args: ['/console/dashboard'] },
+      { run: () => control.getProviders(), method: 'get', args: ['/console/providers'] },
+      { run: () => control.getProviderHealthChecks(), method: 'get', args: ['/console/provider-health-checks'] },
+      { run: () => control.createProvider(payload), method: 'post', args: ['/console/providers', payload] },
+      { run: () => control.updateProvider('provider-1', payload), method: 'put', args: ['/console/providers/provider-1', payload] },
+      { run: () => control.checkProvider('provider-1'), method: 'post', args: ['/console/providers/provider-1/check'] },
+      { run: () => control.getDepartments(), method: 'get', args: ['/console/departments'] },
+      { run: () => control.getApplications(), method: 'get', args: ['/applications'] },
+      { run: () => control.createApplication(payload), method: 'post', args: ['/applications', payload] },
+      { run: () => control.updateApplication('application-1', payload), method: 'put', args: ['/applications/application-1', payload] },
+      { run: () => control.createDepartment(payload), method: 'post', args: ['/console/departments', payload] },
+      { run: () => control.updateDepartment('department-1', payload), method: 'put', args: ['/console/departments/department-1', payload] },
+      { run: () => control.getOrganizationGroups(), method: 'get', args: ['/console/organization-groups'] },
+      { run: () => control.createOrganizationGroup(payload), method: 'post', args: ['/console/organization-groups', payload] },
+      { run: () => control.updateOrganizationGroup('organization-1', payload), method: 'put', args: ['/console/organization-groups/organization-1', payload] },
+      { run: () => control.deleteOrganizationGroup('organization-1'), method: 'delete', args: ['/console/organization-groups/organization-1'] },
+      { run: () => control.getGovernancePolicies(), method: 'get', args: ['/console/policies'] },
+      { run: () => control.createGovernancePolicy(payload), method: 'post', args: ['/console/policies', payload] },
+      { run: () => control.updateGovernancePolicy('policy-1', payload), method: 'put', args: ['/console/policies/policy-1', payload] },
+      { run: () => control.getWorkspaceUsers(), method: 'get', args: ['/console/users'] },
+      { run: () => control.createWorkspaceUser(payload), method: 'post', args: ['/console/users', payload] },
+      { run: () => control.updateWorkspaceUser('user-1', payload), method: 'put', args: ['/console/users/user-1', payload] },
+      { run: () => control.getRoleBindings(), method: 'get', args: ['/console/role-bindings'] },
+      { run: () => control.createRoleBinding(payload), method: 'post', args: ['/console/role-bindings', payload] },
+      { run: () => control.deleteRoleBinding('binding-1'), method: 'delete', args: ['/console/role-bindings/binding-1'] },
+      { run: () => control.getRoutingGroups(), method: 'get', args: ['/console/routing-groups'] },
+      { run: () => control.createRoutingGroup(payload), method: 'post', args: ['/console/routing-groups', payload] },
+      { run: () => control.updateRoutingGroup('group-1', payload), method: 'put', args: ['/console/routing-groups/group-1', payload] },
+      { run: () => control.getProviderAccounts(), method: 'get', args: ['/console/provider-accounts'] },
+      { run: () => control.getProviderAccountHealthChecks(), method: 'get', args: ['/console/provider-account-health-checks'] },
+      { run: () => control.createProviderAccount(payload), method: 'post', args: ['/console/provider-accounts', payload] },
+      { run: () => control.updateProviderAccount('account-1', payload), method: 'put', args: ['/console/provider-accounts/account-1', payload] },
+      { run: () => control.checkProviderAccount('account-1'), method: 'post', args: ['/console/provider-accounts/account-1/check'] },
+      { run: () => control.getProviderAccountModelInventory('account-1'), method: 'get', args: ['/console/provider-accounts/account-1/models'] },
+      { run: () => control.discoverProviderAccountModels('account-1'), method: 'post', args: ['/console/provider-accounts/account-1/models/discover'] },
       {
         run: () => {
           client.post.mockResolvedValueOnce({ data: { account: {}, inventory: {}, discovery: {} } })
           return control.syncProviderAccountModels('account-1', { enabled_models: ['model-a'], auto_enable_new_models: false })
         },
         method: 'post',
-        args: ['/admin/provider-accounts/account-1/models/sync', { enabled_models: ['model-a'], auto_enable_new_models: false }]
+        args: ['/console/provider-accounts/account-1/models/sync', { enabled_models: ['model-a'], auto_enable_new_models: false }]
       },
-      { run: () => control.clearProviderAccountCooldown('account-1'), method: 'post', args: ['/admin/provider-accounts/account-1/clear-cooldown'] },
-      { run: () => control.getGatewayModels(), method: 'get', args: ['/admin/gateway-models'] },
-      { run: () => control.createGatewayModel(payload), method: 'post', args: ['/admin/gateway-models', payload] },
-      { run: () => control.updateGatewayModel('model-1', payload), method: 'put', args: ['/admin/gateway-models/model-1', payload] },
-      { run: () => control.deleteGatewayModel('model-1'), method: 'delete', args: ['/admin/gateway-models/model-1'] },
-      { run: () => control.getModelRoutes(), method: 'get', args: ['/admin/model-routes'] },
-      { run: () => control.createModelRoute(payload), method: 'post', args: ['/admin/model-routes', payload] },
-      { run: () => control.bulkCreateModelRoutes({ routes: [payload] }), method: 'post', args: ['/admin/model-routes/bulk', { routes: [payload] }] },
-      { run: () => control.updateModelRoute('route-1', payload), method: 'put', args: ['/admin/model-routes/route-1', payload] },
-      { run: () => control.deleteModelRoute('route-1'), method: 'delete', args: ['/admin/model-routes/route-1'] },
-      { run: () => control.simulateGatewayRouting('model-a', 123), method: 'post', args: ['/admin/gateway-simulator', { model: 'model-a', estimated_tokens: 123, protocol: 'openai_chat_completions', required_features: [] }] },
-      { run: () => control.getPricingRules('admin'), method: 'get', args: ['/admin/pricing-rules', { params: undefined }] },
-      { run: () => control.getPricingRule('admin', 'pricing-1'), method: 'get', args: ['/admin/pricing-rules/pricing-1'] },
-      { run: () => control.createPricingRule('admin', payload), method: 'post', args: ['/admin/pricing-rules', payload] },
-      { run: () => control.updatePricingRuleDraft('admin', 'pricing-1', payload), method: 'put', args: ['/admin/pricing-rules/pricing-1/draft', payload] },
-      { run: () => control.simulatePricingRule('admin', payload), method: 'post', args: ['/admin/pricing-rules/simulate', payload] },
-      { run: () => control.publishPricingRule('admin', 'pricing-1', payload), method: 'post', args: ['/admin/pricing-rules/pricing-1/publish', payload] },
-      { run: () => control.activatePricingRuleVersion('admin', 'pricing-1', 'version-1', 4), method: 'post', args: ['/admin/pricing-rules/pricing-1/activate/version-1', { expected_lock_version: 4 }] },
-      { run: () => control.disablePricingRule('admin', 'pricing-1', 5), method: 'post', args: ['/admin/pricing-rules/pricing-1/disable', { expected_lock_version: 5 }] },
-      { run: () => control.getPricingEvaluation('admin', 'evaluation-1'), method: 'get', args: ['/admin/pricing-evaluations/evaluation-1'] },
-      { run: () => control.getEffectivePricingPolicy(), method: 'get', args: ['/admin/effective-pricing/policy'] },
-      { run: () => control.updateEffectivePricingPolicy(payload), method: 'put', args: ['/admin/effective-pricing/policy', payload] },
-      { run: () => control.getProcurementPrices(), method: 'get', args: ['/admin/procurement-prices'] },
-      { run: () => control.createProcurementPrice(payload), method: 'post', args: ['/admin/procurement-prices', payload] },
-      { run: () => control.updateProcurementPrice('price-1', payload), method: 'put', args: ['/admin/procurement-prices/price-1', payload] },
-      { run: () => control.getProviderBillingLines(), method: 'get', args: ['/admin/provider-billing-lines'] },
-      { run: () => control.createProviderBillingLine(payload), method: 'post', args: ['/admin/provider-billing-lines', payload] },
-      { run: () => control.inspectProviderBillingSource('account-a'), method: 'post', args: ['/admin/provider-billing-sources/inspect', { provider_account_id: 'account-a', adapter_id: 'auto' }] },
-      { run: () => control.getProviderBillingSources(), method: 'get', args: ['/admin/provider-billing-sources'] },
-      { run: () => control.updateProviderBillingSource(payload), method: 'put', args: ['/admin/provider-billing-sources', payload] },
-      { run: () => control.syncProviderBillingSource('source-a'), method: 'post', args: ['/admin/provider-billing-sources/source-a/sync'] },
-      { run: () => control.getProviderBillingSourceEvidence('source-a', 25), method: 'get', args: ['/admin/provider-billing-sources/source-a/evidence', { params: { limit: 25 } }] },
-      { run: () => control.getProviderCacheCapabilities(), method: 'get', args: ['/admin/provider-cache-capabilities'] },
-      { run: () => control.updateProviderCacheCapability(payload), method: 'put', args: ['/admin/provider-cache-capabilities', payload] },
-      { run: () => control.getProviderCacheProbeRuns(25), method: 'get', args: ['/admin/provider-cache-probes', { params: { limit: 25 } }] },
-      { run: () => control.runProviderCacheProbe({ provider_account_id: 'account-1', upstream_model: 'model-a', protocol: 'openai_chat_completions', prefix_tokens: 2048, max_cost_micros: 100000 }), method: 'post', args: ['/admin/provider-cache-probes', { provider_account_id: 'account-1', upstream_model: 'model-a', protocol: 'openai_chat_completions', prefix_tokens: 2048, max_cost_micros: 100000 }] },
-      { run: () => control.getEffectivePricingDecisions(), method: 'get', args: ['/admin/effective-pricing/decisions'] },
-      { run: () => control.getEffectivePricingDecisionEvaluations('decision-1', 25), method: 'get', args: ['/admin/effective-pricing/decisions/decision-1/evaluations', { params: { limit: 25 } }] },
-      { run: () => control.evaluateEffectivePricingDecision(payload), method: 'post', args: ['/admin/effective-pricing/decisions/evaluate', payload] },
-      { run: () => control.actOnEffectivePricingDecision('decision-1', 'approve_canary', 5), method: 'post', args: ['/admin/effective-pricing/decisions/decision-1/action', { action: 'approve_canary', canary_percent: 5 }] },
-      { run: () => control.getAPIKeys(), method: 'get', args: ['/admin/api-keys'] },
-      { run: () => control.getAPIKeyPolicyExplanation('key-1'), method: 'get', args: ['/admin/api-keys/key-1/policy-explanation'] },
-      { run: () => control.createAPIKey(payload), method: 'post', args: ['/admin/api-keys', payload] },
-      { run: () => control.updateAPIKey('key-1', payload), method: 'put', args: ['/admin/api-keys/key-1', payload] },
-      { run: () => control.rotateAPIKey('key-1', 3600), method: 'post', args: ['/admin/api-keys/key-1/rotate', { grace_period_seconds: 3600 }] },
-      { run: () => control.disableAPIKey('key-1'), method: 'post', args: ['/admin/api-keys/key-1/disable'] },
-      { run: () => control.getArtifact('artifact-1'), method: 'get', args: ['/admin/artifacts/artifact-1'] },
-      { run: () => control.getArtifactContent('artifact / 1'), method: 'get', args: ['/admin/artifacts/artifact%20%2F%201/content', { responseType: 'blob' }] },
-      { run: () => control.getArtifactRuntimes(), method: 'get', args: ['/admin/artifact-runtimes'] },
-      { run: () => control.retryArtifactDelivery('artifact-1'), method: 'post', args: ['/admin/artifacts/artifact-1/retry-delivery'] },
-      { run: () => control.getAIJob('job-1'), method: 'get', args: ['/admin/ai-jobs/job-1'] },
-      { run: () => control.getAIJobRuntime(), method: 'get', args: ['/admin/ai-jobs/runtime'] },
-      { run: () => control.cancelAIJob('job-1'), method: 'post', args: ['/admin/ai-jobs/job-1/cancel'] },
-      { run: () => control.scheduleAIJobAttemptReconciliation('job-1', 'attempt-1'), method: 'post', args: ['/admin/ai-jobs/job-1/attempts/attempt-1/reconcile'] },
-      { run: () => control.acknowledgeAlert('alert-1'), method: 'post', args: ['/admin/alerts/alert-1/acknowledge'] },
-      { run: () => control.resolveAlert('alert-1'), method: 'post', args: ['/admin/alerts/alert-1/resolve'] }
+      { run: () => control.clearProviderAccountCooldown('account-1'), method: 'post', args: ['/console/provider-accounts/account-1/clear-cooldown'] },
+      { run: () => control.getGatewayModels(), method: 'get', args: ['/console/gateway-models'] },
+      { run: () => control.createGatewayModel(payload), method: 'post', args: ['/console/gateway-models', payload] },
+      { run: () => control.updateGatewayModel('model-1', payload), method: 'put', args: ['/console/gateway-models/model-1', payload] },
+      { run: () => control.deleteGatewayModel('model-1'), method: 'delete', args: ['/console/gateway-models/model-1'] },
+      { run: () => control.getModelRoutes(), method: 'get', args: ['/console/model-routes'] },
+      { run: () => control.createModelRoute(payload), method: 'post', args: ['/console/model-routes', payload] },
+      { run: () => control.bulkCreateModelRoutes({ routes: [payload] }), method: 'post', args: ['/console/model-routes/bulk', { routes: [payload] }] },
+      { run: () => control.updateModelRoute('route-1', payload), method: 'put', args: ['/console/model-routes/route-1', payload] },
+      { run: () => control.deleteModelRoute('route-1'), method: 'delete', args: ['/console/model-routes/route-1'] },
+      { run: () => control.simulateGatewayRouting('model-a', 123), method: 'post', args: ['/console/gateway-simulator', { model: 'model-a', estimated_tokens: 123, protocol: 'openai_chat_completions', required_features: [] }] },
+      { run: () => control.getPricingRules(), method: 'get', args: ['/console/pricing-rules', { params: undefined }] },
+      { run: () => control.getPricingRule('pricing-1'), method: 'get', args: ['/console/pricing-rules/pricing-1'] },
+      { run: () => control.createPricingRule(payload), method: 'post', args: ['/console/pricing-rules', payload] },
+      { run: () => control.updatePricingRuleDraft('pricing-1', payload), method: 'put', args: ['/console/pricing-rules/pricing-1/draft', payload] },
+      { run: () => control.simulatePricingRule(payload), method: 'post', args: ['/console/pricing-rules/simulate', payload] },
+      { run: () => control.publishPricingRule('pricing-1', payload), method: 'post', args: ['/console/pricing-rules/pricing-1/publish', payload] },
+      { run: () => control.activatePricingRuleVersion('pricing-1', 'version-1', 4), method: 'post', args: ['/console/pricing-rules/pricing-1/activate/version-1', { expected_lock_version: 4 }] },
+      { run: () => control.disablePricingRule('pricing-1', 5), method: 'post', args: ['/console/pricing-rules/pricing-1/disable', { expected_lock_version: 5 }] },
+      { run: () => control.getPricingEvaluation('evaluation-1'), method: 'get', args: ['/console/pricing-evaluations/evaluation-1'] },
+      { run: () => control.getEffectivePricingPolicy(), method: 'get', args: ['/console/effective-pricing/policy'] },
+      { run: () => control.updateEffectivePricingPolicy(payload), method: 'put', args: ['/console/effective-pricing/policy', payload] },
+      { run: () => control.getProcurementPrices(), method: 'get', args: ['/console/procurement-prices'] },
+      { run: () => control.createProcurementPrice(payload), method: 'post', args: ['/console/procurement-prices', payload] },
+      { run: () => control.updateProcurementPrice('price-1', payload), method: 'put', args: ['/console/procurement-prices/price-1', payload] },
+      { run: () => control.getProviderBillingLines(), method: 'get', args: ['/console/provider-billing-lines'] },
+      { run: () => control.createProviderBillingLine(payload), method: 'post', args: ['/console/provider-billing-lines', payload] },
+      { run: () => control.inspectProviderBillingSource('account-a'), method: 'post', args: ['/console/provider-billing-sources/inspect', { provider_account_id: 'account-a', adapter_id: 'auto' }] },
+      { run: () => control.getProviderBillingSources(), method: 'get', args: ['/console/provider-billing-sources'] },
+      { run: () => control.updateProviderBillingSource(payload), method: 'put', args: ['/console/provider-billing-sources', payload] },
+      { run: () => control.syncProviderBillingSource('source-a'), method: 'post', args: ['/console/provider-billing-sources/source-a/sync'] },
+      { run: () => control.getProviderBillingSourceEvidence('source-a', 25), method: 'get', args: ['/console/provider-billing-sources/source-a/evidence', { params: { limit: 25 } }] },
+      { run: () => control.getProviderCacheCapabilities(), method: 'get', args: ['/console/provider-cache-capabilities'] },
+      { run: () => control.updateProviderCacheCapability(payload), method: 'put', args: ['/console/provider-cache-capabilities', payload] },
+      { run: () => control.getProviderCacheProbeRuns(25), method: 'get', args: ['/console/provider-cache-probes', { params: { limit: 25 } }] },
+      { run: () => control.runProviderCacheProbe({ provider_account_id: 'account-1', upstream_model: 'model-a', protocol: 'openai_chat_completions', prefix_tokens: 2048, max_cost_micros: 100000 }), method: 'post', args: ['/console/provider-cache-probes', { provider_account_id: 'account-1', upstream_model: 'model-a', protocol: 'openai_chat_completions', prefix_tokens: 2048, max_cost_micros: 100000 }] },
+      { run: () => control.getEffectivePricingDecisions(), method: 'get', args: ['/console/effective-pricing/decisions'] },
+      { run: () => control.getEffectivePricingDecisionEvaluations('decision-1', 25), method: 'get', args: ['/console/effective-pricing/decisions/decision-1/evaluations', { params: { limit: 25 } }] },
+      { run: () => control.evaluateEffectivePricingDecision(payload), method: 'post', args: ['/console/effective-pricing/decisions/evaluate', payload] },
+      { run: () => control.actOnEffectivePricingDecision('decision-1', 'approve_canary', 5), method: 'post', args: ['/console/effective-pricing/decisions/decision-1/action', { action: 'approve_canary', canary_percent: 5 }] },
+      { run: () => control.getAPIKeys(), method: 'get', args: ['/console/api-keys'] },
+      { run: () => control.getAPIKeyPolicyExplanation('key-1'), method: 'get', args: ['/console/api-keys/key-1/policy-explanation'] },
+      { run: () => control.createAPIKey(payload), method: 'post', args: ['/console/api-keys', payload] },
+      { run: () => control.updateAPIKey('key-1', payload), method: 'put', args: ['/console/api-keys/key-1', payload] },
+      { run: () => control.rotateAPIKey('key-1', 3600), method: 'post', args: ['/console/api-keys/key-1/rotate', { grace_period_seconds: 3600 }] },
+      { run: () => control.disableAPIKey('key-1'), method: 'post', args: ['/console/api-keys/key-1/disable'] },
+      { run: () => control.getArtifact('artifact-1'), method: 'get', args: ['/console/artifacts/artifact-1'] },
+      { run: () => control.getArtifactContent('artifact / 1'), method: 'get', args: ['/console/artifacts/artifact%20%2F%201/content', { responseType: 'blob' }] },
+      { run: () => control.getArtifactRuntimes(), method: 'get', args: ['/console/artifact-runtimes'] },
+      { run: () => control.retryArtifactDelivery('artifact-1'), method: 'post', args: ['/console/artifacts/artifact-1/retry-delivery'] },
+      { run: () => control.getAIJob('job-1'), method: 'get', args: ['/console/ai-jobs/job-1'] },
+      { run: () => control.getAIJobRuntime(), method: 'get', args: ['/console/ai-jobs/runtime'] },
+      { run: () => control.cancelAIJob('job-1'), method: 'post', args: ['/console/ai-jobs/job-1/cancel'] },
+      { run: () => control.scheduleAIJobAttemptReconciliation('job-1', 'attempt-1'), method: 'post', args: ['/console/ai-jobs/job-1/attempts/attempt-1/reconcile'] },
+      { run: () => control.acknowledgeAlert('alert-1'), method: 'post', args: ['/console/alerts/alert-1/acknowledge'] },
+      { run: () => control.resolveAlert('alert-1'), method: 'post', args: ['/console/alerts/alert-1/resolve'] }
     ]
     for (const testCase of cases) {
       await testCase.run()
@@ -249,22 +253,22 @@ describe('control API contracts', () => {
   it('uses query, summary, and asynchronous export endpoint contracts', async () => {
     const params = { limit: 10, q: 'synthetic' }
     const cases: Array<{ run: () => Promise<unknown>; method: ClientMethod; args: unknown[] }> = [
-      { run: () => control.getAuditLogs(params), method: 'get', args: ['/admin/audit-logs', { params }] },
-      { run: () => control.getAuditLogSummary(params), method: 'get', args: ['/admin/audit-logs/summary', { params }] },
-      { run: () => control.getAlerts(params), method: 'get', args: ['/admin/alerts', { params }] },
-      { run: () => control.getAlertSummary(params), method: 'get', args: ['/admin/alerts/summary', { params }] },
-      { run: () => control.getUsageReport(params), method: 'get', args: ['/admin/usage', { params }] },
-      { run: () => control.getEffectivePricingReport({ model: 'model-a', protocol: 'openai_chat_completions', window_hours: 24 }), method: 'get', args: ['/admin/effective-pricing/report', { params: { model: 'model-a', protocol: 'openai_chat_completions', window_hours: 24 } }] },
-      { run: () => control.getCostAllocationReport(params), method: 'get', args: ['/admin/cost-allocation', { params }] },
-      { run: () => control.getGatewayTraces(params), method: 'get', args: ['/admin/gateway-traces', { params }] },
-      { run: () => control.getGatewayTraceSummary(params), method: 'get', args: ['/admin/gateway-traces/summary', { params }] },
-      { run: () => control.getArtifacts(params), method: 'get', args: ['/admin/artifacts', { params }] },
-      { run: () => control.getArtifactSummary(params), method: 'get', args: ['/admin/artifacts/summary', { params }] },
-      { run: () => control.getAIJobs(params), method: 'get', args: ['/admin/ai-jobs', { params }] },
-      { run: () => control.getAIJobSummary(params), method: 'get', args: ['/admin/ai-jobs/summary', { params }] },
-      { run: () => control.createExportJob('usage', params), method: 'post', args: ['/admin/export-jobs', null, { params: { ...params, kind: 'usage' } }] },
-      { run: () => control.getExportJobs(25), method: 'get', args: ['/admin/export-jobs', { params: { limit: 25 } }] },
-      { run: () => control.getExportJob('job-1'), method: 'get', args: ['/admin/export-jobs/job-1'] }
+      { run: () => control.getAuditLogs(params), method: 'get', args: ['/console/audit-logs', { params }] },
+      { run: () => control.getAuditLogSummary(params), method: 'get', args: ['/console/audit-logs/summary', { params }] },
+      { run: () => control.getAlerts(params), method: 'get', args: ['/console/alerts', { params }] },
+      { run: () => control.getAlertSummary(params), method: 'get', args: ['/console/alerts/summary', { params }] },
+      { run: () => control.getUsageReport(params), method: 'get', args: ['/console/usage', { params }] },
+      { run: () => control.getEffectivePricingReport({ model: 'model-a', protocol: 'openai_chat_completions', window_hours: 24 }), method: 'get', args: ['/console/effective-pricing/report', { params: { model: 'model-a', protocol: 'openai_chat_completions', window_hours: 24 } }] },
+      { run: () => control.getCostAllocationReport(params), method: 'get', args: ['/console/cost-allocation', { params }] },
+      { run: () => control.getGatewayTraces(params), method: 'get', args: ['/console/gateway-traces', { params }] },
+      { run: () => control.getGatewayTraceSummary(params), method: 'get', args: ['/console/gateway-traces/summary', { params }] },
+      { run: () => control.getArtifacts(params), method: 'get', args: ['/console/artifacts', { params }] },
+      { run: () => control.getArtifactSummary(params), method: 'get', args: ['/console/artifacts/summary', { params }] },
+      { run: () => control.getAIJobs(params), method: 'get', args: ['/console/ai-jobs', { params }] },
+      { run: () => control.getAIJobSummary(params), method: 'get', args: ['/console/ai-jobs/summary', { params }] },
+      { run: () => control.createExportJob('usage', params), method: 'post', args: ['/console/export-jobs', null, { params: { ...params, kind: 'usage' } }] },
+      { run: () => control.getExportJobs(25), method: 'get', args: ['/console/export-jobs', { params: { limit: 25 } }] },
+      { run: () => control.getExportJob('job-1'), method: 'get', args: ['/console/export-jobs/job-1'] }
     ]
     for (const testCase of cases) {
       await testCase.run()
@@ -272,19 +276,16 @@ describe('control API contracts', () => {
     }
   })
 
-  it('selects portal or customer self-service endpoint contracts from the active path', async () => {
+  it('uses the enterprise portal self-service endpoint contracts', async () => {
     const payload = { name: 'Self-service key' } as never
-    for (const [browserPath, apiBase] of [['/portal/overview', '/portal'], ['/customer/overview', '/customer']]) {
-      window.history.replaceState({}, '', browserPath)
-      await control.getPortalWorkspace()
-      expect(client.get).toHaveBeenLastCalledWith(`${apiBase}/workspace`)
-      await control.createPortalAPIKey(payload)
-      expect(client.post).toHaveBeenLastCalledWith(`${apiBase}/api-keys`, payload)
-      await control.rotatePortalAPIKey('key-1', 300)
-      expect(client.post).toHaveBeenLastCalledWith(`${apiBase}/api-keys/key-1/rotate`, { grace_period_seconds: 300 })
-      await control.disablePortalAPIKey('key-1')
-      expect(client.post).toHaveBeenLastCalledWith(`${apiBase}/api-keys/key-1/disable`)
-    }
+    await control.getPortalWorkspace()
+    expect(client.get).toHaveBeenLastCalledWith('/portal/workspace')
+    await control.createPortalAPIKey(payload)
+    expect(client.post).toHaveBeenLastCalledWith('/portal/api-keys', payload)
+    await control.rotatePortalAPIKey('key-1', 300)
+    expect(client.post).toHaveBeenLastCalledWith('/portal/api-keys/key-1/rotate', { grace_period_seconds: 300 })
+    await control.disablePortalAPIKey('key-1')
+    expect(client.post).toHaveBeenLastCalledWith('/portal/api-keys/key-1/disable')
   })
 
   it('downloads synchronous and asynchronous CSV exports', async () => {
@@ -298,15 +299,15 @@ describe('control API contracts', () => {
     const params = { limit: 5 }
 
     await control.exportAuditLogsCSV(params)
-    expect(client.get).toHaveBeenLastCalledWith('/admin/audit-logs/export', { params, responseType: 'blob' })
+    expect(client.get).toHaveBeenLastCalledWith('/console/audit-logs/export', { params, responseType: 'blob' })
     await control.exportUsageCSV(params)
-    expect(client.get).toHaveBeenLastCalledWith('/admin/usage/export', { params, responseType: 'blob' })
+    expect(client.get).toHaveBeenLastCalledWith('/console/usage/export', { params, responseType: 'blob' })
     await control.exportCostAllocationCSV(params)
-    expect(client.get).toHaveBeenLastCalledWith('/admin/cost-allocation/export', { params, responseType: 'blob' })
+    expect(client.get).toHaveBeenLastCalledWith('/console/cost-allocation/export', { params, responseType: 'blob' })
     await control.exportGatewayTracesCSV(params)
-    expect(client.get).toHaveBeenLastCalledWith('/admin/gateway-traces/export', { params, responseType: 'blob' })
+    expect(client.get).toHaveBeenLastCalledWith('/console/gateway-traces/export', { params, responseType: 'blob' })
     await control.downloadExportJob({ id: 'job-1', filename: 'job.csv' } as never)
-    expect(client.get).toHaveBeenLastCalledWith('/admin/export-jobs/job-1/download', { params: undefined, responseType: 'blob' })
+    expect(client.get).toHaveBeenLastCalledWith('/console/export-jobs/job-1/download', { params: undefined, responseType: 'blob' })
     expect(createObjectURL).toHaveBeenCalledTimes(5)
     expect(click).toHaveBeenCalledTimes(5)
     expect(revokeObjectURL).toHaveBeenCalledTimes(5)

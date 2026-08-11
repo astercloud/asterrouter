@@ -260,7 +260,7 @@ onMounted(load)
               </td>
               <td>
                 <strong>{{ formatPercent(row.period.health_coverage) }} {{ t('supply.table.health') }}</strong>
-                <RouterLink class="supply-evidence-link" :to="{ path: '/admin/traces', query: evidenceQuery(row) }"><ExternalLink :size="14" />{{ t('supply.table.traces', { count: row.evidence.trace_count }) }}</RouterLink>
+                <RouterLink class="supply-evidence-link" :to="{ path: '/console/traces', query: evidenceQuery(row) }"><ExternalLink :size="14" />{{ t('supply.table.traces', { count: row.evidence.trace_count }) }}</RouterLink>
               </td>
             </tr>
             <tr v-if="!visibleRows.length">

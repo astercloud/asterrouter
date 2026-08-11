@@ -18,8 +18,6 @@ vi.mock('@/api/control', () => ({
   validatePricingRule: vi.fn()
 }))
 
-vi.mock('@/api/operator', () => ({ listOperatorResource: vi.fn().mockResolvedValue([]) }))
-
 const rule: PricingRule = {
   id: 'rule-1', name: 'Token cost', purpose: 'usage_cost', scope_type: 'global', scope_id: '', model: '*',
   status: 'active', active_version_id: '', lock_version: 1, created_by: 'tester', updated_by: 'tester',
@@ -48,20 +46,20 @@ describe('PricingRulesView', () => {
 
   it('loads a surface rule, validates the expression, and creates only the new DTO', async () => {
     const wrapper = mount(PricingRulesView, {
-      props: { surface: 'admin', title: 'Expression Pricing', subtitle: 'Rules' },
+      props: { title: 'Expression Pricing', subtitle: 'Rules' },
       global: { plugins: [i18n] }
     })
     await flushPromises()
 
-    expect(control.getPricingRules).toHaveBeenCalledWith('admin', {})
-    expect(control.getPricingRule).toHaveBeenCalledWith('admin', rule.id)
+    expect(control.getPricingRules).toHaveBeenCalledWith({})
+    expect(control.getPricingRule).toHaveBeenCalledWith(rule.id)
     expect(wrapper.text()).toContain('Token cost')
 
     const validate = wrapper.findAll('button').find((button) => button.text().includes('Validate'))
     expect(validate).toBeTruthy()
     await validate!.trigger('click')
     await flushPromises()
-    expect(control.validatePricingRule).toHaveBeenCalledWith('admin', draft.expression, [])
+    expect(control.validatePricingRule).toHaveBeenCalledWith(draft.expression, [])
 
     const create = wrapper.findAll('button').find((button) => button.text().includes('New rule'))
     await create!.trigger('click')
@@ -69,10 +67,10 @@ describe('PricingRulesView', () => {
     await wrapper.get('.pricing-create-modal').trigger('submit')
     await flushPromises()
 
-    expect(control.createPricingRule).toHaveBeenCalledWith('admin', expect.objectContaining({
+    expect(control.createPricingRule).toHaveBeenCalledWith(expect.objectContaining({
       name: 'New cost rule', purpose: 'usage_cost', scope_type: 'global', scope_id: '', currency: 'USD'
     }))
-    const payload = vi.mocked(control.createPricingRule).mock.calls[0][1] as unknown as Record<string, unknown>
+    const payload = vi.mocked(control.createPricingRule).mock.calls[0][0] as unknown as Record<string, unknown>
     expect(payload).not.toHaveProperty('input_price_cents_per_1m_tokens')
     expect(payload).not.toHaveProperty('rate_multiplier')
   })

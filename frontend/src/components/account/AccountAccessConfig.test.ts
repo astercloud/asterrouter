@@ -14,8 +14,8 @@ vi.mock('@/api/control', () => ({
 
 const key = {
   id: 'key-1', name: 'Developer key', fingerprint: 'fingerprint', prefix: 'sk-test', status: 'active',
-  key_type: 'workspace', customer_id: '', owner_user_id: '', profile_scope: '', platform_tenant_id: '',
-  gateway_principal_id: '', tenant_id: 'workspace', principal_type: 'workspace', principal_reference: 'key-1',
+	key_type: 'workspace', owner_user_id: '', application_id: 'app_default', gateway_principal_id: '',
+	principal_type: 'workspace', principal_reference: 'key-1',
   policy_id: '', scopes: ['gateway:invoke'], model_allowlist: ['published-model'], allowed_modalities: ['text'],
   allowed_operations: ['chat_completion', 'count_tokens'], qps_limit: 0, rpm_limit: 0, tpm_limit: 0,
   concurrency_limit: 0, monthly_token_limit: 0, monthly_budget_micros: 0, monthly_image_limit: 0,

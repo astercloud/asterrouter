@@ -2,46 +2,30 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowLeft, RefreshCw } from '@lucide/vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getPluginFrontendAsset, getPluginFrontendContribution } from '@/api/plugins'
+import { getPluginFrontendAsset, getPluginWorkbench } from '@/api/plugins'
 import { isNotFoundError } from '@/api/client'
-import type { PluginFrontendContribution, PluginFrontendContributionSurface } from '@/types'
+import type { PluginWorkbenchDefinition, PluginWorkbenchManifest } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
 const error = ref('')
 const loaded = ref(false)
-const contribution = ref<PluginFrontendContribution | null>(null)
+const manifest = ref<PluginWorkbenchManifest | null>(null)
 const mountRoot = ref<HTMLDivElement | null>(null)
 let pluginStyle: HTMLStyleElement | null = null
 let pluginScript: HTMLScriptElement | null = null
 
 const pluginID = computed(() => String(route.params.pluginId || '').trim())
-const surfaceRoot = computed(() => {
-  const path = route.path
-  if (path.startsWith('/console/')) return '/console'
-  if (path.startsWith('/operator/')) return '/operator'
-  if (path.startsWith('/platform/')) return '/platform'
-  return '/admin'
-})
-const contributionSurfaceName = computed(() => {
-  if (surfaceRoot.value === '/console') return 'console.plugins'
-  if (surfaceRoot.value === '/operator') return 'operator.plugins'
-  if (surfaceRoot.value === '/platform') return 'platform.plugins'
-  return 'admin.plugins'
-})
-const contributionSurface = computed<PluginFrontendContributionSurface | null>(() => {
-  const surfaces = contribution.value?.surfaces || []
-  return surfaces.find((item) => item.surface === contributionSurfaceName.value) || surfaces.find((item) => item.surface === 'admin.plugins') || surfaces[0] || null
-})
+const workbench = computed<PluginWorkbenchDefinition | null>(() => manifest.value?.workbench || null)
 
 function backToCenter() {
-  void router.push(`${surfaceRoot.value}/plugins`)
+  void router.push('/console/system/plugins')
 }
 
 function assetURL(id: string, assetPath: string) {
   const path = assetPath.split('/').filter(Boolean).map((segment) => encodeURIComponent(segment)).join('/')
-  return `/api/v1/admin/plugins/${encodeURIComponent(id)}/frontend/assets/${path}`
+  return `/api/v1/console/plugins/${encodeURIComponent(id)}/frontend/assets/${path}`
 }
 
 function mimeType(assetPath: string) {
@@ -119,16 +103,16 @@ function clearPlugin() {
   loaded.value = false
 }
 
-async function loadContribution(id: string) {
+async function loadWorkbench(id: string) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await getPluginFrontendContribution(id)
+      return await getPluginWorkbench(id)
     } catch (cause) {
       if (!isNotFoundError(cause) || attempt === 2) throw cause
       await new Promise((resolve) => window.setTimeout(resolve, 300 * (attempt + 1)))
     }
   }
-  throw new Error('插件贡献面暂时不可用')
+  throw new Error('插件工作台暂时不可用')
 }
 
 async function loadPlugin() {
@@ -137,21 +121,21 @@ async function loadPlugin() {
   error.value = ''
   try {
     if (!pluginID.value) throw new Error('插件标识缺失')
-    contribution.value = await loadContribution(pluginID.value)
-    const surface = contributionSurface.value
-    if (!surface?.asset) throw new Error('插件未提供可加载的工作台入口')
+    manifest.value = await loadWorkbench(pluginID.value)
+		const definition = workbench.value
+		if (!definition?.asset) throw new Error('插件未提供可加载的工作台入口')
     if (!mountRoot.value) throw new Error('插件挂载容器不可用')
     mountRoot.value.className = 'plugin-host-root'
 
-    if (surface.style) {
-      const css = await getPluginFrontendAsset(pluginID.value, surface.style, 'text')
+    if (definition.style) {
+      const css = await getPluginFrontendAsset(pluginID.value, definition.style, 'text')
       pluginStyle = document.createElement('style')
       pluginStyle.dataset.pluginFrontend = pluginID.value
       pluginStyle.textContent = scopePluginCSS(String(css))
       document.head.appendChild(pluginStyle)
     }
 
-    const source = await getPluginFrontendAsset(pluginID.value, surface.asset, 'text')
+    const source = await getPluginFrontendAsset(pluginID.value, definition.asset, 'text')
     const script = document.createElement('script')
     script.type = 'text/javascript'
     script.dataset.pluginFrontend = pluginID.value
@@ -184,7 +168,7 @@ onBeforeUnmount(clearPlugin)
         </button>
         <div>
           <span class="eyebrow-label">PLUGIN WORKBENCH</span>
-          <h1>{{ contributionSurface?.title || '插件工作台' }}</h1>
+          <h1>{{ workbench?.title || '插件工作台' }}</h1>
           <p>已安装插件通过 AsterRouter 宿主加载，生成请求仍由宿主统一处理。</p>
         </div>
       </div>

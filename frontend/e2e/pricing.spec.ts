@@ -18,7 +18,7 @@ test('@pricing expression pricing lifecycle remains usable across viewports', as
     status: 'active'
   })
 
-  await page.goto('/admin/pricing')
+  await page.goto('/console/pricing')
   await expect(page.getByRole('heading', { level: 1, name: 'Expression Pricing' })).toBeVisible()
   await page.getByRole('button', { name: 'New rule' }).click()
   const dialog = page.getByRole('dialog', { name: 'New rule' })

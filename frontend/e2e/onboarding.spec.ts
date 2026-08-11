@@ -31,7 +31,7 @@ async function createApplicationThroughUI(page: Page, testInfo: TestInfo, client
   const runID = `${client.id}-${testInfo.project.name}-${Date.now()}`.replace(/[^a-z0-9_-]/gi, '-')
   const publicModel = `first-access-${runID}`
 
-  await page.goto('/admin/onboarding')
+  await page.goto('/console/onboarding')
   await expect(page.getByRole('heading', { level: 1, name: 'First Access' })).toBeVisible()
   await page.getByLabel('Base URL').fill(`http://127.0.0.1:${upstreamPort}/v1`)
   await page.getByLabel('Upstream model').fill('upstream-model')
@@ -76,7 +76,7 @@ for (const client of clients) {
     const traceLink = page.getByRole('link', { name: 'Open Trace' })
     await expect(traceLink).toBeVisible()
     await traceLink.click()
-    await expect(page).toHaveURL(/\/admin\/traces\?q=trace_/)
+    await expect(page).toHaveURL(/\/console\/traces\?q=trace_/)
     await expect(page.getByRole('heading', { level: 1, name: 'Gateway Trace' })).toBeVisible()
     expect(browserErrors).toEqual([])
   })
@@ -85,7 +85,7 @@ for (const client of clients) {
 test('@j01 first-access layout remains usable across locale, theme, and viewport', async ({ page }, testInfo) => {
   const browserErrors = captureBrowserErrors(page)
   await loginDemo(page)
-  await page.goto('/admin/onboarding')
+  await page.goto('/console/onboarding')
   await expect(page.getByRole('heading', { level: 1, name: 'First Access' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: testInfo.outputPath('first-access-light-en.png'), fullPage: true })

@@ -5,7 +5,6 @@ import type { AdminSettings, EmailTemplate, EmailTemplateCatalog, EmailTemplateD
 function normalizePublicSettings<T extends PublicSettings>(settings: T): T {
   return {
     ...settings,
-    enabled_profiles: stringListOrEmpty(settings.enabled_profiles),
     enabled_locales: stringListOrEmpty(settings.enabled_locales),
     legal_documents: listOrEmpty(settings.legal_documents),
     custom_endpoints: listOrEmpty(settings.custom_endpoints),
@@ -36,61 +35,59 @@ export async function getLegalDocument(slug: string): Promise<LegalDocument> {
 }
 
 export async function getAdminSettings(): Promise<AdminSettings> {
-  const response = await apiClient.get<AdminSettings>('/admin/settings')
+  const response = await apiClient.get<AdminSettings>('/console/settings')
   return normalizeAdminSettings(response.data)
 }
 
 export async function updateAdminSettings(payload: AdminSettings): Promise<AdminSettings> {
-  const response = await apiClient.put<AdminSettings>('/admin/settings', payload)
+  const response = await apiClient.put<AdminSettings>('/console/settings', payload)
   return normalizeAdminSettings(response.data)
 }
 
 export async function runRetentionCleanup(): Promise<RetentionCleanupResult> {
-	return (await apiClient.post<RetentionCleanupResult>('/admin/settings/retention/cleanup')).data
+	return (await apiClient.post<RetentionCleanupResult>('/console/settings/retention/cleanup')).data
 }
 
 export async function testSMTPConnection(config: SMTPTestConfig): Promise<void> {
-	await apiClient.post('/admin/settings/smtp/test-connection', config)
+	await apiClient.post('/console/settings/smtp/test-connection', config)
 }
 
 export async function testSMTP(recipient: string, config: SMTPTestConfig): Promise<void> {
-	await apiClient.post('/admin/settings/smtp/test', { recipient, ...config })
+	await apiClient.post('/console/settings/smtp/test', { recipient, ...config })
 }
 
 export async function getDefaultEmailTemplates(): Promise<EmailTemplate[]> {
-  const response = await apiClient.get<EmailTemplate[] | null>('/admin/settings/email-templates/defaults')
+  const response = await apiClient.get<EmailTemplate[] | null>('/console/settings/email-templates/defaults')
   return listOrEmpty(response.data)
 }
 
 export async function getEmailTemplateCatalog(): Promise<EmailTemplateCatalog> {
-	return (await apiClient.get<EmailTemplateCatalog>('/admin/settings/email-templates')).data
+	return (await apiClient.get<EmailTemplateCatalog>('/console/settings/email-templates')).data
 }
 
 export async function getEmailTemplate(event: string, locale: string): Promise<EmailTemplateDetail> {
-	return (await apiClient.get<EmailTemplateDetail>(`/admin/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}`)).data
+	return (await apiClient.get<EmailTemplateDetail>(`/console/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}`)).data
 }
 
 export async function updateEmailTemplate(event: string, locale: string, subject: string, html: string): Promise<EmailTemplateDetail> {
-	return (await apiClient.put<EmailTemplateDetail>(`/admin/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}`, { subject, html })).data
+	return (await apiClient.put<EmailTemplateDetail>(`/console/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}`, { subject, html })).data
 }
 
 export async function restoreEmailTemplate(event: string, locale: string): Promise<EmailTemplateDetail> {
-	return (await apiClient.post<EmailTemplateDetail>(`/admin/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}/restore`)).data
+	return (await apiClient.post<EmailTemplateDetail>(`/console/settings/email-templates/${encodeURIComponent(event)}/${encodeURIComponent(locale)}/restore`)).data
 }
 
 export async function previewEmailTemplate(subject: string, html: string): Promise<{subject: string; html: string}> {
-  const response = await apiClient.post<{subject: string; html: string}>('/admin/settings/email-templates/preview', { subject, html })
+  const response = await apiClient.post<{subject: string; html: string}>('/console/settings/email-templates/preview', { subject, html })
   return response.data
 }
 
 export async function testEmailTemplate(recipient: string, subject: string, html: string, config: SMTPTestConfig): Promise<void> {
-  await apiClient.post('/admin/settings/email-templates/test', { recipient, subject, html, ...config })
+  await apiClient.post('/console/settings/email-templates/test', { recipient, subject, html, ...config })
 }
 
-export async function applySetupProfile(profile: string): Promise<PublicSettings> {
-  const response = await apiClient.post<PublicSettings>('/setup/profiles', {
-    profile
-  })
+export async function completeEnterpriseSetup(organizationName: string): Promise<PublicSettings> {
+  const response = await apiClient.post<PublicSettings>('/setup', { organization_name: organizationName })
   return normalizePublicSettings(response.data)
 }
 
