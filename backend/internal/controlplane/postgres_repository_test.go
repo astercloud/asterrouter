@@ -41,6 +41,7 @@ func TestPostgresRepositoryEmptyListContracts(t *testing.T) {
 	assertEmptyList(t, "ListProviders", func() ([]ProviderConnection, error) { return repo.ListProviders(ctx) })
 	assertEmptyList(t, "ListLatestProviderHealthChecks", func() ([]ProviderHealthCheck, error) { return repo.ListLatestProviderHealthChecks(ctx) })
 	assertEmptyList(t, "ListRoutingGroups", func() ([]RoutingGroup, error) { return repo.ListRoutingGroups(ctx) })
+	assertEmptyList(t, "ListRoutingPolicies", func() ([]RoutingPolicy, error) { return repo.ListRoutingPolicies(ctx) })
 	assertEmptyList(t, "ListProviderAccounts", func() ([]ProviderAccount, error) { return repo.ListProviderAccounts(ctx) })
 	assertEmptyList(t, "ListLatestProviderAccountHealthChecks", func() ([]ProviderAccountHealthCheck, error) { return repo.ListLatestProviderAccountHealthChecks(ctx) })
 	assertEmptyList(t, "ListGatewayModels", func() ([]GatewayModel, error) { return repo.ListGatewayModels(ctx) })
@@ -134,6 +135,18 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	if err := repo.SaveWorkspaceUser(ctx, user); err != nil {
 		t.Fatalf("SaveWorkspaceUser(): %v", err)
 	}
+	routingPolicy := RoutingPolicy{
+		ID: "routing-policy-postgres", Name: "Postgres policy", RouteGroup: "default", Status: RoutingPolicyStatusActive,
+		Strategy: RoutingPolicyStrategy{
+			Preset: RoutingPolicyPresetBalanced, StickyRouting: true, StickyTTLSeconds: 900,
+			FailoverBeforeFirstByte: true, AllowedModels: []string{"model-a"},
+			ResourceBatches: []RoutingPolicyBatch{{Name: "Primary", ProviderAccountIDs: []string{"account-a"}}},
+		},
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repo.SaveRoutingPolicy(ctx, routingPolicy); err != nil {
+		t.Fatalf("SaveRoutingPolicy(): %v", err)
+	}
 	if err := repo.Close(); err != nil {
 		t.Fatalf("Close(): %v", err)
 	}
@@ -168,6 +181,13 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	}
 	if len(users) != 1 || users[0].ID != user.ID || users[0].SessionVersion != 7 {
 		t.Fatalf("persisted session version users=%#v", users)
+	}
+	policies, err := reopened.ListRoutingPolicies(ctx)
+	if err != nil {
+		t.Fatalf("ListRoutingPolicies(): %v", err)
+	}
+	if len(policies) != 1 || policies[0].ID != routingPolicy.ID || policies[0].Strategy.Preset != RoutingPolicyPresetBalanced || len(policies[0].Strategy.ResourceBatches) != 1 {
+		t.Fatalf("persisted routing policies=%#v", policies)
 	}
 }
 

@@ -76,9 +76,35 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 	if !gatewayModelSupportsCanonicalRequest(resolved.GatewayModel, request) {
 		return GatewayExecutionPlan{Request: request, Auth: auth, GatewayModelID: resolved.GatewayModel.ID, RouteGroup: resolved.RouteGroup, RejectionReason: "capability_mismatch"}, nil
 	}
+	routingPolicy, err := s.activeRoutingPolicyForGroup(ctx, resolved.RouteGroup)
+	if err != nil {
+		return GatewayExecutionPlan{}, err
+	}
+	if routingPolicy != nil && !routingPolicyAllowsProtocol(routingPolicy.Strategy, string(request.Protocol)) {
+		return GatewayExecutionPlan{
+			Request: request, Auth: auth, GatewayModelID: resolved.GatewayModel.ID, RouteGroup: resolved.RouteGroup,
+			HasRoutes: true, RejectionReason: "routing_policy_protocol_blocked",
+		}, nil
+	}
 	candidates, hasRoutes, err := s.GatewayProviderCandidatesForModel(ctx, request.Model)
 	if err != nil {
 		return GatewayExecutionPlan{}, err
+	}
+	if routingPolicy != nil && routingPolicy.Strategy.NativeProtocolOnly {
+		filtered := candidates[:0]
+		for _, candidate := range candidates {
+			if routingPolicyNativeProtocolMatches(string(request.Protocol), candidate.UpstreamFormat) {
+				filtered = append(filtered, candidate)
+			}
+		}
+		candidates = filtered
+	}
+	candidates, err = s.applyRoutingPolicyPriceRules(ctx, routingPolicy, string(request.Protocol), candidates)
+	if err != nil {
+		return GatewayExecutionPlan{}, err
+	}
+	if len(candidates) > 1 && routingPolicy != nil && !routingPolicy.Strategy.FailoverBeforeFirstByte {
+		candidates = candidates[:1]
 	}
 	exclusions, err := s.gatewayCandidateExclusions(ctx, resolved, candidates)
 	if err != nil {

@@ -183,7 +183,11 @@ func (s *Service) refreshRoutingAffinityBinding(ctx context.Context, binding Rou
 }
 
 func preferBoundGatewayCandidate(candidates []GatewayProvider, binding RoutingAffinityBinding, requireAccount bool, reason string) ([]GatewayProvider, bool) {
+	firstBatch := candidates[0].PolicyBatchOrder
 	for index, candidate := range candidates {
+		if candidate.RoutingPolicyID != "" && candidate.PolicyBatchOrder != firstBatch {
+			continue
+		}
 		if candidate.ID != binding.ProviderID {
 			continue
 		}

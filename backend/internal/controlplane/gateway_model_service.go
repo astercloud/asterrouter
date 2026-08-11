@@ -443,6 +443,8 @@ type rankedModelRouteCandidate struct {
 	weightScore  float64
 	circuitState string
 	circuitProbe bool
+	policyBatch  int
+	policy       *RoutingPolicy
 }
 
 func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved ResolvedGatewayModel) ([]rankedModelRouteCandidate, bool, error) {
@@ -458,6 +460,13 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 	}
 	if len(matchingRoutes) == 0 {
 		return nil, false, nil
+	}
+	policy, err := s.activeRoutingPolicyForGroup(ctx, resolved.RouteGroup)
+	if err != nil {
+		return nil, true, err
+	}
+	if policy != nil && !routingPolicyAllowsModel(policy.Strategy, resolved.RequestedID) {
+		return nil, true, nil
 	}
 	accounts, err := s.repo.ListProviderAccounts(ctx)
 	if err != nil {
@@ -475,6 +484,7 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 	now := time.Now().UTC()
 	billingHealthByAccount, _ := s.providerBillingRoutingHealthByAccount(ctx, now)
 	candidates := make([]rankedModelRouteCandidate, 0, len(matchingRoutes))
+	policyBatchByAccount := routingPolicyBatchByAccount(policy)
 	for _, route := range matchingRoutes {
 		if route.Status != ModelRouteStatusActive {
 			continue
@@ -495,16 +505,49 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 		if !eligible {
 			continue
 		}
+		policyBatch := 0
+		if policy != nil && len(policy.Strategy.ResourceBatches) > 0 {
+			var listed bool
+			policyBatch, listed = policyBatchByAccount[account.ID]
+			if !listed {
+				continue
+			}
+		}
 		loadRatio := float64(s.providerAccountSlotUsage(account.ID)) / float64(account.EffectiveLoadFactor())
 		headroom := s.providerAccountRateHeadroom(account, now)
 		candidates = append(candidates, rankedModelRouteCandidate{
 			route: route, account: account, provider: provider, loadRatio: loadRatio,
 			headroom: headroom, weightScore: weightedCandidateScore(route.Weight * account.Weight),
 			circuitState: circuitState, circuitProbe: circuitProbe,
+			policyBatch: policyBatch, policy: policy,
 		})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left, right := candidates[i], candidates[j]
+		if left.policyBatch != right.policyBatch {
+			return left.policyBatch < right.policyBatch
+		}
+		preset := RoutingPolicyPresetBalanced
+		if policy != nil {
+			preset = policy.Strategy.Preset
+		}
+		switch preset {
+		case RoutingPolicyPresetCost:
+			if left.account.RateMultiplier != right.account.RateMultiplier {
+				return left.account.RateMultiplier < right.account.RateMultiplier
+			}
+		case RoutingPolicyPresetSpeed:
+			if left.headroom != right.headroom {
+				return left.headroom > right.headroom
+			}
+			if left.loadRatio != right.loadRatio {
+				return left.loadRatio < right.loadRatio
+			}
+		case RoutingPolicyPresetStability:
+			if left.circuitProbe != right.circuitProbe {
+				return !left.circuitProbe
+			}
+		}
 		if left.route.Priority != right.route.Priority {
 			return left.route.Priority < right.route.Priority
 		}
@@ -529,6 +572,76 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 		return left.route.ID < right.route.ID
 	})
 	return candidates, true, nil
+}
+
+func (s *Service) activeRoutingPolicyForGroup(ctx context.Context, routeGroup string) (*RoutingPolicy, error) {
+	policies, err := s.repo.ListRoutingPolicies(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, policy := range policies {
+		if policy.Status == RoutingPolicyStatusActive && policy.RouteGroup == routeGroup {
+			selected := policy
+			return &selected, nil
+		}
+	}
+	return nil, nil
+}
+
+func routingPolicyAllowsModel(strategy RoutingPolicyStrategy, model string) bool {
+	model = strings.TrimSpace(model)
+	baseModel := model
+	if separator := strings.LastIndex(model, ":"); separator > 0 {
+		baseModel = model[:separator]
+	}
+	if contains(strategy.DeniedModels, model) || contains(strategy.DeniedModels, baseModel) {
+		return false
+	}
+	return len(strategy.AllowedModels) == 0 || contains(strategy.AllowedModels, model) || contains(strategy.AllowedModels, baseModel)
+}
+
+func routingPolicyAllowsProtocol(strategy RoutingPolicyStrategy, protocol string) bool {
+	protocol = strings.TrimSpace(protocol)
+	if contains(strategy.DeniedProtocols, protocol) {
+		return false
+	}
+	return len(strategy.AllowedProtocols) == 0 || contains(strategy.AllowedProtocols, protocol)
+}
+
+func routingPolicyNativeProtocolMatches(protocol, upstreamFormat string) bool {
+	switch strings.TrimSpace(protocol) {
+	case "openai_chat_completions":
+		return upstreamFormat == UpstreamFormatOpenAIChat
+	case "openai_responses":
+		return upstreamFormat == UpstreamFormatOpenAIResponses
+	case "openai_embeddings":
+		return upstreamFormat == UpstreamFormatOpenAIEmbeddings
+	case "anthropic_messages":
+		return upstreamFormat == UpstreamFormatAnthropic
+	case "anthropic_count_tokens":
+		return upstreamFormat == UpstreamFormatAnthropic
+	case "gemini_generate_content":
+		return upstreamFormat == UpstreamFormatGemini
+	case "openai_images_generations", "openai_media_generations", "openai_audio_transcriptions", "openai_audio_translations", "openai_audio_speech", "realtime", "aster_jobs":
+		return upstreamFormat == UpstreamFormatNativeMedia
+	default:
+		return false
+	}
+}
+
+func routingPolicyBatchByAccount(policy *RoutingPolicy) map[string]int {
+	out := map[string]int{}
+	if policy == nil {
+		return out
+	}
+	for batchIndex, batch := range policy.Strategy.ResourceBatches {
+		for _, accountID := range batch.ProviderAccountIDs {
+			if _, exists := out[accountID]; !exists {
+				out[accountID] = batchIndex
+			}
+		}
+	}
+	return out
 }
 
 func effectiveCircuitState(account ProviderAccount, now time.Time) (state string, probe bool, eligible bool) {

@@ -724,6 +724,83 @@ func TestRoutingGroupClearsFieldsThatDoNotBelongToType(t *testing.T) {
 	}
 }
 
+func TestRoutingPolicyLifecycleNormalizesStrategyAndVersionsUpdates(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	created, err := svc.CreateRoutingPolicy(context.Background(), "tester", RoutingPolicyRequest{
+		Name:       " Enterprise production ",
+		RouteGroup: "stable",
+		Status:     RoutingPolicyStatusActive,
+		Strategy: RoutingPolicyStrategy{
+			Preset:                     RoutingPolicyPresetBalanced,
+			StickyRouting:              true,
+			StickyTTLSeconds:           900,
+			FailoverBeforeFirstByte:    true,
+			MaxPriceMultipleOfCheapest: 2,
+			AllowedModels:              []string{"gpt-4o", " gpt-4o ", ""},
+			ResourceBatches: []RoutingPolicyBatch{{
+				Name:               "Primary",
+				ProviderAccountIDs: []string{"account-a", "account-a", "account-b"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutingPolicy(): %v", err)
+	}
+	if created.ID == "" || created.Name != "Enterprise production" || created.Version != 1 {
+		t.Fatalf("unexpected created policy: %+v", created)
+	}
+	if created.Strategy.LowPricePoolMode != RoutingPolicyLowPriceAuto || created.Strategy.LowPricePoolPercent != 30 || created.Strategy.LowPricePoolMinCandidates != 2 {
+		t.Fatalf("strategy defaults not applied: %+v", created.Strategy)
+	}
+	if len(created.Strategy.AllowedModels) != 1 || len(created.Strategy.ResourceBatches[0].ProviderAccountIDs) != 2 {
+		t.Fatalf("strategy lists not normalized: %+v", created.Strategy)
+	}
+
+	updated, err := svc.UpdateRoutingPolicy(context.Background(), "tester", created.ID, RoutingPolicyRequest{
+		Name:       created.Name,
+		RouteGroup: created.RouteGroup,
+		Status:     created.Status,
+		Strategy: RoutingPolicyStrategy{
+			Preset:           RoutingPolicyPresetStability,
+			StickyTTLSeconds: 1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRoutingPolicy(): %v", err)
+	}
+	if updated.Version != 2 || updated.Strategy.Preset != RoutingPolicyPresetStability || !updated.CreatedAt.Equal(created.CreatedAt) {
+		t.Fatalf("unexpected updated policy: before=%+v after=%+v", created, updated)
+	}
+	policies, err := svc.ListRoutingPolicies(context.Background())
+	if err != nil || len(policies) != 1 || policies[0].Version != 2 {
+		t.Fatalf("ListRoutingPolicies()=%+v err=%v", policies, err)
+	}
+	if _, err := svc.CreateRoutingPolicy(context.Background(), "tester", RoutingPolicyRequest{
+		Name: "Duplicate active policy", RouteGroup: created.RouteGroup, Status: RoutingPolicyStatusActive,
+		Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900},
+	}); err == nil {
+		t.Fatal("a route group must not accept two active routing policies")
+	}
+}
+
+func TestRoutingPolicyRejectsInvalidHardConstraints(t *testing.T) {
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
+	tests := []RoutingPolicyRequest{
+		{Name: "bad route group", RouteGroup: "not valid", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900}},
+		{Name: "bad preset", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: "random", StickyTTLSeconds: 900}},
+		{Name: "bad price", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, AbsoluteMaxInputPer1M: -1}},
+		{Name: "bad percentile", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, LowPricePoolMode: RoutingPolicyLowPricePercent}},
+		{Name: "empty batch", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, ResourceBatches: []RoutingPolicyBatch{{Name: "Primary"}}}},
+		{Name: "unknown protocol", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, AllowedProtocols: []string{"openai_chat_completion"}}},
+		{Name: "duplicate account across batches", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, ResourceBatches: []RoutingPolicyBatch{{Name: "Primary", ProviderAccountIDs: []string{"account-a"}}, {Name: "Fallback", ProviderAccountIDs: []string{"account-a"}}}}},
+	}
+	for index, req := range tests {
+		if _, err := svc.CreateRoutingPolicy(context.Background(), "tester", req); err == nil {
+			t.Fatalf("case %d: expected validation error", index)
+		}
+	}
+}
+
 func TestCreateProviderAccountRejectsLegacyAuthTypes(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret-key")
 	provider, err := svc.CreateProvider(context.Background(), "tester", ProviderRequest{

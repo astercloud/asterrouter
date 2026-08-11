@@ -230,6 +230,25 @@ func TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt(t *test
 	if ordered[0].AccountID != "account-b" || !strings.Contains(ordered[0].SelectionReason, decision.ID) {
 		t.Fatalf("canary candidate order=%+v", ordered)
 	}
+	policyCandidates := []GatewayProvider{
+		{ID: "provider-a", AccountID: "account-a", RoutingPolicyID: "policy-a", PolicyBatchOrder: 0, SmartOptimization: true},
+		{ID: "provider-b", AccountID: "account-b", RoutingPolicyID: "policy-a", PolicyBatchOrder: 1, SmartOptimization: true},
+	}
+	ordered = svc.OrderGatewayCandidatesByEffectivePricing(ctx, "public-model", "openai_chat_completions", "fingerprint-a", policyCandidates)
+	if ordered[0].AccountID != "account-a" {
+		t.Fatalf("effective pricing crossed an ordered resource batch: %+v", ordered)
+	}
+	policyCandidates[1].PolicyBatchOrder = 0
+	ordered = svc.OrderGatewayCandidatesByEffectivePricing(ctx, "public-model", "openai_chat_completions", "fingerprint-a", policyCandidates)
+	if ordered[0].AccountID != "account-b" {
+		t.Fatalf("effective pricing did not optimize inside the current resource batch: %+v", ordered)
+	}
+	policyCandidates[0].SmartOptimization = false
+	policyCandidates[1].SmartOptimization = false
+	ordered = svc.OrderGatewayCandidatesByEffectivePricing(ctx, "public-model", "openai_chat_completions", "fingerprint-a", policyCandidates)
+	if ordered[0].AccountID != "account-a" {
+		t.Fatalf("disabled policy optimization still changed candidate order: %+v", ordered)
+	}
 	decision, err = svc.ActOnEffectivePricingDecision(ctx, "tester", decision.ID, EffectivePricingDecisionActionRequest{Action: "rollback"})
 	if err != nil || decision.Status != EffectivePricingDecisionRolledBack {
 		t.Fatalf("rollback decision=%+v err=%v", decision, err)

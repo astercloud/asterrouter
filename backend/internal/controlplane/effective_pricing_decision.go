@@ -229,6 +229,9 @@ func (s *Service) OrderGatewayCandidatesByEffectivePricing(ctx context.Context, 
 	if len(candidates) < 2 {
 		return candidates
 	}
+	if candidates[0].RoutingPolicyID != "" && !candidates[0].SmartOptimization {
+		return candidates
+	}
 	decisions, err := s.repo.ListEffectivePricingDecisions(ctx)
 	if err != nil {
 		return candidates
@@ -244,7 +247,11 @@ func (s *Service) OrderGatewayCandidatesByEffectivePricing(ctx context.Context, 
 		if decision.Status == EffectivePricingDecisionCanary && !inEffectivePricingCanary(s.secretKey, decision.ID, cohortKey, decision.CanaryPercent) {
 			continue
 		}
+		firstBatch := candidates[0].PolicyBatchOrder
 		for index, candidate := range candidates {
+			if candidate.RoutingPolicyID != "" && candidate.PolicyBatchOrder != firstBatch {
+				continue
+			}
 			if candidate.AccountID != decision.CandidateProviderAccountID {
 				continue
 			}

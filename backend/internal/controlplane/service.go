@@ -468,6 +468,52 @@ func (s *Service) ListRoutingGroups(ctx context.Context) ([]RoutingGroup, error)
 	return s.repo.ListRoutingGroups(ctx)
 }
 
+func (s *Service) ListRoutingPolicies(ctx context.Context) ([]RoutingPolicy, error) {
+	return s.repo.ListRoutingPolicies(ctx)
+}
+
+func (s *Service) CreateRoutingPolicy(ctx context.Context, actor string, req RoutingPolicyRequest) (RoutingPolicy, error) {
+	policy, err := routingPolicyFromRequest(req, time.Now().UTC())
+	if err != nil {
+		return RoutingPolicy{}, err
+	}
+	if err := s.ensureRoutingPolicyRouteGroupUnique(ctx, policy, ""); err != nil {
+		return RoutingPolicy{}, err
+	}
+	policy.ID = "rpolicy_" + randomID(10)
+	if err := s.repo.SaveRoutingPolicy(ctx, policy); err != nil {
+		return RoutingPolicy{}, err
+	}
+	if err := s.audit(ctx, actor, "create", "routing_policy", policy.ID, fmt.Sprintf("Created routing policy %s", policy.Name)); err != nil {
+		return RoutingPolicy{}, err
+	}
+	return policy, nil
+}
+
+func (s *Service) UpdateRoutingPolicy(ctx context.Context, actor string, id string, req RoutingPolicyRequest) (RoutingPolicy, error) {
+	existing, err := s.routingPolicyByID(ctx, id)
+	if err != nil {
+		return RoutingPolicy{}, err
+	}
+	policy, err := routingPolicyFromRequest(req, existing.CreatedAt)
+	if err != nil {
+		return RoutingPolicy{}, err
+	}
+	if err := s.ensureRoutingPolicyRouteGroupUnique(ctx, policy, existing.ID); err != nil {
+		return RoutingPolicy{}, err
+	}
+	policy.ID = existing.ID
+	policy.Version = existing.Version + 1
+	policy.UpdatedAt = time.Now().UTC()
+	if err := s.repo.SaveRoutingPolicy(ctx, policy); err != nil {
+		return RoutingPolicy{}, err
+	}
+	if err := s.audit(ctx, actor, "update", "routing_policy", policy.ID, fmt.Sprintf("Updated routing policy %s", policy.Name)); err != nil {
+		return RoutingPolicy{}, err
+	}
+	return policy, nil
+}
+
 func (s *Service) CreateRoutingGroup(ctx context.Context, actor string, req RoutingGroupRequest) (RoutingGroup, error) {
 	now := time.Now().UTC()
 	group, err := routingGroupFromRequest(req, now)
@@ -1764,35 +1810,53 @@ func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model s
 			return nil, true, err
 		}
 		upstreamModel := ProviderAccountDispatchModel(entry.account, entry.route.UpstreamModel, resolved.RequestedID)
+		stickyEnabled := resolved.GatewayModel.StickyEnabled
+		stickyTTLSeconds := resolved.GatewayModel.StickyTTLSeconds
+		routingPolicyID := ""
+		failoverEnabled := true
+		if entry.policy != nil {
+			routingPolicyID = entry.policy.ID
+			stickyEnabled = entry.policy.Strategy.StickyRouting
+			stickyTTLSeconds = entry.policy.Strategy.StickyTTLSeconds
+			failoverEnabled = entry.policy.Strategy.FailoverBeforeFirstByte
+		}
+		selectionReason := fmt.Sprintf("selected route %s group=%s route_priority=%d account_priority=%d headroom=%.4g load_ratio=%.4g circuit=%s", entry.route.ID, resolved.RouteGroup, entry.route.Priority, entry.account.Priority, entry.headroom, entry.loadRatio, entry.circuitState)
+		if entry.policy != nil {
+			selectionReason += fmt.Sprintf(" routing_policy=%s routing_policy_version=%d preset=%s batch=%d", entry.policy.ID, entry.policy.Version, entry.policy.Strategy.Preset, entry.policyBatch+1)
+		}
 		routes = append(routes, GatewayProvider{
-			ID:               entry.provider.ID,
-			Name:             entry.provider.Name,
-			Type:             entry.provider.Type,
-			BaseURL:          EffectiveProviderAccountBaseURL(entry.account, entry.provider),
-			APIKey:           secret,
-			AuthType:         entry.account.AuthType,
-			AdapterConfig:    cloneStringMap(entry.account.AdapterConfig),
-			AccountID:        entry.account.ID,
-			AccountName:      entry.account.Name,
-			Concurrency:      entry.account.Concurrency,
-			GatewayModelID:   resolved.GatewayModel.ID,
-			RequestedModel:   resolved.RequestedID,
-			UpstreamModel:    upstreamModel,
-			UpstreamFormat:   entry.route.UpstreamFormat,
-			RouteID:          entry.route.ID,
-			RouteGroup:       resolved.RouteGroup,
-			RoutePriority:    entry.route.Priority,
-			RouteWeight:      entry.route.Weight,
-			AccountWeight:    entry.account.Weight,
-			RPMLimit:         entry.account.RPMLimit,
-			TPMLimit:         entry.account.TPMLimit,
-			CircuitState:     entry.circuitState,
-			CircuitProbe:     entry.circuitProbe,
-			Headroom:         entry.headroom,
-			StickyEnabled:    resolved.GatewayModel.StickyEnabled,
-			StickyTTLSeconds: resolved.GatewayModel.StickyTTLSeconds,
-			Source:           "model_route",
-			SelectionReason:  fmt.Sprintf("selected route %s group=%s route_priority=%d account_priority=%d headroom=%.4g load_ratio=%.4g circuit=%s", entry.route.ID, resolved.RouteGroup, entry.route.Priority, entry.account.Priority, entry.headroom, entry.loadRatio, entry.circuitState),
+			ID:                entry.provider.ID,
+			Name:              entry.provider.Name,
+			Type:              entry.provider.Type,
+			BaseURL:           EffectiveProviderAccountBaseURL(entry.account, entry.provider),
+			APIKey:            secret,
+			AuthType:          entry.account.AuthType,
+			AdapterConfig:     cloneStringMap(entry.account.AdapterConfig),
+			AccountID:         entry.account.ID,
+			AccountName:       entry.account.Name,
+			Concurrency:       entry.account.Concurrency,
+			GatewayModelID:    resolved.GatewayModel.ID,
+			RequestedModel:    resolved.RequestedID,
+			UpstreamModel:     upstreamModel,
+			UpstreamFormat:    entry.route.UpstreamFormat,
+			RouteID:           entry.route.ID,
+			RouteGroup:        resolved.RouteGroup,
+			RoutePriority:     entry.route.Priority,
+			RouteWeight:       entry.route.Weight,
+			AccountWeight:     entry.account.Weight,
+			RPMLimit:          entry.account.RPMLimit,
+			TPMLimit:          entry.account.TPMLimit,
+			CircuitState:      entry.circuitState,
+			CircuitProbe:      entry.circuitProbe,
+			Headroom:          entry.headroom,
+			StickyEnabled:     stickyEnabled,
+			StickyTTLSeconds:  stickyTTLSeconds,
+			RoutingPolicyID:   routingPolicyID,
+			PolicyBatchOrder:  entry.policyBatch,
+			FailoverEnabled:   failoverEnabled,
+			SmartOptimization: entry.policy == nil || entry.policy.Strategy.SmartOptimization,
+			Source:            "model_route",
+			SelectionReason:   selectionReason,
 		})
 	}
 	return routes, true, nil
@@ -2046,6 +2110,39 @@ func (s *Service) routingGroupByID(ctx context.Context, id string) (RoutingGroup
 	return RoutingGroup{}, fmt.Errorf("routing group %q not found", id)
 }
 
+func (s *Service) routingPolicyByID(ctx context.Context, id string) (RoutingPolicy, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return RoutingPolicy{}, errors.New("routing policy id is required")
+	}
+	policies, err := s.repo.ListRoutingPolicies(ctx)
+	if err != nil {
+		return RoutingPolicy{}, err
+	}
+	for _, policy := range policies {
+		if policy.ID == id {
+			return policy, nil
+		}
+	}
+	return RoutingPolicy{}, fmt.Errorf("routing policy %q not found", id)
+}
+
+func (s *Service) ensureRoutingPolicyRouteGroupUnique(ctx context.Context, candidate RoutingPolicy, exceptID string) error {
+	if candidate.Status != RoutingPolicyStatusActive {
+		return nil
+	}
+	policies, err := s.repo.ListRoutingPolicies(ctx)
+	if err != nil {
+		return err
+	}
+	for _, policy := range policies {
+		if policy.ID != exceptID && policy.Status == RoutingPolicyStatusActive && policy.RouteGroup == candidate.RouteGroup {
+			return fmt.Errorf("route_group %q already has an active routing policy", candidate.RouteGroup)
+		}
+	}
+	return nil
+}
+
 func (s *Service) providerAccountByID(ctx context.Context, id string) (ProviderAccount, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -2161,6 +2258,102 @@ func providerFromRequest(req ProviderRequest, now time.Time) (ProviderConnection
 		Priority:  priority,
 		CreatedAt: now,
 		UpdatedAt: now,
+	}, nil
+}
+
+func routingPolicyFromRequest(req RoutingPolicyRequest, now time.Time) (RoutingPolicy, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return RoutingPolicy{}, errors.New("name is required")
+	}
+	routeGroup := strings.TrimSpace(req.RouteGroup)
+	if routeGroup == "" {
+		routeGroup = DefaultModelRouteGroup
+	}
+	if strings.ContainsAny(routeGroup, " :\t\r\n") {
+		return RoutingPolicy{}, errors.New("route_group must not contain spaces or colons")
+	}
+	status := strings.TrimSpace(req.Status)
+	if status == "" {
+		status = RoutingPolicyStatusActive
+	}
+	if !oneOf(status, RoutingPolicyStatusActive, RoutingPolicyStatusDisabled) {
+		return RoutingPolicy{}, errors.New("status must be active or disabled")
+	}
+	strategy := req.Strategy
+	if strategy.Preset == "" {
+		strategy.Preset = RoutingPolicyPresetBalanced
+	}
+	if !oneOf(strategy.Preset, RoutingPolicyPresetCost, RoutingPolicyPresetSpeed, RoutingPolicyPresetStability, RoutingPolicyPresetBalanced) {
+		return RoutingPolicy{}, errors.New("strategy.preset must be cost, speed, stability, or balanced")
+	}
+	if strategy.StickyTTLSeconds == 0 {
+		strategy.StickyTTLSeconds = 900
+	}
+	if strategy.StickyTTLSeconds < 60 || strategy.StickyTTLSeconds > 86400 {
+		return RoutingPolicy{}, errors.New("strategy.sticky_ttl_seconds must be between 60 and 86400")
+	}
+	if strategy.AbsoluteMaxInputPer1M < 0 || strategy.AbsoluteMaxOutputPer1M < 0 {
+		return RoutingPolicy{}, errors.New("strategy absolute price caps must be greater than or equal to 0")
+	}
+	if strategy.MaxPriceMultipleOfCheapest < 0 {
+		return RoutingPolicy{}, errors.New("strategy.max_price_multiple_of_cheapest must be greater than or equal to 0")
+	}
+	if strategy.LowPricePoolPercent < 0 || strategy.LowPricePoolPercent > 100 {
+		return RoutingPolicy{}, errors.New("strategy.low_price_pool_percent must be between 0 and 100")
+	}
+	if strategy.LowPricePoolMinCandidates < 0 {
+		return RoutingPolicy{}, errors.New("strategy.low_price_pool_min_candidates must be greater than or equal to 0")
+	}
+	if strategy.LowPricePoolMode == "" {
+		strategy.LowPricePoolMode = RoutingPolicyLowPriceAuto
+	}
+	if !oneOf(strategy.LowPricePoolMode, RoutingPolicyLowPriceAuto, RoutingPolicyLowPriceStrict, RoutingPolicyLowPricePercent, RoutingPolicyLowPriceNone) {
+		return RoutingPolicy{}, errors.New("strategy.low_price_pool_mode is invalid")
+	}
+	if strategy.LowPricePoolMode == RoutingPolicyLowPriceAuto {
+		if strategy.LowPricePoolPercent == 0 {
+			strategy.LowPricePoolPercent = 30
+		}
+		if strategy.LowPricePoolMinCandidates == 0 {
+			strategy.LowPricePoolMinCandidates = 2
+		}
+	}
+	if strategy.LowPricePoolMode == RoutingPolicyLowPricePercent && strategy.LowPricePoolPercent == 0 {
+		return RoutingPolicy{}, errors.New("strategy.low_price_pool_percent must be between 1 and 100 for percentile mode")
+	}
+	strategy.AllowedModels = cleanStringList(strategy.AllowedModels)
+	strategy.DeniedModels = cleanStringList(strategy.DeniedModels)
+	strategy.AllowedProtocols = cleanStringList(strategy.AllowedProtocols)
+	strategy.DeniedProtocols = cleanStringList(strategy.DeniedProtocols)
+	for _, protocol := range append(append([]string(nil), strategy.AllowedProtocols...), strategy.DeniedProtocols...) {
+		if !routingPolicyProtocolSupported(protocol) {
+			return RoutingPolicy{}, fmt.Errorf("strategy protocol %q is not supported", protocol)
+		}
+	}
+	if strategy.ResourceBatches == nil {
+		strategy.ResourceBatches = []RoutingPolicyBatch{}
+	}
+	configuredAccounts := map[string]int{}
+	for i := range strategy.ResourceBatches {
+		strategy.ResourceBatches[i].Name = strings.TrimSpace(strategy.ResourceBatches[i].Name)
+		if strategy.ResourceBatches[i].Name == "" {
+			strategy.ResourceBatches[i].Name = fmt.Sprintf("Batch %d", i+1)
+		}
+		strategy.ResourceBatches[i].ProviderAccountIDs = cleanStringList(strategy.ResourceBatches[i].ProviderAccountIDs)
+		if len(strategy.ResourceBatches[i].ProviderAccountIDs) == 0 {
+			return RoutingPolicy{}, fmt.Errorf("strategy.resource_batches[%d] must contain at least one provider account", i)
+		}
+		for _, accountID := range strategy.ResourceBatches[i].ProviderAccountIDs {
+			if previous, exists := configuredAccounts[accountID]; exists {
+				return RoutingPolicy{}, fmt.Errorf("provider account %q appears in resource batches %d and %d", accountID, previous+1, i+1)
+			}
+			configuredAccounts[accountID] = i
+		}
+	}
+	return RoutingPolicy{
+		Name: name, Description: strings.TrimSpace(req.Description), RouteGroup: routeGroup,
+		Status: status, Strategy: strategy, Version: 1, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 

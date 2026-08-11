@@ -198,7 +198,7 @@ func resourceForRequest(c *gin.Context) string {
 	switch {
 	case path == "/dashboard":
 		return controlplane.RBACResourceDashboard
-	case strings.HasPrefix(path, "/gateway-models"), strings.HasPrefix(path, "/model-routes"), strings.HasPrefix(path, "/gateway-simulator"), strings.HasPrefix(path, "/routing-groups"):
+	case strings.HasPrefix(path, "/gateway-models"), strings.HasPrefix(path, "/model-routes"), strings.HasPrefix(path, "/gateway-simulator"), strings.HasPrefix(path, "/routing-groups"), strings.HasPrefix(path, "/routing-policies"):
 		return controlplane.RBACResourceRouting
 	case strings.HasPrefix(path, "/providers"), strings.HasPrefix(path, "/provider-"):
 		return controlplane.RBACResourceProviders

@@ -88,6 +88,19 @@ const (
 	RoutingGroupTypeImageGeneration = "image_generation"
 	RoutingGroupTypeVideoGeneration = "video_generation"
 
+	RoutingPolicyStatusActive   = "active"
+	RoutingPolicyStatusDisabled = "disabled"
+
+	RoutingPolicyPresetCost      = "cost"
+	RoutingPolicyPresetSpeed     = "speed"
+	RoutingPolicyPresetStability = "stability"
+	RoutingPolicyPresetBalanced  = "balanced"
+
+	RoutingPolicyLowPriceAuto    = "auto"
+	RoutingPolicyLowPriceStrict  = "strict"
+	RoutingPolicyLowPricePercent = "percentile"
+	RoutingPolicyLowPriceNone    = "none"
+
 	ProviderTypeOpenAICompatible    = "openai_compatible"
 	ProviderTypeAnthropicCompatible = "anthropic_compatible"
 	ProviderTypeGeminiCompatible    = "gemini_compatible"
@@ -201,6 +214,54 @@ type RoutingGroupRequest struct {
 	PeakRateMultiplier           float64 `json:"peak_rate_multiplier"`
 	Status                       string  `json:"status"`
 	SortOrder                    int     `json:"sort_order"`
+}
+
+// RoutingPolicyBatch is an ordered set of provider accounts. The scheduler
+// only advances to the next batch after every account in the current batch has
+// failed before the first byte is received.
+type RoutingPolicyBatch struct {
+	Name               string   `json:"name"`
+	ProviderAccountIDs []string `json:"provider_account_ids"`
+}
+
+type RoutingPolicyStrategy struct {
+	Preset                     string               `json:"preset"`
+	SmartOptimization          bool                 `json:"smart_optimization"`
+	FailoverBeforeFirstByte    bool                 `json:"failover_before_first_byte"`
+	StickyRouting              bool                 `json:"sticky_routing"`
+	StickyTTLSeconds           int                  `json:"sticky_ttl_seconds"`
+	NativeProtocolOnly         bool                 `json:"native_protocol_only"`
+	AbsoluteMaxInputPer1M      float64              `json:"absolute_max_input_per_1m"`
+	AbsoluteMaxOutputPer1M     float64              `json:"absolute_max_output_per_1m"`
+	MaxPriceMultipleOfCheapest float64              `json:"max_price_multiple_of_cheapest"`
+	LowPricePoolMode           string               `json:"low_price_pool_mode"`
+	LowPricePoolPercent        int                  `json:"low_price_pool_percent"`
+	LowPricePoolMinCandidates  int                  `json:"low_price_pool_min_candidates"`
+	ResourceBatches            []RoutingPolicyBatch `json:"resource_batches"`
+	AllowedModels              []string             `json:"allowed_models"`
+	DeniedModels               []string             `json:"denied_models"`
+	AllowedProtocols           []string             `json:"allowed_protocols"`
+	DeniedProtocols            []string             `json:"denied_protocols"`
+}
+
+type RoutingPolicy struct {
+	ID          string                `json:"id"`
+	Name        string                `json:"name"`
+	Description string                `json:"description"`
+	RouteGroup  string                `json:"route_group"`
+	Status      string                `json:"status"`
+	Strategy    RoutingPolicyStrategy `json:"strategy"`
+	Version     int                   `json:"version"`
+	CreatedAt   time.Time             `json:"created_at"`
+	UpdatedAt   time.Time             `json:"updated_at"`
+}
+
+type RoutingPolicyRequest struct {
+	Name        string                `json:"name"`
+	Description string                `json:"description"`
+	RouteGroup  string                `json:"route_group"`
+	Status      string                `json:"status"`
+	Strategy    RoutingPolicyStrategy `json:"strategy"`
 }
 
 type ProviderAccount struct {
@@ -801,34 +862,38 @@ type GatewayAuthContext struct {
 }
 
 type GatewayProvider struct {
-	AttemptID        string
-	ID               string
-	Name             string
-	Type             string
-	BaseURL          string
-	APIKey           string
-	AuthType         string
-	AdapterConfig    map[string]string
-	AdapterID        string
-	AccountID        string
-	AccountName      string
-	Concurrency      int
-	GatewayModelID   string
-	RequestedModel   string
-	UpstreamModel    string
-	UpstreamFormat   string
-	RouteID          string
-	RouteGroup       string
-	RoutePriority    int
-	RouteWeight      int
-	AccountWeight    int
-	RPMLimit         int
-	TPMLimit         int
-	CircuitState     string
-	CircuitProbe     bool
-	Headroom         float64
-	StickyEnabled    bool
-	StickyTTLSeconds int
-	Source           string
-	SelectionReason  string
+	AttemptID         string
+	ID                string
+	Name              string
+	Type              string
+	BaseURL           string
+	APIKey            string
+	AuthType          string
+	AdapterConfig     map[string]string
+	AdapterID         string
+	AccountID         string
+	AccountName       string
+	Concurrency       int
+	GatewayModelID    string
+	RequestedModel    string
+	UpstreamModel     string
+	UpstreamFormat    string
+	RouteID           string
+	RouteGroup        string
+	RoutePriority     int
+	RouteWeight       int
+	AccountWeight     int
+	RPMLimit          int
+	TPMLimit          int
+	CircuitState      string
+	CircuitProbe      bool
+	Headroom          float64
+	StickyEnabled     bool
+	StickyTTLSeconds  int
+	RoutingPolicyID   string
+	PolicyBatchOrder  int
+	FailoverEnabled   bool
+	SmartOptimization bool
+	Source            string
+	SelectionReason   string
 }
