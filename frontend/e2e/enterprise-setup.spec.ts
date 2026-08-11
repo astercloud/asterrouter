@@ -3,6 +3,7 @@ import { captureBrowserErrors } from './fixtures'
 
 test('@setup setup initializes one enterprise instance', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The persistent setup workflow runs once against an isolated empty runtime.')
+  const adminPassword = process.env.ASTER_E2E_PASSWORD || 'setup-browser-test-password'
   const errors = captureBrowserErrors(page)
   await page.addInitScript(() => {
     if (sessionStorage.getItem('stale-auth-seeded')) return
@@ -38,7 +39,7 @@ test('@setup setup initializes one enterprise instance', async ({ page }, testIn
     data: { setup_completed: true }
   })
 
-  await page.locator('input#password').fill('setup-browser-test-password')
+  await page.locator('input#password').fill(adminPassword)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page).toHaveURL(/\/console\/workbench$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()

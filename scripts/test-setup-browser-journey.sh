@@ -27,7 +27,7 @@ __run_runtime() {
   _runtime_env=(
     "ASTERROUTER_SERVER_HTTP_LISTEN=127.0.0.1:${_port}"
     "ASTERROUTER_SERVER_HTTP_FRONTEND_DIR=${_frontend_dir}"
-    'ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD=setup-browser-test-password'
+    "ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD=${_admin_password}"
     'ASTERROUTER_SERVER_SECURITY_SECRET_KEY=asterrouter-setup-browser-test-secret'
     "ASTERROUTER_SERVER_PLUGINS_CACHE_DIR=${_run_dir}/data/plugin-cache"
     "ASTERROUTER_SERVER_PLUGINS_ACTIVE_DIR=${_run_dir}/data/plugin-active"
@@ -48,6 +48,7 @@ __main() {
   _run_dir="${ASTER_SETUP_JOURNEY_DIR:-${TMPDIR:-/tmp}/asterrouter-setup-journey-$$}"
   _port="${ASTER_SETUP_JOURNEY_PORT:-18088}"
   _binary="${ASTER_SETUP_JOURNEY_BINARY:-}"
+  _admin_password="${ASTER_SETUP_JOURNEY_ADMIN_PASSWORD:-setup-browser-test-password}"
 
   if [ -d "${_run_dir}" ] && find "${_run_dir}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
     echo "Refusing to overwrite non-empty setup journey directory: ${_run_dir}" >&2
@@ -93,6 +94,7 @@ __main() {
       ASTER_E2E_INCLUDE_SETUP=1 \
       ASTER_E2E_EXTERNAL_URL="http://127.0.0.1:${_port}" \
       ASTER_E2E_ARTIFACT_DIR="${_run_dir}/playwright" \
+      ASTER_E2E_PASSWORD="${_admin_password}" \
       npx playwright test --grep '@setup'
   )
 

@@ -9,6 +9,7 @@ RUN_DIR="${ASTER_RELEASE_JOURNEY_DIR:-${TMPDIR:-/tmp}/asterrouter-release-journe
 BACKEND_PORT="${ASTER_RELEASE_JOURNEY_PORT:-18087}"
 UPSTREAM_PORT="${ASTER_RELEASE_JOURNEY_UPSTREAM_PORT:-19087}"
 DATABASE_URL="${ASTER_RELEASE_TEST_DATABASE_URL:-}"
+ADMIN_PASSWORD="release-browser-test-password"
 PACKAGE_NAME="asterrouter_${VERSION}_linux_amd64"
 ARCHIVE="${DIST_DIR}/${PACKAGE_NAME}.tar.gz"
 PACKAGE_DIR="${RUN_DIR}/${PACKAGE_NAME}"
@@ -83,7 +84,7 @@ start_runtime() {
     exec env \
       "ASTERROUTER_SERVER_HTTP_LISTEN=127.0.0.1:${port}" \
       "ASTERROUTER_SERVER_HTTP_FRONTEND_DIR=${PACKAGE_DIR}/frontend/dist" \
-      "ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD=release-browser-test-password" \
+      "ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD}" \
       "ASTERROUTER_SERVER_SECURITY_SECRET_KEY=asterrouter-release-journey-test-secret" \
       "ASTERROUTER_SERVER_PLUGINS_CACHE_DIR=${journey_dir}/data/plugin-cache" \
       "ASTERROUTER_SERVER_PLUGINS_ACTIVE_DIR=${journey_dir}/data/plugin-active" \
@@ -131,13 +132,15 @@ run_enterprise_journey() {
   local grep_pattern="$1"
   local port="$2"
   local journey_dir="${RUN_DIR}/enterprise"
-  local journey_database
-  journey_database="$(database_url_for enterprise)"
   mkdir -p "${journey_dir}"
   require_free_port "${port}"
-  start_runtime "${port}" "${journey_database}" "${journey_dir}"
+  start_runtime "${port}" "${ENTERPRISE_DATABASE_URL}" "${journey_dir}"
   local pid="${RUNTIME_PID}"
   wait_for_ready "${pid}" "${port}"
+  if ! curl -fsS "http://127.0.0.1:${port}/api/v1/setup/status" | grep -q '"setup_completed":true'; then
+    echo "Enterprise journey database was not initialized by the setup journey." >&2
+    return 1
+  fi
   (
     cd "${ROOT_DIR}/frontend"
     CI=true \
@@ -145,7 +148,7 @@ run_enterprise_journey() {
       ASTER_E2E_UPSTREAM_PORT="${UPSTREAM_PORT}" \
       ASTER_E2E_ARTIFACT_DIR="${journey_dir}/playwright" \
       ASTER_E2E_USERNAME=admin \
-      ASTER_E2E_PASSWORD=release-browser-test-password \
+      ASTER_E2E_PASSWORD="${ADMIN_PASSWORD}" \
       ASTER_E2E_EXPECT_DEMO_MODE=false \
       npx playwright test --grep "${grep_pattern}"
   )
@@ -165,10 +168,12 @@ tar -C "${RUN_DIR}" -xzf "${ARCHIVE}"
 ) >"${RUN_DIR}/fake-upstream.log" 2>&1 &
 PIDS+=("$!")
 
-ASTER_SETUP_JOURNEY_DATABASE_URL="$(database_url_for enterprise_setup)" \
+ENTERPRISE_DATABASE_URL="$(database_url_for enterprise)"
+ASTER_SETUP_JOURNEY_DATABASE_URL="${ENTERPRISE_DATABASE_URL}" \
   ASTER_SETUP_JOURNEY_DIR="${RUN_DIR}/setup" \
   ASTER_SETUP_JOURNEY_PORT="${BACKEND_PORT}" \
   ASTER_SETUP_JOURNEY_BINARY="${PACKAGE_DIR}/asterrouter" \
+  ASTER_SETUP_JOURNEY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
   bash "${ROOT_DIR}/scripts/test-setup-browser-journey.sh"
 
 run_enterprise_journey '@enterprise-smoke|@j01|@j02|@j03|@j04|@j05|@j09' "$((BACKEND_PORT + 1))"
@@ -181,7 +186,7 @@ run_enterprise_journey '@enterprise-smoke|@j01|@j02|@j03|@j04|@j05|@j09' "$((BAC
   echo 'product=enterprise'
   echo 'isolation=dedicated_postgresql_database_and_runtime'
   echo 'journeys=J01,J02,J03,J04,J05,J09'
-  echo 'first_install=enterprise_setup'
+  echo 'first_install=enterprise'
   echo 'browser=chromium'
 } >"${RUN_DIR}/report.txt"
 
