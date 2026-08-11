@@ -74,10 +74,9 @@ cleanup() {
 }
 
 start_runtime() {
-  local profile="$1"
-  local port="$2"
-  local database_url="$3"
-  local profile_dir="$4"
+  local port="$1"
+  local database_url="$2"
+  local journey_dir="$3"
 
   (
     cd "${PACKAGE_DIR}"
@@ -86,14 +85,13 @@ start_runtime() {
       "ASTERROUTER_SERVER_HTTP_FRONTEND_DIR=${PACKAGE_DIR}/frontend/dist" \
       "ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD=release-browser-test-password" \
       "ASTERROUTER_SERVER_SECURITY_SECRET_KEY=asterrouter-release-journey-test-secret" \
-      "ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE=${profile}" \
-      "ASTERROUTER_SERVER_PLUGINS_CACHE_DIR=${profile_dir}/data/plugin-cache" \
-      "ASTERROUTER_SERVER_PLUGINS_ACTIVE_DIR=${profile_dir}/data/plugin-active" \
-      "ASTERROUTER_SERVER_MAINTENANCE_BACKUP_DIR=${profile_dir}/data/backups" \
-      "ASTERROUTER_SERVER_MAINTENANCE_DIAGNOSTIC_DIR=${profile_dir}/data/diagnostics" \
+      "ASTERROUTER_SERVER_PLUGINS_CACHE_DIR=${journey_dir}/data/plugin-cache" \
+      "ASTERROUTER_SERVER_PLUGINS_ACTIVE_DIR=${journey_dir}/data/plugin-active" \
+      "ASTERROUTER_SERVER_MAINTENANCE_BACKUP_DIR=${journey_dir}/data/backups" \
+      "ASTERROUTER_SERVER_MAINTENANCE_DIAGNOSTIC_DIR=${journey_dir}/data/diagnostics" \
       "ASTERROUTER_SERVER_STORAGE_DATABASE_URL=${database_url}" \
       ./asterrouter server
-  ) >"${profile_dir}/runtime.log" 2>&1 &
+  ) >"${journey_dir}/runtime.log" 2>&1 &
   RUNTIME_PID="$!"
   PIDS+=("${RUNTIME_PID}")
 }
@@ -129,34 +127,26 @@ stop_runtime() {
   PIDS=("${remaining[@]}")
 }
 
-run_profile_journey() {
-  local profile="$1"
-  local grep_pattern="$2"
-  local port="$3"
-  local profile_dir="${RUN_DIR}/profiles/${profile}"
-  local profile_database
-  profile_database="$(database_url_for "${profile}")"
-  mkdir -p "${profile_dir}"
+run_enterprise_journey() {
+  local grep_pattern="$1"
+  local port="$2"
+  local journey_dir="${RUN_DIR}/enterprise"
+  local journey_database
+  journey_database="$(database_url_for enterprise)"
+  mkdir -p "${journey_dir}"
   require_free_port "${port}"
-  start_runtime "${profile}" "${port}" "${profile_database}" "${profile_dir}"
+  start_runtime "${port}" "${journey_database}" "${journey_dir}"
   local pid="${RUNTIME_PID}"
   wait_for_ready "${pid}" "${port}"
-  (
-    cd "${ROOT_DIR}"
-    ASTER_E2E_EXTERNAL_URL="http://127.0.0.1:${port}" \
-      ASTER_E2E_EXPECT_PROFILE="${profile}" \
-      node scripts/configure-e2e-profiles.mjs
-  )
   (
     cd "${ROOT_DIR}/frontend"
     CI=true \
       ASTER_E2E_EXTERNAL_URL="http://127.0.0.1:${port}" \
       ASTER_E2E_UPSTREAM_PORT="${UPSTREAM_PORT}" \
-      ASTER_E2E_ARTIFACT_DIR="${profile_dir}/playwright" \
+      ASTER_E2E_ARTIFACT_DIR="${journey_dir}/playwright" \
       ASTER_E2E_USERNAME=admin \
       ASTER_E2E_PASSWORD=release-browser-test-password \
       ASTER_E2E_EXPECT_DEMO_MODE=false \
-      ASTER_E2E_EXPECT_PROFILE="${profile}" \
       npx playwright test --grep "${grep_pattern}"
   )
   stop_runtime "${pid}"
@@ -175,26 +165,23 @@ tar -C "${RUN_DIR}" -xzf "${ARCHIVE}"
 ) >"${RUN_DIR}/fake-upstream.log" 2>&1 &
 PIDS+=("$!")
 
-ASTER_SETUP_JOURNEY_DATABASE_URL="$(database_url_for platform_setup)" \
+ASTER_SETUP_JOURNEY_DATABASE_URL="$(database_url_for enterprise_setup)" \
   ASTER_SETUP_JOURNEY_DIR="${RUN_DIR}/setup" \
   ASTER_SETUP_JOURNEY_PORT="${BACKEND_PORT}" \
   ASTER_SETUP_JOURNEY_BINARY="${PACKAGE_DIR}/asterrouter" \
   bash "${ROOT_DIR}/scripts/test-setup-browser-journey.sh"
 
-run_profile_journey enterprise '@surface-smoke|@j01|@j02|@j03|@j04|@j05' "$((BACKEND_PORT + 1))"
-run_profile_journey relay_operator '@surface-smoke|@j06|customer and account sessions' "$((BACKEND_PORT + 2))"
-run_profile_journey personal '@surface-smoke|console overview has no serious accessibility violations' "$((BACKEND_PORT + 3))"
-run_profile_journey platform '@surface-smoke|@platform' "$((BACKEND_PORT + 4))"
+run_enterprise_journey '@enterprise-smoke|@j01|@j02|@j03|@j04|@j05|@j09' "$((BACKEND_PORT + 1))"
 
 {
   echo 'release_browser_journeys=passed'
   echo "version=${VERSION}"
   echo 'platform=linux/amd64'
   echo 'execution=candidate_archive'
-  echo 'deployment_profiles=enterprise,relay_operator,personal,platform'
-  echo 'isolation=one_postgresql_database_and_runtime_per_profile'
-  echo 'journeys=J01,J02,J03,J04,J05,J06,J09'
-  echo 'first_install_profile=platform'
+  echo 'product=enterprise'
+  echo 'isolation=dedicated_postgresql_database_and_runtime'
+  echo 'journeys=J01,J02,J03,J04,J05,J09'
+  echo 'first_install=enterprise_setup'
   echo 'browser=chromium'
 } >"${RUN_DIR}/report.txt"
 

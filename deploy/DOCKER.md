@@ -14,8 +14,7 @@ docker compose logs -f asterrouter
 
 默认只绑定 `127.0.0.1:8080`。通过 `ASTERROUTER_BIND_ADDRESS` 和
 `ASTERROUTER_PORT` 修改监听地址或端口。首次打开
-`http://localhost:8080/setup`，选择一个部署角色；也可以在 `.env` 中设置
-`ASTERROUTER_DEPLOYMENT_ROLE` 进行无人值守初始化。
+`http://localhost:8080/setup`，填写企业名称并初始化企业实例。
 
 应用数据和 PostgreSQL 数据分别保存在 `asterrouter_data`、`postgres_data`
 命名卷中。升级时使用 `docker compose pull`（使用远程镜像时）或

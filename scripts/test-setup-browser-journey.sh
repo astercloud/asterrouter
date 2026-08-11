@@ -96,7 +96,6 @@ __main() {
       npx playwright test --grep '@setup'
   )
 
-  curl -fsS "http://127.0.0.1:${_port}/api/v1/setup/status" | grep -q '"default_profile":"platform"'
   curl -fsS "http://127.0.0.1:${_port}/api/v1/setup/status" | grep -q '"setup_completed":true'
 
   if [ -n "${_binary}" ]; then
@@ -107,7 +106,7 @@ __main() {
   {
     echo 'setup_browser_journey=passed'
     echo "execution=${_execution}"
-    echo 'profile=platform'
+    echo 'product=enterprise'
     echo 'browser=chromium'
   } >"${_run_dir}/report.txt"
 
