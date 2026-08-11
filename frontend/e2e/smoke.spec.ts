@@ -65,6 +65,22 @@ test('@enterprise-smoke application credential editor exposes enterprise ownersh
   expect(errors).toEqual([])
 })
 
+test('@smoke @enterprise-smoke application and policy lists remain usable', async ({ page }) => {
+  const errors = captureBrowserErrors(page)
+  await loginDemo(page)
+
+  await page.goto('/console/applications')
+  await expect(page.getByRole('heading', { level: 1, name: 'Applications' })).toBeVisible()
+  await expect(page.locator('.application-list-panel')).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+
+  await page.goto('/console/policies/access')
+  await expect(page.getByRole('heading', { level: 1, name: 'Policies' })).toBeVisible()
+  await expect(page.locator('.policy-page .table-panel')).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  expect(errors).toEqual([])
+})
+
 test('@smoke @enterprise-smoke locale, theme, and responsive layout remain usable', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
