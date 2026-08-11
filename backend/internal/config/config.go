@@ -97,7 +97,7 @@ type JobQueue struct {
 
 type JobLimits struct {
 	Organization int `json:"organization" desc:"Maximum queued jobs for the organization"`
-	Application       int `json:"application"    desc:"Maximum queued jobs per application"`
+	Application  int `json:"application"    desc:"Maximum queued jobs per application"`
 	Principal    int `json:"principal" desc:"Maximum queued jobs per principal"`
 }
 
