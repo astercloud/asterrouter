@@ -59,5 +59,6 @@ curl -fsS "http://127.0.0.1:${PORT}/api/v1/settings/public" | grep -Fq '"demo_mo
 for path in / /login /console/workbench /portal/overview; do
   curl -fsS "http://127.0.0.1:${PORT}${path}" | grep -Fq '<div id="app"></div>'
 done
+curl -fsS "http://127.0.0.1:${PORT}/images/asterrouter-routing-workbench.webp" | cmp -s - "${ROOT_DIR}/frontend/dist/images/asterrouter-routing-workbench.webp"
 
 echo "Single-origin smoke passed on port ${PORT}."

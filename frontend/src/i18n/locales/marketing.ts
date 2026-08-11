@@ -9,7 +9,7 @@ export const marketingZh = {
     description: '在企业应用与已授权 AI 供应商之间建立统一控制面。一次完成身份校验、访问准入、资源选择、成本约束和请求级证据记录。',
     primaryAction: '进入企业控制台', secondaryAction: '查看请求决策', factsLabel: '产品事实',
     factProtocols: '统一接入 OpenAI、Anthropic 与 Gemini 兼容协议', factEvidence: '策略、路由、用量、成本与 Trace 使用同一证据链',
-    imageAlt: 'AsterRouter 路由策略工作台实际界面', actualProduct: '实际产品界面', actualProductDetail: '路由策略工作台 · v0.23.0'
+    imageAlt: 'AsterRouter 路由策略工作台实际界面', actualProduct: '实际产品界面', actualProductDetail: '路由策略工作台 · v0.23.1'
   },
   decision: {
     overline: 'ONE REQUEST, ONE EXPLAINABLE DECISION', title: '每一次模型请求，都经过同一条企业决策链',
@@ -59,7 +59,7 @@ export const marketingEn = {
     description: 'Place one control plane between enterprise applications and authorized AI providers. Enforce identity, access, supply selection, cost boundaries, and request-level evidence on every call.',
     primaryAction: 'Open enterprise console', secondaryAction: 'Inspect the decision flow', factsLabel: 'Product facts',
     factProtocols: 'One gateway for OpenAI, Anthropic, and Gemini-compatible protocols', factEvidence: 'Policy, routing, usage, cost, and traces share one evidence chain',
-    imageAlt: 'Actual AsterRouter routing policy workbench', actualProduct: 'Actual product interface', actualProductDetail: 'Routing policy workbench · v0.23.0'
+    imageAlt: 'Actual AsterRouter routing policy workbench', actualProduct: 'Actual product interface', actualProductDetail: 'Routing policy workbench · v0.23.1'
   },
   decision: {
     overline: 'ONE REQUEST, ONE EXPLAINABLE DECISION', title: 'Every model request follows the same enterprise decision chain',

@@ -4,7 +4,7 @@ import { captureBrowserErrors, expectNoHorizontalOverflow } from './fixtures'
 
 test('@marketing official website is public, localized, and responsive', async ({ page }, testInfo) => {
   const errors = captureBrowserErrors(page)
-  await page.goto('/')
+  await page.goto('/', { waitUntil: 'commit' })
 
   await expect(page).toHaveURL('/')
   await expect(page.getByRole('heading', { level: 1, name: 'AsterRouter' })).toBeVisible()
