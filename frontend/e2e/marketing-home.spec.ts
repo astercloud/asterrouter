@@ -4,6 +4,7 @@ import { captureBrowserErrors, expectNoHorizontalOverflow } from './fixtures'
 
 test('@marketing official website is public, localized, and responsive', async ({ page }, testInfo) => {
   const errors = captureBrowserErrors(page)
+  const captureDesignEvidence = !process.env.ASTER_E2E_EXTERNAL_URL
   await page.goto('/', { waitUntil: 'commit' })
 
   await expect(page).toHaveURL('/')
@@ -12,9 +13,11 @@ test('@marketing official website is public, localized, and responsive', async (
   await expect(page.getByRole('heading', { level: 2, name: 'Every model request follows the same enterprise decision chain' })).toBeVisible()
   const productImage = page.getByRole('img', { name: 'Actual AsterRouter routing policy workbench' })
   await expect(productImage).toBeVisible()
-  expect(await productImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true)
+  await expect.poll(() => productImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true)
   await expectNoHorizontalOverflow(page)
-  await page.screenshot({ path: testInfo.outputPath('marketing-home-en.png'), fullPage: true })
+  if (captureDesignEvidence) {
+    await page.screenshot({ path: testInfo.outputPath('marketing-home-en.png'), fullPage: true, animations: 'disabled' })
+  }
 
   if ((page.viewportSize()?.width || 0) <= 1080) {
     await page.getByRole('button', { name: 'Open website navigation' }).click()
@@ -27,7 +30,9 @@ test('@marketing official website is public, localized, and responsive', async (
   await expect(page.locator('.hero-category')).toHaveText('企业 AI 访问与路由基础设施')
   await expect(page.getByRole('heading', { level: 2, name: '策略不是一个权重，而是一份完整路由合同' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
-  await page.screenshot({ path: testInfo.outputPath('marketing-home-zh.png'), fullPage: true })
+  if (captureDesignEvidence) {
+    await page.screenshot({ path: testInfo.outputPath('marketing-home-zh.png'), fullPage: true, animations: 'disabled' })
+  }
 
   if (testInfo.project.name === 'chromium-desktop') {
     const results = await new AxeBuilder({ page }).analyze()
