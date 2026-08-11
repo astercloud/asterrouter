@@ -109,7 +109,6 @@ export default {
     title: '管理员后台',
     subtitle: '治理、设置、Provider、插件、审计和运维。',
     overview: '概览',
-		onboarding: '首次接入',
     settings: '系统设置',
     providers: 'Provider 连接',
     gatewayModels: '网关模型',
@@ -133,39 +132,6 @@ export default {
     plugins: '插件中心',
     audit: '审计日志'
   },
-	onboarding: {
-		title: '首次接入',
-		subtitle: '连接模型来源，发布团队模型，创建应用并完成一次受治理验证。',
-		progress: '首次接入进度',
-		session: '会话 {id}',
-		newSession: '新建接入会话',
-		expired: '接入会话已过期',
-		expiredAction: '新建会话后继续配置。已有对象仍保留在管理后台。',
-		failedAt: '{step}未完成',
-		steps: { source: '模型来源', model: '发布模型', application: '创建应用', verify: '客户端验证' },
-		source: {
-			title: '连接模型来源', subtitle: '保存连接并检查上游模型目录。', type: '协议类型', name: '来源名称', baseURL: '基础地址', account: '资源名称', authType: '认证方式', upstreamModel: '上游模型', secret: '访问凭据', concurrency: '并发上限', connect: '连接并检查', checking: '正在检查'
-		},
-		model: {
-			title: '发布团队模型', subtitle: '为客户端提供稳定的模型标识。', id: '模型标识', name: '显示名称', routeGroup: '路由组', defaultRoute: '默认', description: '描述', publish: '发布模型'
-		},
-		application: {
-			title: '创建应用', subtitle: '建立最小调用权限和独立用量边界。', name: '应用名称', concurrency: '并发上限', monthlyTokens: '月度 Token 上限', create: '创建应用与凭据'
-		},
-		verify: {
-			title: '配置并验证客户端', subtitle: '配置由当前应用、模型和公共网关地址动态生成。', client: '目标客户端', credential: '应用凭据', credentialWindow: '仅在当前 24 小时接入会话内可恢复，不写入浏览器存储。', copyCredential: '复制应用凭据', configuration: '客户端配置', copyConfig: '复制客户端配置', run: '运行真实验证', running: '正在验证', success: '验证成功', failed: '验证失败', operation: 'Operation', openTrace: '打开 Trace'
-		},
-		compatibility: {
-			title: '兼容性证据', subtitle: '正在读取版本化验证记录。', router: 'AsterRouter {version}', revision: '记录 {revision}', runtimeVerified: '客户端实测通过', protocolVerified: '协议验证通过', pending: '待确认', unavailable: '兼容性记录当前不可用。', empty: '当前客户端没有兼容性记录。', validUntil: '证据有效期至 {date}', confirmBeforeUse: '使用前需要重新确认',
-			release: { current: '当前版本', previous: '前一支持线' },
-			languages: { cli: 'CLI', javascript: 'JavaScript', python: 'Python' },
-			limitations: { official_client_runtime_not_executed: '未执行官方客户端运行时，仅验证协议链路。', streaming_not_covered: '当前证据不覆盖流式调用。' }
-		},
-		clients: { codex: 'Codex', claude_code: 'Claude Code', openai_sdk: 'OpenAI SDK', anthropic_sdk: 'Anthropic SDK' },
-		recovery: {
-			check_base_url_credentials_and_upstream_model: '检查基础地址、访问凭据和上游模型。', choose_a_model_returned_by_provider_discovery: '选择来源目录返回的模型。', check_model_protocol_and_source_mapping: '检查模型协议与来源映射。', use_the_onboarding_credential: '使用当前应用凭据后重试。', check_api_key_model_and_policy_scope: '检查应用模型范围与策略。', check_api_key_and_provider_capacity: '检查应用限额与来源容量。', check_route_and_provider_health: '检查路由与来源健康状态。', check_client_protocol_compatibility: '检查客户端协议配置。', inspect_trace_and_retry: '检查 Trace 后重试。'
-		}
-	},
   artifactOps: {
     title: '产物管理',
     subtitle: '统一查看图片、视频、音频任务的生成产物与客户交付状态。',

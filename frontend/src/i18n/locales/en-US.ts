@@ -109,7 +109,6 @@ export default {
     title: 'Admin Console',
     subtitle: 'Governance, settings, providers, plugins, audit, and operations.',
     overview: 'Overview',
-		onboarding: 'First Access',
     settings: 'System Settings',
     providers: 'Provider Connections',
     gatewayModels: 'Gateway Models',
@@ -133,39 +132,6 @@ export default {
     plugins: 'Plugin Center',
     audit: 'Audit Logs'
   },
-	onboarding: {
-		title: 'First Access',
-		subtitle: 'Connect a model source, publish a team model, create an application, and complete one governed verification.',
-		progress: 'First access progress',
-		session: 'Session {id}',
-		newSession: 'New access session',
-		expired: 'Access session expired',
-		expiredAction: 'Start a new session to continue. Existing objects remain available in administration.',
-		failedAt: '{step} did not complete',
-		steps: { source: 'Model source', model: 'Publish model', application: 'Create application', verify: 'Client verification' },
-		source: {
-			title: 'Connect model source', subtitle: 'Save the connection and check the upstream model catalog.', type: 'Protocol type', name: 'Source name', baseURL: 'Base URL', account: 'Resource name', authType: 'Authentication', upstreamModel: 'Upstream model', secret: 'Access credential', concurrency: 'Concurrency limit', connect: 'Connect and check', checking: 'Checking'
-		},
-		model: {
-			title: 'Publish team model', subtitle: 'Expose a stable model identifier to clients.', id: 'Model identifier', name: 'Display name', routeGroup: 'Route group', defaultRoute: 'Default', description: 'Description', publish: 'Publish model'
-		},
-		application: {
-			title: 'Create application', subtitle: 'Establish minimum invocation permissions and an independent usage boundary.', name: 'Application name', concurrency: 'Concurrency limit', monthlyTokens: 'Monthly Token limit', create: 'Create application and credential'
-		},
-		verify: {
-			title: 'Configure and verify client', subtitle: 'Configuration is generated from the current application, model, and public gateway address.', client: 'Target client', credential: 'Application credential', credentialWindow: 'Recoverable only within this 24-hour access session and never written to browser storage.', copyCredential: 'Copy application credential', configuration: 'Client configuration', copyConfig: 'Copy client configuration', run: 'Run real verification', running: 'Verifying', success: 'Verification succeeded', failed: 'Verification failed', operation: 'Operation', openTrace: 'Open Trace'
-		},
-		compatibility: {
-			title: 'Compatibility evidence', subtitle: 'Loading versioned verification records.', router: 'AsterRouter {version}', revision: 'Record {revision}', runtimeVerified: 'Client runtime verified', protocolVerified: 'Protocol verified', pending: 'Pending confirmation', unavailable: 'Compatibility records are currently unavailable.', empty: 'No compatibility records are available for this client.', validUntil: 'Evidence valid until {date}', confirmBeforeUse: 'Reconfirmation required before use',
-			release: { current: 'Current version', previous: 'Previous support line' },
-			languages: { cli: 'CLI', javascript: 'JavaScript', python: 'Python' },
-			limitations: { official_client_runtime_not_executed: 'Official client runtime was not executed; only the protocol path was verified.', streaming_not_covered: 'Current evidence does not cover streaming requests.' }
-		},
-		clients: { codex: 'Codex', claude_code: 'Claude Code', openai_sdk: 'OpenAI SDK', anthropic_sdk: 'Anthropic SDK' },
-		recovery: {
-			check_base_url_credentials_and_upstream_model: 'Check the base URL, access credential, and upstream model.', choose_a_model_returned_by_provider_discovery: 'Choose a model returned by source discovery.', check_model_protocol_and_source_mapping: 'Check the model protocol and source mapping.', use_the_onboarding_credential: 'Use the current application credential and retry.', check_api_key_model_and_policy_scope: 'Check the application model and policy scope.', check_api_key_and_provider_capacity: 'Check application limits and source capacity.', check_route_and_provider_health: 'Check route and source health.', check_client_protocol_compatibility: 'Check the client protocol configuration.', inspect_trace_and_retry: 'Inspect the Trace and retry.'
-		}
-	},
   artifactOps: {
     title: 'Artifacts',
     subtitle: 'Generated media and customer delivery across image, video, and audio workloads.',

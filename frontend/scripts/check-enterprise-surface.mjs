@@ -24,6 +24,10 @@ const legacyPricingGuards = new Set([
   'backend/internal/server/pricing_rule_routes_test.go'
 ])
 
+const applicationListGuards = new Set([
+  'frontend/src/views/admin/AdminOnboardingView.test.ts'
+])
+
 const rules = [
   {
     name: 'historical configuration or scope',
@@ -65,6 +69,11 @@ const rules = [
   {
     name: 'removed surface abstraction',
     pattern: /SurfaceShell|surfaces_json|PluginFrontendContributionSurface|@surface-smoke/g
+  },
+  {
+    name: 'removed first-access wizard',
+    pattern: /\/console\/onboarding|onboarding-progress|\bFirst Access\b|首次接入/g,
+    allowedFiles: applicationListGuards
   },
   {
     name: 'removed plugin contribution contract',
