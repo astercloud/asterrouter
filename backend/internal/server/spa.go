@@ -22,9 +22,12 @@ func serveSPA(r *gin.Engine, dir string) {
 		return
 	}
 	r.Static("/assets", filepath.Join(abs, "assets"))
+	r.Static("/images", filepath.Join(abs, "images"))
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/v1/") {
+		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/v1/") ||
+			path == "/assets" || strings.HasPrefix(path, "/assets/") ||
+			path == "/images" || strings.HasPrefix(path, "/images/") {
 			httpx.Error(c, http.StatusNotFound, 1404, "not found")
 			return
 		}
