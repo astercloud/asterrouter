@@ -15,7 +15,6 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
-	operatorcore "github.com/astercloud/asterrouter/backend/internal/operator"
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
 	"github.com/astercloud/asterrouter/backend/internal/system"
@@ -52,14 +51,12 @@ func newTestRuntime(t *testing.T, cfg RuntimeConfig) (http.Handler, *controlplan
 
 func newTestRuntimeWithDurableAdmission(t *testing.T, cfg RuntimeConfig, durableJobs DurableAIJobAdmission) (http.Handler, *controlplane.Service) {
 	t.Helper()
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	if err := controlService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("EnsureSeedData(): %v", err)
 	}
 	pluginService := plugins.NewService(plugins.NewMemoryRepository())
-	operatorService := operatorcore.NewService(operatorcore.NewMemoryRepository(), controlService)
-	controlService.SetCustomerPricingContextResolver(operatorService)
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("Plugin EnsureSeedData(): %v", err)
 	}
@@ -68,7 +65,7 @@ func newTestRuntimeWithDurableAdmission(t *testing.T, cfg RuntimeConfig, durable
 	if value, ok := durableJobs.(AIJobRuntimeStatusProvider); ok {
 		runtime = value
 	}
-	return New(Options{Runtime: cfg, SettingsService: settingsService, ControlService: controlService, OperatorService: operatorService, PluginService: pluginService, SystemService: systemService, DurableAIJobs: durableJobs, AIJobRuntime: runtime}), controlService
+	return New(Options{Runtime: cfg, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: systemService, DurableAIJobs: durableJobs, AIJobRuntime: runtime}), controlService
 }
 
 func newTestHandler(t *testing.T, cfg RuntimeConfig) http.Handler {
@@ -89,7 +86,7 @@ func newAuthTestRuntime(t *testing.T) (http.Handler, *controlplane.Service) {
 
 func newAuthTestRuntimeWithTOTP(t *testing.T, totpEnabled bool) (http.Handler, *controlplane.Service) {
 	t.Helper()
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
 	adminSettings, err := settingsService.Admin(t.Context())
 	if err != nil {
 		t.Fatalf("load settings: %v", err)
@@ -107,7 +104,6 @@ func newAuthTestRuntimeWithTOTP(t *testing.T, totpEnabled bool) (http.Handler, *
 		t.Fatalf("EnsureLocalAdmin(): %v", err)
 	}
 	pluginService := plugins.NewService(plugins.NewMemoryRepository())
-	operatorService := operatorcore.NewService(operatorcore.NewMemoryRepository(), controlService)
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("Plugin EnsureSeedData(): %v", err)
 	}
@@ -116,7 +112,6 @@ func newAuthTestRuntimeWithTOTP(t *testing.T, totpEnabled bool) (http.Handler, *
 		AuthService:     auth.NewService(auth.Config{Username: "admin", Password: "secret", PasswordHash: localAdmin.PasswordHash, SecretKey: "test-secret"}),
 		SettingsService: settingsService,
 		ControlService:  controlService,
-		OperatorService: operatorService,
 		PluginService:   pluginService,
 		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
 	}), controlService
@@ -348,10 +343,10 @@ func awaitReadinessStatus(t *testing.T, handler http.Handler, expected int) (int
 	}
 }
 
-func TestAdminSettingsRequiresToken(t *testing.T) {
+func TestConsoleSettingsRequiresToken(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{AdminToken: "secret"})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/console/settings", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -360,10 +355,10 @@ func TestAdminSettingsRequiresToken(t *testing.T) {
 	}
 }
 
-func TestAdminSettingsRequiresLoginWhenAuthServiceEnabled(t *testing.T) {
+func TestConsoleSettingsRequiresLoginWhenAuthServiceEnabled(t *testing.T) {
 	handler := newAuthTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/console/settings", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -372,7 +367,7 @@ func TestAdminSettingsRequiresLoginWhenAuthServiceEnabled(t *testing.T) {
 	}
 }
 
-func TestLoginAllowsAdminSettingsAccess(t *testing.T) {
+func TestLoginAllowsConsoleSettingsAccess(t *testing.T) {
 	handler := newAuthTestHandler(t)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"secret"}`))
@@ -393,60 +388,13 @@ func TestLoginAllowsAdminSettingsAccess(t *testing.T) {
 		t.Fatalf("empty access token: %+v", loginResp.Data)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/console/settings", nil)
 	req.Header.Set("Authorization", "Bearer "+loginResp.Data.AccessToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("settings status = %d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestAuthenticationResponsesExposeServerDerivedAllowedSurfaces(t *testing.T) {
-	handler, control := newAuthTestRuntime(t)
-	user, _, err := control.RegisterWorkspaceUser(t.Context(), "surface-summary@example.test", "synthetic-password-123", "Surface Summary", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	login := func() auth.LoginResult {
-		t.Helper()
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"surface-summary@example.test","password":"synthetic-password-123"}`))
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		var response struct {
-			Data auth.LoginResult `json:"data"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || rec.Code != http.StatusOK {
-			t.Fatalf("login status=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
-		}
-		return response.Data
-	}
-
-	initial := login()
-	if !containsSurface(initial.User.AllowedSurfaces, controlplane.SurfaceCustomer) || !containsSurface(initial.User.AllowedSurfaces, controlplane.SurfacePortal) || containsSurface(initial.User.AllowedSurfaces, controlplane.SurfaceRelayOperator) || containsSurface(initial.User.AllowedSurfaces, controlplane.SurfaceEnterprise) {
-		t.Fatalf("initial allowed surfaces=%v", initial.User.AllowedSurfaces)
-	}
-	if _, err := control.CreateRoleBinding(t.Context(), "tester", controlplane.RoleBindingRequest{
-		UserID: user.ID, Role: controlplane.RolePlatformAdmin, ScopeType: controlplane.RoleScopeSurface, ScopeID: controlplane.SurfaceRelayOperator,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	bound := login()
-	if !containsSurface(bound.User.AllowedSurfaces, controlplane.SurfaceRelayOperator) {
-		t.Fatalf("bound allowed surfaces=%v", bound.User.AllowedSurfaces)
-	}
-
-	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
-	meReq.Header.Set("Authorization", "Bearer "+bound.AccessToken)
-	meRec := httptest.NewRecorder()
-	handler.ServeHTTP(meRec, meReq)
-	var meResponse struct {
-		Data auth.User `json:"data"`
-	}
-	if err := json.Unmarshal(meRec.Body.Bytes(), &meResponse); err != nil || meRec.Code != http.StatusOK || !containsSurface(meResponse.Data.AllowedSurfaces, controlplane.SurfaceRelayOperator) {
-		t.Fatalf("auth/me status=%d body=%s response=%+v err=%v", meRec.Code, meRec.Body.String(), meResponse, err)
 	}
 }
 
@@ -551,15 +499,6 @@ func responseCookie(t *testing.T, recorder *httptest.ResponseRecorder, name stri
 	return nil
 }
 
-func containsSurface(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 func TestLoginAgreementIsEnforcedAfterPayloadBinding(t *testing.T) {
 	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
 	current, err := settingsService.Admin(context.Background())
@@ -630,27 +569,14 @@ func TestLegacyCaptchaEndpointDisablesCaptcha(t *testing.T) {
 	}
 }
 
-func TestSetupProfileEndpoint(t *testing.T) {
+func TestSetupEndpointCompletesEnterpriseInitialization(t *testing.T) {
 	repo := settings.NewMemoryRepository()
 	svc := settings.NewService(repo, settings.ServiceOptions{Version: "test", StorageMode: "memory"})
-	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
-	pluginService := plugins.NewService(plugins.NewMemoryRepository())
-	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
-		t.Fatalf("Plugin EnsureSeedData(): %v", err)
-	}
-	systemService := system.NewService(system.Config{Version: "test", BuildType: "source"})
-	handler := New(Options{Runtime: RuntimeConfig{}, SettingsService: svc, ControlService: controlService, PluginService: pluginService, SystemService: systemService})
-	postProfile := func(profile string) *httptest.ResponseRecorder {
-		t.Helper()
-		body := bytes.NewBufferString(fmt.Sprintf(`{"profile":%q}`, profile))
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/profiles", body)
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		return rec
-	}
-
-	rec := postProfile("platform")
+	handler := New(Options{SettingsService: svc})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewBufferString(`{"organization_name":"  Aster Cloud  "}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -658,191 +584,60 @@ func TestSetupProfileEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Admin(): %v", err)
 	}
-	if got.DefaultProfile != "platform" || len(got.EnabledProfiles) != 1 || got.EnabledProfiles[0] != "platform" || !got.SetupCompleted {
+	if !got.SetupCompleted || got.SiteName != "Aster Cloud" {
 		t.Fatalf("setup not persisted: %+v", got)
 	}
-
-	retry := postProfile("platform")
-	if retry.Code != http.StatusOK {
-		t.Fatalf("same-profile retry status = %d body=%s", retry.Code, retry.Body.String())
-	}
-	var retryResponse struct {
-		Data map[string]json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(retry.Body.Bytes(), &retryResponse); err != nil {
-		t.Fatalf("decode same-profile retry: %v", err)
-	}
-	if _, exposed := retryResponse.Data["invitation_codes"]; exposed {
-		t.Fatalf("same-profile retry exposed admin-only settings: %s", retry.Body.String())
-	}
-
-	conflict := postProfile("enterprise")
-	if conflict.Code != http.StatusBadRequest {
-		t.Fatalf("different-profile retry status = %d, want %d body=%s", conflict.Code, http.StatusBadRequest, conflict.Body.String())
-	}
-	got, err = svc.Admin(context.Background())
-	if err != nil {
-		t.Fatalf("Admin() after conflict: %v", err)
-	}
-	if got.DefaultProfile != "platform" || len(got.EnabledProfiles) != 1 || got.EnabledProfiles[0] != "platform" {
-		t.Fatalf("conflicting retry mutated setup: %+v", got)
-	}
 }
 
-func TestSetupProfileEndpointSerializesConcurrentInstalls(t *testing.T) {
-	for _, test := range []struct {
-		name          string
-		profiles      []string
-		wantSucceeded int
-	}{
-		{name: "same profile retries are idempotent", profiles: []string{"platform", "platform"}, wantSucceeded: 2},
-		{name: "different profiles conflict", profiles: []string{"platform", "enterprise"}, wantSucceeded: 1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			svc := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
-			controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
-			handler := New(Options{
-				SettingsService: svc,
-				ControlService:  controlService,
-				SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
-			})
-			start := make(chan struct{})
-			responses := make(chan *httptest.ResponseRecorder, len(test.profiles))
-			for _, profile := range test.profiles {
-				go func(profile string) {
-					<-start
-					body := bytes.NewBufferString(fmt.Sprintf(`{"profile":%q}`, profile))
-					req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/profiles", body)
-					req.Header.Set("Content-Type", "application/json")
-					rec := httptest.NewRecorder()
-					handler.ServeHTTP(rec, req)
-					responses <- rec
-				}(profile)
-			}
-			close(start)
-
-			succeeded := 0
-			for range test.profiles {
-				rec := <-responses
-				if rec.Code == http.StatusOK {
-					succeeded++
-					continue
-				}
-				if rec.Code != http.StatusBadRequest {
-					t.Fatalf("unexpected status = %d body=%s", rec.Code, rec.Body.String())
-				}
-			}
-			if succeeded != test.wantSucceeded {
-				t.Fatalf("successful requests = %d, want %d", succeeded, test.wantSucceeded)
-			}
-
-			current, err := svc.Admin(context.Background())
-			if err != nil {
-				t.Fatalf("Admin(): %v", err)
-			}
-			if !current.SetupCompleted || len(current.EnabledProfiles) != 1 || current.DefaultProfile != current.EnabledProfiles[0] {
-				t.Fatalf("persisted deployment profile is inconsistent: %+v", current.PublicSettings)
-			}
-			tenants, err := controlService.ListPlatformTenants(context.Background())
-			if err != nil {
-				t.Fatalf("ListPlatformTenants(): %v", err)
-			}
-			if current.DefaultProfile == "platform" && len(tenants) == 0 {
-				t.Fatal("platform installation did not create its bootstrap tenant")
-			}
-			if current.DefaultProfile != "platform" && len(tenants) != 0 {
-				t.Fatalf("losing platform request created bootstrap tenants: %+v", tenants)
-			}
-		})
-	}
-}
-
-type enterpriseFirstSetupRepository struct {
-	*settings.MemoryRepository
-	enterpriseInstalled chan struct{}
-}
-
-func newEnterpriseFirstSetupRepository() *enterpriseFirstSetupRepository {
-	return &enterpriseFirstSetupRepository{
-		MemoryRepository:    settings.NewMemoryRepository(),
-		enterpriseInstalled: make(chan struct{}),
-	}
-}
-
-func (r *enterpriseFirstSetupRepository) InitializeDeploymentProfile(ctx context.Context, profile string) error {
-	if profile == controlplane.ProfileScopePlatform {
-		<-r.enterpriseInstalled
-	}
-	err := r.MemoryRepository.InitializeDeploymentProfile(ctx, profile)
-	if profile == "enterprise" {
-		close(r.enterpriseInstalled)
-	}
-	return err
-}
-
-func TestSetupProfileEndpointDoesNotBootstrapLosingPlatformInstall(t *testing.T) {
-	repo := newEnterpriseFirstSetupRepository()
-	svc := settings.NewService(repo, settings.ServiceOptions{Version: "test", StorageMode: "memory"})
-	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
-	handler := New(Options{
-		SettingsService: svc,
-		ControlService:  controlService,
-		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
-	})
-	type response struct {
-		profile string
-		record  *httptest.ResponseRecorder
-	}
+func TestSetupEndpointSerializesConcurrentRequests(t *testing.T) {
+	svc := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
+	handler := New(Options{SettingsService: svc})
 	start := make(chan struct{})
-	responses := make(chan response, 2)
-	for _, profile := range []string{"platform", "enterprise"} {
-		go func(profile string) {
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for _, organizationName := range []string{"First Organization", "Second Organization"} {
+		go func(name string) {
 			<-start
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/profiles", bytes.NewBufferString(fmt.Sprintf(`{"profile":%q}`, profile)))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewBufferString(fmt.Sprintf(`{"organization_name":%q}`, name)))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
-			responses <- response{profile: profile, record: rec}
-		}(profile)
+			responses <- rec
+		}(organizationName)
 	}
 	close(start)
 
+	succeeded := 0
+	conflicted := 0
 	for range 2 {
-		result := <-responses
-		want := http.StatusBadRequest
-		if result.profile == "enterprise" {
-			want = http.StatusOK
-		}
-		if result.record.Code != want {
-			t.Fatalf("%s status = %d, want %d body=%s", result.profile, result.record.Code, want, result.record.Body.String())
+		rec := <-responses
+		switch rec.Code {
+		case http.StatusOK:
+			succeeded++
+		case http.StatusConflict:
+			conflicted++
+		default:
+			t.Fatalf("unexpected status = %d body=%s", rec.Code, rec.Body.String())
 		}
 	}
-	tenants, err := controlService.ListPlatformTenants(context.Background())
-	if err != nil {
-		t.Fatalf("ListPlatformTenants(): %v", err)
-	}
-	if len(tenants) != 0 {
-		t.Fatalf("losing platform request created bootstrap tenants: %+v", tenants)
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("concurrent setup results: succeeded=%d conflicted=%d", succeeded, conflicted)
 	}
 }
 
-type failingDeploymentProfileRepository struct {
+type failingSetupRepository struct {
 	*settings.MemoryRepository
 }
 
-func (r *failingDeploymentProfileRepository) InitializeDeploymentProfile(context.Context, string) error {
+func (r *failingSetupRepository) CompleteSetup(context.Context, string) error {
 	return errors.New("database secret detail")
 }
 
-func TestSetupProfileEndpointReturnsSanitizedServerErrorWhenPersistenceFails(t *testing.T) {
-	svc := settings.NewService(&failingDeploymentProfileRepository{MemoryRepository: settings.NewMemoryRepository()}, settings.ServiceOptions{
+func TestSetupEndpointReturnsSanitizedServerErrorWhenPersistenceFails(t *testing.T) {
+	svc := settings.NewService(&failingSetupRepository{MemoryRepository: settings.NewMemoryRepository()}, settings.ServiceOptions{
 		Version: "test", StorageMode: "memory",
 	})
-	handler := New(Options{
-		SettingsService: svc,
-		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/profiles", bytes.NewBufferString(`{"profile":"enterprise"}`))
+	handler := New(Options{SettingsService: svc})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewBufferString(`{"organization_name":"Aster Cloud"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -853,29 +648,37 @@ func TestSetupProfileEndpointReturnsSanitizedServerErrorWhenPersistenceFails(t *
 	if bytes.Contains(rec.Body.Bytes(), []byte("database secret detail")) {
 		t.Fatalf("setup response exposed repository error: %s", rec.Body.String())
 	}
-	if !bytes.Contains(rec.Body.Bytes(), []byte("failed to initialize deployment profile")) {
+	if !bytes.Contains(rec.Body.Bytes(), []byte("failed to complete setup")) {
 		t.Fatalf("setup response did not include the public error category: %s", rec.Body.String())
 	}
 }
 
-func TestSetupProfileEndpointRequiresOneValidProfile(t *testing.T) {
+func TestSetupEndpointRejectsInvalidOrganization(t *testing.T) {
 	svc := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
-	handler := New(Options{
-		SettingsService: svc,
-		ControlService:  controlplane.NewService(controlplane.NewMemoryRepository(), "/v1"),
-		SystemService:   system.NewService(system.Config{Version: "test", BuildType: "source"}),
-	})
+	handler := New(Options{SettingsService: svc})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewBufferString(`{"organization_name":"  "}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want %d, response=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
 
-	for _, body := range []string{
-		`{"profiles":["enterprise","platform"],"default_profile":"enterprise"}`,
-		`{"profile":"unsupported"}`,
+func TestRemovedAPIRoutesReturnNotFound(t *testing.T) {
+	handler := newTestHandler(t, RuntimeConfig{})
+	for _, path := range []string{
+		"/api/v1/admin/settings",
+		"/api/v1/operator/dashboard",
+		"/api/v1/customer/billing",
+		"/api/v1/platform/dashboard",
+		"/api/v1/setup/profiles",
 	} {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/profiles", bytes.NewBufferString(body))
-		req.Header.Set("Content-Type", "application/json")
+		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("body=%s status=%d, want %d, response=%s", body, rec.Code, http.StatusBadRequest, rec.Body.String())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("path=%s status=%d, want %d, response=%s", path, rec.Code, http.StatusNotFound, rec.Body.String())
 		}
 	}
 }

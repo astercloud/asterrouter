@@ -270,11 +270,11 @@ func TestConcurrentAliasRegistrationCreatesOneAccount(t *testing.T) {
 
 func TestRegisterWorkspaceUserAppliesDefaults(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1")
-	user, _, err := svc.RegisterWorkspaceUser(context.Background(), "defaults@example.test", "long-password", "Defaults", false, WorkspaceUserDefaults{BalanceMicros: 1200, ConcurrencyLimit: 8, RPMLimit: 90})
+	user, _, err := svc.RegisterWorkspaceUser(context.Background(), "defaults@example.test", "long-password", "Defaults", false, WorkspaceUserDefaults{ConcurrencyLimit: 8, RPMLimit: 90})
 	if err != nil {
 		t.Fatalf("RegisterWorkspaceUser() error = %v", err)
 	}
-	if user.BalanceMicros != 1200 || user.ConcurrencyLimit != 8 || user.RPMLimit != 90 {
+	if user.ConcurrencyLimit != 8 || user.RPMLimit != 90 {
 		t.Fatalf("user defaults not applied: %+v", user)
 	}
 }

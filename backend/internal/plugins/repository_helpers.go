@@ -57,11 +57,9 @@ type officialFeedSyncRunScanner interface {
 
 func scanPlugin(scanner pluginScanner) (Plugin, error) {
 	var plugin Plugin
-	var surfaces string
-	if err := scanner.Scan(&plugin.ID, &plugin.PluginID, &plugin.Name, &plugin.Description, &plugin.Category, &plugin.Type, &plugin.Tier, &plugin.Version, &plugin.Vendor, &plugin.Status, &plugin.EntitlementStatus, &surfaces, &plugin.EntryPoint, &plugin.Configurable, &plugin.CreatedAt, &plugin.UpdatedAt); err != nil {
+	if err := scanner.Scan(&plugin.ID, &plugin.PluginID, &plugin.Name, &plugin.Description, &plugin.Category, &plugin.Type, &plugin.Tier, &plugin.Version, &plugin.Vendor, &plugin.Status, &plugin.EntitlementStatus, &plugin.EntryPoint, &plugin.Configurable, &plugin.CreatedAt, &plugin.UpdatedAt); err != nil {
 		return Plugin{}, err
 	}
-	plugin.Surfaces = parseStringList(surfaces)
 	return plugin, nil
 }
 
@@ -138,14 +136,12 @@ func scanLicenseRecord(scanner licenseRecordScanner) (licenseRecord, error) {
 func scanPluginAPITokenRecord(scanner pluginAPITokenScanner) (pluginAPITokenRecord, error) {
 	var record pluginAPITokenRecord
 	var scopes string
-	var surfaces string
 	var expiresAt sql.NullTime
 	var lastUsedAt sql.NullTime
-	if err := scanner.Scan(&record.ID, &record.Name, &record.PluginID, &record.TokenPrefix, &record.TokenHash, &scopes, &surfaces, &record.Status, &expiresAt, &lastUsedAt, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	if err := scanner.Scan(&record.ID, &record.Name, &record.PluginID, &record.TokenPrefix, &record.TokenHash, &scopes, &record.Status, &expiresAt, &lastUsedAt, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return pluginAPITokenRecord{}, err
 	}
 	record.Scopes = parseStringList(scopes)
-	record.Surfaces = parseStringList(surfaces)
 	if expiresAt.Valid {
 		record.ExpiresAt = &expiresAt.Time
 	}
@@ -228,7 +224,7 @@ func tierRank(tier string) int {
 		return 0
 	case TierFreeCore:
 		return 1
-	case TierProfileBundle:
+	case TierEnterpriseBundle:
 		return 2
 	case TierPaidAddon:
 		return 3

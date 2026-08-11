@@ -442,7 +442,7 @@ func TestGatewayChatCompletionRoutesThroughProviderAccountPool(t *testing.T) {
 		t.Fatalf("trace response metadata not recorded: %+v", trace)
 	}
 
-	traceReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces", nil)
+	traceReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces", nil)
 	traceRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceRec, traceReq)
 	if traceRec.Code != http.StatusOK {

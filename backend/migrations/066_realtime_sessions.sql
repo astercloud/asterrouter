@@ -2,8 +2,7 @@ CREATE TABLE IF NOT EXISTS realtime_sessions (
   id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL UNIQUE REFERENCES ai_operations(id) ON DELETE RESTRICT,
   attempt_id TEXT NOT NULL UNIQUE REFERENCES ai_attempts(id) ON DELETE RESTRICT,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   credential_id TEXT NOT NULL,
   principal_type TEXT NOT NULL DEFAULT '',
   principal_id TEXT NOT NULL DEFAULT '',
@@ -32,8 +31,8 @@ CREATE TABLE IF NOT EXISTS realtime_sessions (
   CHECK (transfer_bytes >= 0 AND usage_version >= 0 AND session_duration_ms >= 0)
 );
 
-CREATE INDEX IF NOT EXISTS realtime_sessions_tenant_created_idx
-  ON realtime_sessions(profile_scope, tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS realtime_sessions_application_created_idx
+  ON realtime_sessions(application_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS realtime_sessions_status_updated_idx
   ON realtime_sessions(status, updated_at);

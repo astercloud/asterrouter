@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -45,7 +44,7 @@ type totpVerificationRequest struct {
 }
 
 var accountPublicErrors = []error{
-	controlplane.ErrDeploymentManagedAccount,
+	controlplane.ErrConfigManagedAccount,
 	controlplane.ErrAccountDisplayNameRequired,
 	controlplane.ErrAccountDisplayNameTooLong,
 	controlplane.ErrAccountAvatarTooLarge,
@@ -387,7 +386,7 @@ func currentAccountProfile(c *gin.Context, opts Options) (accountProfileResponse
 	if opts.AuthService == nil && actor(c) == "local-admin" {
 		isLocalPrincipal = true
 	}
-	if errors.Is(err, controlplane.ErrDeploymentManagedAccount) && isLocalPrincipal {
+	if errors.Is(err, controlplane.ErrConfigManagedAccount) && isLocalPrincipal {
 		profile = controlplane.AccountProfile{
 			ID: actor(c), DisplayName: actor(c), Status: controlplane.WorkspaceUserStatusActive,
 			Role: role(c), PasswordEnabled: true, ManagedByConfig: true,
@@ -456,10 +455,9 @@ func externalDetail(issuer, email string) string {
 }
 
 func currentAuthUser(c *gin.Context, opts Options) gin.H {
-	allowedSurfaces := allowedSurfacesForActor(c.Request.Context(), opts.ControlService, actor(c))
 	data, err := currentAccountProfile(c, opts)
 	if err != nil {
-		return gin.H{"username": actor(c), "role": role(c), "allowed_surfaces": allowedSurfaces}
+		return gin.H{"username": actor(c), "role": role(c)}
 	}
 	username := data.Email
 	if username == "" {
@@ -467,31 +465,6 @@ func currentAuthUser(c *gin.Context, opts Options) gin.H {
 	}
 	return gin.H{
 		"username": username, "role": data.Role, "display_name": data.DisplayName,
-		"email": data.Email, "avatar_data_url": data.AvatarDataURL, "allowed_surfaces": allowedSurfaces,
+		"email": data.Email, "avatar_data_url": data.AvatarDataURL,
 	}
-}
-
-func allowedSurfacesForActor(ctx context.Context, control *controlplane.Service, actor string) []string {
-	if control == nil {
-		return nil
-	}
-	surfaces := []string{
-		controlplane.SurfacePersonal,
-		controlplane.SurfaceRelayOperator,
-		controlplane.SurfaceEnterprise,
-		controlplane.SurfacePlatform,
-		controlplane.SurfacePortal,
-		controlplane.SurfaceCustomer,
-	}
-	allowed := make([]string, 0, len(surfaces))
-	for _, surface := range surfaces {
-		ok, err := control.ActorCanSurface(ctx, actor, surface)
-		if err != nil {
-			return nil
-		}
-		if ok {
-			allowed = append(allowed, surface)
-		}
-	}
-	return allowed
 }

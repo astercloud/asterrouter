@@ -45,7 +45,7 @@ func TestMonitorPricePackageInstallProxyRestartAndFrontend(t *testing.T) {
 	if err := repo.SavePlugin(context.Background(), Plugin{
 		ID: pluginID, PluginID: pluginID, Name: "MonitorPrice 采购比价", Description: "ChatGPT 账号与 API 采购比价",
 		Category: "finops", Type: "remote", Tier: TierFreeCore, Version: version, Vendor: "AsterCloud",
-		Status: StatusEnabled, EntitlementStatus: EntitlementFree, Surfaces: []string{"enterprise", "relay_operator"},
+		Status: StatusEnabled, EntitlementStatus: EntitlementFree,
 		Configurable: true, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -79,9 +79,9 @@ func TestMonitorPricePackageInstallProxyRestartAndFrontend(t *testing.T) {
 	if installation.Status != PackageInstallInstalled {
 		t.Fatalf("installation = %#v", installation)
 	}
-	contribution, err := svc.PluginFrontendContribution(context.Background(), pluginID)
-	if err != nil || !bytes.Contains(contribution, []byte(`"operator.plugins"`)) {
-		t.Fatalf("frontend contribution=%s err=%v", contribution, err)
+	workbench, err := svc.PluginWorkbench(context.Background(), pluginID)
+	if err != nil || !bytes.Contains(workbench, []byte(`"workbench"`)) {
+		t.Fatalf("frontend workbench=%s err=%v", workbench, err)
 	}
 	catalog, err := svc.Catalog(context.Background())
 	if err != nil || len(catalog.Plugins) != 1 || !catalog.Plugins[0].FrontendAvailable {

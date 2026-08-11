@@ -270,7 +270,7 @@ func prometheusBool(value bool) string {
 
 func prometheusCapacityScope(scope string) string {
 	switch strings.TrimSpace(scope) {
-	case "application", "tenant", "provider_account":
+	case "credential", "application", "provider_account":
 		return strings.TrimSpace(scope)
 	default:
 		return "other"
@@ -292,8 +292,8 @@ func prometheusCapacityReason(reason string) string {
 		return "none"
 	case "concurrency_exhausted", "at_capacity":
 		return "concurrency"
-	case "tenant_concurrency_exhausted":
-		return "tenant_concurrency"
+	case "application_concurrency_exhausted":
+		return "application_concurrency"
 	case "qps_exhausted":
 		return "qps"
 	case "rpm_exhausted":

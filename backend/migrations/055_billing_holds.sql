@@ -1,8 +1,7 @@
 CREATE TABLE IF NOT EXISTS billing_holds (
   id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL UNIQUE REFERENCES ai_operations(id) ON DELETE RESTRICT,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   credential_id TEXT NOT NULL,
   credential_source TEXT NOT NULL,
   integration_id TEXT NOT NULL DEFAULT '',
@@ -32,7 +31,7 @@ CREATE TABLE IF NOT EXISTS billing_holds (
 
 CREATE TABLE IF NOT EXISTS billing_hold_pricing_versions (
   hold_id TEXT NOT NULL REFERENCES billing_holds(id) ON DELETE RESTRICT,
-  purpose TEXT NOT NULL CHECK (purpose IN ('usage_cost', 'customer_charge')),
+  purpose TEXT NOT NULL CHECK (purpose = 'usage_cost'),
   pricing_rule_version_id TEXT NOT NULL REFERENCES pricing_rule_versions(id) ON DELETE RESTRICT,
   estimate_evaluation_id TEXT NOT NULL REFERENCES pricing_evaluations(id) ON DELETE RESTRICT,
   settlement_evaluation_id TEXT NOT NULL DEFAULT '',
@@ -40,7 +39,7 @@ CREATE TABLE IF NOT EXISTS billing_hold_pricing_versions (
 );
 
 CREATE INDEX IF NOT EXISTS billing_holds_budget_idx
-  ON billing_holds(profile_scope, tenant_id, credential_id, budget_period_start, status);
+  ON billing_holds(application_id, credential_id, budget_period_start, status);
 
 CREATE INDEX IF NOT EXISTS billing_holds_expiry_idx
   ON billing_holds(status, expires_at);

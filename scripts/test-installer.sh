@@ -97,18 +97,15 @@ export ASTERROUTER_SERVICE_FILE="${SERVICE_FILE}"
 export ASTERROUTER_COMMAND_PATH="${COMMAND_PATH}"
 export ASTERROUTER_RELEASE_BASE_URL=https://release.test
 
-if bash "${ROOT_DIR}/deploy/install.sh" install -v 0.3.0 >"${WORK_DIR}/deployment-role-rejection.log" 2>&1; then
-  echo "Installer accepted a new installation without a deployment role." >&2
-  exit 1
-fi
-grep -q 'deployment role is required' "${WORK_DIR}/deployment-role-rejection.log"
-
-bash "${ROOT_DIR}/deploy/install.sh" install -v 0.3.0 --deployment platform
+bash "${ROOT_DIR}/deploy/install.sh" install -v 0.3.0
 test "$("${INSTALL_DIR}/asterrouter" --version)" = "asterrouter 0.3.0"
 test -f "${INSTALL_DIR}/frontend/dist/index.html"
 test -x "${COMMAND_PATH}"
 test -f "${SERVICE_FILE}"
-grep -q '^ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE=platform$' "${CONFIG_DIR}/asterrouter.env"
+if grep -q 'DEPLOYMENT_ROLE' "${CONFIG_DIR}/asterrouter.env"; then
+  echo "Installer wrote a removed deployment role setting." >&2
+  exit 1
+fi
 
 bash "${ROOT_DIR}/deploy/install.sh" upgrade -v 0.4.0
 test "$("${INSTALL_DIR}/asterrouter" --version)" = "asterrouter 0.4.0"
@@ -141,7 +138,7 @@ fi
   echo 'install_version=0.3.0'
   echo 'upgrade_version=0.4.0'
   echo 'rollback_version=0.3.0'
-  echo 'deployment_role_rejection=passed'
+  echo 'enterprise_only_config=passed'
   echo 'checksum_rejection=passed'
 } >"${REPORT}"
 

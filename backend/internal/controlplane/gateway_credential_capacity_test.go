@@ -60,31 +60,31 @@ func TestCredentialCapacityStoreContract(t *testing.T) {
 				t.Fatalf("reacquire concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
 			}
 
-			tenantFirst := capacityRequest("tenant-credential-a", "lease-tenant-1", now)
-			tenantFirst.TenantID = "tenant-aggregate"
-			tenantFirst.TenantConcurrencyLimit = 1
-			tenantLease, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), tenantFirst)
+			applicationFirst := capacityRequest("application-credential-a", "lease-application-1", now)
+			applicationFirst.ApplicationID = "application-aggregate"
+			applicationFirst.ApplicationConcurrencyLimit = 1
+			applicationLease, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), applicationFirst)
 			if err != nil || !acquired || reason != "" {
-				t.Fatalf("acquire tenant lease=%+v reason=%q acquired=%t err=%v", tenantLease, reason, acquired, err)
+				t.Fatalf("acquire application lease=%+v reason=%q acquired=%t err=%v", applicationLease, reason, acquired, err)
 			}
-			tenantBlocked := capacityRequest("tenant-credential-b", "lease-tenant-2", now)
-			tenantBlocked.TenantID = tenantFirst.TenantID
-			tenantBlocked.TenantConcurrencyLimit = 1
-			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), tenantBlocked); err != nil || acquired || reason != "tenant_concurrency_exhausted" {
-				t.Fatalf("blocked tenant concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
+			applicationBlocked := capacityRequest("application-credential-b", "lease-application-2", now)
+			applicationBlocked.ApplicationID = applicationFirst.ApplicationID
+			applicationBlocked.ApplicationConcurrencyLimit = 1
+			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), applicationBlocked); err != nil || acquired || reason != "application_concurrency_exhausted" {
+				t.Fatalf("blocked application concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
 			}
-			isolatedTenant := tenantBlocked
-			isolatedTenant.LeaseID = "lease-tenant-isolated"
-			isolatedTenant.TenantID = "tenant-capacity-isolated"
-			isolatedLease, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), isolatedTenant)
+			isolatedApplication := applicationBlocked
+			isolatedApplication.LeaseID = "lease-application-isolated"
+			isolatedApplication.ApplicationID = "application-capacity-isolated"
+			isolatedLease, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), isolatedApplication)
 			if err != nil || !acquired || reason != "" {
-				t.Fatalf("isolated tenant lease=%+v reason=%q acquired=%t err=%v", isolatedLease, reason, acquired, err)
+				t.Fatalf("isolated application lease=%+v reason=%q acquired=%t err=%v", isolatedLease, reason, acquired, err)
 			}
-			if err := store.ReleaseCredentialCapacity(context.Background(), tenantLease); err != nil {
-				t.Fatalf("release tenant lease: %v", err)
+			if err := store.ReleaseCredentialCapacity(context.Background(), applicationLease); err != nil {
+				t.Fatalf("release application lease: %v", err)
 			}
-			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), tenantBlocked); err != nil || !acquired || reason != "" {
-				t.Fatalf("reacquire tenant concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
+			if _, reason, acquired, err := store.AcquireCredentialCapacity(context.Background(), applicationBlocked); err != nil || !acquired || reason != "" {
+				t.Fatalf("reacquire application concurrency reason=%q acquired=%t err=%v", reason, acquired, err)
 			}
 			_ = store.ReleaseCredentialCapacity(context.Background(), isolatedLease)
 
@@ -147,7 +147,7 @@ func TestCredentialCapacityStoreContract(t *testing.T) {
 				t.Fatalf("expired reacquire reason=%q acquired=%t err=%v", reason, acquired, err)
 			}
 			if _, found, err := store.ExtendCredentialCapacity(context.Background(), CredentialCapacityLease{
-				ID: "lease-expired-1", ProfileScope: expired.ProfileScope, TenantID: expired.TenantID, CredentialID: expired.CredentialID,
+				ID: "lease-expired-1", ApplicationID: expired.ApplicationID, CredentialID: expired.CredentialID,
 			}, expired.Now, expired.Now.Add(time.Minute)); err != nil || found {
 				t.Fatalf("expired extension found=%t err=%v", found, err)
 			}
@@ -168,7 +168,7 @@ func TestGatewayCredentialPermitReportsLostHeartbeatLease(t *testing.T) {
 	}
 	permit := &GatewayCredentialPermit{state: &gatewayCredentialPermitState{
 		store: store,
-		lease: CredentialCapacityLease{ID: "lease-heartbeat", ProfileScope: "platform", TenantID: "tenant", CredentialID: "credential", ExpiresAt: time.Now().Add(time.Minute)},
+		lease: CredentialCapacityLease{ID: "lease-heartbeat", ApplicationID: "application", CredentialID: "credential", ExpiresAt: time.Now().Add(time.Minute)},
 		lost:  make(chan error, 1),
 	}}
 	permit.state.startHeartbeat(time.Now, 6*time.Millisecond)
@@ -259,7 +259,7 @@ func TestCredentialCapacityDoesNotOversellAcrossConcurrentInstances(t *testing.T
 	}
 }
 
-func TestTenantCapacityDoesNotOversellAcrossCredentialsAndInstances(t *testing.T) {
+func TestApplicationCapacityDoesNotOversellAcrossCredentialsAndInstances(t *testing.T) {
 	tests := []struct {
 		name string
 		open func(*testing.T) (CredentialCapacityStore, CredentialCapacityStore)
@@ -301,8 +301,8 @@ func TestTenantCapacityDoesNotOversellAcrossCredentialsAndInstances(t *testing.T
 					if index%2 == 1 {
 						store = second
 					}
-					request := capacityRequest("application-"+strconv.Itoa(index%8), testutil.UniqueID("tenant-lease"), now)
-					request.TenantConcurrencyLimit = 3
+					request := capacityRequest("application-"+strconv.Itoa(index%8), testutil.UniqueID("application-lease"), now)
+					request.ApplicationConcurrencyLimit = 3
 					lease, reason, ok, err := store.AcquireCredentialCapacity(context.Background(), request)
 					if err != nil {
 						t.Errorf("AcquireCredentialCapacity(): %v", err)
@@ -314,7 +314,7 @@ func TestTenantCapacityDoesNotOversellAcrossCredentialsAndInstances(t *testing.T
 							store CredentialCapacityStore
 							lease CredentialCapacityLease
 						}{store, lease}
-					} else if reason != "tenant_concurrency_exhausted" {
+					} else if reason != "application_concurrency_exhausted" {
 						t.Errorf("capacity reason=%q", reason)
 					}
 				}(index)
@@ -335,7 +335,7 @@ func TestTenantCapacityDoesNotOversellAcrossCredentialsAndInstances(t *testing.T
 
 func capacityRequest(credentialID, leaseID string, now time.Time) CredentialCapacityRequest {
 	return CredentialCapacityRequest{
-		LeaseID: leaseID, ProfileScope: "platform", TenantID: "tenant-capacity", CredentialID: credentialID,
+		LeaseID: leaseID, ApplicationID: "application-capacity", CredentialID: credentialID,
 		Now: now, LeaseUntil: now.Add(time.Minute),
 	}
 }

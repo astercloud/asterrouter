@@ -109,7 +109,7 @@ func TestCreateAPIKeyNormalizesPrincipalAndExtendedPolicy(t *testing.T) {
 		t.Fatalf("CreateAPIKey(): %v", err)
 	}
 	key := created.Record
-	if key.TenantID != gatewayDefaultTenantID || key.PrincipalType != APIKeyTypeService || key.PrincipalReference != key.ID || key.RotationFamilyID == "" {
+	if key.ApplicationID != gatewayDefaultApplicationID || key.PrincipalType != APIKeyTypeService || key.PrincipalReference != key.ID || key.RotationFamilyID == "" {
 		t.Fatalf("principal = %+v", key)
 	}
 	if key.RPMLimit != 30 || key.TPMLimit != 5000 || key.ConcurrencyLimit != 4 || key.MonthlyBudgetMicros != 900 || key.LanePolicy != GatewayLanePolicyDirectAndDurable || key.ArtifactPolicy != GatewayArtifactPolicyManaged {
@@ -231,7 +231,7 @@ func TestAuthorizeCanonicalGatewayRequestAllowsMatchingCIDR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AuthorizeCanonicalGatewayRequest(): %v", err)
 	}
-	if canonical.TenantID != gatewayDefaultTenantID || canonical.PrincipalID != created.Record.ID || len(canonical.AllowedCIDRs) != 1 {
+	if canonical.ApplicationID != gatewayDefaultApplicationID || canonical.PrincipalID != created.Record.ID || len(canonical.AllowedCIDRs) != 1 {
 		t.Fatalf("canonical auth = %+v", canonical)
 	}
 }

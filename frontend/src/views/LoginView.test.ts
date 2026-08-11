@@ -27,7 +27,7 @@ const registerMock = vi.mocked(registerRequest)
 const resetPasswordMock = vi.mocked(resetPasswordRequest)
 const verifyEmailMock = vi.mocked(verifyEmailRequest)
 const currentUserMock = vi.mocked(getCurrentUser)
-const target = defineComponent({ template: '<main><h1>Personal Console</h1></main>' })
+const target = defineComponent({ template: '<main><h1>Enterprise Console</h1></main>' })
 
 describe('LoginView demo entry', () => {
   beforeEach(() => {
@@ -52,8 +52,6 @@ describe('LoginView demo entry', () => {
     const app = useAppStore()
     app.publicSettings = makePublicSettings({
       demo_mode: demoMode,
-      default_profile: 'personal',
-			enabled_profiles: ['personal'],
 			...settingsOverrides
     })
     const router = createRouter({
@@ -65,7 +63,7 @@ describe('LoginView demo entry', () => {
 				{ path: '/resend-verification', component: LoginView },
 				{ path: '/reset-password', component: LoginView },
 				{ path: '/verify-email', component: LoginView },
-        { path: '/console/overview', component: target }
+        { path: '/console/workbench', component: target }
       ]
     })
 		await router.push(path)
@@ -83,7 +81,7 @@ describe('LoginView demo entry', () => {
     await flushPromises()
 
     expect(loginMock).toHaveBeenCalledWith('demo', 'demo', false, '')
-    expect(router.currentRoute.value.fullPath).toBe('/console/overview')
+    expect(router.currentRoute.value.fullPath).toBe('/console/workbench')
     expect(localStorage.getItem('asterrouter_admin_token')).toBe('oidc-cookie')
     wrapper.unmount()
   })
@@ -115,7 +113,7 @@ describe('LoginView demo entry', () => {
 			access_token: 'oidc-cookie',
 			token_type: 'Bearer',
 			expires_at: '2099-01-01T00:00:00Z',
-			user: makeAuthUser({ username: 'external@example.test', role: 'developer', allowed_surfaces: ['personal'] })
+			user: makeAuthUser({ username: 'external@example.test', role: 'developer' })
 		})
 		const { router, wrapper } = await mountLogin(false, '/login?mfa=required')
 
@@ -126,7 +124,7 @@ describe('LoginView demo entry', () => {
 		await flushPromises()
 
 		expect(completeTOTPMock).toHaveBeenCalledWith('', '123456')
-		expect(router.currentRoute.value.fullPath).toBe('/console/overview')
+		expect(router.currentRoute.value.fullPath).toBe('/portal/overview')
 		wrapper.unmount()
 	})
 
@@ -137,14 +135,14 @@ describe('LoginView demo entry', () => {
 		['GitHub', '/login?oauth=github&status=success'],
 		['Google', '/login?oauth=google&status=success']
 		])('restores the HttpOnly cookie session after %s login', async (_provider, callbackPath) => {
-		const user = makeAuthUser({ username: 'external@example.test', role: 'developer', allowed_surfaces: ['personal'] })
+		const user = makeAuthUser({ username: 'external@example.test', role: 'developer' })
 		currentUserMock.mockResolvedValue(user)
 
 		const { router, wrapper } = await mountLogin(false, callbackPath)
 		await flushPromises()
 
 		expect(currentUserMock).toHaveBeenCalledOnce()
-		expect(router.currentRoute.value.fullPath).toBe('/console/overview')
+		expect(router.currentRoute.value.fullPath).toBe('/portal/overview')
 		expect(localStorage.getItem('asterrouter_admin_token')).toBe('oidc-cookie')
 		expect(JSON.parse(localStorage.getItem('asterrouter_admin_user') || '{}')).toEqual(user)
 			wrapper.unmount()

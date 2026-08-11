@@ -21,7 +21,7 @@ func TestRuntimeConfigKeysValid(t *testing.T) { files.ValidateRuntimeConfig(t) }
 
 func TestManagerLoadsStrictServerHierarchy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := "server:\n  http:\n    listen: 127.0.0.1:19090\n  jobs:\n    queue:\n      limits:\n        tenant: 25\n"
+	content := "server:\n  http:\n    listen: 127.0.0.1:19090\n  jobs:\n    queue:\n      limits:\n        application: 25\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestManagerLoadsStrictServerHierarchy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Server.HTTP.Listen != "127.0.0.1:19090" || loaded.Server.Jobs.Queue.Limits.Tenant != 25 {
+	if loaded.Server.HTTP.Listen != "127.0.0.1:19090" || loaded.Server.Jobs.Queue.Limits.Application != 25 {
 		t.Fatalf("unexpected loaded config: %#v", loaded.Server)
 	}
 
@@ -43,14 +43,14 @@ func TestManagerLoadsStrictServerHierarchy(t *testing.T) {
 
 func TestManagerLoadsCanonicalEnvironment(t *testing.T) {
 	t.Setenv("ASTERROUTER_SERVER_HTTP_LISTEN", "127.0.0.1:18081")
-	t.Setenv("ASTERROUTER_SERVER_JOBS_QUEUE_LIMITS_PROFILE", "12")
+	t.Setenv("ASTERROUTER_SERVER_JOBS_QUEUE_LIMITS_ORGANIZATION", "12")
 	t.Setenv("ASTERROUTER_SERVER_ARTIFACTS_S3_PATH_STYLE", "true")
 	t.Setenv("ASTERROUTER_SERVER_OBSERVABILITY_METRICS_TOKEN", "metrics-secret")
 	loaded, err := Manager.Load(t.Context(), cfgm.Env("ASTERROUTER_"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Server.HTTP.Listen != "127.0.0.1:18081" || loaded.Server.Jobs.Queue.Limits.Profile != 12 || !loaded.Server.Artifacts.S3.PathStyle || loaded.Server.Observability.MetricsToken != "metrics-secret" {
+	if loaded.Server.HTTP.Listen != "127.0.0.1:18081" || loaded.Server.Jobs.Queue.Limits.Organization != 12 || !loaded.Server.Artifacts.S3.PathStyle || loaded.Server.Observability.MetricsToken != "metrics-secret" {
 		t.Fatalf("unexpected environment config: %#v", loaded.Server)
 	}
 }

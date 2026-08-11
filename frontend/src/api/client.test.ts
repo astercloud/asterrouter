@@ -17,7 +17,7 @@ function response(config: AxiosRequestConfig, data: unknown, status = 200): Axio
 
 describe('api client', () => {
   beforeEach(() => {
-    window.history.replaceState({}, '', '/admin/dashboard')
+    window.history.replaceState({}, '', '/console/workbench')
     setLocale('en-US')
   })
 
@@ -35,7 +35,7 @@ describe('api client', () => {
       return response(config, { code: 0, message: 'ok', data: { id: 'provider-1' } })
     }
 
-    const result = await apiClient.get('/admin/providers')
+    const result = await apiClient.get('/console/providers')
 
     expect(result.data).toEqual({ id: 'provider-1' })
     expect(captured?.headers?.Authorization).toBe('Bearer test-token')
@@ -43,30 +43,22 @@ describe('api client', () => {
     expect(captured?.headers?.['Accept-Language']).toBe('en-US')
   })
 
-  it.each([
-    ['/console/overview', '/admin/providers', '/console/providers'],
-    ['/operator/overview', '/admin/providers', '/operator/providers'],
-    ['/admin/dashboard', '/admin/providers', '/admin/providers'],
-    ['/platform/overview', '/admin/providers', '/platform/providers'],
-    ['/platform/overview', '/admin/policies', '/platform/policies'],
-    ['/platform/overview', '/admin/audit-logs', '/platform/audit-logs']
-  ])('maps shared admin endpoint %s for the active surface %s', async (browserPath, requestURL, expectedURL) => {
-    window.history.replaceState({}, '', browserPath)
+  it('preserves explicit console endpoint paths', async () => {
     let capturedURL = ''
     apiClient.defaults.adapter = async (config) => {
       capturedURL = String(config.url)
       return response(config, { code: 0, message: 'ok', data: [] })
     }
 
-    await apiClient.get(requestURL)
+    await apiClient.get('/console/providers')
 
-    expect(capturedURL).toBe(expectedURL)
+    expect(capturedURL).toBe('/console/providers')
   })
 
   it('normalizes API errors and identifies not-found responses', async () => {
     apiClient.defaults.adapter = async (config) => response(config, { code: 40401, message: 'not found', data: null }, 404)
 
-    const error = await apiClient.get('/admin/missing').catch((value) => value)
+    const error = await apiClient.get('/console/missing').catch((value) => value)
 
     expect(error).toBeInstanceOf(ApiClientError)
     expect(error).toMatchObject({ status: 404, code: 40401 })

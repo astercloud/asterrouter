@@ -302,8 +302,6 @@ func systemDiagnosticDetails(c *gin.Context, settingsSvc *settings.Service, cont
 	if settingsSvc != nil {
 		if data, err := settingsSvc.Public(c.Request.Context()); err == nil {
 			details["settings"] = map[string]any{
-				"default_profile":     data.DefaultProfile,
-				"enabled_profiles":    data.EnabledProfiles,
 				"default_locale":      data.DefaultLocale,
 				"enabled_locales":     data.EnabledLocales,
 				"service_center_mode": data.ServiceCenterMode,

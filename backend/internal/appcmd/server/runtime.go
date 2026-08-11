@@ -13,7 +13,6 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/buildinfo"
 	"github.com/astercloud/asterrouter/backend/internal/config"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
-	operatorcore "github.com/astercloud/asterrouter/backend/internal/operator"
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	httpserver "github.com/astercloud/asterrouter/backend/internal/server"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
@@ -26,7 +25,6 @@ type runtime struct {
 
 	settingsRepo settings.Repository
 	controlRepo  controlplane.Repository
-	operatorRepo operatorcore.Repository
 	pluginRepo   plugins.Repository
 	exportStore  httpserver.CSVExportJobStore
 
@@ -58,9 +56,6 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 	if rt.controlRepo, _, err = controlplane.NewRepository(ctx, cfg.Storage.DatabaseURL); err != nil {
 		return nil, fmt.Errorf("initialize control plane repository: %w", err)
 	}
-	if rt.operatorRepo, err = operatorcore.NewRepository(ctx, cfg.Storage.DatabaseURL); err != nil {
-		return nil, fmt.Errorf("initialize operator repository: %w", err)
-	}
 	if rt.pluginRepo, _, err = plugins.NewRepository(ctx, cfg.Storage.DatabaseURL); err != nil {
 		return nil, fmt.Errorf("initialize plugin repository: %w", err)
 	}
@@ -68,19 +63,9 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 		return nil, fmt.Errorf("initialize export job store: %w", err)
 	}
 
-	profiles := []string(nil)
-	defaultProfile := ""
-	if cfg.Bootstrap.DeploymentRole != "" {
-		profiles = []string{cfg.Bootstrap.DeploymentRole}
-		defaultProfile = cfg.Bootstrap.DeploymentRole
-	}
 	rt.settingsService = settings.NewService(rt.settingsRepo, settings.ServiceOptions{
-		Version: buildinfo.Version, EnabledProfiles: profiles, DefaultProfile: defaultProfile,
-		StorageMode: rt.storageMode, DemoMode: cfg.Bootstrap.DemoMode, SecretKey: cfg.Security.SecretKey,
+		Version: buildinfo.Version, StorageMode: rt.storageMode, DemoMode: cfg.Bootstrap.DemoMode, SecretKey: cfg.Security.SecretKey,
 	})
-	if err = rt.settingsService.BootstrapProfile(ctx); err != nil {
-		return nil, fmt.Errorf("bootstrap profile: %w", err)
-	}
 	if err = rt.settingsService.MigrateLegacySensitiveSettings(ctx); err != nil {
 		return nil, fmt.Errorf("migrate sensitive settings: %w", err)
 	}
@@ -99,7 +84,7 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 		return nil, err
 	}
 	if err = rt.controlService.SetAIJobAdmissionLimits(controlplane.AIJobAdmissionLimits{
-		Profile: cfg.Jobs.Queue.Limits.Profile, Tenant: cfg.Jobs.Queue.Limits.Tenant, Principal: cfg.Jobs.Queue.Limits.Principal,
+		Organization: cfg.Jobs.Queue.Limits.Organization, Application: cfg.Jobs.Queue.Limits.Application, Principal: cfg.Jobs.Queue.Limits.Principal,
 	}); err != nil {
 		return nil, fmt.Errorf("configure durable AI job admission: %w", err)
 	}
@@ -111,11 +96,6 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 	if err = rt.controlService.EnsureSeedData(ctx); err != nil {
 		return nil, fmt.Errorf("seed control plane repository: %w", err)
 	}
-	if adminSettings.DefaultProfile == controlplane.ProfileScopePlatform {
-		if err = rt.controlService.EnsurePlatformBootstrap(ctx); err != nil {
-			return nil, fmt.Errorf("initialize platform domain: %w", err)
-		}
-	}
 
 	authService := auth.NewService(auth.Config{
 		Username: cfg.Security.Admin.Username, Password: cfg.Security.Admin.Password,
@@ -123,7 +103,7 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 	})
 	localAdminUsername, localAdminPassword := authService.BootstrapIdentity()
 	localAdminDefaults := controlplane.WorkspaceUserDefaults{
-		BalanceMicros: adminSettings.DefaultBalanceMicros, ConcurrencyLimit: adminSettings.DefaultConcurrency, RPMLimit: adminSettings.DefaultRPM,
+		ConcurrencyLimit: adminSettings.DefaultConcurrency, RPMLimit: adminSettings.DefaultRPM,
 	}
 	localAdmin, err := rt.controlService.EnsureLocalAdmin(ctx, localAdminUsername, localAdminPassword, localAdminDefaults)
 	if err != nil {
@@ -131,19 +111,6 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 	}
 	authService.SetPasswordHash(localAdmin.PasswordHash)
 
-	operatorService := operatorcore.NewService(rt.operatorRepo, rt.controlService)
-	rt.controlService.SetCustomerPricingContextResolver(operatorService)
-	rt.controlService.SetTransactionalOutboxPublisher(operatorService)
-	operatorService.SetRiskConfigProvider(func(ctx context.Context) (operatorcore.RiskRuntimeConfig, error) {
-		current, err := rt.settingsService.Admin(ctx)
-		if err != nil {
-			return operatorcore.RiskRuntimeConfig{}, err
-		}
-		return operatorcore.RiskRuntimeConfig{
-			Enabled: current.RiskControlEnabled, AutoBlock: current.CyberSessionBlockEnabled,
-			BlockTimeout: time.Duration(current.CyberSessionBlockTTLSeconds) * time.Second,
-		}, nil
-	})
 	rt.pluginService = plugins.NewServiceWithOptions(rt.pluginRepo, plugins.ServiceOptions{
 		SecretKey: cfg.Security.SecretKey,
 		OfficialCatalog: plugins.OfficialCatalogConfig{
@@ -191,7 +158,7 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 		},
 		AuthService: authService, OIDCService: oidcService, FeishuService: feishuService,
 		GitHubOAuthService: githubOAuthService, GoogleOAuthService: googleOAuthService, DingTalkService: dingTalkService,
-		SettingsService: rt.settingsService, ControlService: rt.controlService, OperatorService: operatorService,
+		SettingsService: rt.settingsService, ControlService: rt.controlService,
 		PluginService: rt.pluginService, SystemService: rt.systemService, ExportJobStore: rt.exportStore,
 		DurableAIJobs: rt.durableJobs, AIJobRuntime: rt.durableJobs,
 	})
@@ -233,7 +200,7 @@ func (rt *runtime) Close(ctx context.Context) error {
 			rt.closeInfrastructure()
 		}
 		for _, closeResource := range []func() error{
-			closeCSVExportStore(rt.exportStore), closePluginRepository(rt.pluginRepo), closeOperatorRepository(rt.operatorRepo),
+			closeCSVExportStore(rt.exportStore), closePluginRepository(rt.pluginRepo),
 			closeControlRepository(rt.controlRepo), closeSettingsRepository(rt.settingsRepo),
 		} {
 			rt.closeErr = errors.Join(rt.closeErr, closeResource())
@@ -255,15 +222,6 @@ func (rt *runtime) startBackground(ctx context.Context) {
 		}, func(operation string, err error) {
 			slog.Error("channel monitor failed", "operation", operation, "error", err)
 		})
-	})
-	rt.launch(func() {
-		rt.controlService.RunCustomerNotificationScheduler(ctx, logBackgroundError("customer notification scheduler"))
-	})
-	rt.launch(func() {
-		rt.controlService.RunPlatformUsageDeliveryScheduler(ctx, logBackgroundError("platform usage delivery scheduler"))
-	})
-	rt.launch(func() {
-		rt.controlService.RunTransactionalOutboxScheduler(ctx, 2*time.Second, 100, logBackgroundError("transactional outbox scheduler"))
 	})
 	rt.launch(func() {
 		rt.controlService.RunArtifactLifecycleScheduler(ctx, 30*time.Second, 100, logBackgroundError("artifact lifecycle scheduler"))
@@ -322,15 +280,6 @@ func closeCSVExportStore(store httpserver.CSVExportJobStore) func() error {
 }
 
 func closePluginRepository(repo plugins.Repository) func() error {
-	return func() error {
-		if repo == nil {
-			return nil
-		}
-		return repo.Close()
-	}
-}
-
-func closeOperatorRepository(repo operatorcore.Repository) func() error {
 	return func() error {
 		if repo == nil {
 			return nil

@@ -38,18 +38,17 @@ type ArtifactSinkObjectStore interface {
 type ArtifactSinkStoreFactory func(context.Context, controlplane.S3ArtifactStoreConfig) (ArtifactSinkObjectStore, error)
 
 type artifactSinkDestinationRecord struct {
-	ID                  string `json:"id"`
-	Name                string `json:"name"`
-	Provider            string `json:"provider"`
-	Endpoint            string `json:"endpoint,omitempty"`
-	Region              string `json:"region"`
-	Bucket              string `json:"bucket"`
-	Prefix              string `json:"prefix,omitempty"`
-	ReferenceBaseURL    string `json:"reference_base_url,omitempty"`
-	AllowedProfileScope string `json:"allowed_profile_scope,omitempty"`
-	AllowedTenantID     string `json:"allowed_tenant_id,omitempty"`
-	PathStyle           bool   `json:"path_style"`
-	Enabled             bool   `json:"enabled"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Provider             string `json:"provider"`
+	Endpoint             string `json:"endpoint,omitempty"`
+	Region               string `json:"region"`
+	Bucket               string `json:"bucket"`
+	Prefix               string `json:"prefix,omitempty"`
+	ReferenceBaseURL     string `json:"reference_base_url,omitempty"`
+	AllowedApplicationID string `json:"allowed_application_id,omitempty"`
+	PathStyle            bool   `json:"path_style"`
+	Enabled              bool   `json:"enabled"`
 }
 
 type s3ArtifactSink struct {
@@ -406,18 +405,17 @@ func normalizeArtifactSinkDestination(sinkID string, request ArtifactSinkDestina
 		ID: strings.TrimSpace(sinkID), Name: strings.TrimSpace(request.Name), Provider: strings.ToLower(strings.TrimSpace(request.Provider)),
 		Endpoint: strings.TrimRight(strings.TrimSpace(request.Endpoint), "/"), Region: strings.TrimSpace(request.Region),
 		Bucket: strings.TrimSpace(request.Bucket), Prefix: strings.Trim(strings.TrimSpace(request.Prefix), "/"),
-		ReferenceBaseURL:    strings.TrimRight(strings.TrimSpace(request.ReferenceBaseURL), "/"),
-		AllowedProfileScope: strings.TrimSpace(request.AllowedProfileScope), AllowedTenantID: strings.TrimSpace(request.AllowedTenantID),
-		PathStyle: request.PathStyle, Enabled: request.Enabled,
+		ReferenceBaseURL:     strings.TrimRight(strings.TrimSpace(request.ReferenceBaseURL), "/"),
+		AllowedApplicationID: strings.TrimSpace(request.AllowedApplicationID),
+		PathStyle:            request.PathStyle, Enabled: request.Enabled,
 	}
 }
 
 func validateArtifactSinkDestination(destination artifactSinkDestinationRecord) error {
 	if !validPluginArtifactSinkID(destination.ID) || destination.Name == "" || len(destination.Name) > 160 || invalidArtifactSinkText(destination.Name) ||
 		!oneOfString(destination.Provider, "s3", "r2", "oss") || destination.Bucket == "" || len(destination.Bucket) > 255 ||
-		destination.Region == "" || invalidArtifactSinkText(destination.Region) || invalidArtifactSinkText(destination.Bucket) || invalidArtifactSinkText(destination.AllowedProfileScope) ||
-		!oneOfString(destination.AllowedProfileScope, "", "personal", "relay_operator", "enterprise", "platform") ||
-		invalidArtifactSinkText(destination.AllowedTenantID) || strings.Contains(destination.Bucket, "/") ||
+		destination.Region == "" || invalidArtifactSinkText(destination.Region) || invalidArtifactSinkText(destination.Bucket) ||
+		invalidArtifactSinkText(destination.AllowedApplicationID) || strings.Contains(destination.Bucket, "/") ||
 		strings.Contains(destination.Prefix, "..") || strings.Contains(destination.Prefix, "\\") || invalidArtifactSinkText(destination.Prefix) {
 		return ErrPluginConfigInvalid
 	}
@@ -511,8 +509,8 @@ func artifactSinkDestinationFromRecord(destination artifactSinkDestinationRecord
 	return ArtifactSinkDestination{
 		ID: destination.ID, Name: destination.Name, Provider: destination.Provider, Endpoint: destination.Endpoint, Region: destination.Region,
 		Bucket: destination.Bucket, Prefix: destination.Prefix, ReferenceBaseURL: destination.ReferenceBaseURL,
-		AllowedProfileScope: destination.AllowedProfileScope, AllowedTenantID: destination.AllowedTenantID,
-		PathStyle: destination.PathStyle, Enabled: destination.Enabled, SecretHints: hints,
+		AllowedApplicationID: destination.AllowedApplicationID,
+		PathStyle:            destination.PathStyle, Enabled: destination.Enabled, SecretHints: hints,
 	}
 }
 
@@ -550,8 +548,7 @@ func oneOfString(value string, allowed ...string) bool {
 func (s *s3ArtifactSink) ID() string { return s.destination.ID }
 
 func (s *s3ArtifactSink) Accepts(owner controlplane.ArtifactOwner) bool {
-	return (s.destination.AllowedProfileScope == "" || owner.ProfileScope == s.destination.AllowedProfileScope) &&
-		(s.destination.AllowedTenantID == "" || owner.TenantID == s.destination.AllowedTenantID)
+	return s.destination.AllowedApplicationID == "" || owner.ApplicationID == s.destination.AllowedApplicationID
 }
 
 func (s *s3ArtifactSink) DeliverArtifact(ctx context.Context, request controlplane.ArtifactSinkRequest, body io.Reader) (controlplane.ArtifactSinkResult, error) {
@@ -577,7 +574,7 @@ func (s *s3ArtifactSink) DeleteArtifact(ctx context.Context, request controlplan
 
 func (s *s3ArtifactSink) objectKey(request controlplane.ArtifactSinkRequest) string {
 	digest := sha256.Sum256([]byte(strings.Join([]string{
-		request.Owner.ProfileScope, request.Owner.TenantID, request.Owner.IntegrationID, request.Owner.PrincipalType,
+		request.Owner.ApplicationID, request.Owner.IntegrationID, request.Owner.PrincipalType,
 		request.Owner.PrincipalID, request.Owner.ExternalSubjectReference,
 	}, "\x00")))
 	return "owners/" + hex.EncodeToString(digest[:16]) + "/" + request.ArtifactID

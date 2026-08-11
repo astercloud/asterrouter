@@ -122,14 +122,15 @@ jobs:
           set -o pipefail
           go test -json -count=1 -run '^TestPostgresBackupRestoreRehearsal$' ./internal/system | tee "${{ runner.temp }}/recovery-test.json"
           grep -Eq '"Action":"pass".*"Test":"TestPostgresBackupRestoreRehearsal"' "${{ runner.temp }}/recovery-test.json"
-      - name: Upgrade v0.17.0 schema fixture with candidate runtime
+      - name: Validate current runtime schema and migration snapshots
         working-directory: backend
         env:
           ASTER_TEST_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_recovery_test?sslmode=disable
         run: |
           set -o pipefail
-          go test -json -count=1 -run '^TestV017SchemaUpgradesWithCandidateRuntime$' ./migrations | tee "${{ runner.temp }}/migration-upgrade-test.json"
-          grep -Eq '"Action":"pass".*"Test":"TestV017SchemaUpgradesWithCandidateRuntime"' "${{ runner.temp }}/migration-upgrade-test.json"
+          go test -json -count=1 -run '^(TestMigrationSnapshotsApplyToRuntimePostgres|TestRuntimeSchemaMatchesMigrationSnapshots)$' ./migrations | tee "${{ runner.temp }}/migration-schema-test.json"
+          grep -Eq '"Action":"pass".*"Test":"TestMigrationSnapshotsApplyToRuntimePostgres"' "${{ runner.temp }}/migration-schema-test.json"
+          grep -Eq '"Action":"pass".*"Test":"TestRuntimeSchemaMatchesMigrationSnapshots"' "${{ runner.temp }}/migration-schema-test.json"
       - name: Upload recovery evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -137,7 +138,7 @@ jobs:
           name: postgres-recovery-evidence
           path: |
             ${{ runner.temp }}/recovery-test.json
-            ${{ runner.temp }}/migration-upgrade-test.json
+            ${{ runner.temp }}/migration-schema-test.json
           if-no-files-found: error
 
   frontend:
@@ -158,6 +159,9 @@ jobs:
       - name: Check workflow pipeline failure propagation
         working-directory: frontend
         run: npm run check:workflow-pipefail
+      - name: Check release browser contract
+        working-directory: frontend
+        run: npm run check:release-browser-contract
       - name: Check Enterprise surface
         working-directory: frontend
         run: npm run check:enterprise-surface

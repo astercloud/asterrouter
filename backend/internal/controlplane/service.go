@@ -42,59 +42,46 @@ var (
 )
 
 type Service struct {
-	repo                              Repository
-	gatewayPath                       string
-	secretKey                         string
-	now                               func() time.Time
-	alertDispatcher                   AlertDispatcher
-	customerNotificationDispatcherMu  sync.RWMutex
-	customerNotificationDispatcher    CustomerNotificationDispatcher
-	customerNotificationDispatchSlots chan struct{}
-	pricingEngine                     *pricing.Engine
-	customerPricingResolver           CustomerPricingContextResolver
-	credentialCapacityStore           CredentialCapacityStore
-	capacityAdmissionObserverMu       sync.RWMutex
-	capacityAdmissionObserver         CapacityAdmissionObserver
-	providerCapacityMu                sync.RWMutex
-	providerCapacityStore             ProviderCapacityStore
-	routingAffinityMu                 sync.RWMutex
-	routingAffinityCoordinator        RoutingAffinityCoordinator
-	aiJobRuntimeMu                    sync.RWMutex
-	aiJobReadyIndex                   AIJobReadyIndex
-	aiJobAdmissionLimits              AIJobAdmissionLimits
-	artifactStoreMu                   sync.RWMutex
-	artifactStores                    map[string]ArtifactStore
-	artifactPrimaryDriver             string
-	artifactSinkMu                    sync.RWMutex
-	artifactSinks                     map[string]ArtifactSink
-	artifactProxyMu                   sync.RWMutex
-	artifactProxies                   map[string]ArtifactProxy
-	outboxPublisherMu                 sync.RWMutex
-	outboxPublisher                   TransactionalOutboxPublisher
-	rateMu                            sync.Mutex
-	rateWindows                       map[string][]time.Time
-	jwksMu                            sync.Mutex
-	externalAuthJWKSFetcher           externalAuthJWKSFetcher
-	externalAuthJWKSCache             map[string]externalAuthJWKSCacheEntry
-	platformUsageHTTPClient           *http.Client
-	providerCacheProbeHTTPClient      *http.Client
-	providerBillingHTTPClient         *http.Client
-	providerBillingAdapters           *ProviderBillingAdapterRegistry
-	slotMu                            sync.Mutex
-	accountSlots                      map[string]int
-	scheduler                         *gatewayScheduler
-}
-
-func (s *Service) SetCustomerPricingContextResolver(resolver CustomerPricingContextResolver) {
-	s.customerPricingResolver = resolver
+	repo                         Repository
+	gatewayPath                  string
+	secretKey                    string
+	now                          func() time.Time
+	alertDispatcher              AlertDispatcher
+	pricingEngine                *pricing.Engine
+	credentialCapacityStore      CredentialCapacityStore
+	capacityAdmissionObserverMu  sync.RWMutex
+	capacityAdmissionObserver    CapacityAdmissionObserver
+	providerCapacityMu           sync.RWMutex
+	providerCapacityStore        ProviderCapacityStore
+	routingAffinityMu            sync.RWMutex
+	routingAffinityCoordinator   RoutingAffinityCoordinator
+	aiJobRuntimeMu               sync.RWMutex
+	aiJobReadyIndex              AIJobReadyIndex
+	aiJobAdmissionLimits         AIJobAdmissionLimits
+	artifactStoreMu              sync.RWMutex
+	artifactStores               map[string]ArtifactStore
+	artifactPrimaryDriver        string
+	artifactSinkMu               sync.RWMutex
+	artifactSinks                map[string]ArtifactSink
+	artifactProxyMu              sync.RWMutex
+	artifactProxies              map[string]ArtifactProxy
+	outboxPublisherMu            sync.RWMutex
+	outboxPublisher              TransactionalOutboxPublisher
+	rateMu                       sync.Mutex
+	rateWindows                  map[string][]time.Time
+	jwksMu                       sync.Mutex
+	externalAuthJWKSFetcher      externalAuthJWKSFetcher
+	externalAuthJWKSCache        map[string]externalAuthJWKSCacheEntry
+	providerCacheProbeHTTPClient *http.Client
+	providerBillingHTTPClient    *http.Client
+	providerBillingAdapters      *ProviderBillingAdapterRegistry
+	slotMu                       sync.Mutex
+	accountSlots                 map[string]int
+	scheduler                    *gatewayScheduler
 }
 
 type AlertDispatcher interface {
 	DispatchAlert(ctx context.Context, event AlertEvent) error
-}
-
-type CustomerNotificationDispatcher interface {
-	DispatchCustomerNotification(ctx context.Context, user WorkspaceUser, notification CustomerNotification) error
 }
 
 func NewService(repo Repository, gatewayPath string, secretKey ...string) *Service {
@@ -110,9 +97,7 @@ func NewService(repo Repository, gatewayPath string, secretKey ...string) *Servi
 	if persistentProviderCapacityStore, ok := repo.(ProviderCapacityStore); ok {
 		providerCapacityStore = persistentProviderCapacityStore
 	}
-	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, now: time.Now, pricingEngine: pricing.NewEngine(), rateWindows: map[string][]time.Time{}, credentialCapacityStore: capacityStore, customerNotificationDispatchSlots: make(chan struct{}, customerNotificationEmailDispatchLimit), externalAuthJWKSFetcher: fetchExternalAuthJWKS, externalAuthJWKSCache: map[string]externalAuthJWKSCacheEntry{}, platformUsageHTTPClient: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return errors.New("platform usage sink redirects are not allowed")
-	}}, providerCacheProbeHTTPClient: &http.Client{Timeout: providerProbeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
+	return &Service{repo: repo, gatewayPath: gatewayPath, secretKey: key, now: time.Now, pricingEngine: pricing.NewEngine(), rateWindows: map[string][]time.Time{}, credentialCapacityStore: capacityStore, externalAuthJWKSFetcher: fetchExternalAuthJWKS, externalAuthJWKSCache: map[string]externalAuthJWKSCacheEntry{}, providerCacheProbeHTTPClient: &http.Client{Timeout: providerProbeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider cache probe redirects are not allowed")
 	}}, providerBillingHTTPClient: &http.Client{Timeout: providerBillingRequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("provider billing redirects are not allowed")
@@ -174,18 +159,6 @@ func (s *Service) SetAlertDispatcher(dispatcher AlertDispatcher) {
 	s.alertDispatcher = dispatcher
 }
 
-func (s *Service) SetCustomerNotificationDispatcher(dispatcher CustomerNotificationDispatcher) {
-	s.customerNotificationDispatcherMu.Lock()
-	defer s.customerNotificationDispatcherMu.Unlock()
-	s.customerNotificationDispatcher = dispatcher
-}
-
-func (s *Service) customerNotificationDispatcherValue() CustomerNotificationDispatcher {
-	s.customerNotificationDispatcherMu.RLock()
-	defer s.customerNotificationDispatcherMu.RUnlock()
-	return s.customerNotificationDispatcher
-}
-
 func (s *Service) SetRoutingAffinityCoordinator(coordinator RoutingAffinityCoordinator) {
 	if s == nil {
 		return
@@ -205,6 +178,9 @@ func (s *Service) routingAffinityCoordinatorValue() RoutingAffinityCoordinator {
 }
 
 func (s *Service) EnsureSeedData(ctx context.Context) error {
+	if err := s.EnsureApplicationBootstrap(ctx); err != nil {
+		return err
+	}
 	providers, err := s.repo.ListProviders(ctx)
 	if err != nil {
 		return err
@@ -273,7 +249,7 @@ func (s *Service) PlatformDashboard(ctx context.Context) (Dashboard, error) {
 	if err != nil {
 		return Dashboard{}, err
 	}
-	audit, err := s.repo.QueryAuditLogs(ctx, AuditLogQuery{Limit: 8, ProfileScope: ProfileScopePlatform})
+	audit, err := s.repo.QueryAuditLogs(ctx, AuditLogQuery{Limit: 8})
 	if err != nil {
 		return Dashboard{}, err
 	}
@@ -284,7 +260,7 @@ func (s *Service) PlatformDashboard(ctx context.Context) (Dashboard, error) {
 		}
 	}
 	for _, key := range presentAPIKeys(keys, s.nowUTC()) {
-		if key.ProfileScope == ProfileScopePlatform {
+		if isApplicationAPIKey(key) {
 			if key.LifecycleStatus == APIKeyLifecycleActive {
 				activeKeys++
 			}
@@ -307,7 +283,7 @@ func (s *Service) PlatformDashboard(ctx context.Context) (Dashboard, error) {
 func countPlatformKeys(keys []APIKeyRecord) int {
 	count := 0
 	for _, key := range keys {
-		if key.ProfileScope == ProfileScopePlatform {
+		if isApplicationAPIKey(key) {
 			count++
 		}
 	}
@@ -766,23 +742,23 @@ func (s *Service) ListAPIKeys(ctx context.Context) ([]APIKeyRecord, error) {
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, actor string, req APIKeyCreateRequest) (APIKeyCreateResponse, error) {
-	if strings.TrimSpace(req.PlatformTenantID) != "" || strings.TrimSpace(req.GatewayPrincipalID) != "" {
-		return APIKeyCreateResponse{}, errors.New("platform API keys must be created through the platform control plane")
+	if strings.TrimSpace(req.ApplicationID) != "" || strings.TrimSpace(req.GatewayPrincipalID) != "" {
+		return APIKeyCreateResponse{}, errors.New("application API keys must be created through the application management API")
 	}
 	return s.createAPIKey(ctx, actor, req, nil)
 }
 
-func (s *Service) createAPIKey(ctx context.Context, actor string, req APIKeyCreateRequest, platformIdentity *platformCredentialIdentity) (APIKeyCreateResponse, error) {
+func (s *Service) createAPIKey(ctx context.Context, actor string, req APIKeyCreateRequest, applicationIdentity *applicationCredentialIdentity) (APIKeyCreateResponse, error) {
 	rawKey := "ar_" + randomToken(32)
-	record, err := s.buildAPIKeyRecord(ctx, req, platformIdentity, "key_"+randomID(10), rawKey, "", s.nowUTC())
+	record, err := s.buildAPIKeyRecord(ctx, req, applicationIdentity, "key_"+randomID(10), rawKey, "", s.nowUTC())
 	if err != nil {
 		return APIKeyCreateResponse{}, err
 	}
 	if err := s.repo.SaveAPIKey(ctx, record); err != nil {
 		return APIKeyCreateResponse{}, err
 	}
-	if platformIdentity != nil {
-		if err := s.auditPlatform(ctx, actor, "create", "api_key", record.ID, fmt.Sprintf("Created platform API key %s", record.Name), &platformIdentity.tenant, &platformIdentity.principal); err != nil {
+	if applicationIdentity != nil {
+		if err := s.auditApplication(ctx, actor, "create", "api_key", record.ID, fmt.Sprintf("Created application API key %s", record.Name), &applicationIdentity.application, &applicationIdentity.principal); err != nil {
 			return APIKeyCreateResponse{}, err
 		}
 		return APIKeyCreateResponse{Record: record, Key: rawKey}, nil
@@ -793,7 +769,7 @@ func (s *Service) createAPIKey(ctx context.Context, actor string, req APIKeyCrea
 	return APIKeyCreateResponse{Record: record, Key: rawKey}, nil
 }
 
-func (s *Service) buildAPIKeyRecord(ctx context.Context, req APIKeyCreateRequest, platformIdentity *platformCredentialIdentity, id, rawKey, rotationFamilyID string, now time.Time) (APIKeyRecord, error) {
+func (s *Service) buildAPIKeyRecord(ctx context.Context, req APIKeyCreateRequest, applicationIdentity *applicationCredentialIdentity, id, rawKey, rotationFamilyID string, now time.Time) (APIKeyRecord, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return APIKeyRecord{}, errors.New("name is required")
@@ -813,7 +789,7 @@ func (s *Service) buildAPIKeyRecord(ctx context.Context, req APIKeyCreateRequest
 	if err != nil {
 		return APIKeyRecord{}, err
 	}
-	keyType, customerID, ownerUserID, err := normalizeAPIKeyOwnership(req.KeyType, req.CustomerID, req.OwnerUserID)
+	keyType, ownerUserID, err := normalizeAPIKeyOwnership(req.KeyType, req.OwnerUserID)
 	if err != nil {
 		return APIKeyRecord{}, err
 	}
@@ -834,7 +810,6 @@ func (s *Service) buildAPIKeyRecord(ctx context.Context, req APIKeyCreateRequest
 		Prefix:         prefix(rawKey, 10),
 		Status:         APIKeyStatusActive,
 		KeyType:        keyType,
-		CustomerID:     customerID,
 		OwnerUserID:    ownerUserID,
 		PolicyID:       strings.TrimSpace(req.PolicyID),
 		ModelAllowlist: models,
@@ -845,7 +820,7 @@ func (s *Service) buildAPIKeyRecord(ctx context.Context, req APIKeyCreateRequest
 	record.LifecycleStatus = APIKeyLifecycleActive
 	record.RotationFamilyID = strings.TrimSpace(rotationFamilyID)
 	applyAPIKeyPolicy(&record, keyPolicy)
-	applyAPIKeyPrincipal(&record, platformIdentity)
+	applyAPIKeyPrincipal(&record, applicationIdentity)
 	return record, nil
 }
 
@@ -854,11 +829,11 @@ func (s *Service) UpdateAPIKey(ctx context.Context, actor string, id string, req
 	if err != nil {
 		return APIKeyRecord{}, err
 	}
-	if key.ProfileScope == ProfileScopePlatform {
-		return APIKeyRecord{}, errors.New("platform API keys must be updated through the platform control plane")
+	if isApplicationAPIKey(key) {
+		return APIKeyRecord{}, errors.New("application API keys must be updated through the application management API")
 	}
-	if strings.TrimSpace(req.PlatformTenantID) != "" || strings.TrimSpace(req.GatewayPrincipalID) != "" {
-		return APIKeyRecord{}, errors.New("platform API key ownership is immutable")
+	if strings.TrimSpace(req.ApplicationID) != "" || strings.TrimSpace(req.GatewayPrincipalID) != "" {
+		return APIKeyRecord{}, errors.New("application API key ownership is immutable")
 	}
 	return s.updateAPIKey(ctx, actor, key, req)
 }
@@ -894,15 +869,11 @@ func (s *Service) updateAPIKey(ctx context.Context, actor string, key APIKeyReco
 	if strings.TrimSpace(keyType) == "" {
 		keyType = key.KeyType
 	}
-	customerID := req.CustomerID
-	if strings.TrimSpace(customerID) == "" && keyType == APIKeyTypeCustomer {
-		customerID = key.CustomerID
-	}
 	ownerUserID := req.OwnerUserID
 	if strings.TrimSpace(ownerUserID) == "" && keyType == APIKeyTypeUser {
 		ownerUserID = key.OwnerUserID
 	}
-	keyType, customerID, ownerUserID, err = normalizeAPIKeyOwnership(keyType, customerID, ownerUserID)
+	keyType, ownerUserID, err = normalizeAPIKeyOwnership(keyType, ownerUserID)
 	if err != nil {
 		return APIKeyRecord{}, err
 	}
@@ -915,24 +886,23 @@ func (s *Service) updateAPIKey(ctx context.Context, actor string, key APIKeyReco
 	key.ExpiresAt = expiresAt
 	key.Status = status
 	key.KeyType = keyType
-	key.CustomerID = customerID
 	key.OwnerUserID = ownerUserID
 	applyAPIKeyPolicy(&key, keyPolicy)
-	var platformIdentity *platformCredentialIdentity
-	if key.ProfileScope == ProfileScopePlatform {
-		identity, identityErr := s.activePlatformCredentialIdentity(ctx, key.PlatformTenantID, key.GatewayPrincipalID)
+	var applicationIdentity *applicationCredentialIdentity
+	if isApplicationAPIKey(key) {
+		identity, identityErr := s.activeApplicationCredentialIdentity(ctx, key.ApplicationID, key.GatewayPrincipalID)
 		if identityErr != nil {
 			return APIKeyRecord{}, identityErr
 		}
-		platformIdentity = &identity
+		applicationIdentity = &identity
 	}
-	applyAPIKeyPrincipal(&key, platformIdentity)
+	applyAPIKeyPrincipal(&key, applicationIdentity)
 	key.UpdatedAt = time.Now().UTC()
 	if err := s.repo.SaveAPIKey(ctx, key); err != nil {
 		return APIKeyRecord{}, err
 	}
-	if platformIdentity != nil {
-		if err := s.auditPlatform(ctx, actor, "update", "api_key", key.ID, fmt.Sprintf("Updated platform API key %s policy", key.Name), &platformIdentity.tenant, &platformIdentity.principal); err != nil {
+	if applicationIdentity != nil {
+		if err := s.auditApplication(ctx, actor, "update", "api_key", key.ID, fmt.Sprintf("Updated application API key %s policy", key.Name), &applicationIdentity.application, &applicationIdentity.principal); err != nil {
 			return APIKeyRecord{}, err
 		}
 		return key, nil
@@ -943,29 +913,22 @@ func (s *Service) updateAPIKey(ctx context.Context, actor string, key APIKeyReco
 	return key, nil
 }
 
-func normalizeAPIKeyOwnership(keyType string, customerID string, ownerUserID string) (string, string, string, error) {
+func normalizeAPIKeyOwnership(keyType string, ownerUserID string) (string, string, error) {
 	keyType = strings.TrimSpace(keyType)
 	if keyType == "" {
 		keyType = APIKeyTypeWorkspace
 	}
-	if !oneOf(keyType, APIKeyTypeWorkspace, APIKeyTypeUser, APIKeyTypeCustomer, APIKeyTypeService) {
-		return "", "", "", errors.New("key_type must be workspace, user, customer, or service")
-	}
-	customerID = strings.TrimSpace(customerID)
-	if keyType == APIKeyTypeCustomer && customerID == "" {
-		return "", "", "", errors.New("customer_id is required for customer keys")
-	}
-	if keyType != APIKeyTypeCustomer {
-		customerID = ""
+	if !oneOf(keyType, APIKeyTypeWorkspace, APIKeyTypeUser, APIKeyTypeService) {
+		return "", "", errors.New("key_type must be workspace, user, or service")
 	}
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	if keyType == APIKeyTypeUser && ownerUserID == "" {
-		return "", "", "", errors.New("owner_user_id is required for user keys")
+		return "", "", errors.New("owner_user_id is required for user keys")
 	}
 	if keyType != APIKeyTypeUser {
 		ownerUserID = ""
 	}
-	return keyType, customerID, ownerUserID, nil
+	return keyType, ownerUserID, nil
 }
 
 func (s *Service) validateAPIKeyOwner(ctx context.Context, keyType string, ownerUserID string) error {
@@ -994,13 +957,13 @@ func (s *Service) RotateAPIKeyWithGrace(ctx context.Context, actor string, id st
 	if err != nil {
 		return APIKeyCreateResponse{}, err
 	}
-	if key.ProfileScope == ProfileScopePlatform {
-		return APIKeyCreateResponse{}, errors.New("platform API keys must be rotated through the platform control plane")
+	if isApplicationAPIKey(key) {
+		return APIKeyCreateResponse{}, errors.New("application API keys must be rotated through the application management API")
 	}
 	return s.rotateAPIKey(ctx, actor, key, nil, time.Duration(gracePeriodSeconds)*time.Second)
 }
 
-func (s *Service) rotateAPIKey(ctx context.Context, actor string, key APIKeyRecord, platformIdentity *platformCredentialIdentity, gracePeriod time.Duration) (APIKeyCreateResponse, error) {
+func (s *Service) rotateAPIKey(ctx context.Context, actor string, key APIKeyRecord, applicationIdentity *applicationCredentialIdentity, gracePeriod time.Duration) (APIKeyCreateResponse, error) {
 	if key.ReplacedByKeyID != "" {
 		return APIKeyCreateResponse{}, ErrAPIKeyAlreadyRotated
 	}
@@ -1032,8 +995,8 @@ func (s *Service) rotateAPIKey(ctx context.Context, actor string, key APIKeyReco
 		key.Status = APIKeyStatusDisabled
 	}
 	audit := s.newAuditLog(actor, "rotate", "api_key", replacement.ID, fmt.Sprintf("Rotated API key %s from %s", replacement.Name, key.ID))
-	if platformIdentity != nil {
-		audit = s.newPlatformAuditLog(actor, "rotate", "api_key", replacement.ID, fmt.Sprintf("Rotated platform API key %s from %s", replacement.Name, key.ID), &platformIdentity.tenant, &platformIdentity.principal)
+	if applicationIdentity != nil {
+		audit = s.newApplicationAuditLog(actor, "rotate", "api_key", replacement.ID, fmt.Sprintf("Rotated application API key %s from %s", replacement.Name, key.ID), &applicationIdentity.application, &applicationIdentity.principal)
 	}
 	if err := s.repo.RotateAPIKeyPair(ctx, key, replacement, audit, expectedUpdatedAt); err != nil {
 		return APIKeyCreateResponse{}, err
@@ -1070,8 +1033,8 @@ func (s *Service) DisableAPIKey(ctx context.Context, actor string, id string) er
 	if err != nil {
 		return err
 	}
-	if key.ProfileScope == ProfileScopePlatform {
-		return errors.New("platform API keys must be disabled through the platform control plane")
+	if isApplicationAPIKey(key) {
+		return errors.New("application API keys must be disabled through the application management API")
 	}
 	if err := s.repo.DisableAPIKey(ctx, id, time.Now().UTC()); err != nil {
 		return err
@@ -1114,14 +1077,14 @@ func (s *Service) authenticateGatewayKey(ctx context.Context, rawKey string, rec
 	if key.ReplacedByKeyID != "" && (key.RotationGraceExpiresAt == nil || !now.Before(*key.RotationGraceExpiresAt)) {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
-	var platformTenant *PlatformTenant
+	var application *Application
 	var gatewayPrincipal *GatewayPrincipal
-	if key.ProfileScope == ProfileScopePlatform {
-		identity, identityErr := s.activePlatformCredentialIdentity(ctx, key.PlatformTenantID, key.GatewayPrincipalID)
+	if isApplicationAPIKey(key) {
+		identity, identityErr := s.activeApplicationCredentialIdentity(ctx, key.ApplicationID, key.GatewayPrincipalID)
 		if identityErr != nil {
 			return GatewayAuthContext{}, ErrGatewayUnauthorized
 		}
-		platformTenant = &identity.tenant
+		application = &identity.application
 		gatewayPrincipal = &identity.principal
 	}
 	if recordLastUsed {
@@ -1135,7 +1098,7 @@ func (s *Service) authenticateGatewayKey(ctx context.Context, rawKey string, rec
 	if err != nil {
 		return GatewayAuthContext{}, err
 	}
-	return GatewayAuthContext{APIKey: key, Policy: policy, PolicySource: policySource, PlatformTenant: platformTenant, GatewayPrincipal: gatewayPrincipal}, nil
+	return GatewayAuthContext{APIKey: key, Policy: policy, PolicySource: policySource, Application: application, GatewayPrincipal: gatewayPrincipal}, nil
 }
 
 func (s *Service) AuthorizeGatewayModel(ctx context.Context, rawKey string, model string) (GatewayAuthContext, error) {
@@ -1413,7 +1376,6 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 		UsageSource:               strings.TrimSpace(in.UsageSource),
 		RequestFingerprint:        strings.TrimSpace(in.RequestFingerprint),
 		APIKeyID:                  auth.APIKey.ID,
-		CustomerID:                auth.APIKey.CustomerID,
 		APIFingerprint:            auth.APIKey.Fingerprint,
 		Model:                     strings.TrimSpace(in.Model),
 		UpstreamModel:             strings.TrimSpace(in.UpstreamModel),
@@ -1460,15 +1422,8 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 		}
 		record = settlement.Record
 	}
-	events, err := s.platformUsageDeliveryEventsForRecord(ctx, record)
-	if err != nil {
-		return err
-	}
 	if record.OperationID != "" {
-		settlement.PlatformEvents = events
 		applied, err = s.repo.ApplyUsageSettlement(ctx, settlement)
-	} else if len(events) > 0 {
-		err = s.repo.SaveUsageRecordAndEnqueuePlatformUsage(ctx, record, events)
 	} else {
 		err = s.repo.SaveUsageRecord(ctx, record)
 	}
@@ -1478,7 +1433,6 @@ func (s *Service) RecordGatewayUsage(ctx context.Context, auth GatewayAuthContex
 	if !applied {
 		return nil
 	}
-	_ = s.syncCustomerUsageNotifications(ctx, auth, record)
 	if auth.effectiveMonthlyTokenLimit() > 0 && (in.InputTokens > 0 || in.OutputTokens > 0) {
 		_ = s.syncAPIKeyQuotaAlertForAuth(ctx, auth, record.CreatedAt)
 	}
@@ -1534,12 +1488,11 @@ func (s *Service) RecordGatewayTrace(ctx context.Context, auth GatewayAuthContex
 }
 
 func applyGatewayPlatformSnapshotToAudit(event *AuditLog, auth GatewayAuthContext) {
-	if event == nil || auth.APIKey.ProfileScope != ProfileScopePlatform || auth.PlatformTenant == nil || auth.GatewayPrincipal == nil {
+	if event == nil || auth.Application == nil || auth.GatewayPrincipal == nil {
 		return
 	}
-	event.ProfileScope = ProfileScopePlatform
-	event.PlatformTenantID = auth.PlatformTenant.ID
-	event.PlatformTenantName = auth.PlatformTenant.Name
+	event.ApplicationID = auth.Application.ID
+	event.ApplicationName = auth.Application.Name
 	event.GatewayPrincipalID = auth.GatewayPrincipal.ID
 	event.GatewayPrincipalName = auth.GatewayPrincipal.Name
 	if auth.ExternalAuthIntegration != nil {
@@ -1549,12 +1502,11 @@ func applyGatewayPlatformSnapshotToAudit(event *AuditLog, auth GatewayAuthContex
 }
 
 func applyGatewayPlatformSnapshotToUsage(record *UsageRecord, auth GatewayAuthContext) {
-	if record == nil || auth.APIKey.ProfileScope != ProfileScopePlatform || auth.PlatformTenant == nil || auth.GatewayPrincipal == nil {
+	if record == nil || auth.Application == nil || auth.GatewayPrincipal == nil {
 		return
 	}
-	record.ProfileScope = ProfileScopePlatform
-	record.PlatformTenantID = auth.PlatformTenant.ID
-	record.PlatformTenantName = auth.PlatformTenant.Name
+	record.ApplicationID = auth.Application.ID
+	record.ApplicationName = auth.Application.Name
 	record.GatewayPrincipalID = auth.GatewayPrincipal.ID
 	record.GatewayPrincipalName = auth.GatewayPrincipal.Name
 	if auth.ExternalAuthIntegration != nil {
@@ -1564,12 +1516,11 @@ func applyGatewayPlatformSnapshotToUsage(record *UsageRecord, auth GatewayAuthCo
 }
 
 func applyGatewayPlatformSnapshotToTrace(trace *GatewayTrace, auth GatewayAuthContext) {
-	if trace == nil || auth.APIKey.ProfileScope != ProfileScopePlatform || auth.PlatformTenant == nil || auth.GatewayPrincipal == nil {
+	if trace == nil || auth.Application == nil || auth.GatewayPrincipal == nil {
 		return
 	}
-	trace.ProfileScope = ProfileScopePlatform
-	trace.PlatformTenantID = auth.PlatformTenant.ID
-	trace.PlatformTenantName = auth.PlatformTenant.Name
+	trace.ApplicationID = auth.Application.ID
+	trace.ApplicationName = auth.Application.Name
 	trace.GatewayPrincipalID = auth.GatewayPrincipal.ID
 	trace.GatewayPrincipalName = auth.GatewayPrincipal.Name
 	if auth.ExternalAuthIntegration != nil {
@@ -2053,14 +2004,11 @@ func (s *Service) newAuditLog(actor, action, resourceType, resourceID, summary s
 	}
 }
 
-func scopeAuditLog(audit AuditLog, profileScope, tenantID, principalID, integrationID, externalSubjectReference string) AuditLog {
-	audit.ProfileScope = strings.TrimSpace(profileScope)
-	if audit.ProfileScope == ProfileScopePlatform {
-		audit.PlatformTenantID = strings.TrimSpace(tenantID)
-		audit.GatewayPrincipalID = strings.TrimSpace(principalID)
-		audit.ExternalAuthIntegrationID = strings.TrimSpace(integrationID)
-		audit.ExternalSubjectReference = strings.TrimSpace(externalSubjectReference)
-	}
+func applicationAuditLog(audit AuditLog, applicationID, principalID, integrationID, externalSubjectReference string) AuditLog {
+	audit.ApplicationID = strings.TrimSpace(applicationID)
+	audit.GatewayPrincipalID = strings.TrimSpace(principalID)
+	audit.ExternalAuthIntegrationID = strings.TrimSpace(integrationID)
+	audit.ExternalSubjectReference = strings.TrimSpace(externalSubjectReference)
 	return audit
 }
 

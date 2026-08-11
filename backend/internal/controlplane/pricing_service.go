@@ -199,9 +199,6 @@ func (s *Service) PublishPricingRule(ctx context.Context, actor, ruleID string, 
 	if request.ExpectedLockVersion != detail.Rule.LockVersion {
 		return PricingRuleDetail{}, ErrPricingCASConflict
 	}
-	if detail.Rule.Purpose == PricingPurposeCustomerCharge && !request.AcknowledgeImpact {
-		return PricingRuleDetail{}, errors.New("customer charge impact acknowledgement is required")
-	}
 	version, found, err := s.repo.FindPricingRuleVersion(ctx, request.DraftVersionID)
 	if err != nil {
 		return PricingRuleDetail{}, err
@@ -261,7 +258,7 @@ func (s *Service) DisablePricingRule(ctx context.Context, actor, ruleID string, 
 	return nil
 }
 
-func (s *Service) SelectPricingRule(ctx context.Context, purpose, planID, model string) (PricingSelection, bool, error) {
+func (s *Service) SelectPricingRule(ctx context.Context, model string) (PricingSelection, bool, error) {
 	rules, err := s.repo.ListPricingRules(ctx)
 	if err != nil {
 		return PricingSelection{}, false, err
@@ -270,13 +267,10 @@ func (s *Service) SelectPricingRule(ctx context.Context, purpose, planID, model 
 	best := -1
 	for index := range rules {
 		rule := &rules[index]
-		if rule.Status != PricingRuleStatusActive || rule.Purpose != purpose || (rule.ScopeType == PricingScopeOperatorPlan && rule.ScopeID != planID) || (rule.ScopeType == PricingScopeGlobal && rule.ScopeID != "") || (rule.Model != model && rule.Model != "*") {
+		if rule.Status != PricingRuleStatusActive || rule.Purpose != PricingPurposeUsageCost || rule.ScopeType != PricingScopeGlobal || rule.ScopeID != "" || (rule.Model != model && rule.Model != "*") {
 			continue
 		}
 		score := 0
-		if purpose == PricingPurposeCustomerCharge && rule.ScopeType == PricingScopeOperatorPlan {
-			score += 2
-		}
 		if rule.Model == model {
 			score++
 		}
@@ -302,7 +296,7 @@ func (s *Service) SelectPricingRule(ctx context.Context, purpose, planID, model 
 }
 
 func (s *Service) EstimateModelUsageCostMicros(ctx context.Context, model string, inputTokens, outputTokens int) (int, bool, error) {
-	selection, found, err := s.SelectPricingRule(ctx, PricingPurposeUsageCost, "", strings.TrimSpace(model))
+	selection, found, err := s.SelectPricingRule(ctx, strings.TrimSpace(model))
 	if err != nil || !found {
 		return 0, found, err
 	}
@@ -316,14 +310,11 @@ func (s *Service) EstimateModelUsageCostMicros(ctx context.Context, model string
 
 func normalizePricingRule(request PricingRuleCreateRequest, actor string, now time.Time) (PricingRule, error) {
 	purpose, scopeType, model := strings.TrimSpace(request.Purpose), strings.TrimSpace(request.ScopeType), strings.TrimSpace(request.Model)
-	if purpose != PricingPurposeUsageCost && purpose != PricingPurposeCustomerCharge || scopeType != PricingScopeGlobal && scopeType != PricingScopeOperatorPlan || model == "" {
-		return PricingRule{}, ErrPricingInvalidSlot
-	}
-	if purpose == PricingPurposeUsageCost && scopeType != PricingScopeGlobal {
+	if purpose != PricingPurposeUsageCost || scopeType != PricingScopeGlobal || model == "" {
 		return PricingRule{}, ErrPricingInvalidSlot
 	}
 	scopeID := strings.TrimSpace(request.ScopeID)
-	if scopeType == PricingScopeGlobal && scopeID != "" || scopeType == PricingScopeOperatorPlan && scopeID == "" {
+	if scopeID != "" {
 		return PricingRule{}, ErrPricingInvalidSlot
 	}
 	if strings.ToUpper(strings.TrimSpace(request.Currency)) != "" && strings.ToUpper(strings.TrimSpace(request.Currency)) != pricing.CurrencyUSD {
@@ -352,14 +343,6 @@ func pricingError(err error) *pricing.Error {
 }
 
 func (s *Service) validatePricingRuleSlot(ctx context.Context, rule PricingRule) error {
-	if rule.ScopeType == PricingScopeOperatorPlan {
-		if s.customerPricingResolver == nil {
-			return errors.New("customer pricing context resolver is unavailable")
-		}
-		if err := s.customerPricingResolver.ValidatePricingPlan(ctx, rule.ScopeID); err != nil {
-			return err
-		}
-	}
 	if rule.Model != "*" {
 		models, err := s.repo.ListGatewayModels(ctx)
 		if err != nil {

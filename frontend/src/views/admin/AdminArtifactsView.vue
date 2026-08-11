@@ -10,14 +10,6 @@ import {
   getArtifactSummary as getAdminArtifactSummary,
   retryArtifactDelivery as retryAdminArtifactDelivery
 } from '@/api/control'
-import {
-  getPlatformArtifact,
-  getPlatformArtifactContent,
-  getPlatformArtifactRuntimes,
-  getPlatformArtifacts,
-  getPlatformArtifactSummary,
-  retryPlatformArtifactDelivery
-} from '@/api/platform'
 import type {
   ArtifactAdminDetail,
   ArtifactAdminRecord,
@@ -26,25 +18,15 @@ import type {
   ArtifactSummary
 } from '@/types'
 
-const props = withDefaults(defineProps<{ surface?: 'admin' | 'platform' }>(), { surface: 'admin' })
 const { t } = useI18n()
-const operations = props.surface === 'platform'
-  ? {
-      getArtifact: getPlatformArtifact,
-      getArtifactContent: getPlatformArtifactContent,
-      getRuntimes: getPlatformArtifactRuntimes,
-      getArtifacts: getPlatformArtifacts,
-      getSummary: getPlatformArtifactSummary,
-      retryDelivery: retryPlatformArtifactDelivery
-    }
-  : {
-      getArtifact: getAdminArtifact,
-      getArtifactContent: getAdminArtifactContent,
-      getRuntimes: getAdminArtifactRuntimes,
-      getArtifacts: getAdminArtifacts,
-      getSummary: getAdminArtifactSummary,
-      retryDelivery: retryAdminArtifactDelivery
-    }
+const operations = {
+  getArtifact: getAdminArtifact,
+  getArtifactContent: getAdminArtifactContent,
+  getRuntimes: getAdminArtifactRuntimes,
+  getArtifacts: getAdminArtifacts,
+  getSummary: getAdminArtifactSummary,
+  retryDelivery: retryAdminArtifactDelivery
+}
 const artifacts = ref<ArtifactAdminRecord[]>([])
 const summary = ref<ArtifactSummary>({ total: 0, size_bytes: 0, by_status: {} })
 const runtimes = ref<ArtifactRuntime[]>([])

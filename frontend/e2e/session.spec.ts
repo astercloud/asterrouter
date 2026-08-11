@@ -7,13 +7,13 @@ test('@smoke @j02 logout immediately revokes a dedicated user session', async ({
   await loginDemo(page)
   const adminToken = await loginTestPrincipal(page)
   const headers = { Authorization: `Bearer ${adminToken}` }
-  const settings = await data<Record<string, unknown>>(await page.request.get('/api/v1/admin/settings', { headers }))
+  const settings = await data<Record<string, unknown>>(await page.request.get('/api/v1/console/settings', { headers }))
   const originalRegistration = Boolean(settings.registration_enabled)
   const email = `e2e-session-${Date.now()}@example.test`
   const password = 'synthetic-password-123'
 
   try {
-    await data(await page.request.put('/api/v1/admin/settings', {
+    await data(await page.request.put('/api/v1/console/settings', {
       headers,
       data: { ...settings, registration_enabled: true, email_verify_enabled: false }
     }))
@@ -21,7 +21,7 @@ test('@smoke @j02 logout immediately revokes a dedicated user session', async ({
       data: { email, password, display_name: 'E2E Session User', agreement_accepted: true }
     }))
   } finally {
-    await data(await page.request.put('/api/v1/admin/settings', {
+    await data(await page.request.put('/api/v1/console/settings', {
       headers,
       data: { ...settings, registration_enabled: originalRegistration }
     }))
@@ -50,13 +50,13 @@ test('@smoke @j02 role changes and disabling immediately revoke existing user se
   await loginDemo(page)
   const adminToken = await loginTestPrincipal(page)
   const headers = { Authorization: `Bearer ${adminToken}` }
-  const settings = await data<Record<string, unknown>>(await page.request.get('/api/v1/admin/settings', { headers }))
+  const settings = await data<Record<string, unknown>>(await page.request.get('/api/v1/console/settings', { headers }))
   const email = `e2e-session-admin-${Date.now()}@example.test`
   const password = 'synthetic-password-123'
   let userID = ''
 
   try {
-    await data(await page.request.put('/api/v1/admin/settings', {
+    await data(await page.request.put('/api/v1/console/settings', {
       headers,
       data: { ...settings, registration_enabled: true, email_verify_enabled: false }
     }))
@@ -65,13 +65,13 @@ test('@smoke @j02 role changes and disabling immediately revoke existing user se
     }))
     userID = registration.user_id
   } finally {
-    await data(await page.request.put('/api/v1/admin/settings', { headers, data: settings }))
+    await data(await page.request.put('/api/v1/console/settings', { headers, data: settings }))
   }
 
   const login = async () => data<{ access_token: string }>(await page.request.post('/api/v1/auth/login', {
     data: { username: email, password, agreement_accepted: true }
   }))
-  const updateUser = async (status: string, role: string) => data(await page.request.put(`/api/v1/admin/users/${userID}`, {
+  const updateUser = async (status: string, role: string) => data(await page.request.put(`/api/v1/console/users/${userID}`, {
     headers,
     data: { email, display_name: 'E2E Revoked User', status, role }
   }))

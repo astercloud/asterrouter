@@ -42,7 +42,7 @@ func TestRealtimeSessionRepositoryContract(t *testing.T) {
 			}
 			auth := gatewaycore.CanonicalAuthContext{
 				CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "credential-" + requestID,
-				ProfileScope: ProfileScopePlatform, TenantID: "tenant-" + requestID,
+				ApplicationID: "application-" + requestID,
 				PrincipalType: APIKeyTypeService, PrincipalID: "principal-" + requestID,
 			}
 			operation, created, err := svc.BeginCanonicalOperation(ctx, auth, request)

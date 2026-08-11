@@ -10,7 +10,7 @@ import (
 	"github.com/lib/pq"
 )
 
-const workspaceUserColumns = `id, email, email_normalized, display_name, avatar_data_url, status, role, balance_micros, concurrency_limit, rpm_limit, external_issuer, external_subject, department_id, totp_enabled, totp_secret_ciphertext, totp_recovery_hashes, password_hash, email_verified, email_verify_hash, email_verify_expires_at, email_verify_sent_at, password_reset_hash, password_reset_expires_at, password_reset_sent_at, session_version, created_at, updated_at`
+const workspaceUserColumns = `id, email, email_normalized, display_name, avatar_data_url, status, role, concurrency_limit, rpm_limit, external_issuer, external_subject, department_id, totp_enabled, totp_secret_ciphertext, totp_recovery_hashes, password_hash, email_verified, email_verify_hash, email_verify_expires_at, email_verify_sent_at, password_reset_hash, password_reset_expires_at, password_reset_sent_at, session_version, created_at, updated_at`
 
 const workspaceUserSelect = `SELECT ` + workspaceUserColumns + ` FROM workspace_users `
 
@@ -408,7 +408,7 @@ type workspaceUserRowScanner interface {
 func scanWorkspaceUser(scanner workspaceUserRowScanner) (WorkspaceUser, error) {
 	var user WorkspaceUser
 	var recovery string
-	if err := scanner.Scan(&user.ID, &user.Email, &user.EmailNormalized, &user.DisplayName, &user.AvatarDataURL, &user.Status, &user.Role, &user.BalanceMicros, &user.ConcurrencyLimit, &user.RPMLimit, &user.ExternalIssuer, &user.ExternalSubject, &user.DepartmentID, &user.TOTPEnabled, &user.TOTPSecretCiphertext, &recovery, &user.PasswordHash, &user.EmailVerified, &user.EmailVerifyHash, &user.EmailVerifyExpiresAt, &user.EmailVerifySentAt, &user.PasswordResetHash, &user.PasswordResetExpiresAt, &user.PasswordResetSentAt, &user.SessionVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
+	if err := scanner.Scan(&user.ID, &user.Email, &user.EmailNormalized, &user.DisplayName, &user.AvatarDataURL, &user.Status, &user.Role, &user.ConcurrencyLimit, &user.RPMLimit, &user.ExternalIssuer, &user.ExternalSubject, &user.DepartmentID, &user.TOTPEnabled, &user.TOTPSecretCiphertext, &recovery, &user.PasswordHash, &user.EmailVerified, &user.EmailVerifyHash, &user.EmailVerifyExpiresAt, &user.EmailVerifySentAt, &user.PasswordResetHash, &user.PasswordResetExpiresAt, &user.PasswordResetSentAt, &user.SessionVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
 		return WorkspaceUser{}, err
 	}
 	user.TOTPRecoveryHashes = parseStringList(recovery)
@@ -542,8 +542,8 @@ type workspaceUserExecer interface {
 func saveWorkspaceUser(ctx context.Context, execer workspaceUserExecer, user WorkspaceUser) error {
 	withNormalizedEmail(&user)
 	_, err := execer.ExecContext(ctx, `
-INSERT INTO workspace_users(id, email, email_normalized, display_name, avatar_data_url, status, role, balance_micros, concurrency_limit, rpm_limit, external_issuer, external_subject, department_id, totp_enabled, totp_secret_ciphertext, totp_recovery_hashes, password_hash, email_verified, email_verify_hash, email_verify_expires_at, email_verify_sent_at, password_reset_hash, password_reset_expires_at, password_reset_sent_at, session_version, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+INSERT INTO workspace_users(id, email, email_normalized, display_name, avatar_data_url, status, role, concurrency_limit, rpm_limit, external_issuer, external_subject, department_id, totp_enabled, totp_secret_ciphertext, totp_recovery_hashes, password_hash, email_verified, email_verify_hash, email_verify_expires_at, email_verify_sent_at, password_reset_hash, password_reset_expires_at, password_reset_sent_at, session_version, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
 ON CONFLICT(id) DO UPDATE SET
   email = EXCLUDED.email,
   email_normalized = EXCLUDED.email_normalized,
@@ -551,7 +551,6 @@ ON CONFLICT(id) DO UPDATE SET
 	  avatar_data_url = EXCLUDED.avatar_data_url,
   status = EXCLUDED.status,
   role = EXCLUDED.role,
-  balance_micros = EXCLUDED.balance_micros,
   concurrency_limit = EXCLUDED.concurrency_limit,
   rpm_limit = EXCLUDED.rpm_limit,
   external_issuer = EXCLUDED.external_issuer,
@@ -570,7 +569,7 @@ ON CONFLICT(id) DO UPDATE SET
 	  password_reset_sent_at = EXCLUDED.password_reset_sent_at,
 	 session_version = EXCLUDED.session_version,
   updated_at = EXCLUDED.updated_at
-		`, user.ID, user.Email, user.EmailNormalized, user.DisplayName, user.AvatarDataURL, user.Status, user.Role, user.BalanceMicros, user.ConcurrencyLimit, user.RPMLimit, user.ExternalIssuer, user.ExternalSubject, user.DepartmentID, user.TOTPEnabled, user.TOTPSecretCiphertext, marshalStringList(user.TOTPRecoveryHashes), user.PasswordHash, user.EmailVerified, user.EmailVerifyHash, user.EmailVerifyExpiresAt, user.EmailVerifySentAt, user.PasswordResetHash, user.PasswordResetExpiresAt, user.PasswordResetSentAt, user.SessionVersion, user.CreatedAt, user.UpdatedAt)
+		`, user.ID, user.Email, user.EmailNormalized, user.DisplayName, user.AvatarDataURL, user.Status, user.Role, user.ConcurrencyLimit, user.RPMLimit, user.ExternalIssuer, user.ExternalSubject, user.DepartmentID, user.TOTPEnabled, user.TOTPSecretCiphertext, marshalStringList(user.TOTPRecoveryHashes), user.PasswordHash, user.EmailVerified, user.EmailVerifyHash, user.EmailVerifyExpiresAt, user.EmailVerifySentAt, user.PasswordResetHash, user.PasswordResetExpiresAt, user.PasswordResetSentAt, user.SessionVersion, user.CreatedAt, user.UpdatedAt)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == "23505" && (pqErr.Constraint == "workspace_users_email_key" || pqErr.Constraint == "workspace_users_email_normalized_unique") {
 		return ErrUserEmailExists

@@ -25,9 +25,6 @@ func Validate(cfg Server, buildType string) (Server, error) {
 	if cfg.HTTP.Listen == "" || cfg.HTTP.FrontendDir == "" {
 		return cfg, fmt.Errorf("%w: server.http.listen and server.http.frontend-dir are required", ErrInvalidHTTP)
 	}
-	if cfg.Bootstrap.DeploymentRole != "" && !isDeploymentRole(cfg.Bootstrap.DeploymentRole) {
-		return cfg, fmt.Errorf("%w: server.bootstrap.deployment-role must be personal, relay_operator, enterprise, or platform", ErrInvalidBootstrap)
-	}
 	if cfg.Security.Admin.Username == "" {
 		return cfg, fmt.Errorf("%w: server.security.admin.username is required", ErrInvalidSecurity)
 	}
@@ -66,7 +63,6 @@ func Validate(cfg Server, buildType string) (Server, error) {
 func normalize(cfg *Server) {
 	cfg.HTTP.Listen = strings.TrimSpace(cfg.HTTP.Listen)
 	cfg.HTTP.FrontendDir = strings.TrimSpace(cfg.HTTP.FrontendDir)
-	cfg.Bootstrap.DeploymentRole = strings.TrimSpace(cfg.Bootstrap.DeploymentRole)
 	cfg.Security.Admin.Username = strings.TrimSpace(cfg.Security.Admin.Username)
 	cfg.Security.Admin.Password = strings.TrimSpace(cfg.Security.Admin.Password)
 	cfg.Security.Admin.Token = strings.TrimSpace(cfg.Security.Admin.Token)
@@ -122,7 +118,7 @@ func normalizeOfficial(cfg *Official) {
 
 func validateJobs(cfg Server) error {
 	limits := cfg.Jobs.Queue.Limits
-	if limits.Profile < 0 || limits.Tenant < 0 || limits.Principal < 0 {
+	if limits.Organization < 0 || limits.Application < 0 || limits.Principal < 0 {
 		return fmt.Errorf("%w: server.jobs.queue.limits values must be non-negative", ErrInvalidJobs)
 	}
 	switch cfg.Jobs.Queue.Driver {
@@ -186,15 +182,6 @@ func validateOfficial(cfg Official) error {
 		return nil
 	default:
 		return fmt.Errorf("%w: catalog mode must be disabled, online, private_mirror, or offline", ErrInvalidOfficial)
-	}
-}
-
-func isDeploymentRole(value string) bool {
-	switch value {
-	case "personal", "relay_operator", "enterprise", "platform":
-		return true
-	default:
-		return false
 	}
 }
 

@@ -3,7 +3,6 @@ package controlplane
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"sync"
@@ -222,8 +221,8 @@ func TestDurableAIJobReconcilerUsesProviderCancellationWhenJobIsCanceling(t *tes
 		t.Fatalf("worker report=%+v err=%v", report, err)
 	}
 	auth := gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "worker-key", ProfileScope: ProfileScopePlatform,
-		TenantID: "worker-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal", ArtifactPolicy: GatewayArtifactPolicyTemporary,
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "worker-key",
+		ApplicationID: "worker-application", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal", ArtifactPolicy: GatewayArtifactPolicyTemporary,
 	}
 	canceling, found, err := svc.CancelAIJobForAuth(ctx, auth, job.ID)
 	if err != nil || !found || canceling.Status != AIJobStatusCanceling {
@@ -342,8 +341,8 @@ func TestDurableAIJobCanceledNotChargedSettlesZeroUsage(t *testing.T) {
 		t.Fatalf("canceled claim=%+v err=%v", claimed, err)
 	}
 	cancelAuth := gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "worker-key", ProfileScope: ProfileScopePlatform,
-		TenantID: "worker-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal",
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "worker-key",
+		ApplicationID: "worker-application", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal",
 	}
 	canceling, found, err := svc.CancelAIJobForAuth(ctx, cancelAuth, job.ID)
 	if err != nil || !found || canceling.Status != AIJobStatusCanceling {
@@ -363,8 +362,8 @@ func TestDurableAIJobCanceledNotChargedSettlesZeroUsage(t *testing.T) {
 		t.Fatalf("canceled usage=%+v err=%v", usage, err)
 	}
 	second, created, err := svc.BeginDurableAIJob(ctx, gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "worker-key", ProfileScope: ProfileScopePlatform,
-		TenantID: "worker-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal", Limits: limits,
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "worker-key",
+		ApplicationID: "worker-application", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal", Limits: limits,
 		ArtifactPolicy: GatewayArtifactPolicyTemporary,
 	}, gatewaycore.CanonicalRequest{
 		ID: "request-after-cancel", ClientRequestID: "client-after-cancel", Fingerprint: "fingerprint-after-cancel",
@@ -387,79 +386,6 @@ func TestFinalizeAIOperationTerminalBillingDoesNotResolveRecordError(t *testing.
 	}, 1)
 	if resolved || err == nil {
 		t.Fatalf("record error resolved=%t err=%v", resolved, err)
-	}
-}
-
-func TestDurableAIJobFinalUsageEnqueuesPlatformDimensions(t *testing.T) {
-	ctx := context.Background()
-	repo := NewMemoryRepository()
-	svc := NewService(repo, "/v1", "durable-platform-usage-secret")
-	base := time.Date(2026, time.July, 15, 13, 0, 0, 0, time.UTC)
-	svc.now = func() time.Time { return base }
-	if err := svc.SetArtifactStore(NewMemoryArtifactStore()); err != nil {
-		t.Fatal(err)
-	}
-	setupDurableWorkerRoutes(t, svc)
-	identity := createExternalAuthIdentity(t, ctx, svc)
-	integration, err := svc.CreateExternalAuthIntegration(ctx, "operator", ExternalAuthIntegrationRequest{
-		TenantID: identity.tenant.ID, GatewayPrincipalID: identity.principal.ID, Name: "Durable media product",
-		KeyID: "durable-media-v1", Audience: "https://gateway.example/v1", ModelAllowlist: []string{"worker-image"},
-		QPSLimit: 10, MonthlyTokenLimit: 1000, MaxTTLSeconds: 300,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sink, err := svc.CreatePlatformUsageSink(ctx, "operator", PlatformUsageSinkRequest{
-		TenantID: identity.tenant.ID, ExternalAuthIntegrationID: integration.Record.ID,
-		Name: "Durable usage callback", EndpointURL: "https://billing.example/usage", MaxAttempts: 2,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	subject := "opaque-durable-subject"
-	subjectHash := hashAPIKey(integration.Record.ID + "\x00" + subject)
-	auth := gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceHMACContext,
-		CredentialID:     "eai_subject_" + prefix(subjectHash, 32), CredentialFingerprint: prefix(subjectHash, 12),
-		IntegrationID: integration.Record.ID, ProfileScope: ProfileScopePlatform,
-		TenantID: identity.tenant.ID, PrincipalType: identity.principal.PrincipalType, PrincipalID: identity.principal.ID,
-		ExternalSubjectReference: subject, ArtifactPolicy: GatewayArtifactPolicyTemporary,
-	}
-	request := gatewaycore.CanonicalRequest{
-		ID: "durable-platform-request", ClientRequestID: "durable-platform-client", Fingerprint: "durable-platform-fingerprint",
-		IdempotencyKey: "durable-platform-idempotency", Protocol: gatewaycore.ProtocolAsterJobs,
-		Operation: GatewayOperationImageGeneration, Modality: GatewayModalityImage, Lane: gatewaycore.LaneDurable,
-		Model: "worker-image", OutputCount: 1,
-		Payload: []byte(`{"model":"worker-image","operation":"image_generation","modality":"image","input":{"prompt":"synthetic"}}`),
-	}
-	job, created, err := svc.BeginDurableAIJob(ctx, auth, request)
-	if err != nil || !created {
-		t.Fatalf("BeginDurableAIJob() job=%+v created=%t err=%v", job, created, err)
-	}
-	procurementCost := int64(31)
-	adapter := &durableAIJobAdapterStub{dispatchSteps: []durableDispatchStep{{result: ProviderDispatchResult{
-		Outcome:         ProviderDispatchOutcomeAccepted,
-		Task:            ProviderTaskReference{ProviderTaskID: "platform-task", ProviderRequestID: "platform-request", Status: "succeeded"},
-		Outputs:         []ProviderOutputDescriptor{{OutputID: "platform-image", Role: ArtifactRoleFinal, MediaType: "image/png", ExpectedSizeBytes: -1}},
-		UsageDimensions: UsageDimensions{UsageDimensionOutputImages: {Quantity: 7, Unit: UsageUnitCount, Source: "provider", Confidence: UsageConfidenceReported}},
-		Billing:         ProviderBillingObservation{Status: ProviderBillingStatusFinal, ProcurementCostMicros: &procurementCost, Currency: "USD", Source: "provider_invoice", Confidence: ProcurementCostConfidenceExact},
-	}}}}
-	if report, err := svc.RunDurableAIJobWorkerOnce(ctx, "platform-worker", time.Minute, 1, adapter); err != nil || report.Claimed != 1 {
-		t.Fatalf("worker report=%+v err=%v", report, err)
-	}
-	assertAIJobStatus(t, svc, job.ID, AIJobStatusSucceeded)
-	assertBillingHoldStatus(t, svc, job.OperationID, BillingHoldStatusSettled)
-	events, err := svc.ListPlatformUsageDeliveryEvents(ctx, PlatformUsageDeliveryQuery{SinkID: sink.Record.ID})
-	if err != nil || len(events) != 1 {
-		t.Fatalf("platform usage events=%+v err=%v", events, err)
-	}
-	var payload platformUsageEventPayload
-	if err := json.Unmarshal([]byte(events[0].PayloadJSON), &payload); err != nil || payload.ExternalSubjectRef != subject || payload.UsageDimensions[UsageDimensionOutputImages].Quantity != 1 {
-		t.Fatalf("platform usage payload=%+v err=%v raw=%s", payload, err, events[0].PayloadJSON)
-	}
-	usage, err := repo.QueryUsageRecords(ctx, UsageQuery{Limit: 10})
-	if err != nil || len(usage) != 1 || usage[0].ProcurementCostMicros == nil || *usage[0].ProcurementCostMicros != procurementCost {
-		t.Fatalf("successful provider procurement cost usage=%+v err=%v", usage, err)
 	}
 }
 
@@ -511,8 +437,8 @@ func beginDurableWorkerJobWithLimits(t *testing.T, svc *Service, idempotencyKey 
 		Lane: gatewaycore.LaneDurable, Model: "worker-image", Payload: []byte(`{"model":"worker-image","operation":"image_generation","modality":"image","input":{"prompt":"synthetic"}}`),
 	}
 	auth := gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "worker-key", ProfileScope: ProfileScopePlatform,
-		TenantID: "worker-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal", Limits: limits, ArtifactPolicy: GatewayArtifactPolicyTemporary,
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "worker-key",
+		ApplicationID: "worker-application", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal", Limits: limits, ArtifactPolicy: GatewayArtifactPolicyTemporary,
 	}
 	job, created, err := svc.BeginDurableAIJob(context.Background(), auth, request)
 	if err != nil || !created {

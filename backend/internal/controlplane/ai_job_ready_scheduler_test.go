@@ -13,7 +13,7 @@ func TestDurableAIJobSchedulerFallsBackWhenReadyIndexIsUnavailable(t *testing.T)
 	svc := newAIJobTestService(t, NewMemoryRepository())
 	svc.now = func() time.Time { return base }
 	svc.SetAIJobReadyIndex(unavailableAIJobReadyIndex{err: errors.New("redis unavailable")})
-	if _, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("tenant-fallback", "principal-fallback"), aiJobTestRequest("index-fallback", "index-fallback")); err != nil {
+	if _, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("application-fallback", "principal-fallback"), aiJobTestRequest("index-fallback", "index-fallback")); err != nil {
 		t.Fatal(err)
 	}
 	queue, err := NewMemoryAIJobDeliveryQueue(time.Minute)
@@ -36,7 +36,7 @@ func TestDurableAIJobSchedulerUsesReadyIndexWithoutTrustingStaleVersion(t *testi
 	svc.now = func() time.Time { return now }
 	index := NewMemoryAIJobReadyIndex()
 	svc.SetAIJobReadyIndex(index)
-	job, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("tenant-index", "principal-index"), aiJobTestRequest("index-stale", "index-stale"))
+	job, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("application-index", "principal-index"), aiJobTestRequest("index-stale", "index-stale"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestDurableAIJobRebuilderRestoresLostReadyIndex(t *testing.T) {
 	now := base
 	svc := newAIJobTestService(t, NewMemoryRepository())
 	svc.now = func() time.Time { return now }
-	job, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("tenant-reindex", "principal-reindex"), aiJobTestRequest("reindex-job", "reindex-job"))
+	job, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("application-reindex", "principal-reindex"), aiJobTestRequest("reindex-job", "reindex-job"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestAIJobReadyIndexLifecycleRemovesRunningJob(t *testing.T) {
 	svc.now = func() time.Time { return base }
 	index := NewMemoryAIJobReadyIndex()
 	svc.SetAIJobReadyIndex(index)
-	if _, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("tenant-lifecycle", "principal-lifecycle"), aiJobTestRequest("ready-lifecycle", "ready-lifecycle")); err != nil {
+	if _, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("application-lifecycle", "principal-lifecycle"), aiJobTestRequest("ready-lifecycle", "ready-lifecycle")); err != nil {
 		t.Fatal(err)
 	}
 	assertAIJobReadyCount(t, index, AIJobReadyScope{Level: AIJobReadyScopeAll}, 1)

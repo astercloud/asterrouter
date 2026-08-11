@@ -84,16 +84,16 @@ type CanonicalInputArtifact struct {
 }
 
 type CanonicalLimits struct {
-	QPSLimit                 int   `json:"qps_limit"`
-	RPMLimit                 int   `json:"rpm_limit"`
-	TPMLimit                 int   `json:"tpm_limit"`
-	ConcurrencyLimit         int   `json:"concurrency_limit"`
-	TenantConcurrencyLimit   int   `json:"tenant_concurrency_limit"`
-	MonthlyTokenLimit        int   `json:"monthly_token_limit"`
-	MonthlyBudgetMicros      int64 `json:"monthly_budget_micros"`
-	MonthlyImageLimit        int   `json:"monthly_image_limit"`
-	MonthlyVideoSecondsLimit int   `json:"monthly_video_seconds_limit"`
-	MonthlyAudioSecondsLimit int   `json:"monthly_audio_seconds_limit"`
+	QPSLimit                    int   `json:"qps_limit"`
+	RPMLimit                    int   `json:"rpm_limit"`
+	TPMLimit                    int   `json:"tpm_limit"`
+	ConcurrencyLimit            int   `json:"concurrency_limit"`
+	ApplicationConcurrencyLimit int   `json:"application_concurrency_limit"`
+	MonthlyTokenLimit           int   `json:"monthly_token_limit"`
+	MonthlyBudgetMicros         int64 `json:"monthly_budget_micros"`
+	MonthlyImageLimit           int   `json:"monthly_image_limit"`
+	MonthlyVideoSecondsLimit    int   `json:"monthly_video_seconds_limit"`
+	MonthlyAudioSecondsLimit    int   `json:"monthly_audio_seconds_limit"`
 }
 
 type CanonicalAuthContext struct {
@@ -101,8 +101,7 @@ type CanonicalAuthContext struct {
 	CredentialID             string           `json:"credential_id"`
 	CredentialFingerprint    string           `json:"credential_fingerprint"`
 	IntegrationID            string           `json:"integration_id,omitempty"`
-	ProfileScope             string           `json:"profile_scope"`
-	TenantID                 string           `json:"tenant_id,omitempty"`
+	ApplicationID            string           `json:"application_id,omitempty"`
 	PrincipalType            string           `json:"principal_type"`
 	PrincipalID              string           `json:"principal_id"`
 	ExternalSubjectReference string           `json:"external_subject_reference,omitempty"`

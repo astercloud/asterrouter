@@ -81,7 +81,7 @@ func TestOnboardingHTTPJourneyPerformsGovernedVerification(t *testing.T) {
 		t.Fatalf("API key result=%+v", apiKey)
 	}
 
-	configRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/api-keys/"+apiKey.APIKey.ID+"/client-config?client=codex&model=team-model", nil)
+	configRequest := httptest.NewRequest(http.MethodGet, "/api/v1/console/api-keys/"+apiKey.APIKey.ID+"/client-config?client=codex&model=team-model", nil)
 	configRequest.Header.Set("Authorization", "Bearer admin-token")
 	configRequest.Host = "router.example.test"
 	configRecorder := httptest.NewRecorder()
@@ -210,7 +210,7 @@ func TestOnboardingHTTPRejectsMissingAdminAuthenticationAndWrongCredential(t *te
 		t.Fatal(err)
 	}
 	payload, _ := json.Marshal(clientVerificationRequest{Client: controlplane.ClientOpenAISDK, Model: "model-a", Credential: "wrong-credential"})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys/"+key.Record.ID+"/client-verifications", bytes.NewReader(payload))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/console/api-keys/"+key.Record.ID+"/client-verifications", bytes.NewReader(payload))
 	request.Header.Set("Authorization", "Bearer admin-token")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "wrong-credential-verification")
@@ -305,7 +305,7 @@ func TestAPIKeyClientVerificationProtocolMatrixRecordsSuccessAndFailure(t *testi
 	}
 	for _, client := range clients {
 		var result controlplane.ClientVerificationResult
-		requestOnboardingJSON(t, handler, http.MethodPost, "/api/v1/admin/api-keys/"+apiKey.APIKey.ID+"/client-verifications", clientVerificationRequest{
+		requestOnboardingJSON(t, handler, http.MethodPost, "/api/v1/console/api-keys/"+apiKey.APIKey.ID+"/client-verifications", clientVerificationRequest{
 			Client: client, Model: "matrix-model", Credential: apiKey.Credential,
 		}, "matrix-success-"+client, &result)
 		if result.Status != "success" || result.Client != client || result.OperationID == "" || result.TraceID == "" || result.HTTPStatus != http.StatusOK {
@@ -315,7 +315,7 @@ func TestAPIKeyClientVerificationProtocolMatrixRecordsSuccessAndFailure(t *testi
 
 	failInference.Store(true)
 	var failed controlplane.ClientVerificationResult
-	requestOnboardingJSON(t, handler, http.MethodPost, "/api/v1/admin/api-keys/"+apiKey.APIKey.ID+"/client-verifications", clientVerificationRequest{
+	requestOnboardingJSON(t, handler, http.MethodPost, "/api/v1/console/api-keys/"+apiKey.APIKey.ID+"/client-verifications", clientVerificationRequest{
 		Client: controlplane.ClientOpenAISDK, Model: "matrix-model", Credential: apiKey.Credential,
 	}, "matrix-failed-upstream", &failed)
 	if failed.Status != "failed" || failed.OperationID == "" || failed.TraceID == "" || failed.ErrorCode == "" || failed.RecoveryAction != "check_route_and_provider_health" {

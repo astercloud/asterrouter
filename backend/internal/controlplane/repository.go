@@ -43,20 +43,12 @@ type Repository interface {
 	CancelWorkspaceUserPasswordReset(ctx context.Context, userID, hash string, now time.Time) (bool, error)
 	ConsumeWorkspaceUserPasswordReset(ctx context.Context, hash, passwordHash string, now time.Time) (WorkspaceUser, bool, error)
 	ConsumeWorkspaceUserTOTPRecoveryCode(ctx context.Context, userID, hash string, now time.Time) (WorkspaceUser, bool, error)
-	ListPlatformTenants(ctx context.Context) ([]PlatformTenant, error)
-	SavePlatformTenant(ctx context.Context, tenant PlatformTenant) error
+	ListApplications(ctx context.Context) ([]Application, error)
+	SaveApplication(ctx context.Context, application Application) error
 	ListGatewayPrincipals(ctx context.Context) ([]GatewayPrincipal, error)
 	SaveGatewayPrincipal(ctx context.Context, principal GatewayPrincipal) error
 	ListExternalAuthIntegrations(ctx context.Context) ([]ExternalAuthIntegration, error)
 	SaveExternalAuthIntegration(ctx context.Context, integration ExternalAuthIntegration) error
-	ListPlatformUsageSinks(ctx context.Context) ([]PlatformUsageSink, error)
-	SavePlatformUsageSink(ctx context.Context, sink PlatformUsageSink) error
-	QueryPlatformUsageDeliveryEvents(ctx context.Context, query PlatformUsageDeliveryQuery) ([]PlatformUsageDeliveryEvent, error)
-	SaveUsageRecordAndEnqueuePlatformUsage(ctx context.Context, record UsageRecord, events []PlatformUsageDeliveryEvent) error
-	ClaimDuePlatformUsageDeliveryEvents(ctx context.Context, now, leaseUntil time.Time, leaseToken string, limit int) ([]PlatformUsageDeliveryEvent, error)
-	CompletePlatformUsageDeliveryEvent(ctx context.Context, id, leaseToken string, deliveredAt time.Time, httpStatus int) error
-	ReschedulePlatformUsageDeliveryEvent(ctx context.Context, id, leaseToken string, nextAttemptAt time.Time, httpStatus int, lastError string, deadLetter bool, updatedAt time.Time) error
-	RequeuePlatformUsageDeliveryEvent(ctx context.Context, id string, nextAttemptAt time.Time) error
 	CreateAIOperation(ctx context.Context, operation AIOperation) (AIOperation, bool, error)
 	CreateAIOperationWithBillingHold(ctx context.Context, operation AIOperation, admission BillingHoldAdmission) (AIOperation, bool, error)
 	FindAIOperation(ctx context.Context, id string) (AIOperation, bool, error)
@@ -115,18 +107,6 @@ type Repository interface {
 	CompleteTransactionalOutboxEvent(ctx context.Context, id, leaseToken string, publishedAt time.Time) error
 	RescheduleTransactionalOutboxEvent(ctx context.Context, id, leaseToken string, nextAttemptAt time.Time, lastError string, deadLetter bool, updatedAt time.Time) error
 	RequeueTransactionalOutboxEvent(ctx context.Context, id string, nextAttemptAt time.Time) error
-	GetCustomerWallet(ctx context.Context, userID string) (CustomerWallet, error)
-	ListCustomerBillingEntries(ctx context.Context, query CustomerBillingQuery) ([]CustomerBillingEntry, int, error)
-	ListAvailableCustomerVouchers(ctx context.Context, userID string, now time.Time) ([]CustomerVoucher, error)
-	RedeemCustomerCode(ctx context.Context, request CustomerCodeRedemption) (CustomerBillingEntry, error)
-	SaveCustomerRedemptionCode(ctx context.Context, code CustomerRedemptionCode) error
-	GetCustomerNotificationPreferences(ctx context.Context, userID string) ([]CustomerNotificationPreference, error)
-	SaveCustomerNotificationPreferences(ctx context.Context, userID string, preferences []CustomerNotificationPreference, updatedAt time.Time) error
-	CreateCustomerNotification(ctx context.Context, notification CustomerNotification) (bool, error)
-	ListCustomerNotifications(ctx context.Context, query CustomerNotificationQuery) ([]CustomerNotification, int, int, error)
-	MarkCustomerNotificationRead(ctx context.Context, userID, id string, readAt time.Time) (bool, error)
-	MarkAllCustomerNotificationsRead(ctx context.Context, userID string, readAt time.Time) (int, error)
-	SaveCustomerNotificationDelivery(ctx context.Context, delivery CustomerNotificationDelivery) error
 	ListAuthIdentities(ctx context.Context, userID string) ([]AuthIdentity, error)
 	FindAuthIdentity(ctx context.Context, issuer, subject string) (AuthIdentity, bool, error)
 	BindAuthIdentity(ctx context.Context, identity AuthIdentity, verifyEmail bool) error
@@ -253,19 +233,9 @@ type MemoryRepository struct {
 	organizationGroups              map[string]OrganizationGroup
 	governancePolicies              map[string]GovernancePolicy
 	workspaceUsers                  map[string]WorkspaceUser
-	platformTenants                 map[string]PlatformTenant
+	applications                    map[string]Application
 	gatewayPrincipals               map[string]GatewayPrincipal
 	externalAuthIntegrations        map[string]ExternalAuthIntegration
-	platformUsageSinks              map[string]PlatformUsageSink
-	platformUsageDeliveryEvents     map[string]PlatformUsageDeliveryEvent
-	customerWallets                 map[string]CustomerWallet
-	customerEntries                 map[string]CustomerBillingEntry
-	customerCodes                   map[string]CustomerRedemptionCode
-	customerRedemptions             map[string]CustomerRedemption
-	customerVouchers                map[string]CustomerVoucher
-	customerNotificationPreferences map[string]map[string]CustomerNotificationPreference
-	customerNotifications           map[string]CustomerNotification
-	customerNotificationDeliveries  map[string]CustomerNotificationDelivery
 	authIdentities                  map[string]AuthIdentity
 	roleBindings                    map[string]RoleBinding
 	groups                          map[string]RoutingGroup
@@ -322,19 +292,9 @@ func NewMemoryRepository() *MemoryRepository {
 		organizationGroups:              map[string]OrganizationGroup{},
 		governancePolicies:              map[string]GovernancePolicy{},
 		workspaceUsers:                  map[string]WorkspaceUser{},
-		platformTenants:                 map[string]PlatformTenant{},
+		applications:                    map[string]Application{},
 		gatewayPrincipals:               map[string]GatewayPrincipal{},
 		externalAuthIntegrations:        map[string]ExternalAuthIntegration{},
-		platformUsageSinks:              map[string]PlatformUsageSink{},
-		platformUsageDeliveryEvents:     map[string]PlatformUsageDeliveryEvent{},
-		customerWallets:                 map[string]CustomerWallet{},
-		customerEntries:                 map[string]CustomerBillingEntry{},
-		customerCodes:                   map[string]CustomerRedemptionCode{},
-		customerRedemptions:             map[string]CustomerRedemption{},
-		customerVouchers:                map[string]CustomerVoucher{},
-		customerNotificationPreferences: map[string]map[string]CustomerNotificationPreference{},
-		customerNotifications:           map[string]CustomerNotification{},
-		customerNotificationDeliveries:  map[string]CustomerNotificationDelivery{},
 		authIdentities:                  map[string]AuthIdentity{},
 		roleBindings:                    map[string]RoleBinding{},
 		groups:                          map[string]RoutingGroup{},
@@ -851,13 +811,7 @@ func memoryUsageRecordMatches(record UsageRecord, query UsageQuery) bool {
 	if len(query.APIKeyIDs) > 0 && !contains(query.APIKeyIDs, record.APIKeyID) {
 		return false
 	}
-	if query.CustomerID != "" && record.CustomerID != query.CustomerID {
-		return false
-	}
-	if query.ProfileScope != "" && record.ProfileScope != query.ProfileScope {
-		return false
-	}
-	if query.PlatformTenantID != "" && record.PlatformTenantID != query.PlatformTenantID {
+	if query.ApplicationID != "" && record.ApplicationID != query.ApplicationID {
 		return false
 	}
 	if query.GatewayPrincipalID != "" && record.GatewayPrincipalID != query.GatewayPrincipalID {
@@ -891,7 +845,7 @@ func memoryUsageRecordMatches(record UsageRecord, query UsageQuery) bool {
 	if keyword == "" {
 		return true
 	}
-	return anyContains(keyword, record.Model, record.Status, record.ErrorType, record.ProviderID, record.ProviderAccountID, record.APIKeyID, record.CustomerID, record.APIFingerprint, record.ProfileScope, record.PlatformTenantID, record.PlatformTenantName, record.GatewayPrincipalID, record.GatewayPrincipalName, record.ExternalAuthIntegrationID, record.ExternalSubjectReference)
+	return anyContains(keyword, record.Model, record.Status, record.ErrorType, record.ProviderID, record.ProviderAccountID, record.APIKeyID, record.APIFingerprint, record.ApplicationID, record.ApplicationName, record.GatewayPrincipalID, record.GatewayPrincipalName, record.ExternalAuthIntegrationID, record.ExternalSubjectReference)
 }
 
 func memoryGatewayTraceMatches(trace GatewayTrace, query GatewayTraceQuery) bool {
@@ -901,10 +855,7 @@ func memoryGatewayTraceMatches(trace GatewayTrace, query GatewayTraceQuery) bool
 	if len(query.APIKeyIDs) > 0 && !contains(query.APIKeyIDs, trace.APIKeyID) {
 		return false
 	}
-	if query.ProfileScope != "" && trace.ProfileScope != query.ProfileScope {
-		return false
-	}
-	if query.PlatformTenantID != "" && trace.PlatformTenantID != query.PlatformTenantID {
+	if query.ApplicationID != "" && trace.ApplicationID != query.ApplicationID {
 		return false
 	}
 	if query.GatewayPrincipalID != "" && trace.GatewayPrincipalID != query.GatewayPrincipalID {
@@ -944,7 +895,7 @@ func memoryGatewayTraceMatches(trace GatewayTrace, query GatewayTraceQuery) bool
 	if keyword == "" {
 		return true
 	}
-	return anyContains(keyword, trace.Model, trace.Status, trace.ErrorType, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicySnapshot, trace.APIKeyID, trace.APIFingerprint, trace.RequestSummary, trace.ResponseSummary, trace.ProfileScope, trace.PlatformTenantID, trace.PlatformTenantName, trace.GatewayPrincipalID, trace.GatewayPrincipalName, trace.ExternalAuthIntegrationID, trace.ExternalSubjectReference)
+	return anyContains(keyword, trace.Model, trace.Status, trace.ErrorType, trace.ProviderID, trace.ProviderAccountID, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicySnapshot, trace.APIKeyID, trace.APIFingerprint, trace.RequestSummary, trace.ResponseSummary, trace.ApplicationID, trace.ApplicationName, trace.GatewayPrincipalID, trace.GatewayPrincipalName, trace.ExternalAuthIntegrationID, trace.ExternalSubjectReference)
 }
 
 func memoryAuditLogMatches(event AuditLog, query AuditLogQuery) bool {
@@ -954,10 +905,7 @@ func memoryAuditLogMatches(event AuditLog, query AuditLogQuery) bool {
 	if query.ResourceType != "" && event.ResourceType != query.ResourceType {
 		return false
 	}
-	if query.ProfileScope != "" && event.ProfileScope != query.ProfileScope {
-		return false
-	}
-	if query.PlatformTenantID != "" && event.PlatformTenantID != query.PlatformTenantID {
+	if query.ApplicationID != "" && event.ApplicationID != query.ApplicationID {
 		return false
 	}
 	if query.GatewayPrincipalID != "" && event.GatewayPrincipalID != query.GatewayPrincipalID {
@@ -976,7 +924,7 @@ func memoryAuditLogMatches(event AuditLog, query AuditLogQuery) bool {
 	if keyword == "" {
 		return true
 	}
-	return anyContains(keyword, event.Actor, event.Action, event.ResourceType, event.ResourceID, event.Summary, event.ProfileScope, event.PlatformTenantID, event.PlatformTenantName, event.GatewayPrincipalID, event.GatewayPrincipalName, event.ExternalAuthIntegrationID, event.ExternalSubjectReference)
+	return anyContains(keyword, event.Actor, event.Action, event.ResourceType, event.ResourceID, event.Summary, event.ApplicationID, event.ApplicationName, event.GatewayPrincipalID, event.GatewayPrincipalName, event.ExternalAuthIntegrationID, event.ExternalSubjectReference)
 }
 
 func anyContains(keyword string, values ...string) bool {
@@ -1035,9 +983,7 @@ func appendUsageRecordFilters(clauses *[]string, args *[]any, query UsageQuery) 
 	appendExactFilter(clauses, args, "id", query.ID)
 	appendExactFilter(clauses, args, "api_key_id", query.APIKeyID)
 	appendAnyExactFilter(clauses, args, "api_key_id", query.APIKeyIDs)
-	appendExactFilter(clauses, args, "customer_id", query.CustomerID)
-	appendExactFilter(clauses, args, "profile_scope", query.ProfileScope)
-	appendExactFilter(clauses, args, "platform_tenant_id", query.PlatformTenantID)
+	appendExactFilter(clauses, args, "application_id", query.ApplicationID)
 	appendExactFilter(clauses, args, "gateway_principal_id", query.GatewayPrincipalID)
 	appendExactFilter(clauses, args, "external_auth_integration_id", query.ExternalAuthIntegrationID)
 	appendExactFilter(clauses, args, "model", query.Model)
@@ -1047,14 +993,13 @@ func appendUsageRecordFilters(clauses *[]string, args *[]any, query UsageQuery) 
 	appendExactFilter(clauses, args, "status", query.Status)
 	appendTimeFilter(clauses, args, "created_at", ">=", query.CreatedFrom)
 	appendTimeFilter(clauses, args, "created_at", "<=", query.CreatedTo)
-	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "api_key_id", "customer_id", "api_fingerprint", "profile_scope", "platform_tenant_id", "platform_tenant_name", "gateway_principal_id", "gateway_principal_name", "external_auth_integration_id", "external_subject_reference"})
+	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "api_key_id", "api_fingerprint", "application_id", "application_name", "gateway_principal_id", "gateway_principal_name", "external_auth_integration_id", "external_subject_reference"})
 }
 
 func appendGatewayTraceFilters(clauses *[]string, args *[]any, query GatewayTraceQuery) {
 	appendExactFilter(clauses, args, "api_key_id", query.APIKeyID)
 	appendAnyExactFilter(clauses, args, "api_key_id", query.APIKeyIDs)
-	appendExactFilter(clauses, args, "profile_scope", query.ProfileScope)
-	appendExactFilter(clauses, args, "platform_tenant_id", query.PlatformTenantID)
+	appendExactFilter(clauses, args, "application_id", query.ApplicationID)
 	appendExactFilter(clauses, args, "gateway_principal_id", query.GatewayPrincipalID)
 	appendExactFilter(clauses, args, "external_auth_integration_id", query.ExternalAuthIntegrationID)
 	appendExactFilter(clauses, args, "model", query.Model)
@@ -1066,19 +1011,18 @@ func appendGatewayTraceFilters(clauses *[]string, args *[]any, query GatewayTrac
 	appendExactFilter(clauses, args, "status", query.Status)
 	appendTimeFilter(clauses, args, "created_at", ">=", query.CreatedFrom)
 	appendTimeFilter(clauses, args, "created_at", "<=", query.CreatedTo)
-	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_snapshot", "api_key_id", "api_fingerprint", "request_summary", "response_summary", "profile_scope", "platform_tenant_id", "platform_tenant_name", "gateway_principal_id", "gateway_principal_name", "external_auth_integration_id", "external_subject_reference"})
+	appendSearchFilter(clauses, args, query.Search, []string{"model", "status", "error_type", "provider_id", "provider_account_id", "route_source", "route_reason", "policy_id", "policy_name", "policy_source", "policy_snapshot", "api_key_id", "api_fingerprint", "request_summary", "response_summary", "application_id", "application_name", "gateway_principal_id", "gateway_principal_name", "external_auth_integration_id", "external_subject_reference"})
 }
 
 func appendAuditLogFilters(clauses *[]string, args *[]any, query AuditLogQuery) {
 	appendExactFilter(clauses, args, "action", query.Action)
 	appendExactFilter(clauses, args, "resource_type", query.ResourceType)
-	appendExactFilter(clauses, args, "profile_scope", query.ProfileScope)
-	appendExactFilter(clauses, args, "platform_tenant_id", query.PlatformTenantID)
+	appendExactFilter(clauses, args, "application_id", query.ApplicationID)
 	appendExactFilter(clauses, args, "gateway_principal_id", query.GatewayPrincipalID)
 	appendExactFilter(clauses, args, "external_auth_integration_id", query.ExternalAuthIntegrationID)
 	appendTimeFilter(clauses, args, "created_at", ">=", query.CreatedFrom)
 	appendTimeFilter(clauses, args, "created_at", "<=", query.CreatedTo)
-	appendSearchFilter(clauses, args, query.Search, []string{"actor", "action", "resource_type", "resource_id", "summary", "profile_scope", "platform_tenant_id", "platform_tenant_name", "gateway_principal_id", "gateway_principal_name", "external_auth_integration_id", "external_subject_reference"})
+	appendSearchFilter(clauses, args, query.Search, []string{"actor", "action", "resource_type", "resource_id", "summary", "application_id", "application_name", "gateway_principal_id", "gateway_principal_name", "external_auth_integration_id", "external_subject_reference"})
 }
 
 func appendSearchFilter(clauses *[]string, args *[]any, value string, columns []string) {
@@ -1211,7 +1155,6 @@ ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS email_verify_sent_at TIMEST
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_reset_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_reset_expires_at TIMESTAMPTZ;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS password_reset_sent_at TIMESTAMPTZ;
-ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS balance_micros BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS concurrency_limit INTEGER NOT NULL DEFAULT 5;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS rpm_limit INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE workspace_users ADD COLUMN IF NOT EXISTS avatar_data_url TEXT NOT NULL DEFAULT '';
@@ -1300,112 +1243,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS role_bindings_unique_scope_idx
 
 CREATE INDEX IF NOT EXISTS role_bindings_scope_idx
   ON role_bindings(scope_type, scope_id);
-
-CREATE TABLE IF NOT EXISTS customer_wallets (
-  user_id TEXT PRIMARY KEY REFERENCES workspace_users(id) ON DELETE CASCADE,
-  gift_balance_micros BIGINT NOT NULL DEFAULT 0,
-  profit_balance_micros BIGINT NOT NULL DEFAULT 0,
-  updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS customer_billing_entries (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES workspace_users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL,
-  amount_micros BIGINT NOT NULL,
-  balance_after_micros BIGINT NOT NULL,
-  reference TEXT NOT NULL DEFAULT '',
-  description TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS customer_billing_entries_user_created_idx
-  ON customer_billing_entries(user_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS customer_redemption_codes (
-  id TEXT PRIMARY KEY,
-  code_hash TEXT NOT NULL UNIQUE,
-  title TEXT NOT NULL DEFAULT '',
-  amount_micros BIGINT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active',
-  max_redemptions INTEGER NOT NULL DEFAULT 1,
-  redeemed_count INTEGER NOT NULL DEFAULT 0,
-  expires_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS customer_redemptions (
-  code_id TEXT NOT NULL REFERENCES customer_redemption_codes(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES workspace_users(id) ON DELETE CASCADE,
-  entry_id TEXT NOT NULL REFERENCES customer_billing_entries(id) ON DELETE CASCADE,
-  redeemed_at TIMESTAMPTZ NOT NULL,
-  PRIMARY KEY(code_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS customer_vouchers (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES workspace_users(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  amount_micros BIGINT NOT NULL,
-  minimum_recharge_micros BIGINT NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'active',
-  expires_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS customer_vouchers_user_status_idx
-  ON customer_vouchers(user_id, status, expires_at);
-
-CREATE TABLE IF NOT EXISTS customer_notification_preferences (
-  user_id TEXT NOT NULL REFERENCES workspace_users(id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL,
-  enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  channels TEXT NOT NULL DEFAULT '[]',
-  threshold DOUBLE PRECISION,
-  updated_at TIMESTAMPTZ NOT NULL,
-  PRIMARY KEY(user_id, event_type),
-  CHECK (threshold IS NULL OR threshold >= 0)
-);
-
-CREATE TABLE IF NOT EXISTS customer_notifications (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES workspace_users(id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL,
-  title TEXT NOT NULL,
-  content TEXT NOT NULL DEFAULT '',
-  link TEXT NOT NULL DEFAULT '',
-  dedupe_key TEXT NOT NULL DEFAULT '',
-  visible_in_app BOOLEAN NOT NULL DEFAULT TRUE,
-  is_read BOOLEAN NOT NULL DEFAULT FALSE,
-  read_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS customer_notifications_user_dedupe_idx
-  ON customer_notifications(user_id, dedupe_key)
-  WHERE dedupe_key <> '';
-
-CREATE INDEX IF NOT EXISTS customer_notifications_user_created_idx
-  ON customer_notifications(user_id, visible_in_app, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS customer_notifications_user_unread_idx
-  ON customer_notifications(user_id, is_read, created_at DESC)
-  WHERE visible_in_app = TRUE;
-
-CREATE TABLE IF NOT EXISTS customer_notification_deliveries (
-  id TEXT PRIMARY KEY,
-  notification_id TEXT NOT NULL REFERENCES customer_notifications(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES workspace_users(id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL,
-  channel TEXT NOT NULL,
-  status TEXT NOT NULL,
-  error_message TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS customer_notification_deliveries_notification_idx
-  ON customer_notification_deliveries(notification_id, channel);
 
 CREATE TABLE IF NOT EXISTS routing_groups (
   id TEXT PRIMARY KEY,
@@ -1687,7 +1524,7 @@ CREATE INDEX IF NOT EXISTS governance_policies_scope_idx
 CREATE INDEX IF NOT EXISTS governance_policies_status_idx
   ON governance_policies(status);
 
-CREATE TABLE IF NOT EXISTS platform_tenants (
+CREATE TABLE IF NOT EXISTS applications (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   slug TEXT NOT NULL UNIQUE,
@@ -1698,39 +1535,39 @@ CREATE TABLE IF NOT EXISTS platform_tenants (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
-ALTER TABLE platform_tenants ADD COLUMN IF NOT EXISTS concurrency_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS concurrency_limit INTEGER NOT NULL DEFAULT 0;
 
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
-    WHERE conname = 'platform_tenants_concurrency_limit_non_negative'
-      AND conrelid = 'platform_tenants'::regclass
+    WHERE conname = 'applications_concurrency_limit_non_negative'
+      AND conrelid = 'applications'::regclass
   ) THEN
-    ALTER TABLE platform_tenants
-      ADD CONSTRAINT platform_tenants_concurrency_limit_non_negative
+    ALTER TABLE applications
+      ADD CONSTRAINT applications_concurrency_limit_non_negative
       CHECK (concurrency_limit >= 0);
   END IF;
 END $$;
 
 CREATE TABLE IF NOT EXISTS gateway_principals (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES platform_tenants(id) ON DELETE RESTRICT,
+  application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
   name TEXT NOT NULL,
   principal_type TEXT NOT NULL DEFAULT 'service',
   external_subject_reference TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
-  UNIQUE(tenant_id, name)
+  UNIQUE(application_id, name)
 );
 
-CREATE INDEX IF NOT EXISTS gateway_principals_tenant_status_idx
-  ON gateway_principals(tenant_id, status);
+CREATE INDEX IF NOT EXISTS gateway_principals_application_status_idx
+  ON gateway_principals(application_id, status);
 
 CREATE TABLE IF NOT EXISTS external_auth_integrations (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES platform_tenants(id) ON DELETE RESTRICT,
+  application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
   gateway_principal_id TEXT NOT NULL REFERENCES gateway_principals(id) ON DELETE RESTRICT,
   name TEXT NOT NULL,
   protocol TEXT NOT NULL DEFAULT 'hmac_signed_context',
@@ -1753,7 +1590,7 @@ CREATE TABLE IF NOT EXISTS external_auth_integrations (
   status TEXT NOT NULL DEFAULT 'disabled',
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
-  UNIQUE(tenant_id, name)
+  UNIQUE(application_id, name)
 );
 
 ALTER TABLE external_auth_integrations ADD COLUMN IF NOT EXISTS gateway_principal_id TEXT NOT NULL DEFAULT '';
@@ -1765,8 +1602,8 @@ ALTER TABLE external_auth_integrations ADD COLUMN IF NOT EXISTS models_claim TEX
 ALTER TABLE external_auth_integrations ADD COLUMN IF NOT EXISTS qps_limit_claim TEXT NOT NULL DEFAULT '';
 ALTER TABLE external_auth_integrations ADD COLUMN IF NOT EXISTS monthly_token_limit_claim TEXT NOT NULL DEFAULT '';
 
-CREATE INDEX IF NOT EXISTS external_auth_integrations_tenant_status_idx
-  ON external_auth_integrations(tenant_id, status);
+CREATE INDEX IF NOT EXISTS external_auth_integrations_application_status_idx
+  ON external_auth_integrations(application_id, status);
 
 CREATE UNIQUE INDEX IF NOT EXISTS external_auth_integrations_key_id_idx
   ON external_auth_integrations(key_id);
@@ -1779,12 +1616,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
   prefix TEXT NOT NULL,
   status TEXT NOT NULL,
   key_type TEXT NOT NULL DEFAULT 'workspace',
-  customer_id TEXT NOT NULL DEFAULT '',
   owner_user_id TEXT NOT NULL DEFAULT '',
-  profile_scope TEXT NOT NULL DEFAULT '',
-  platform_tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   gateway_principal_id TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
   principal_type TEXT NOT NULL DEFAULT '',
   principal_reference TEXT NOT NULL DEFAULT '',
   policy_id TEXT NOT NULL DEFAULT '',
@@ -1817,12 +1651,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_type TEXT NOT NULL DEFAULT 'workspace';
-ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS customer_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS owner_user_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS profile_scope TEXT NOT NULL DEFAULT '';
-ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS platform_tenant_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS application_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS gateway_principal_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS principal_type TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS principal_reference TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS scopes TEXT NOT NULL DEFAULT '["gateway:invoke","models:read"]';
@@ -1848,16 +1679,12 @@ CREATE INDEX IF NOT EXISTS api_keys_owner_user_idx
   ON api_keys(owner_user_id, status)
   WHERE owner_user_id <> '';
 
-CREATE INDEX IF NOT EXISTS api_keys_customer_idx
-  ON api_keys(customer_id, status)
-  WHERE customer_id <> '';
+CREATE INDEX IF NOT EXISTS api_keys_application_principal_idx
+  ON api_keys(application_id, gateway_principal_id, status)
+;
 
-CREATE INDEX IF NOT EXISTS api_keys_platform_scope_idx
-  ON api_keys(profile_scope, platform_tenant_id, gateway_principal_id, status)
-  WHERE profile_scope = 'platform';
-
-CREATE INDEX IF NOT EXISTS api_keys_tenant_principal_idx
-  ON api_keys(profile_scope, tenant_id, principal_reference, status);
+CREATE INDEX IF NOT EXISTS api_keys_principal_reference_idx
+  ON api_keys(application_id, principal_reference, status);
 
 CREATE INDEX IF NOT EXISTS api_keys_rotation_family_idx
   ON api_keys(rotation_family_id)
@@ -1884,9 +1711,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   resource_type TEXT NOT NULL,
   resource_id TEXT NOT NULL,
   summary TEXT NOT NULL,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  platform_tenant_id TEXT NOT NULL DEFAULT '',
-  platform_tenant_name TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
+  application_name TEXT NOT NULL DEFAULT '',
   gateway_principal_id TEXT NOT NULL DEFAULT '',
   gateway_principal_name TEXT NOT NULL DEFAULT '',
 	 external_auth_integration_id TEXT NOT NULL DEFAULT '',
@@ -1894,26 +1720,24 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TIMESTAMPTZ NOT NULL
 );
 
-ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS profile_scope TEXT NOT NULL DEFAULT '';
-ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS platform_tenant_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS platform_tenant_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS application_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS application_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS gateway_principal_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS gateway_principal_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS external_auth_integration_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS external_subject_reference TEXT NOT NULL DEFAULT '';
 
-CREATE INDEX IF NOT EXISTS audit_logs_platform_scope_created_idx
-  ON audit_logs(profile_scope, platform_tenant_id, gateway_principal_id, created_at DESC)
-  WHERE profile_scope = 'platform';
+CREATE INDEX IF NOT EXISTS audit_logs_application_principal_created_idx
+  ON audit_logs(application_id, gateway_principal_id, created_at DESC)
+;
 
 CREATE INDEX IF NOT EXISTS audit_logs_external_auth_created_idx
-  ON audit_logs(profile_scope, external_auth_integration_id, external_subject_reference, created_at DESC)
+  ON audit_logs(external_auth_integration_id, external_subject_reference, created_at DESC)
   WHERE external_auth_integration_id <> '';
 
 CREATE TABLE IF NOT EXISTS ai_operations (
   id TEXT PRIMARY KEY,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL,
+  application_id TEXT NOT NULL,
   credential_id TEXT NOT NULL,
   credential_source TEXT NOT NULL,
   integration_id TEXT NOT NULL DEFAULT '',
@@ -1941,19 +1765,18 @@ CREATE TABLE IF NOT EXISTS ai_operations (
 	ALTER TABLE ai_operations ADD COLUMN IF NOT EXISTS artifact_sink_id TEXT NOT NULL DEFAULT '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS ai_operations_idempotency_scope_idx
-  ON ai_operations(profile_scope, tenant_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
+  ON ai_operations(application_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
   WHERE idempotency_key <> '';
 
 DROP INDEX IF EXISTS ai_operations_idempotency_idx;
 
-CREATE INDEX IF NOT EXISTS ai_operations_tenant_created_idx
-  ON ai_operations(profile_scope, tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ai_operations_application_created_idx
+  ON ai_operations(application_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS billing_holds (
   id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL UNIQUE REFERENCES ai_operations(id) ON DELETE RESTRICT,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   credential_id TEXT NOT NULL,
   credential_source TEXT NOT NULL,
   integration_id TEXT NOT NULL DEFAULT '',
@@ -1983,7 +1806,7 @@ CREATE TABLE IF NOT EXISTS billing_holds (
 );
 
 CREATE INDEX IF NOT EXISTS billing_holds_budget_idx
-  ON billing_holds(profile_scope, tenant_id, credential_id, budget_period_start, status);
+  ON billing_holds(application_id, credential_id, budget_period_start, status);
 
 CREATE INDEX IF NOT EXISTS billing_holds_expiry_idx
   ON billing_holds(status, expires_at);
@@ -1993,8 +1816,7 @@ ALTER TABLE billing_holds ADD COLUMN IF NOT EXISTS reserved_usage_dimensions JSO
 CREATE TABLE IF NOT EXISTS ai_jobs (
   id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL UNIQUE REFERENCES ai_operations(id) ON DELETE RESTRICT,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL,
+  application_id TEXT NOT NULL,
   credential_id TEXT NOT NULL,
   credential_source TEXT NOT NULL,
   integration_id TEXT NOT NULL DEFAULT '',
@@ -2026,11 +1848,11 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ai_jobs_idempotency_idx
-  ON ai_jobs(profile_scope, tenant_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
+  ON ai_jobs(application_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
   WHERE idempotency_key <> '';
 
 CREATE INDEX IF NOT EXISTS ai_jobs_owner_created_idx
-  ON ai_jobs(profile_scope, tenant_id, integration_id, principal_type, principal_id, external_subject_reference, created_at DESC);
+  ON ai_jobs(application_id, integration_id, principal_type, principal_id, external_subject_reference, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS ai_jobs_ready_idx
   ON ai_jobs(status, next_eligible_at, priority DESC, created_at);
@@ -2108,8 +1930,7 @@ CREATE TABLE IF NOT EXISTS realtime_sessions (
   id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL UNIQUE REFERENCES ai_operations(id) ON DELETE RESTRICT,
   attempt_id TEXT NOT NULL UNIQUE REFERENCES ai_attempts(id) ON DELETE RESTRICT,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   credential_id TEXT NOT NULL,
   principal_type TEXT NOT NULL DEFAULT '',
   principal_id TEXT NOT NULL DEFAULT '',
@@ -2138,8 +1959,8 @@ CREATE TABLE IF NOT EXISTS realtime_sessions (
   CHECK (transfer_bytes >= 0 AND usage_version >= 0 AND session_duration_ms >= 0)
 );
 
-CREATE INDEX IF NOT EXISTS realtime_sessions_tenant_created_idx
-  ON realtime_sessions(profile_scope, tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS realtime_sessions_application_created_idx
+  ON realtime_sessions(application_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS realtime_sessions_status_updated_idx
   ON realtime_sessions(status, updated_at);
@@ -2188,8 +2009,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
   job_id TEXT REFERENCES ai_jobs(id) ON DELETE RESTRICT,
   attempt_id TEXT REFERENCES ai_attempts(id) ON DELETE RESTRICT,
   source_artifact_id TEXT REFERENCES artifacts(id) ON DELETE RESTRICT,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   integration_id TEXT NOT NULL DEFAULT '',
   principal_type TEXT NOT NULL DEFAULT '',
   principal_id TEXT NOT NULL DEFAULT '',
@@ -2216,7 +2036,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 
 CREATE INDEX IF NOT EXISTS artifacts_owner_created_idx
-  ON artifacts(profile_scope, tenant_id, integration_id, principal_type, principal_id, external_subject_reference, created_at DESC);
+  ON artifacts(application_id, integration_id, principal_type, principal_id, external_subject_reference, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS artifacts_job_created_idx
   ON artifacts(job_id, created_at);
@@ -2245,27 +2065,25 @@ CREATE INDEX IF NOT EXISTS artifact_events_artifact_version_idx
 
 CREATE TABLE IF NOT EXISTS gateway_credential_rate_samples (
   id TEXT PRIMARY KEY,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   credential_id TEXT NOT NULL,
   estimated_tokens INTEGER NOT NULL DEFAULT 0,
   occurred_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS gateway_credential_rate_samples_window_idx
-  ON gateway_credential_rate_samples(profile_scope, tenant_id, credential_id, occurred_at);
+  ON gateway_credential_rate_samples(application_id, credential_id, occurred_at);
 
 CREATE TABLE IF NOT EXISTS gateway_credential_capacity_leases (
   id TEXT PRIMARY KEY,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   credential_id TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS gateway_credential_capacity_leases_expiry_idx
-  ON gateway_credential_capacity_leases(profile_scope, tenant_id, credential_id, expires_at);
+  ON gateway_credential_capacity_leases(application_id, credential_id, expires_at);
 
 CREATE TABLE IF NOT EXISTS gateway_provider_rate_samples (
   id TEXT PRIMARY KEY,
@@ -2324,10 +2142,8 @@ CREATE TABLE IF NOT EXISTS usage_records (
   usage_source TEXT NOT NULL DEFAULT '',
   request_fingerprint TEXT NOT NULL DEFAULT '',
   api_key_id TEXT NOT NULL,
-  customer_id TEXT NOT NULL DEFAULT '',
-  profile_scope TEXT NOT NULL DEFAULT '',
-  platform_tenant_id TEXT NOT NULL DEFAULT '',
-  platform_tenant_name TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
+  application_name TEXT NOT NULL DEFAULT '',
   gateway_principal_id TEXT NOT NULL DEFAULT '',
   gateway_principal_name TEXT NOT NULL DEFAULT '',
 	 external_auth_integration_id TEXT NOT NULL DEFAULT '',
@@ -2350,11 +2166,9 @@ CREATE TABLE IF NOT EXISTS usage_records (
 );
 
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS provider_account_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS customer_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS upstream_model TEXT NOT NULL DEFAULT '';
-ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS profile_scope TEXT NOT NULL DEFAULT '';
-ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS platform_tenant_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS platform_tenant_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS application_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS application_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS gateway_principal_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS gateway_principal_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS external_auth_integration_id TEXT NOT NULL DEFAULT '';
@@ -2365,64 +2179,17 @@ ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS usage_version INTEGER NOT NUL
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS usage_source TEXT NOT NULL DEFAULT '';
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS request_fingerprint TEXT NOT NULL DEFAULT '';
 
-CREATE INDEX IF NOT EXISTS usage_records_customer_created_idx
-  ON usage_records(customer_id, created_at DESC)
-  WHERE customer_id <> '';
-
-CREATE INDEX IF NOT EXISTS usage_records_platform_scope_created_idx
-  ON usage_records(profile_scope, platform_tenant_id, gateway_principal_id, created_at DESC)
-  WHERE profile_scope = 'platform';
+CREATE INDEX IF NOT EXISTS usage_records_application_principal_created_idx
+  ON usage_records(application_id, gateway_principal_id, created_at DESC)
+;
 
 CREATE INDEX IF NOT EXISTS usage_records_external_auth_created_idx
-  ON usage_records(profile_scope, external_auth_integration_id, external_subject_reference, created_at DESC)
+  ON usage_records(external_auth_integration_id, external_subject_reference, created_at DESC)
   WHERE external_auth_integration_id <> '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS usage_records_ledger_identity_idx
   ON usage_records(operation_id, attempt_id, usage_version)
   WHERE operation_id <> '';
-
-CREATE TABLE IF NOT EXISTS platform_usage_sinks (
-  id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES platform_tenants(id) ON DELETE RESTRICT,
-  external_auth_integration_id TEXT NOT NULL REFERENCES external_auth_integrations(id) ON DELETE RESTRICT,
-  name TEXT NOT NULL,
-  endpoint_url_ciphertext TEXT NOT NULL DEFAULT '',
-  endpoint_url_hint TEXT NOT NULL DEFAULT '',
-  signing_secret_ciphertext TEXT NOT NULL DEFAULT '',
-  signing_secret_hint TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'disabled',
-  max_attempts INTEGER NOT NULL DEFAULT 10,
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL,
-  UNIQUE(external_auth_integration_id, name)
-);
-
-CREATE INDEX IF NOT EXISTS platform_usage_sinks_integration_status_idx
-  ON platform_usage_sinks(external_auth_integration_id, status);
-
-CREATE TABLE IF NOT EXISTS platform_usage_delivery_events (
-  id TEXT PRIMARY KEY,
-  sink_id TEXT NOT NULL REFERENCES platform_usage_sinks(id) ON DELETE RESTRICT,
-  usage_record_id TEXT NOT NULL REFERENCES usage_records(id) ON DELETE RESTRICT,
-  event_id TEXT NOT NULL UNIQUE,
-  payload_json TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  attempt_count INTEGER NOT NULL DEFAULT 0,
-  max_attempts INTEGER NOT NULL DEFAULT 10,
-  next_attempt_at TIMESTAMPTZ NOT NULL,
-  lease_until TIMESTAMPTZ NULL,
-  lease_token TEXT NOT NULL DEFAULT '',
-  delivered_at TIMESTAMPTZ NULL,
-  last_http_status INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT NOT NULL DEFAULT '',
-  target_hint TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL,
-  UNIQUE(sink_id, usage_record_id)
-);
-
-CREATE INDEX IF NOT EXISTS platform_usage_delivery_due_idx
-  ON platform_usage_delivery_events(status, next_attempt_at, lease_until);
 
 CREATE TABLE IF NOT EXISTS gateway_traces (
   id TEXT PRIMARY KEY,
@@ -2431,9 +2198,8 @@ CREATE TABLE IF NOT EXISTS gateway_traces (
   request_fingerprint TEXT NOT NULL DEFAULT '',
   api_key_id TEXT NOT NULL,
   api_fingerprint TEXT NOT NULL,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  platform_tenant_id TEXT NOT NULL DEFAULT '',
-  platform_tenant_name TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
+  application_name TEXT NOT NULL DEFAULT '',
   gateway_principal_id TEXT NOT NULL DEFAULT '',
   gateway_principal_name TEXT NOT NULL DEFAULT '',
 	 external_auth_integration_id TEXT NOT NULL DEFAULT '',
@@ -2476,9 +2242,8 @@ ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_source TEXT NOT NULL 
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS policy_snapshot TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS route_attempts TEXT NOT NULL DEFAULT '[]';
-ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS profile_scope TEXT NOT NULL DEFAULT '';
-ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS platform_tenant_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS platform_tenant_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS application_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS application_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS gateway_principal_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS gateway_principal_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE gateway_traces ADD COLUMN IF NOT EXISTS external_auth_integration_id TEXT NOT NULL DEFAULT '';
@@ -2496,12 +2261,12 @@ CREATE INDEX IF NOT EXISTS gateway_traces_route_idx
 CREATE INDEX IF NOT EXISTS gateway_traces_policy_idx
   ON gateway_traces(policy_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS gateway_traces_platform_scope_created_idx
-  ON gateway_traces(profile_scope, platform_tenant_id, gateway_principal_id, created_at DESC)
-  WHERE profile_scope = 'platform';
+CREATE INDEX IF NOT EXISTS gateway_traces_application_principal_created_idx
+  ON gateway_traces(application_id, gateway_principal_id, created_at DESC)
+;
 
 CREATE INDEX IF NOT EXISTS gateway_traces_external_auth_created_idx
-  ON gateway_traces(profile_scope, external_auth_integration_id, external_subject_reference, created_at DESC)
+  ON gateway_traces(external_auth_integration_id, external_subject_reference, created_at DESC)
   WHERE external_auth_integration_id <> '';
 
 CREATE TABLE IF NOT EXISTS alert_events (
@@ -2513,9 +2278,8 @@ CREATE TABLE IF NOT EXISTS alert_events (
   summary TEXT NOT NULL,
   resource_type TEXT NOT NULL DEFAULT '',
   resource_id TEXT NOT NULL DEFAULT '',
-  profile_scope TEXT NOT NULL DEFAULT '',
-  platform_tenant_id TEXT NOT NULL DEFAULT '',
-  platform_tenant_name TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
+  application_name TEXT NOT NULL DEFAULT '',
   gateway_principal_id TEXT NOT NULL DEFAULT '',
   gateway_principal_name TEXT NOT NULL DEFAULT '',
 	 external_auth_integration_id TEXT NOT NULL DEFAULT '',
@@ -2536,20 +2300,19 @@ CREATE INDEX IF NOT EXISTS alert_events_status_last_seen_idx
 CREATE INDEX IF NOT EXISTS alert_events_resource_idx
   ON alert_events(resource_type, resource_id, last_seen_at DESC);
 
-ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS profile_scope TEXT NOT NULL DEFAULT '';
-ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS platform_tenant_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS platform_tenant_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS application_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS application_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS gateway_principal_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS gateway_principal_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS external_auth_integration_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS external_subject_reference TEXT NOT NULL DEFAULT '';
 
-CREATE INDEX IF NOT EXISTS alert_events_platform_scope_last_seen_idx
-  ON alert_events(profile_scope, platform_tenant_id, gateway_principal_id, last_seen_at DESC)
-  WHERE profile_scope = 'platform';
+CREATE INDEX IF NOT EXISTS alert_events_application_principal_last_seen_idx
+  ON alert_events(application_id, gateway_principal_id, last_seen_at DESC)
+;
 
 CREATE INDEX IF NOT EXISTS alert_events_external_auth_last_seen_idx
-  ON alert_events(profile_scope, external_auth_integration_id, external_subject_reference, last_seen_at DESC)
+  ON alert_events(external_auth_integration_id, external_subject_reference, last_seen_at DESC)
   WHERE external_auth_integration_id <> '';
 
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS protocol TEXT NOT NULL DEFAULT '';
@@ -3464,8 +3227,8 @@ FROM provider_accounts
 	return counts, activeCounts, rows.Err()
 }
 
-const apiKeySelectColumns = `id, name, key_hash, fingerprint, prefix, status, key_type, customer_id, owner_user_id,
-profile_scope, platform_tenant_id, gateway_principal_id, tenant_id, principal_type, principal_reference,
+const apiKeySelectColumns = `id, name, key_hash, fingerprint, prefix, status, key_type, owner_user_id,
+application_id, gateway_principal_id, principal_type, principal_reference,
 policy_id, scopes, model_allowlist, allowed_modalities, allowed_operations,
 qps_limit, rpm_limit, tpm_limit, concurrency_limit, monthly_token_limit, monthly_budget_micros,
 monthly_image_limit, monthly_video_seconds_limit, monthly_audio_seconds_limit,
@@ -3482,8 +3245,8 @@ func scanAPIKey(scanner apiKeyScanner) (APIKeyRecord, error) {
 	var scopes, allowlist, modalities, operations, allowedCIDRs string
 	var rotationGraceExpiresAt, expiresAt, lastUsedAt sql.NullTime
 	err := scanner.Scan(
-		&key.ID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.KeyType, &key.CustomerID, &key.OwnerUserID,
-		&key.ProfileScope, &key.PlatformTenantID, &key.GatewayPrincipalID, &key.TenantID, &key.PrincipalType, &key.PrincipalReference,
+		&key.ID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.KeyType, &key.OwnerUserID,
+		&key.ApplicationID, &key.GatewayPrincipalID, &key.PrincipalType, &key.PrincipalReference,
 		&key.PolicyID, &scopes, &allowlist, &modalities, &operations,
 		&key.QPSLimit, &key.RPMLimit, &key.TPMLimit, &key.ConcurrencyLimit, &key.MonthlyTokenLimit, &key.MonthlyBudgetMicros,
 		&key.MonthlyImageLimit, &key.MonthlyVideoSecondsLimit, &key.MonthlyAudioSecondsLimit,
@@ -3550,8 +3313,8 @@ func (r *PostgresRepository) SaveAPIKey(ctx context.Context, key APIKeyRecord) e
 
 const apiKeyInsertStatement = `
 INSERT INTO api_keys(
-  id, name, key_hash, fingerprint, prefix, status, key_type, customer_id, owner_user_id,
-  profile_scope, platform_tenant_id, gateway_principal_id, tenant_id, principal_type, principal_reference,
+  id, name, key_hash, fingerprint, prefix, status, key_type, owner_user_id,
+	  application_id, gateway_principal_id, principal_type, principal_reference,
   policy_id, scopes, model_allowlist, allowed_modalities, allowed_operations,
   qps_limit, rpm_limit, tpm_limit, concurrency_limit, monthly_token_limit, monthly_budget_micros,
   monthly_image_limit, monthly_video_seconds_limit, monthly_audio_seconds_limit,
@@ -3560,8 +3323,8 @@ INSERT INTO api_keys(
   expires_at, last_used_at, created_at, updated_at
 )
 VALUES(
-  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-  $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41
+	  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+	  $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38
 )
 `
 
@@ -3572,14 +3335,11 @@ ON CONFLICT(id) DO UPDATE SET
   fingerprint = EXCLUDED.fingerprint,
   prefix = EXCLUDED.prefix,
   status = EXCLUDED.status,
-  key_type = EXCLUDED.key_type,
-  customer_id = EXCLUDED.customer_id,
-  owner_user_id = EXCLUDED.owner_user_id,
-  profile_scope = EXCLUDED.profile_scope,
-  platform_tenant_id = EXCLUDED.platform_tenant_id,
-  gateway_principal_id = EXCLUDED.gateway_principal_id,
-  tenant_id = EXCLUDED.tenant_id,
-  principal_type = EXCLUDED.principal_type,
+	key_type = EXCLUDED.key_type,
+	owner_user_id = EXCLUDED.owner_user_id,
+	application_id = EXCLUDED.application_id,
+	gateway_principal_id = EXCLUDED.gateway_principal_id,
+	principal_type = EXCLUDED.principal_type,
   principal_reference = EXCLUDED.principal_reference,
   policy_id = EXCLUDED.policy_id,
   scopes = EXCLUDED.scopes,
@@ -3615,8 +3375,8 @@ func apiKeyWriteArgs(key APIKeyRecord) []any {
 	operations := marshalStringList(key.AllowedOperations)
 	allowedCIDRs := marshalStringList(key.AllowedCIDRs)
 	return []any{
-		key.ID, key.Name, key.KeyHash, key.Fingerprint, key.Prefix, key.Status, key.KeyType, key.CustomerID, key.OwnerUserID,
-		key.ProfileScope, key.PlatformTenantID, key.GatewayPrincipalID, key.TenantID, key.PrincipalType, key.PrincipalReference,
+		key.ID, key.Name, key.KeyHash, key.Fingerprint, key.Prefix, key.Status, key.KeyType, key.OwnerUserID,
+		key.ApplicationID, key.GatewayPrincipalID, key.PrincipalType, key.PrincipalReference,
 		key.PolicyID, scopes, allowlist, modalities, operations,
 		key.QPSLimit, key.RPMLimit, key.TPMLimit, key.ConcurrencyLimit, key.MonthlyTokenLimit, key.MonthlyBudgetMicros,
 		key.MonthlyImageLimit, key.MonthlyVideoSecondsLimit, key.MonthlyAudioSecondsLimit,
@@ -3704,9 +3464,9 @@ func saveUsageRecord(ctx context.Context, executor usageRecordExecutor, record U
 		return err
 	}
 	_, err = executor.ExecContext(ctx, `
-	INSERT INTO usage_records(id, operation_id, attempt_id, usage_version, usage_source, request_fingerprint, api_key_id, customer_id, profile_scope, platform_tenant_id, platform_tenant_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, api_fingerprint, model, upstream_model, protocol, provider_id, provider_account_id, status, error_type, latency_ms, ttft_ms, input_tokens, output_tokens, total_input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, cache_fields_present, usage_dimensions, usage_normalization_status, upstream_request_id, procurement_cost_micros, procurement_cost_currency, procurement_cost_source, procurement_cost_confidence, procurement_price_id, provider_billing_line_id, usage_cost_micros, usage_cost_currency, usage_pricing_evaluation_id, pricing_status, created_at)
-	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34::jsonb,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47)
-	`, record.ID, record.OperationID, record.AttemptID, record.UsageVersion, record.UsageSource, record.RequestFingerprint, record.APIKeyID, record.CustomerID, record.ProfileScope, record.PlatformTenantID, record.PlatformTenantName, record.GatewayPrincipalID, record.GatewayPrincipalName, record.ExternalAuthIntegrationID, record.ExternalSubjectReference, record.APIFingerprint, record.Model, record.UpstreamModel, record.Protocol, record.ProviderID, record.ProviderAccountID, record.Status, record.ErrorType, record.LatencyMS, record.TTFTMS, record.InputTokens, record.OutputTokens, record.TotalInputTokens, record.UncachedInputTokens, record.CacheReadTokens, record.CacheWrite5mTokens, record.CacheWrite1hTokens, record.CacheFieldsPresent, usageDimensionsJSON, record.UsageNormalizationStatus, record.UpstreamRequestID, record.ProcurementCostMicros, record.ProcurementCostCurrency, record.ProcurementCostSource, record.ProcurementCostConfidence, record.ProcurementPriceID, record.ProviderBillingLineID, record.UsageCostMicros, record.UsageCostCurrency, record.UsagePricingEvaluationID, record.PricingStatus, record.CreatedAt)
+		INSERT INTO usage_records(id, operation_id, attempt_id, usage_version, usage_source, request_fingerprint, api_key_id, application_id, application_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, api_fingerprint, model, upstream_model, protocol, provider_id, provider_account_id, status, error_type, latency_ms, ttft_ms, input_tokens, output_tokens, total_input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, cache_fields_present, usage_dimensions, usage_normalization_status, upstream_request_id, procurement_cost_micros, procurement_cost_currency, procurement_cost_source, procurement_cost_confidence, procurement_price_id, provider_billing_line_id, usage_cost_micros, usage_cost_currency, usage_pricing_evaluation_id, pricing_status, created_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32::jsonb,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)
+		`, record.ID, record.OperationID, record.AttemptID, record.UsageVersion, record.UsageSource, record.RequestFingerprint, record.APIKeyID, record.ApplicationID, record.ApplicationName, record.GatewayPrincipalID, record.GatewayPrincipalName, record.ExternalAuthIntegrationID, record.ExternalSubjectReference, record.APIFingerprint, record.Model, record.UpstreamModel, record.Protocol, record.ProviderID, record.ProviderAccountID, record.Status, record.ErrorType, record.LatencyMS, record.TTFTMS, record.InputTokens, record.OutputTokens, record.TotalInputTokens, record.UncachedInputTokens, record.CacheReadTokens, record.CacheWrite5mTokens, record.CacheWrite1hTokens, record.CacheFieldsPresent, usageDimensionsJSON, record.UsageNormalizationStatus, record.UpstreamRequestID, record.ProcurementCostMicros, record.ProcurementCostCurrency, record.ProcurementCostSource, record.ProcurementCostConfidence, record.ProcurementPriceID, record.ProviderBillingLineID, record.UsageCostMicros, record.UsageCostCurrency, record.UsagePricingEvaluationID, record.PricingStatus, record.CreatedAt)
 	return err
 }
 
@@ -3720,7 +3480,7 @@ func (r *PostgresRepository) QueryUsageRecords(ctx context.Context, query UsageQ
 	args := []any{}
 	appendUsageRecordFilters(&clauses, &args, query)
 	sqlText := `
-	SELECT id, operation_id, attempt_id, usage_version, usage_source, request_fingerprint, api_key_id, customer_id, profile_scope, platform_tenant_id, platform_tenant_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, api_fingerprint, model, upstream_model, protocol, provider_id, provider_account_id, status, error_type, latency_ms, ttft_ms, input_tokens, output_tokens, total_input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, cache_fields_present, usage_dimensions, usage_normalization_status, upstream_request_id, procurement_cost_micros, procurement_cost_currency, procurement_cost_source, procurement_cost_confidence, procurement_price_id, provider_billing_line_id, usage_cost_micros, usage_cost_currency, usage_pricing_evaluation_id, pricing_status, created_at
+		SELECT id, operation_id, attempt_id, usage_version, usage_source, request_fingerprint, api_key_id, application_id, application_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, api_fingerprint, model, upstream_model, protocol, provider_id, provider_account_id, status, error_type, latency_ms, ttft_ms, input_tokens, output_tokens, total_input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, cache_fields_present, usage_dimensions, usage_normalization_status, upstream_request_id, procurement_cost_micros, procurement_cost_currency, procurement_cost_source, procurement_cost_confidence, procurement_price_id, provider_billing_line_id, usage_cost_micros, usage_cost_currency, usage_pricing_evaluation_id, pricing_status, created_at
 FROM usage_records`
 	if len(clauses) > 0 {
 		sqlText += " WHERE " + strings.Join(clauses, " AND ")
@@ -3736,7 +3496,7 @@ FROM usage_records`
 	for rows.Next() {
 		var record UsageRecord
 		var usageDimensionsJSON []byte
-		if err := rows.Scan(&record.ID, &record.OperationID, &record.AttemptID, &record.UsageVersion, &record.UsageSource, &record.RequestFingerprint, &record.APIKeyID, &record.CustomerID, &record.ProfileScope, &record.PlatformTenantID, &record.PlatformTenantName, &record.GatewayPrincipalID, &record.GatewayPrincipalName, &record.ExternalAuthIntegrationID, &record.ExternalSubjectReference, &record.APIFingerprint, &record.Model, &record.UpstreamModel, &record.Protocol, &record.ProviderID, &record.ProviderAccountID, &record.Status, &record.ErrorType, &record.LatencyMS, &record.TTFTMS, &record.InputTokens, &record.OutputTokens, &record.TotalInputTokens, &record.UncachedInputTokens, &record.CacheReadTokens, &record.CacheWrite5mTokens, &record.CacheWrite1hTokens, &record.CacheFieldsPresent, &usageDimensionsJSON, &record.UsageNormalizationStatus, &record.UpstreamRequestID, &record.ProcurementCostMicros, &record.ProcurementCostCurrency, &record.ProcurementCostSource, &record.ProcurementCostConfidence, &record.ProcurementPriceID, &record.ProviderBillingLineID, &record.UsageCostMicros, &record.UsageCostCurrency, &record.UsagePricingEvaluationID, &record.PricingStatus, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.OperationID, &record.AttemptID, &record.UsageVersion, &record.UsageSource, &record.RequestFingerprint, &record.APIKeyID, &record.ApplicationID, &record.ApplicationName, &record.GatewayPrincipalID, &record.GatewayPrincipalName, &record.ExternalAuthIntegrationID, &record.ExternalSubjectReference, &record.APIFingerprint, &record.Model, &record.UpstreamModel, &record.Protocol, &record.ProviderID, &record.ProviderAccountID, &record.Status, &record.ErrorType, &record.LatencyMS, &record.TTFTMS, &record.InputTokens, &record.OutputTokens, &record.TotalInputTokens, &record.UncachedInputTokens, &record.CacheReadTokens, &record.CacheWrite5mTokens, &record.CacheWrite1hTokens, &record.CacheFieldsPresent, &usageDimensionsJSON, &record.UsageNormalizationStatus, &record.UpstreamRequestID, &record.ProcurementCostMicros, &record.ProcurementCostCurrency, &record.ProcurementCostSource, &record.ProcurementCostConfidence, &record.ProcurementPriceID, &record.ProviderBillingLineID, &record.UsageCostMicros, &record.UsageCostCurrency, &record.UsagePricingEvaluationID, &record.PricingStatus, &record.CreatedAt); err != nil {
 			return nil, err
 		}
 		record.UsageDimensions, err = ParseUsageDimensionsJSON(string(usageDimensionsJSON))
@@ -3856,9 +3616,9 @@ WHERE api_key_id = $1 AND created_at >= $2
 
 func (r *PostgresRepository) SaveGatewayTrace(ctx context.Context, trace GatewayTrace) error {
 	_, err := r.db.ExecContext(ctx, `
-INSERT INTO gateway_traces(id, operation_id, attempt_id, request_fingerprint, api_key_id, api_fingerprint, profile_scope, platform_tenant_id, platform_tenant_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, model, stream, message_count, provider_id, provider_account_id, gateway_model_id, route_id, route_group, upstream_model, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
-`, trace.ID, trace.OperationID, trace.AttemptID, trace.RequestFingerprint, trace.APIKeyID, trace.APIFingerprint, trace.ProfileScope, trace.PlatformTenantID, trace.PlatformTenantName, trace.GatewayPrincipalID, trace.GatewayPrincipalName, trace.ExternalAuthIntegrationID, trace.ExternalSubjectReference, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.GatewayModelID, trace.RouteID, trace.RouteGroup, trace.UpstreamModel, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicyVersion, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, defaultJSONArray(trace.RouteAttempts), trace.CreatedAt)
+INSERT INTO gateway_traces(id, operation_id, attempt_id, request_fingerprint, api_key_id, api_fingerprint, application_id, application_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, model, stream, message_count, provider_id, provider_account_id, gateway_model_id, route_id, route_group, upstream_model, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
+`, trace.ID, trace.OperationID, trace.AttemptID, trace.RequestFingerprint, trace.APIKeyID, trace.APIFingerprint, trace.ApplicationID, trace.ApplicationName, trace.GatewayPrincipalID, trace.GatewayPrincipalName, trace.ExternalAuthIntegrationID, trace.ExternalSubjectReference, trace.Model, trace.Stream, trace.MessageCount, trace.ProviderID, trace.ProviderAccountID, trace.GatewayModelID, trace.RouteID, trace.RouteGroup, trace.UpstreamModel, trace.RouteSource, trace.RouteReason, trace.PolicyID, trace.PolicyName, trace.PolicySource, trace.PolicyVersion, trace.PolicySnapshot, trace.Status, trace.HTTPStatus, trace.ErrorType, trace.LatencyMS, trace.InputTokens, trace.OutputTokens, trace.RequestSummary, trace.ResponseSummary, defaultJSONArray(trace.RouteAttempts), trace.CreatedAt)
 	return err
 }
 
@@ -3879,7 +3639,7 @@ func (r *PostgresRepository) QueryGatewayTraces(ctx context.Context, query Gatew
 	args := []any{}
 	appendGatewayTraceFilters(&clauses, &args, query)
 	sqlText := `
-	SELECT id, operation_id, attempt_id, request_fingerprint, api_key_id, api_fingerprint, profile_scope, platform_tenant_id, platform_tenant_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, model, stream, message_count, provider_id, provider_account_id, gateway_model_id, route_id, route_group, upstream_model, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at
+		SELECT id, operation_id, attempt_id, request_fingerprint, api_key_id, api_fingerprint, application_id, application_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, model, stream, message_count, provider_id, provider_account_id, gateway_model_id, route_id, route_group, upstream_model, route_source, route_reason, policy_id, policy_name, policy_source, policy_version, policy_snapshot, status, http_status, error_type, latency_ms, input_tokens, output_tokens, request_summary, response_summary, route_attempts, created_at
 FROM gateway_traces`
 	if len(clauses) > 0 {
 		sqlText += " WHERE " + strings.Join(clauses, " AND ")
@@ -3894,7 +3654,7 @@ FROM gateway_traces`
 	out := make([]GatewayTrace, 0)
 	for rows.Next() {
 		var trace GatewayTrace
-		if err := rows.Scan(&trace.ID, &trace.OperationID, &trace.AttemptID, &trace.RequestFingerprint, &trace.APIKeyID, &trace.APIFingerprint, &trace.ProfileScope, &trace.PlatformTenantID, &trace.PlatformTenantName, &trace.GatewayPrincipalID, &trace.GatewayPrincipalName, &trace.ExternalAuthIntegrationID, &trace.ExternalSubjectReference, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.GatewayModelID, &trace.RouteID, &trace.RouteGroup, &trace.UpstreamModel, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicyVersion, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.RouteAttempts, &trace.CreatedAt); err != nil {
+		if err := rows.Scan(&trace.ID, &trace.OperationID, &trace.AttemptID, &trace.RequestFingerprint, &trace.APIKeyID, &trace.APIFingerprint, &trace.ApplicationID, &trace.ApplicationName, &trace.GatewayPrincipalID, &trace.GatewayPrincipalName, &trace.ExternalAuthIntegrationID, &trace.ExternalSubjectReference, &trace.Model, &trace.Stream, &trace.MessageCount, &trace.ProviderID, &trace.ProviderAccountID, &trace.GatewayModelID, &trace.RouteID, &trace.RouteGroup, &trace.UpstreamModel, &trace.RouteSource, &trace.RouteReason, &trace.PolicyID, &trace.PolicyName, &trace.PolicySource, &trace.PolicyVersion, &trace.PolicySnapshot, &trace.Status, &trace.HTTPStatus, &trace.ErrorType, &trace.LatencyMS, &trace.InputTokens, &trace.OutputTokens, &trace.RequestSummary, &trace.ResponseSummary, &trace.RouteAttempts, &trace.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, trace)
@@ -3941,7 +3701,7 @@ func (r *PostgresRepository) QueryAuditLogs(ctx context.Context, query AuditLogQ
 	args := []any{}
 	appendAuditLogFilters(&clauses, &args, query)
 	sqlText := `
-SELECT id, actor, action, resource_type, resource_id, summary, profile_scope, platform_tenant_id, platform_tenant_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, created_at
+SELECT id, actor, action, resource_type, resource_id, summary, application_id, application_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, created_at
 FROM audit_logs`
 	if len(clauses) > 0 {
 		sqlText += " WHERE " + strings.Join(clauses, " AND ")
@@ -3956,7 +3716,7 @@ FROM audit_logs`
 	out := make([]AuditLog, 0)
 	for rows.Next() {
 		var event AuditLog
-		if err := rows.Scan(&event.ID, &event.Actor, &event.Action, &event.ResourceType, &event.ResourceID, &event.Summary, &event.ProfileScope, &event.PlatformTenantID, &event.PlatformTenantName, &event.GatewayPrincipalID, &event.GatewayPrincipalName, &event.ExternalAuthIntegrationID, &event.ExternalSubjectReference, &event.CreatedAt); err != nil {
+		if err := rows.Scan(&event.ID, &event.Actor, &event.Action, &event.ResourceType, &event.ResourceID, &event.Summary, &event.ApplicationID, &event.ApplicationName, &event.GatewayPrincipalID, &event.GatewayPrincipalName, &event.ExternalAuthIntegrationID, &event.ExternalSubjectReference, &event.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, event)
@@ -3993,9 +3753,9 @@ func (r *PostgresRepository) AddAuditLog(ctx context.Context, event AuditLog) er
 
 func insertAuditLog(ctx context.Context, executor usageRecordExecutor, event AuditLog) error {
 	_, err := executor.ExecContext(ctx, `
-INSERT INTO audit_logs(id, actor, action, resource_type, resource_id, summary, profile_scope, platform_tenant_id, platform_tenant_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, created_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-`, event.ID, event.Actor, event.Action, event.ResourceType, event.ResourceID, event.Summary, event.ProfileScope, event.PlatformTenantID, event.PlatformTenantName, event.GatewayPrincipalID, event.GatewayPrincipalName, event.ExternalAuthIntegrationID, event.ExternalSubjectReference, event.CreatedAt)
+	INSERT INTO audit_logs(id, actor, action, resource_type, resource_id, summary, application_id, application_name, gateway_principal_id, gateway_principal_name, external_auth_integration_id, external_subject_reference, created_at)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+	`, event.ID, event.Actor, event.Action, event.ResourceType, event.ResourceID, event.Summary, event.ApplicationID, event.ApplicationName, event.GatewayPrincipalID, event.GatewayPrincipalName, event.ExternalAuthIntegrationID, event.ExternalSubjectReference, event.CreatedAt)
 	return err
 }
 

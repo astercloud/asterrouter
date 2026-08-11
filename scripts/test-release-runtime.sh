@@ -88,7 +88,7 @@ done
 
 curl -fsS "http://127.0.0.1:${PORT}/ready" | grep -q '"status":"ready"'
 curl -fsS "http://127.0.0.1:${PORT}/api/v1/settings/public" | grep -q '"demo_mode":true'
-for path in /login /console/overview /admin/dashboard /portal/overview; do
+for path in /login /console/workbench /portal/overview; do
   curl -fsS "http://127.0.0.1:${PORT}${path}" | grep -q '<div id="app"></div>'
 done
 

@@ -23,10 +23,6 @@ func mapRemoteCatalogPlugins(index remoteCatalogIndex, now time.Time) []Plugin {
 		}
 		tier, entitlement, status := remoteTier(item.Tier, requiresEntitlement)
 		manifestMetadata := remotePluginManifestMetadata(item)
-		surfaces := manifestMetadata.Surfaces
-		if len(surfaces) == 0 {
-			surfaces = []string{"admin"}
-		}
 		out = append(out, Plugin{
 			ID:                pluginID,
 			PluginID:          pluginID,
@@ -39,8 +35,7 @@ func mapRemoteCatalogPlugins(index remoteCatalogIndex, now time.Time) []Plugin {
 			Vendor:            defaultText(item.VendorName, "AsterCloud"),
 			Status:            status,
 			EntitlementStatus: entitlement,
-			Surfaces:          surfaces,
-			EntryPoint:        "/admin/plugins",
+			EntryPoint:        "/console/system/plugins",
 			Configurable:      manifestMetadata.Configurable,
 			CreatedAt:         now,
 			UpdatedAt:         now,
@@ -50,17 +45,8 @@ func mapRemoteCatalogPlugins(index remoteCatalogIndex, now time.Time) []Plugin {
 	return out
 }
 
-func remotePluginSurfaces(item remoteCatalogPlugin) []string {
-	metadata := remotePluginManifestMetadata(item)
-	if len(metadata.Surfaces) > 0 {
-		return metadata.Surfaces
-	}
-	return []string{"admin"}
-}
-
 type remotePluginManifest struct {
-	Surfaces     []string `json:"surfaces"`
-	Configurable bool     `json:"configurable"`
+	Configurable bool `json:"configurable"`
 }
 
 func remotePluginManifestMetadata(item remoteCatalogPlugin) remotePluginManifest {
@@ -78,20 +64,6 @@ func remotePluginManifestMetadata(item remoteCatalogPlugin) remotePluginManifest
 		if err := json.Unmarshal(payload.Manifest, &manifest); err != nil {
 			continue
 		}
-		surfaces := make([]string, 0, len(manifest.Surfaces))
-		seen := make(map[string]struct{}, len(manifest.Surfaces))
-		for _, surface := range manifest.Surfaces {
-			surface = strings.TrimSpace(surface)
-			if surface == "" {
-				continue
-			}
-			if _, ok := seen[surface]; ok {
-				continue
-			}
-			seen[surface] = struct{}{}
-			surfaces = append(surfaces, surface)
-		}
-		manifest.Surfaces = surfaces
 		return manifest
 	}
 	return remotePluginManifest{}

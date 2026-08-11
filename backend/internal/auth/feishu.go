@@ -39,8 +39,15 @@ func NewFeishuService(cfg FeishuConfig) (*FeishuService, error) {
 	if cfg.Enabled && (strings.TrimSpace(cfg.AppID) == "" || strings.TrimSpace(cfg.AppSecret) == "" || strings.TrimSpace(cfg.RedirectURL) == "") {
 		return nil, errors.New("feishu app id, app secret, and redirect url are required")
 	}
-	state, _ := NewOIDCService(OIDCConfig{Enabled: cfg.Enabled, IssuerURL: "https://" + strings.TrimPrefix(strings.TrimPrefix(cfg.RedirectURL, "https://"), "http://"), ClientID: cfg.AppID, RedirectURL: cfg.RedirectURL})
-	return &FeishuService{cfg: cfg, client: http.DefaultClient, state: state}, nil
+	issuerURL := "https://open.feishu.cn"
+	if cfg.Region == FeishuRegionGlobal {
+		issuerURL = "https://open.larksuite.com"
+	}
+	state, err := NewOIDCService(OIDCConfig{Enabled: cfg.Enabled, IssuerURL: issuerURL, ClientID: cfg.AppID, RedirectURL: cfg.RedirectURL})
+	if err != nil {
+		return nil, fmt.Errorf("initialize Feishu OAuth state: %w", err)
+	}
+	return &FeishuService{cfg: cfg, client: newExternalIdentityHTTPClient(), state: state}, nil
 }
 
 func (s *FeishuService) Begin(now time.Time) (OIDCState, error) { return s.state.Begin(now) }

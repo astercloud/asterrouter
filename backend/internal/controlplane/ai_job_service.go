@@ -16,7 +16,7 @@ func (s *Service) BeginDurableAIJob(ctx context.Context, auth gatewaycore.Canoni
 		}
 		return AIJob{}, false, gatewaycore.ErrInvalidCanonicalRequest
 	}
-	if strings.TrimSpace(auth.CredentialID) == "" || strings.TrimSpace(auth.TenantID) == "" || strings.TrimSpace(auth.PrincipalID) == "" || strings.TrimSpace(request.Fingerprint) == "" {
+	if strings.TrimSpace(auth.CredentialID) == "" || strings.TrimSpace(auth.ApplicationID) == "" || strings.TrimSpace(auth.PrincipalID) == "" || strings.TrimSpace(request.Fingerprint) == "" {
 		return AIJob{}, false, gatewaycore.ErrInvalidCanonicalRequest
 	}
 	resolved, found, err := s.ResolveGatewayModel(ctx, request.Model)
@@ -35,7 +35,7 @@ func (s *Service) BeginDurableAIJob(ctx context.Context, auth gatewaycore.Canoni
 	}
 	now := s.nowUTC()
 	operation := AIOperation{
-		ID: "aio_" + randomID(12), ProfileScope: strings.TrimSpace(auth.ProfileScope), TenantID: strings.TrimSpace(auth.TenantID),
+		ID: "aio_" + randomID(12), ApplicationID: strings.TrimSpace(auth.ApplicationID),
 		CredentialID: strings.TrimSpace(auth.CredentialID), CredentialSource: string(auth.CredentialSource), IntegrationID: strings.TrimSpace(auth.IntegrationID),
 		PrincipalType: strings.TrimSpace(auth.PrincipalType), PrincipalID: strings.TrimSpace(auth.PrincipalID),
 		ExternalSubjectReference: strings.TrimSpace(auth.ExternalSubjectReference), ClientRequestID: strings.TrimSpace(request.ClientRequestID),
@@ -49,7 +49,7 @@ func (s *Service) BeginDurableAIJob(ctx context.Context, auth gatewaycore.Canoni
 		return AIJob{}, false, ErrArtifactSinkRequired
 	}
 	job := AIJob{
-		ID: "job_" + randomID(12), OperationID: operation.ID, ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
+		ID: "job_" + randomID(12), OperationID: operation.ID, ApplicationID: operation.ApplicationID,
 		CredentialID: operation.CredentialID, CredentialSource: operation.CredentialSource, IntegrationID: operation.IntegrationID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, ExternalSubjectReference: operation.ExternalSubjectReference,
 		RequestFingerprint: operation.RequestFingerprint, IdempotencyKey: operation.IdempotencyKey, Protocol: operation.Protocol,
@@ -339,7 +339,7 @@ func (s *Service) AIJobProgressEventsForAuth(ctx context.Context, auth gatewayco
 
 func aiJobOwnerFromAuth(auth gatewaycore.CanonicalAuthContext) AIJobOwner {
 	return AIJobOwner{
-		ProfileScope: strings.TrimSpace(auth.ProfileScope), TenantID: strings.TrimSpace(auth.TenantID),
+		ApplicationID: strings.TrimSpace(auth.ApplicationID),
 		IntegrationID: strings.TrimSpace(auth.IntegrationID), PrincipalType: strings.TrimSpace(auth.PrincipalType),
 		PrincipalID: strings.TrimSpace(auth.PrincipalID), ExternalSubjectReference: strings.TrimSpace(auth.ExternalSubjectReference),
 	}

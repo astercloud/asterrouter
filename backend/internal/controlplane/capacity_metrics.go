@@ -56,23 +56,23 @@ func (s *Service) observeCapacityAdmission(scope, reason string, acquired bool, 
 }
 
 func (s *Service) observeCredentialCapacityAdmission(authLimits gatewayCredentialCapacityLimits, reason string, acquired bool, err error) {
-	applicationLimited := authLimits.qps > 0 || authLimits.rpm > 0 || authLimits.tpm > 0 || authLimits.concurrency > 0
-	tenantLimited := authLimits.tenantConcurrency > 0
+	credentialLimited := authLimits.qps > 0 || authLimits.rpm > 0 || authLimits.tpm > 0 || authLimits.concurrency > 0
+	applicationLimited := authLimits.applicationConcurrency > 0
 	if !acquired && err == nil {
-		if reason == "tenant_concurrency_exhausted" {
-			s.observeCapacityAdmission("tenant", reason, false, nil)
+		if reason == "application_concurrency_exhausted" {
+			s.observeCapacityAdmission("application", reason, false, nil)
 			return
 		}
-		if applicationLimited {
-			s.observeCapacityAdmission("application", reason, false, nil)
+		if credentialLimited {
+			s.observeCapacityAdmission("credential", reason, false, nil)
 		}
 		return
 	}
+	if credentialLimited {
+		s.observeCapacityAdmission("credential", reason, acquired, err)
+	}
 	if applicationLimited {
 		s.observeCapacityAdmission("application", reason, acquired, err)
-	}
-	if tenantLimited {
-		s.observeCapacityAdmission("tenant", reason, acquired, err)
 	}
 }
 
@@ -112,9 +112,9 @@ func (s *Service) ProviderCapacityMetrics(ctx context.Context) ([]ProviderCapaci
 }
 
 type gatewayCredentialCapacityLimits struct {
-	qps               int
-	rpm               int
-	tpm               int
-	concurrency       int
-	tenantConcurrency int
+	qps                    int
+	rpm                    int
+	tpm                    int
+	concurrency            int
+	applicationConcurrency int
 }

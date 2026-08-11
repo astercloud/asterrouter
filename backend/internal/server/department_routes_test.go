@@ -16,7 +16,7 @@ func TestAdminDepartmentEndpoints(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 
 	parentBody := bytes.NewBufferString(`{"name":"Engineering","code":"eng","cost_center":"eng-core","monthly_budget_micros":250000,"status":"active"}`)
-	parentReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/departments", parentBody)
+	parentReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/departments", parentBody)
 	parentReq.Header.Set("Content-Type", "application/json")
 	parentRec := httptest.NewRecorder()
 	handler.ServeHTTP(parentRec, parentReq)
@@ -34,7 +34,7 @@ func TestAdminDepartmentEndpoints(t *testing.T) {
 	}
 
 	childBody := bytes.NewBufferString(`{"name":"Platform","code":"platform","parent_id":"` + parentResp.Data.ID + `","cost_center":"platform","monthly_budget_micros":120000,"status":"active"}`)
-	childReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/departments", childBody)
+	childReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/departments", childBody)
 	childReq.Header.Set("Content-Type", "application/json")
 	childRec := httptest.NewRecorder()
 	handler.ServeHTTP(childRec, childReq)
@@ -52,7 +52,7 @@ func TestAdminDepartmentEndpoints(t *testing.T) {
 	}
 
 	updateBody := bytes.NewBufferString(`{"name":"Platform Services","code":"platform","parent_id":"` + parentResp.Data.ID + `","cost_center":"platform-svc","monthly_budget_micros":160000,"status":"archived"}`)
-	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/departments/"+childResp.Data.ID, updateBody)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/departments/"+childResp.Data.ID, updateBody)
 	updateReq.Header.Set("Content-Type", "application/json")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
@@ -69,7 +69,7 @@ func TestAdminDepartmentEndpoints(t *testing.T) {
 		t.Fatalf("update mismatch: %+v", updateResp.Data)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/departments", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/departments", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -85,7 +85,7 @@ func TestAdminDepartmentEndpoints(t *testing.T) {
 		t.Fatalf("department list mismatch: %+v", listResp.Data)
 	}
 
-	duplicateReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/departments", bytes.NewBufferString(`{"name":"Duplicate","code":"ENG","status":"active"}`))
+	duplicateReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/departments", bytes.NewBufferString(`{"name":"Duplicate","code":"ENG","status":"active"}`))
 	duplicateReq.Header.Set("Content-Type", "application/json")
 	duplicateRec := httptest.NewRecorder()
 	handler.ServeHTTP(duplicateRec, duplicateReq)
@@ -93,7 +93,7 @@ func TestAdminDepartmentEndpoints(t *testing.T) {
 		t.Fatalf("duplicate code should be rejected status=%d body=%s", duplicateRec.Code, duplicateRec.Body.String())
 	}
 
-	missingParentReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/departments", bytes.NewBufferString(`{"name":"Unknown Parent","code":"unknown","parent_id":"dept_missing","status":"active"}`))
+	missingParentReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/departments", bytes.NewBufferString(`{"name":"Unknown Parent","code":"unknown","parent_id":"dept_missing","status":"active"}`))
 	missingParentReq.Header.Set("Content-Type", "application/json")
 	missingParentRec := httptest.NewRecorder()
 	handler.ServeHTTP(missingParentRec, missingParentReq)

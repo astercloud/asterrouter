@@ -122,7 +122,7 @@ func (s *Service) ReconcileDirectAI(ctx context.Context, provider controlplane.G
 
 func directAIJobSnapshot(operation controlplane.AIOperation, request gatewaycore.CanonicalRequest) controlplane.AIJob {
 	return controlplane.AIJob{
-		OperationID: operation.ID, ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
+		OperationID: operation.ID, ApplicationID: operation.ApplicationID,
 		CredentialID: operation.CredentialID, CredentialSource: operation.CredentialSource,
 		IntegrationID: operation.IntegrationID, PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID,
 		ExternalSubjectReference: operation.ExternalSubjectReference, Protocol: string(request.Protocol),

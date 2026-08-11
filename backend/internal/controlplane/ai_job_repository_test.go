@@ -18,7 +18,7 @@ func TestAIJobAdmissionCancellationAndOwnershipContract(t *testing.T) {
 	forEachAIJobRepository(t, func(t *testing.T, repo Repository) {
 		svc := newAIJobTestService(t, repo)
 		ctx := context.Background()
-		auth := aiJobTestAuth("tenant-a", "principal-a")
+		auth := aiJobTestAuth("application-a", "principal-a")
 		request := aiJobTestRequest("job-idem-1", "fingerprint-1")
 
 		job, created, err := svc.BeginDurableAIJob(ctx, auth, request)
@@ -35,10 +35,10 @@ func TestAIJobAdmissionCancellationAndOwnershipContract(t *testing.T) {
 			t.Fatalf("fingerprint conflict error=%v", err)
 		}
 
-		if _, found, err := svc.AIJobForAuth(ctx, aiJobTestAuth("tenant-b", "principal-a"), job.ID); err != nil || found {
-			t.Fatalf("cross-tenant lookup found=%t err=%v", found, err)
+		if _, found, err := svc.AIJobForAuth(ctx, aiJobTestAuth("application-b", "principal-a"), job.ID); err != nil || found {
+			t.Fatalf("cross-application lookup found=%t err=%v", found, err)
 		}
-		if _, found, err := svc.AIJobForAuth(ctx, aiJobTestAuth("tenant-a", "principal-b"), job.ID); err != nil || found {
+		if _, found, err := svc.AIJobForAuth(ctx, aiJobTestAuth("application-a", "principal-b"), job.ID); err != nil || found {
 			t.Fatalf("cross-principal lookup found=%t err=%v", found, err)
 		}
 
@@ -70,7 +70,7 @@ func TestAIJobQueueLeaseFenceAndCancellationRaceContract(t *testing.T) {
 		svc := newAIJobTestService(t, repo)
 		base := time.Date(2026, time.July, 14, 14, 0, 0, 0, time.UTC)
 		svc.now = func() time.Time { return base }
-		auth := aiJobTestAuth("tenant-a", "principal-a")
+		auth := aiJobTestAuth("application-a", "principal-a")
 		job, _, err := svc.BeginDurableAIJob(context.Background(), auth, aiJobTestRequest("job-idem-fence", "fingerprint-fence"))
 		if err != nil {
 			t.Fatal(err)
@@ -131,7 +131,7 @@ func TestAIJobDeliveryRebuildAndLeaseExtensionRepositoryContract(t *testing.T) {
 		base := time.Date(2026, time.July, 15, 1, 0, 0, 0, time.UTC)
 		now := base
 		svc.now = func() time.Time { return now }
-		job, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("tenant-rebuild", "principal-rebuild"), aiJobTestRequest("job-idem-rebuild", "fingerprint-rebuild"))
+		job, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("application-rebuild", "principal-rebuild"), aiJobTestRequest("job-idem-rebuild", "fingerprint-rebuild"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,7 +186,7 @@ func TestAIJobDeliveryRebuildAndLeaseExtensionRepositoryContract(t *testing.T) {
 func TestAIJobAdmissionIsAtomicAcrossConcurrentRequests(t *testing.T) {
 	forEachAIJobRepository(t, func(t *testing.T, repo Repository) {
 		svc := newAIJobTestService(t, repo)
-		auth := aiJobTestAuth("tenant-concurrent", "principal-concurrent")
+		auth := aiJobTestAuth("application-concurrent", "principal-concurrent")
 		request := aiJobTestRequest("job-idem-concurrent", "fingerprint-concurrent")
 		var createdCount atomic.Int32
 		ids := make(chan string, 20)
@@ -237,7 +237,7 @@ func TestAIJobAdmissionRollsBackOnOutboxConflict(t *testing.T) {
 	forEachAIJobRepository(t, func(t *testing.T, repo Repository) {
 		svc := newAIJobTestService(t, repo)
 		ctx := context.Background()
-		auth := aiJobTestAuth("tenant-rollback", "principal-rollback")
+		auth := aiJobTestAuth("application-rollback", "principal-rollback")
 		first, _, err := svc.BeginDurableAIJob(ctx, auth, aiJobTestRequest("job-idem-existing", "fingerprint-existing"))
 		if err != nil {
 			t.Fatal(err)
@@ -249,14 +249,14 @@ func TestAIJobAdmissionRollsBackOnOutboxConflict(t *testing.T) {
 
 		now := time.Date(2026, time.July, 14, 16, 0, 0, 0, time.UTC)
 		operation := AIOperation{
-			ID: "aio_rollback", ProfileScope: auth.ProfileScope, TenantID: auth.TenantID, CredentialID: auth.CredentialID,
+			ID: "aio_rollback", ApplicationID: auth.ApplicationID, CredentialID: auth.CredentialID,
 			CredentialSource: string(auth.CredentialSource), PrincipalType: auth.PrincipalType, PrincipalID: auth.PrincipalID,
 			RequestFingerprint: "fingerprint-rollback", IdempotencyKey: "job-idem-rollback", Protocol: string(gatewaycore.ProtocolAsterJobs),
 			Operation: "image_generation", Modality: "image", Lane: string(gatewaycore.LaneDurable), Model: "image-model",
 			ArtifactPolicy: GatewayArtifactPolicyManaged, Status: AIOperationStatusAccepted, CreatedAt: now, UpdatedAt: now,
 		}
 		job := AIJob{
-			ID: "job_rollback", OperationID: operation.ID, ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
+			ID: "job_rollback", OperationID: operation.ID, ApplicationID: operation.ApplicationID,
 			CredentialID: operation.CredentialID, CredentialSource: operation.CredentialSource, PrincipalType: operation.PrincipalType,
 			PrincipalID: operation.PrincipalID, RequestFingerprint: operation.RequestFingerprint, IdempotencyKey: operation.IdempotencyKey,
 			Protocol: operation.Protocol, Operation: operation.Operation, Modality: operation.Modality, Model: operation.Model,
@@ -307,7 +307,7 @@ func TestAIJobClaimIsAtomicAcrossPostgresInstances(t *testing.T) {
 	svc := newAIJobTestService(t, repoA)
 	base := time.Date(2026, time.July, 14, 15, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return base }
-	if _, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("tenant-claim", "principal-claim"), aiJobTestRequest("job-idem-claim", "fingerprint-claim")); err != nil {
+	if _, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("application-claim", "principal-claim"), aiJobTestRequest("job-idem-claim", "fingerprint-claim")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -353,7 +353,7 @@ func TestAIJobEncryptedPayloadSurvivesPostgresRestart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	created, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("tenant-restart", "principal-restart"), aiJobTestRequest("job-idem-restart", "fingerprint-restart"))
+	created, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("application-restart", "principal-restart"), aiJobTestRequest("job-idem-restart", "fingerprint-restart"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,10 +413,10 @@ func newAIJobTestService(t *testing.T, repo Repository) *Service {
 	return svc
 }
 
-func aiJobTestAuth(tenantID, principalID string) gatewaycore.CanonicalAuthContext {
+func aiJobTestAuth(applicationID, principalID string) gatewaycore.CanonicalAuthContext {
 	return gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "credential-a", ProfileScope: ProfileScopePlatform,
-		TenantID: tenantID, PrincipalType: GatewayPrincipalTypeService, PrincipalID: principalID, ArtifactPolicy: GatewayArtifactPolicyManaged,
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "credential-a",
+		ApplicationID: applicationID, PrincipalType: GatewayPrincipalTypeService, PrincipalID: principalID, ArtifactPolicy: GatewayArtifactPolicyManaged,
 	}
 }
 

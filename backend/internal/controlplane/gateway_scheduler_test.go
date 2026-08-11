@@ -108,7 +108,7 @@ func TestGatewayCandidateAffinityReusesAccountThenSupplierWithinScope(t *testing
 		{ID: "provider-b", RouteID: "route-b", AccountID: "acct-b", StickyEnabled: true, StickyTTLSeconds: 600, SelectionReason: "b"},
 	}
 	input := GatewayAffinityInput{
-		TenantID: "tenant-a", PrincipalID: "customer-a", CredentialID: "key-a", Model: "public-model",
+		ApplicationID: "application-a", PrincipalID: "customer-a", CredentialID: "key-a", Model: "public-model",
 		Protocol: "openai_chat", RouteGroup: "stable", StickyKey: "session-1", PolicyVersion: 3,
 	}
 	if err := svc.BindGatewayCandidateAffinity(ctx, input, candidates[1]); err != nil {
@@ -167,7 +167,7 @@ func TestResolveGatewayUpstreamAffinityUsesVerifiedCapabilityAndOpaqueValue(t *t
 		t.Fatal(err)
 	}
 	input := GatewayAffinityInput{
-		TenantID: "tenant-a", PrincipalID: "customer-a", CredentialID: "key-a", Model: "public-model",
+		ApplicationID: "application-a", PrincipalID: "customer-a", CredentialID: "key-a", Model: "public-model",
 		Protocol: "openai_chat_completions", RouteGroup: "default", StickyKey: "raw-session-secret", PolicyVersion: 3,
 	}
 	provider := GatewayProvider{ID: "provider-a", AccountID: "account-a", UpstreamModel: "upstream-model"}
@@ -182,11 +182,11 @@ func TestResolveGatewayUpstreamAffinityUsesVerifiedCapabilityAndOpaqueValue(t *t
 	if first.HeaderName != "X-Session-ID" || !first.PromptCacheKey || first.Value == "" || strings.Contains(first.Value, input.StickyKey) || strings.Contains(first.Value, input.PrincipalID) {
 		t.Fatalf("unsafe or incomplete upstream affinity: %+v", first)
 	}
-	otherTenant := input
-	otherTenant.TenantID = "tenant-b"
-	other, found, err := svc.ResolveGatewayUpstreamAffinity(ctx, otherTenant, provider)
+	otherApplication := input
+	otherApplication.ApplicationID = "application-b"
+	other, found, err := svc.ResolveGatewayUpstreamAffinity(ctx, otherApplication, provider)
 	if err != nil || !found || other.Value == first.Value {
-		t.Fatalf("upstream affinity leaked across tenants: first=%+v other=%+v found=%t err=%v", first, other, found, err)
+		t.Fatalf("upstream affinity leaked across applications: first=%+v other=%+v found=%t err=%v", first, other, found, err)
 	}
 	capability.SupportStatus = CacheSupportDegraded
 	if err := repo.SaveProviderCacheCapability(ctx, capability); err != nil {

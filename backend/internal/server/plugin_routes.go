@@ -12,31 +12,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control *controlplane.Service, surface string) {
-	group.Use(func(c *gin.Context) {
-		if svc == nil || c.Param("id") == "" {
-			c.Next()
-			return
-		}
-		if err := svc.RequireSurface(c.Request.Context(), c.Param("id"), surface); err != nil {
-			if errors.Is(err, plugins.ErrPluginNotFound) {
-				httpx.Error(c, http.StatusNotFound, 1704, err.Error())
-			} else if errors.Is(err, plugins.ErrPluginSurface) {
-				httpx.Error(c, http.StatusForbidden, 1705, err.Error())
-			} else {
-				httpx.Error(c, http.StatusInternalServerError, 1701, err.Error())
-			}
-			c.Abort()
-			return
-		}
-		c.Next()
-	})
+func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control *controlplane.Service) {
 	group.GET("", func(c *gin.Context) {
 		if svc == nil {
 			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
 			return
 		}
-		catalog, err := svc.CatalogForSurface(c.Request.Context(), surface)
+		catalog, err := svc.Catalog(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1701, err.Error())
 			return
@@ -150,13 +132,7 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 			writePluginAPITokenError(c, err)
 			return
 		}
-		filtered := make([]plugins.PluginAPIToken, 0, len(items))
-		for _, item := range items {
-			if pluginTokenHasSurface(item, surface) {
-				filtered = append(filtered, item)
-			}
-		}
-		httpx.OK(c, filtered)
+		httpx.OK(c, items)
 	})
 	group.POST("/api-tokens", func(c *gin.Context) {
 		if svc == nil {
@@ -168,7 +144,6 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 			httpx.Error(c, http.StatusBadRequest, 1770, "invalid plugin API token payload")
 			return
 		}
-		req.Surfaces = []string{surface}
 		result, err := svc.CreatePluginAPIToken(c.Request.Context(), req)
 		if err != nil {
 			writePluginAPITokenError(c, err)
@@ -180,22 +155,6 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 	group.DELETE("/api-tokens/:token_id", func(c *gin.Context) {
 		if svc == nil {
 			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
-			return
-		}
-		items, err := svc.ListPluginAPITokens(c.Request.Context(), "")
-		if err != nil {
-			writePluginAPITokenError(c, err)
-			return
-		}
-		allowed := false
-		for _, item := range items {
-			if item.ID == c.Param("token_id") && pluginTokenHasSurface(item, surface) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			writePluginAPITokenError(c, plugins.ErrPluginAPITokenNotFound)
 			return
 		}
 		token, err := svc.RevokePluginAPIToken(c.Request.Context(), c.Param("token_id"))
@@ -300,12 +259,12 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 		c.Status(response.StatusCode)
 		_, _ = io.Copy(c.Writer, response.Body)
 	})
-	group.GET("/:id/frontend/contribution", func(c *gin.Context) {
+	group.GET("/:id/frontend/workbench", func(c *gin.Context) {
 		if svc == nil {
 			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
 			return
 		}
-		raw, err := svc.PluginFrontendContribution(c.Request.Context(), c.Param("id"))
+		raw, err := svc.PluginWorkbench(c.Request.Context(), c.Param("id"))
 		if err != nil {
 			writeFrontendError(c, err)
 			return
@@ -398,7 +357,7 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 			return
 		}
 		var request plugins.ArtifactSinkDestinationRequest
-		if err := c.ShouldBindJSON(&request); err != nil {
+		if err := decodeStrictAdminJSON(c, &request); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1712, "invalid artifact sink destination payload")
 			return
 		}
@@ -518,15 +477,6 @@ func registerPluginRoutes(group *gin.RouterGroup, svc *plugins.Service, control 
 	})
 }
 
-func pluginTokenHasSurface(token plugins.PluginAPIToken, surface string) bool {
-	for _, item := range token.Surfaces {
-		if item == surface {
-			return true
-		}
-	}
-	return false
-}
-
 func writePluginError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, plugins.ErrPluginNotFound):
@@ -641,7 +591,7 @@ func writePluginAPITokenError(c *gin.Context, err error) {
 		httpx.Error(c, http.StatusBadRequest, 1772, err.Error())
 	case errors.Is(err, plugins.ErrPluginAPITokenExpired):
 		httpx.Error(c, http.StatusUnauthorized, 1773, err.Error())
-	case errors.Is(err, plugins.ErrPluginAPITokenScope), errors.Is(err, plugins.ErrPluginSurface):
+	case errors.Is(err, plugins.ErrPluginAPITokenScope):
 		httpx.Error(c, http.StatusForbidden, 1774, err.Error())
 	default:
 		httpx.Error(c, http.StatusInternalServerError, 1775, err.Error())

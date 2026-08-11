@@ -6,15 +6,12 @@ import (
 	"time"
 )
 
-func TestMapRemoteCatalogPluginsUsesManifestSurfaces(t *testing.T) {
+func TestMapRemoteCatalogPluginsUsesEnterpriseMetadata(t *testing.T) {
 	manifestPayload, err := json.Marshal(map[string]any{
 		"schema_version": "astercloud.plugin-manifest.v1",
 		"plugin":         "imagegen-workbench",
 		"version":        "0.3.2",
-		"manifest": map[string]any{
-			"surfaces":     []string{"personal", "enterprise", "personal"},
-			"configurable": true,
-		},
+		"manifest":       map[string]any{"configurable": true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -35,37 +32,7 @@ func TestMapRemoteCatalogPluginsUsesManifestSurfaces(t *testing.T) {
 	if len(plugins) != 1 {
 		t.Fatalf("mapped plugins = %d, want 1", len(plugins))
 	}
-	if got, want := plugins[0].Surfaces, []string{"personal", "enterprise"}; !equalStringSlices(got, want) {
-		t.Fatalf("surfaces = %#v, want %#v", got, want)
-	}
 	if !plugins[0].Configurable {
 		t.Fatal("manifest configurable flag was not preserved")
 	}
-}
-
-func TestMapRemoteCatalogPluginsKeepsLegacyAdminSurface(t *testing.T) {
-	plugins := mapRemoteCatalogPlugins(remoteCatalogIndex{
-		Plugins: []remoteCatalogPlugin{{
-			PluginID: "com.astercloud.catalog.legacy",
-			Slug:     "legacy",
-			Name:     "Legacy",
-			Tier:     "free",
-			Versions: []remoteCatalogVersion{{Version: "1.0.0", Status: "published"}},
-		}},
-	}, time.Now())
-	if len(plugins) != 1 || !equalStringSlices(plugins[0].Surfaces, []string{"admin"}) {
-		t.Fatalf("legacy surfaces = %#v, want [admin]", plugins[0].Surfaces)
-	}
-}
-
-func equalStringSlices(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }

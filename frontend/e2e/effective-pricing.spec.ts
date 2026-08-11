@@ -4,7 +4,7 @@ import { captureBrowserErrors, expectNoHorizontalOverflow, loginDemo } from './f
 test('@effective-pricing automatic window policy remains usable across viewports', async ({ page }, testInfo) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
-  await page.goto('/admin/effective-pricing')
+  await page.goto('/console/effective-pricing')
   await expect(page.getByRole('heading', { level: 1, name: 'Effective Pricing & Cache Routing' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Policy' }).click()
@@ -57,7 +57,7 @@ test('@effective-pricing billing source inspection keeps aggregate evidence dist
   let savedPayload: Record<string, unknown> | undefined
   let syncRequests = 0
   await loginDemo(page)
-  await page.route('**/api/v1/admin/provider-accounts', async (route) => {
+  await page.route('**/api/v1/console/provider-accounts', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -68,7 +68,7 @@ test('@effective-pricing billing source inspection keeps aggregate evidence dist
       })
     })
   })
-  await page.route('**/api/v1/admin/provider-billing-sources/inspect', async (route) => {
+  await page.route('**/api/v1/console/provider-billing-sources/inspect', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -90,7 +90,7 @@ test('@effective-pricing billing source inspection keeps aggregate evidence dist
       })
     })
   })
-  await page.route('**/api/v1/admin/provider-billing-sources', async (route) => {
+  await page.route('**/api/v1/console/provider-billing-sources', async (route) => {
     if (route.request().method() === 'PUT') {
       savedPayload = route.request().postDataJSON()
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 0, message: 'success', data: { ...source, ...savedPayload, version: 4 } }) })
@@ -98,15 +98,15 @@ test('@effective-pricing billing source inspection keeps aggregate evidence dist
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 0, message: 'success', data: [source] }) })
   })
-  await page.route('**/api/v1/admin/provider-billing-sources/source-e2e/evidence**', async (route) => {
+  await page.route('**/api/v1/console/provider-billing-sources/source-e2e/evidence**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 0, message: 'success', data: { source, runs: [run], balances: [balance], aggregates: [aggregate] } }) })
   })
-  await page.route('**/api/v1/admin/provider-billing-sources/source-e2e/sync', async (route) => {
+  await page.route('**/api/v1/console/provider-billing-sources/source-e2e/sync', async (route) => {
     syncRequests++
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 0, message: 'success', data: { source: { ...source, version: 5 }, run, balance, aggregates: [aggregate] } }) })
   })
 
-  await page.goto('/admin/effective-pricing')
+  await page.goto('/console/effective-pricing')
   await page.getByRole('button', { name: 'Billing source' }).click()
   await expect(page.getByRole('heading', { name: 'Third-party billing source inspection' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Sync run history' })).toBeVisible()

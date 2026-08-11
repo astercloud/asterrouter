@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const artifactSelectColumns = `id, operation_id, COALESCE(job_id, ''), COALESCE(attempt_id, ''), COALESCE(source_artifact_id, ''), profile_scope, tenant_id, integration_id,
+const artifactSelectColumns = `id, operation_id, COALESCE(job_id, ''), COALESCE(attempt_id, ''), COALESCE(source_artifact_id, ''), application_id, integration_id,
 principal_type, principal_id, external_subject_reference, role, policy, status, status_version, media_type, size_bytes,
 sha256, store_driver, store_key, external_reference, error_type, retain_until, created_at, updated_at, ready_at, delivered_at, deleted_at`
 
@@ -22,7 +22,7 @@ func scanArtifact(scanner artifactScanner) (Artifact, error) {
 	var artifact Artifact
 	if err := scanner.Scan(
 		&artifact.ID, &artifact.OperationID, &artifact.JobID, &artifact.AttemptID, &artifact.SourceArtifactID,
-		&artifact.ProfileScope, &artifact.TenantID, &artifact.IntegrationID, &artifact.PrincipalType, &artifact.PrincipalID,
+		&artifact.ApplicationID, &artifact.IntegrationID, &artifact.PrincipalType, &artifact.PrincipalID,
 		&artifact.ExternalSubjectReference, &artifact.Role, &artifact.Policy, &artifact.Status, &artifact.StatusVersion,
 		&artifact.MediaType, &artifact.SizeBytes, &artifact.SHA256, &artifact.StoreDriver, &artifact.StoreKey,
 		&artifact.ExternalReference, &artifact.ErrorType, &artifact.RetainUntil, &artifact.CreatedAt, &artifact.UpdatedAt,
@@ -108,8 +108,8 @@ func (r *MemoryRepository) FindOwnedArtifact(_ context.Context, id string, owner
 
 func (r *PostgresRepository) FindOwnedArtifact(ctx context.Context, id string, owner ArtifactOwner) (Artifact, bool, error) {
 	artifact, err := scanArtifact(r.db.QueryRowContext(ctx, `SELECT `+artifactSelectColumns+` FROM artifacts
-WHERE id=$1 AND profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7`,
-		strings.TrimSpace(id), owner.ProfileScope, owner.TenantID, owner.IntegrationID, owner.PrincipalType, owner.PrincipalID, owner.ExternalSubjectReference))
+WHERE id=$1 AND application_id=$2 AND integration_id=$3 AND principal_type=$4 AND principal_id=$5 AND external_subject_reference=$6`,
+		strings.TrimSpace(id), owner.ApplicationID, owner.IntegrationID, owner.PrincipalType, owner.PrincipalID, owner.ExternalSubjectReference))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Artifact{}, false, nil
 	}
@@ -154,16 +154,16 @@ func (r *PostgresRepository) QueryArtifacts(ctx context.Context, query ArtifactQ
 		owner = *query.Owner
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT `+artifactSelectColumns+` FROM artifacts
-	WHERE (NOT $1 OR (profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7))
-	  AND ($8='' OR profile_scope=$8) AND ($9='' OR tenant_id=$9)
-	  AND ($10='' OR id ILIKE '%'||$10||'%' OR operation_id ILIKE '%'||$10||'%' OR COALESCE(job_id,'') ILIKE '%'||$10||'%' OR COALESCE(attempt_id,'') ILIKE '%'||$10||'%')
-	  AND ($11='' OR operation_id=$11) AND ($12='' OR job_id=$12) AND ($13='' OR attempt_id=$13)
-	  AND ($14='' OR source_artifact_id=$14) AND ($15='' OR role=$15) AND ($16='' OR policy=$16) AND ($17='' OR status=$17)
-	  AND ($18::timestamptz IS NULL OR retain_until <= $18)
-	ORDER BY created_at DESC, id DESC LIMIT $19 OFFSET $20`,
-		ownerScoped, strings.TrimSpace(owner.ProfileScope), strings.TrimSpace(owner.TenantID), strings.TrimSpace(owner.IntegrationID),
+	WHERE (NOT $1 OR (application_id=$2 AND integration_id=$3 AND principal_type=$4 AND principal_id=$5 AND external_subject_reference=$6))
+	  AND ($7='' OR application_id=$7)
+	  AND ($8='' OR id ILIKE '%'||$8||'%' OR operation_id ILIKE '%'||$8||'%' OR COALESCE(job_id,'') ILIKE '%'||$8||'%' OR COALESCE(attempt_id,'') ILIKE '%'||$8||'%')
+	  AND ($9='' OR operation_id=$9) AND ($10='' OR job_id=$10) AND ($11='' OR attempt_id=$11)
+	  AND ($12='' OR source_artifact_id=$12) AND ($13='' OR role=$13) AND ($14='' OR policy=$14) AND ($15='' OR status=$15)
+	  AND ($16::timestamptz IS NULL OR retain_until <= $16)
+	ORDER BY created_at DESC, id DESC LIMIT $17 OFFSET $18`,
+		ownerScoped, strings.TrimSpace(owner.ApplicationID), strings.TrimSpace(owner.IntegrationID),
 		strings.TrimSpace(owner.PrincipalType), strings.TrimSpace(owner.PrincipalID), strings.TrimSpace(owner.ExternalSubjectReference),
-		strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID), strings.TrimSpace(query.Search), strings.TrimSpace(query.OperationID),
+		strings.TrimSpace(query.ApplicationID), strings.TrimSpace(query.Search), strings.TrimSpace(query.OperationID),
 		strings.TrimSpace(query.JobID), strings.TrimSpace(query.AttemptID), strings.TrimSpace(query.SourceArtifactID), strings.TrimSpace(query.Role), strings.TrimSpace(query.Policy),
 		strings.TrimSpace(query.Status), query.RetainBefore, limit, nonNegative(query.Offset))
 	if err != nil {
@@ -188,15 +188,15 @@ func (r *PostgresRepository) SummarizeArtifacts(ctx context.Context, query Artif
 		owner = *query.Owner
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*), COALESCE(SUM(size_bytes),0) FROM artifacts
-	WHERE (NOT $1 OR (profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7))
-	  AND ($8='' OR profile_scope=$8) AND ($9='' OR tenant_id=$9)
-	  AND ($10='' OR id ILIKE '%'||$10||'%' OR operation_id ILIKE '%'||$10||'%' OR COALESCE(job_id,'') ILIKE '%'||$10||'%' OR COALESCE(attempt_id,'') ILIKE '%'||$10||'%')
-	  AND ($11='' OR operation_id=$11) AND ($12='' OR job_id=$12) AND ($13='' OR attempt_id=$13)
-	  AND ($14='' OR source_artifact_id=$14) AND ($15='' OR role=$15) AND ($16='' OR policy=$16) AND ($17='' OR status=$17)
-	  AND ($18::timestamptz IS NULL OR retain_until <= $18)
-	GROUP BY status`, ownerScoped, strings.TrimSpace(owner.ProfileScope), strings.TrimSpace(owner.TenantID), strings.TrimSpace(owner.IntegrationID),
+	WHERE (NOT $1 OR (application_id=$2 AND integration_id=$3 AND principal_type=$4 AND principal_id=$5 AND external_subject_reference=$6))
+	  AND ($7='' OR application_id=$7)
+	  AND ($8='' OR id ILIKE '%'||$8||'%' OR operation_id ILIKE '%'||$8||'%' OR COALESCE(job_id,'') ILIKE '%'||$8||'%' OR COALESCE(attempt_id,'') ILIKE '%'||$8||'%')
+	  AND ($9='' OR operation_id=$9) AND ($10='' OR job_id=$10) AND ($11='' OR attempt_id=$11)
+	  AND ($12='' OR source_artifact_id=$12) AND ($13='' OR role=$13) AND ($14='' OR policy=$14) AND ($15='' OR status=$15)
+	  AND ($16::timestamptz IS NULL OR retain_until <= $16)
+	GROUP BY status`, ownerScoped, strings.TrimSpace(owner.ApplicationID), strings.TrimSpace(owner.IntegrationID),
 		strings.TrimSpace(owner.PrincipalType), strings.TrimSpace(owner.PrincipalID), strings.TrimSpace(owner.ExternalSubjectReference),
-		strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID), strings.TrimSpace(query.Search), strings.TrimSpace(query.OperationID),
+		strings.TrimSpace(query.ApplicationID), strings.TrimSpace(query.Search), strings.TrimSpace(query.OperationID),
 		strings.TrimSpace(query.JobID), strings.TrimSpace(query.AttemptID), strings.TrimSpace(query.SourceArtifactID), strings.TrimSpace(query.Role), strings.TrimSpace(query.Policy),
 		strings.TrimSpace(query.Status), query.RetainBefore)
 	if err != nil {
@@ -311,12 +311,12 @@ func (r *PostgresRepository) ListArtifactEvents(ctx context.Context, artifactID 
 
 func insertArtifact(ctx context.Context, executor usageRecordExecutor, artifact Artifact) error {
 	_, err := executor.ExecContext(ctx, `INSERT INTO artifacts(
-id, operation_id, job_id, attempt_id, source_artifact_id, profile_scope, tenant_id, integration_id, principal_type, principal_id,
+id, operation_id, job_id, attempt_id, source_artifact_id, application_id, integration_id, principal_type, principal_id,
 external_subject_reference, role, policy, status, status_version, media_type, size_bytes, sha256, store_driver, store_key,
 external_reference, error_type, retain_until, created_at, updated_at, ready_at, delivered_at, deleted_at)
-VALUES($1,$2,NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)`,
+VALUES($1,$2,NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
 		artifact.ID, artifact.OperationID, artifact.JobID, artifact.AttemptID, artifact.SourceArtifactID,
-		artifact.ProfileScope, artifact.TenantID, artifact.IntegrationID, artifact.PrincipalType, artifact.PrincipalID,
+		artifact.ApplicationID, artifact.IntegrationID, artifact.PrincipalType, artifact.PrincipalID,
 		artifact.ExternalSubjectReference, artifact.Role, artifact.Policy, artifact.Status, artifact.StatusVersion, artifact.MediaType,
 		artifact.SizeBytes, artifact.SHA256, artifact.StoreDriver, artifact.StoreKey, artifact.ExternalReference, artifact.ErrorType,
 		artifact.RetainUntil, artifact.CreatedAt, artifact.UpdatedAt, artifact.ReadyAt, artifact.DeliveredAt, artifact.DeletedAt)
@@ -349,10 +349,7 @@ func artifactMatchesQuery(artifact Artifact, query ArtifactQuery) bool {
 	if query.Owner != nil && !artifactOwnerMatches(artifact, *query.Owner) {
 		return false
 	}
-	if strings.TrimSpace(query.ProfileScope) != "" && artifact.ProfileScope != strings.TrimSpace(query.ProfileScope) {
-		return false
-	}
-	if strings.TrimSpace(query.TenantID) != "" && artifact.TenantID != strings.TrimSpace(query.TenantID) {
+	if strings.TrimSpace(query.ApplicationID) != "" && artifact.ApplicationID != strings.TrimSpace(query.ApplicationID) {
 		return false
 	}
 	if search := strings.ToLower(strings.TrimSpace(query.Search)); search != "" &&

@@ -22,7 +22,7 @@ func TestSidecarFeedPayloadRequiresRuntimeTokenAndManifestPermission(t *testing.
 
 	if err := repo.SavePlugin(context.Background(), Plugin{
 		ID: pluginID, PluginID: pluginID, Name: "Feed reader", Status: StatusEnabled,
-		Tier: TierFreeCore, EntitlementStatus: EntitlementFree, Surfaces: []string{"enterprise"}, CreatedAt: now, UpdatedAt: now,
+		Tier: TierFreeCore, EntitlementStatus: EntitlementFree, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("SavePlugin(): %v", err)
 	}
@@ -103,7 +103,7 @@ func TestSidecarConfigReturnsOnlyBoundPluginConfig(t *testing.T) {
 	})
 	if err := repo.SavePlugin(context.Background(), Plugin{
 		ID: pluginID, PluginID: pluginID, Name: "Config reader", Status: StatusEnabled,
-		Tier: TierFreeCore, EntitlementStatus: EntitlementFree, Surfaces: []string{"enterprise"}, Configurable: true,
+		Tier: TierFreeCore, EntitlementStatus: EntitlementFree, Configurable: true,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)

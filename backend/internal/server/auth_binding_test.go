@@ -18,11 +18,11 @@ func TestAuthBindingStoreIsSingleUseProviderBoundAndExpiring(t *testing.T) {
 	if _, ok := store.Consume("state-1", "github", now); ok {
 		t.Fatal("failed provider match must still consume the transaction")
 	}
-	if err := store.Save("state-2", "user-2", "oidc", "/operator/account", now); err != nil {
+	if err := store.Save("state-2", "user-2", "oidc", "/portal/account", now); err != nil {
 		t.Fatal(err)
 	}
 	transaction, ok := store.Consume("state-2", "oidc", now.Add(time.Minute))
-	if !ok || transaction.UserID != "user-2" || transaction.ReturnPath != "/operator/account" {
+	if !ok || transaction.UserID != "user-2" || transaction.ReturnPath != "/portal/account" {
 		t.Fatalf("transaction=%+v ok=%v", transaction, ok)
 	}
 	if _, ok := store.Consume("state-2", "oidc", now.Add(time.Minute)); ok {
@@ -34,7 +34,7 @@ func TestAuthBindingStoreIsSingleUseProviderBoundAndExpiring(t *testing.T) {
 	if _, ok := store.Consume("state-3", "oidc", now.Add(11*time.Minute)); ok {
 		t.Fatal("expired transaction must be rejected")
 	}
-	if got := authBindingRedirect(authBindingTransaction{ReturnPath: "//evil.example"}, "error", "", "failed"); got != "/admin/account?binding=error&message=failed" {
+	if got := authBindingRedirect(authBindingTransaction{ReturnPath: "//evil.example"}, "error", "", "failed"); got != "/console/account?binding=error&message=failed" {
 		t.Fatalf("unsafe redirect = %q", got)
 	}
 }

@@ -195,7 +195,7 @@ func directRequestFromOperation(operation AIOperation) gatewaycore.CanonicalRequ
 
 func directJobFromOperation(operation AIOperation) AIJob {
 	return AIJob{
-		OperationID: operation.ID, ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
+		OperationID: operation.ID, ApplicationID: operation.ApplicationID,
 		CredentialID: operation.CredentialID, CredentialSource: operation.CredentialSource, IntegrationID: operation.IntegrationID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, ExternalSubjectReference: operation.ExternalSubjectReference,
 		Protocol: operation.Protocol, Operation: operation.Operation, Modality: operation.Modality, Model: operation.Model,

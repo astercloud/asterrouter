@@ -8,19 +8,6 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/pricing"
 )
 
-type pricingContextResolverStub struct{}
-
-func (pricingContextResolverStub) ResolveCustomerPricingContext(context.Context, string) (CustomerPricingContext, error) {
-	return CustomerPricingContext{}, nil
-}
-
-func (pricingContextResolverStub) ValidatePricingPlan(_ context.Context, planID string) error {
-	if planID == "plan-a" {
-		return nil
-	}
-	return errors.New("operator plan not found")
-}
-
 func TestPricingRuleLifecycleValidationAndCAS(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")
@@ -84,40 +71,24 @@ func TestPricingRuleLifecycleValidationAndCAS(t *testing.T) {
 func TestPricingRuleSelectionPriority(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")
-	svc.SetCustomerPricingContextResolver(pricingContextResolverStub{})
 	if _, err := svc.CreateGatewayModel(ctx, "tester", GatewayModelRequest{ModelID: "model-a", Name: "Model A", Status: GatewayModelStatusActive}); err != nil {
 		t.Fatal(err)
 	}
 
-	createPublishedPricingRule(t, svc, PricingRuleCreateRequest{Name: "global wildcard", Purpose: PricingPurposeCustomerCharge, ScopeType: PricingScopeGlobal, Model: "*", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 1)`})
-	createPublishedPricingRule(t, svc, PricingRuleCreateRequest{Name: "global exact", Purpose: PricingPurposeCustomerCharge, ScopeType: PricingScopeGlobal, Model: "model-a", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 2)`})
-	createPublishedPricingRule(t, svc, PricingRuleCreateRequest{Name: "plan wildcard", Purpose: PricingPurposeCustomerCharge, ScopeType: PricingScopeOperatorPlan, ScopeID: "plan-a", Model: "*", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 3)`})
-	createPublishedPricingRule(t, svc, PricingRuleCreateRequest{Name: "plan exact", Purpose: PricingPurposeCustomerCharge, ScopeType: PricingScopeOperatorPlan, ScopeID: "plan-a", Model: "model-a", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 4)`})
+	createPublishedPricingRule(t, svc, PricingRuleCreateRequest{Name: "global wildcard", Purpose: PricingPurposeUsageCost, ScopeType: PricingScopeGlobal, Model: "*", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 1)`})
+	createPublishedPricingRule(t, svc, PricingRuleCreateRequest{Name: "global exact", Purpose: PricingPurposeUsageCost, ScopeType: PricingScopeGlobal, Model: "model-a", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 2)`})
 
-	tests := []struct {
-		name, plan, model string
-		want              int64
-	}{
-		{name: "plan exact", plan: "plan-a", model: "model-a", want: 4},
-		{name: "plan wildcard", plan: "plan-a", model: "model-b", want: 3},
-		{name: "global exact", plan: "plan-b", model: "model-a", want: 2},
-		{name: "global wildcard", plan: "plan-b", model: "model-b", want: 1},
+	selection, found, err := svc.SelectPricingRule(ctx, "model-a")
+	if err != nil || !found {
+		t.Fatalf("SelectPricingRule() found=%t err=%v", found, err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			selection, found, err := svc.SelectPricingRule(ctx, PricingPurposeCustomerCharge, test.plan, test.model)
-			if err != nil || !found {
-				t.Fatalf("SelectPricingRule() found=%t err=%v", found, err)
-			}
-			result, err := svc.pricingEngine.Evaluate(selection.Compiled, pricing.Facts{})
-			if err != nil || result.AmountMicros != test.want {
-				t.Fatalf("Evaluate() result=%+v err=%v", result, err)
-			}
-		})
+	result, err := svc.pricingEngine.Evaluate(selection.Compiled, pricing.Facts{})
+	if err != nil || result.AmountMicros != 2 {
+		t.Fatalf("Evaluate() result=%+v err=%v", result, err)
 	}
 }
 
-func TestPricingRuleRejectsUnsupportedCurrencyAndCustomerPublishWithoutAcknowledgement(t *testing.T) {
+func TestPricingRuleRejectsUnsupportedCurrencyAndLegacySlots(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")
 	if _, err := svc.CreatePricingRule(ctx, "tester", PricingRuleCreateRequest{
@@ -125,16 +96,13 @@ func TestPricingRuleRejectsUnsupportedCurrencyAndCustomerPublishWithoutAcknowled
 	}); !errors.Is(err, ErrPricingCurrencyUnsupported) {
 		t.Fatalf("non-USD create error=%v", err)
 	}
-	detail, err := svc.CreatePricingRule(ctx, "tester", PricingRuleCreateRequest{
-		Name: "Customer", Purpose: PricingPurposeCustomerCharge, ScopeType: PricingScopeGlobal, Model: "*", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 1)`,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.PublishPricingRule(ctx, "tester", detail.Rule.ID, PricingPublishRequest{
-		DraftVersionID: detail.Draft.ID, ExpectedLockVersion: detail.Rule.LockVersion, ExpressionHash: detail.Draft.ExpressionHash,
-	}); err == nil {
-		t.Fatal("customer charge publish did not require impact acknowledgement")
+	for _, request := range []PricingRuleCreateRequest{
+		{Name: "legacy purpose", Purpose: "customer_charge", ScopeType: PricingScopeGlobal, Model: "*", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 1)`},
+		{Name: "legacy scope", Purpose: PricingPurposeUsageCost, ScopeType: "operator_plan", ScopeID: "plan-a", Model: "*", Currency: pricing.CurrencyUSD, Expression: `v1: fixed_line("request", "request", 1)`},
+	} {
+		if _, err := svc.CreatePricingRule(ctx, "tester", request); !errors.Is(err, ErrPricingInvalidSlot) {
+			t.Fatalf("legacy pricing slot error=%v request=%+v", err, request)
+		}
 	}
 }
 
@@ -146,7 +114,7 @@ func createPublishedPricingRule(t *testing.T, svc *Service, request PricingRuleC
 	}
 	detail, err = svc.PublishPricingRule(context.Background(), "tester", detail.Rule.ID, PricingPublishRequest{
 		DraftVersionID: detail.Draft.ID, ExpectedLockVersion: detail.Rule.LockVersion,
-		ExpressionHash: detail.Draft.ExpressionHash, AcknowledgeImpact: request.Purpose == PricingPurposeCustomerCharge,
+		ExpressionHash: detail.Draft.ExpressionHash,
 	})
 	if err != nil {
 		t.Fatal(err)

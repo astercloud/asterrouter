@@ -5,13 +5,13 @@ type WorkspaceUser = { id: string; email: string; department_id?: string }
 type APIKeyResult = { key: string; record: { id: string; owner_user_id: string } }
 
 async function adminGet<T>(page: Page, token: string, path: string): Promise<T> {
-  return envelope<T>(await page.request.get(`/api/v1/admin${path}`, {
+  return envelope<T>(await page.request.get(`/api/v1/console${path}`, {
     headers: { Authorization: `Bearer ${token}` }
   }))
 }
 
 async function updateUser(page: Page, token: string, user: WorkspaceUser, departmentID: string): Promise<void> {
-  await envelope(await page.request.put(`/api/v1/admin/users/${user.id}`, {
+  await envelope(await page.request.put(`/api/v1/console/users/${user.id}`, {
     headers: { Authorization: `Bearer ${token}` },
     data: {
       email: user.email,
@@ -113,7 +113,7 @@ test('@smoke @j03 department and owner isolation covers reads, writes, and expor
   expect(costs.rows.map((row) => row.resource_id).sort()).toEqual([engA.id, engB.id].sort())
   expect(costs.rows).not.toContainEqual(expect.objectContaining({ resource_id: finA.id }))
 
-  const usageCSV = await page.request.get('/api/v1/admin/usage/export?limit=100', {
+  const usageCSV = await page.request.get('/api/v1/console/usage/export?limit=100', {
     headers: { Authorization: `Bearer ${engManagerToken}` }
   })
   expect(usageCSV.status()).toBe(200)
@@ -123,14 +123,14 @@ test('@smoke @j03 department and owner isolation covers reads, writes, and expor
   expect(usageCSVBody).not.toContain(finAKey.record.id)
 
   const exportJob = await adminPost<{ id: string }>(page, engManagerToken, '/export-jobs?kind=gateway_traces&limit=100', {})
-  await expectForbiddenOrHidden(await page.request.get(`/api/v1/admin/export-jobs/${exportJob.id}`, {
+  await expectForbiddenOrHidden(await page.request.get(`/api/v1/console/export-jobs/${exportJob.id}`, {
     headers: { Authorization: `Bearer ${finManagerToken}` }
   }))
   await expect.poll(async () => {
     const job = await adminGet<{ status: string }>(page, engManagerToken, `/export-jobs/${exportJob.id}`)
     return job.status
   }).toBe('succeeded')
-  const exportDownload = await page.request.get(`/api/v1/admin/export-jobs/${exportJob.id}/download`, {
+  const exportDownload = await page.request.get(`/api/v1/console/export-jobs/${exportJob.id}/download`, {
     headers: { Authorization: `Bearer ${engManagerToken}` }
   })
   expect(exportDownload.status()).toBe(200)
@@ -139,7 +139,7 @@ test('@smoke @j03 department and owner isolation covers reads, writes, and expor
   expect(exportBody).toContain(engBKey.record.id)
   expect(exportBody).not.toContain(finAKey.record.id)
 
-  await expectForbiddenOrHidden(await page.request.post(`/api/v1/admin/api-keys/${finAKey.record.id}/disable`, {
+  await expectForbiddenOrHidden(await page.request.post(`/api/v1/console/api-keys/${finAKey.record.id}/disable`, {
     headers: { Authorization: `Bearer ${engManagerToken}` }
   }))
   const portal = await envelope<{ api_keys: Array<{ id: string }>; usage: { recent: Array<{ api_key_id: string }> }; recent_traces: Array<{ api_key_id: string }>; alerts: Array<{ resource_id: string }> }>(

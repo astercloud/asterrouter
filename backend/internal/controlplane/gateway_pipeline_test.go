@@ -134,7 +134,7 @@ func TestCanonicalAuthContextKeepsExternalSubjectsCredentialScoped(t *testing.T)
 	canonical := svc.canonicalAuthContext(GatewayAuthContext{
 		APIKey: APIKeyRecord{
 			ID: "eai_subject_1", Fingerprint: "fingerprint-1", KeyType: APIKeyTypeService,
-			ProfileScope: ProfileScopePlatform, PlatformTenantID: "tenant-1", GatewayPrincipalID: "principal-1",
+			ApplicationID: "application-1", GatewayPrincipalID: "principal-1",
 			ModelAllowlist: []string{"model-a"},
 		},
 		ExternalAuthIntegration:  &integration,
@@ -145,14 +145,14 @@ func TestCanonicalAuthContextKeepsExternalSubjectsCredentialScoped(t *testing.T)
 	}
 }
 
-func TestCanonicalAuthContextIncludesPlatformTenantConcurrencyLimit(t *testing.T) {
+func TestCanonicalAuthContextIncludesApplicationConcurrencyLimit(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1")
 	canonical := svc.canonicalAuthContext(GatewayAuthContext{
-		APIKey:         APIKeyRecord{ID: "application-1", ProfileScope: ProfileScopePlatform, ConcurrencyLimit: 2},
-		PlatformTenant: &PlatformTenant{ID: "tenant-1", ConcurrencyLimit: 5},
+		APIKey:      APIKeyRecord{ID: "application-1", ConcurrencyLimit: 2},
+		Application: &Application{ID: "application-1", ConcurrencyLimit: 5},
 	})
-	if canonical.TenantID != "tenant-1" || canonical.Limits.ConcurrencyLimit != 2 || canonical.Limits.TenantConcurrencyLimit != 5 {
-		t.Fatalf("canonical capacity limits=%+v tenant_id=%q", canonical.Limits, canonical.TenantID)
+	if canonical.ApplicationID != "application-1" || canonical.Limits.ConcurrencyLimit != 2 || canonical.Limits.ApplicationConcurrencyLimit != 5 {
+		t.Fatalf("canonical capacity limits=%+v application_id=%q", canonical.Limits, canonical.ApplicationID)
 	}
 }
 

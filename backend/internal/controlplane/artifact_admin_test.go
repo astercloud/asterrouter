@@ -13,7 +13,7 @@ func TestArtifactAdminQueryDetailAndRuntimeDisclosure(t *testing.T) {
 		t.Fatalf("reconcile report=%+v err=%v", report, err)
 	}
 	records, err := fixture.service.ListArtifactsAdmin(context.Background(), ArtifactQuery{
-		ProfileScope: ProfileScopePlatform, TenantID: "output-tenant", Policy: GatewayArtifactPolicyCustomerSink,
+		ApplicationID: "output-application", Policy: GatewayArtifactPolicyCustomerSink,
 		Status: ArtifactStatusDelivered, Limit: 10,
 	})
 	if err != nil || len(records) != 1 {
@@ -71,7 +71,7 @@ func TestRetryArtifactDeliverySchedulesReconciliationAndAudits(t *testing.T) {
 	foundAudit := false
 	for _, log := range logs {
 		if log.Action == "retry_delivery" && log.ResourceType == "artifact" && log.ResourceID == artifacts[0].ID && log.Actor == "admin@example.test" &&
-			log.ProfileScope == ProfileScopePlatform && log.PlatformTenantID == artifacts[0].TenantID {
+			log.ApplicationID == artifacts[0].ApplicationID {
 			foundAudit = true
 		}
 	}

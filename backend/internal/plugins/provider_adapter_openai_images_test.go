@@ -88,8 +88,8 @@ func TestBuiltinOpenAIImageAdapterRunsDurableJobToArtifact(t *testing.T) {
 	t.Cleanup(cancelRuntime)
 
 	auth := gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "image-key", ProfileScope: controlplane.ProfileScopePlatform,
-		TenantID: "image-tenant", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "image-principal",
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "image-key",
+		ApplicationID: "image-application", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "image-principal",
 		ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
 	}
 	payload := []byte(`{"model":"public-image","operation":"image_generation","modality":"image","input":{"prompt":"synthetic","count":1}}`)

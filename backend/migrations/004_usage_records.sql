@@ -1,7 +1,6 @@
 CREATE TABLE IF NOT EXISTS usage_records (
   id TEXT PRIMARY KEY,
   api_key_id TEXT NOT NULL,
-  customer_id TEXT NOT NULL DEFAULT '',
   api_fingerprint TEXT NOT NULL,
   model TEXT NOT NULL,
   upstream_model TEXT NOT NULL DEFAULT '',

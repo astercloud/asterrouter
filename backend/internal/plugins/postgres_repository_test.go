@@ -20,7 +20,7 @@ func TestPostgresRepositoryPersistsPluginAcrossRestart(t *testing.T) {
 	plugin := Plugin{
 		ID: "plugin-postgres", PluginID: "official.test", Name: "Postgres Plugin", Category: "testing",
 		Type: "builtin", Tier: TierFreeCore, Version: "1.0.0", Vendor: "AsterRouter",
-		Status: StatusEnabled, EntitlementStatus: EntitlementFree, Surfaces: []string{"admin", "console"},
+		Status: StatusEnabled, EntitlementStatus: EntitlementFree,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := repo.SavePlugin(ctx, plugin); err != nil {
@@ -39,7 +39,7 @@ func TestPostgresRepositoryPersistsPluginAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindPlugin(): %v", err)
 	}
-	if !ok || found.PluginID != plugin.PluginID || len(found.Surfaces) != 2 || found.Status != StatusEnabled {
+	if !ok || found.PluginID != plugin.PluginID || found.Status != StatusEnabled {
 		t.Fatalf("persisted plugin ok=%t plugin=%#v", ok, found)
 	}
 }

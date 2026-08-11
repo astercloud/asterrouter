@@ -27,7 +27,7 @@ import (
 func TestAdminPluginsCatalogEndpoint(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -47,13 +47,13 @@ func TestAdminPluginsCatalogEndpoint(t *testing.T) {
 }
 
 func TestAdminOfficialFeedSyncRecordsDisabledAttempt(t *testing.T) {
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", EnabledProfiles: []string{"enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewService(plugins.NewMemoryRepository())
 	handler := New(Options{Runtime: RuntimeConfig{}, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: system.NewService(system.Config{Version: "test", BuildType: "source"})})
 
 	body := bytes.NewBufferString(`{"service_key":"provider-intelligence"}`)
-	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/feeds/sync", body)
+	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/feeds/sync", body)
 	syncReq.Header.Set("Content-Type", "application/json")
 	syncRec := httptest.NewRecorder()
 	handler.ServeHTTP(syncRec, syncReq)
@@ -61,7 +61,7 @@ func TestAdminOfficialFeedSyncRecordsDisabledAttempt(t *testing.T) {
 		t.Fatalf("sync status = %d body=%s", syncRec.Code, syncRec.Body.String())
 	}
 
-	runsReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/feeds/sync-runs?service_key=provider-intelligence", nil)
+	runsReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/feeds/sync-runs?service_key=provider-intelligence", nil)
 	runsRec := httptest.NewRecorder()
 	handler.ServeHTTP(runsRec, runsReq)
 	if runsRec.Code != http.StatusOK {
@@ -123,30 +123,29 @@ func TestPluginHostProviderCallbackEndpointRejectsExternalAndUnknownRuntime(t *t
 }
 
 func TestPluginOpenCatalogUsesScopedAPIToken(t *testing.T) {
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewService(plugins.NewMemoryRepository())
 	if err := pluginService.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("Plugin EnsureSeedData(): %v", err)
 	}
 	created, err := pluginService.CreatePluginAPIToken(context.Background(), plugins.PluginAPITokenCreateRequest{
-		Name:     "catalog integration",
-		Scopes:   []string{plugins.PluginAPIScopeCatalogRead},
-		Surfaces: []string{"personal"},
+		Name:   "catalog integration",
+		Scopes: []string{plugins.PluginAPIScopeCatalogRead},
 	})
 	if err != nil {
 		t.Fatalf("CreatePluginAPIToken(): %v", err)
 	}
 	handler := New(Options{Runtime: RuntimeConfig{}, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: system.NewService(system.Config{Version: "test", BuildType: "source"})})
 
-	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/api/v1/open/plugins/catalog?surface=personal", nil)
+	unauthorizedReq := httptest.NewRequest(http.MethodGet, "/api/v1/open/plugins/catalog", nil)
 	unauthorizedRec := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorizedRec, unauthorizedReq)
 	if unauthorizedRec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status = %d body=%s", unauthorizedRec.Code, unauthorizedRec.Body.String())
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/open/plugins/catalog?surface=personal", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/open/plugins/catalog", nil)
 	request.Header.Set("Authorization", "Bearer "+created.Secret)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -162,10 +161,12 @@ func TestPluginOpenCatalogUsesScopedAPIToken(t *testing.T) {
 	if len(response.Data.Plugins) == 0 {
 		t.Fatal("open catalog is empty")
 	}
+	foundAudit := false
 	for _, plugin := range response.Data.Plugins {
-		if plugin.ID == "com.asterrouter.enterprise.audit-baseline" {
-			t.Fatal("enterprise-only plugin leaked through personal API token")
-		}
+		foundAudit = foundAudit || plugin.ID == "com.asterrouter.enterprise.audit-baseline"
+	}
+	if !foundAudit {
+		t.Fatal("enterprise audit plugin is missing from the scoped catalog")
 	}
 }
 
@@ -200,7 +201,7 @@ func TestAdminPluginsCatalogSyncEndpoint(t *testing.T) {
 	}))
 	defer catalogServer.Close()
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		OfficialCatalog: plugins.OfficialCatalogConfig{
@@ -213,7 +214,7 @@ func TestAdminPluginsCatalogSyncEndpoint(t *testing.T) {
 	})
 	handler := New(Options{Runtime: RuntimeConfig{}, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: system.NewService(system.Config{Version: "test", BuildType: "source"})})
 
-	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/catalog-sync", nil)
+	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/catalog-sync", nil)
 	syncRec := httptest.NewRecorder()
 	handler.ServeHTTP(syncRec, syncReq)
 	if syncRec.Code != http.StatusOK {
@@ -229,7 +230,7 @@ func TestAdminPluginsCatalogSyncEndpoint(t *testing.T) {
 		t.Fatalf("sync response mismatch: %+v", syncResp.Data)
 	}
 
-	catalogReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins", nil)
+	catalogReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins", nil)
 	catalogRec := httptest.NewRecorder()
 	handler.ServeHTTP(catalogRec, catalogReq)
 	if catalogRec.Code != http.StatusOK {
@@ -339,7 +340,7 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 	defer catalogServer.Close()
 	catalogServerURL = catalogServer.URL
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		OfficialCatalog: plugins.OfficialCatalogConfig{
@@ -356,14 +357,14 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 	})
 	handler := New(Options{Runtime: RuntimeConfig{}, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: system.NewService(system.Config{Version: "test", BuildType: "source"})})
 
-	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/catalog-sync", nil)
+	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/catalog-sync", nil)
 	syncRec := httptest.NewRecorder()
 	handler.ServeHTTP(syncRec, syncReq)
 	if syncRec.Code != http.StatusOK {
 		t.Fatalf("sync status = %d body=%s", syncRec.Code, syncRec.Body.String())
 	}
 
-	downloadReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/com.astercloud.catalog.router-sync/packages/"+packageID+"/download", nil)
+	downloadReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/packages/"+packageID+"/download", nil)
 	downloadRec := httptest.NewRecorder()
 	handler.ServeHTTP(downloadRec, downloadReq)
 	if downloadRec.Code != http.StatusOK {
@@ -383,7 +384,7 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 		t.Fatalf("download response mismatch: %+v content=%q", downloadResp.Data, cached)
 	}
 
-	installReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/com.astercloud.catalog.router-sync/packages/"+packageID+"/install", nil)
+	installReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/packages/"+packageID+"/install", nil)
 	installRec := httptest.NewRecorder()
 	handler.ServeHTTP(installRec, installReq)
 	if installRec.Code != http.StatusOK {
@@ -399,7 +400,7 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 		t.Fatalf("install response mismatch: %+v", installResp.Data)
 	}
 
-	uninstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/com.astercloud.catalog.router-sync/packages/"+packageID+"/uninstall", nil)
+	uninstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/packages/"+packageID+"/uninstall", nil)
 	uninstallRec := httptest.NewRecorder()
 	handler.ServeHTTP(uninstallRec, uninstallReq)
 	if uninstallRec.Code != http.StatusOK {
@@ -436,7 +437,7 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 func TestAdminPluginsEnableFreePluginAudits(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/com.asterrouter.notification.webhook/enable", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/com.asterrouter.notification.webhook/enable", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -469,7 +470,7 @@ func TestAdminPluginConfigEndpointsAuditAndMaskSecrets(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 
 	body := bytes.NewBufferString(`{"settings":{"min_severity":"critical","alert_types":"api_key_quota"},"secrets":{"webhook_url":"https://example.com/hook","bearer_token":"secret-token"}}`)
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/plugins/com.asterrouter.notification.webhook/config", body)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/console/plugins/com.asterrouter.notification.webhook/config", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -488,7 +489,7 @@ func TestAdminPluginConfigEndpointsAuditAndMaskSecrets(t *testing.T) {
 		t.Fatalf("config response mismatch: %+v", resp.Data)
 	}
 
-	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/com.asterrouter.notification.webhook/config", nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/com.asterrouter.notification.webhook/config", nil)
 	getRec := httptest.NewRecorder()
 	handler.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusOK {
@@ -519,13 +520,12 @@ func TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets(t *testing.T) 
   "bucket":"customer-media",
   "prefix":"generated",
   "reference_base_url":"https://media.example/generated",
-  "allowed_profile_scope":"platform",
-  "allowed_tenant_id":"tenant-a",
+  "allowed_application_id":"application-a",
   "path_style":true,
   "enabled":true,
   "secrets":{"access_key":"` + accessKey + `","secret_key":"` + secretKey + `"}
 }`)
-	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", body)
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", body)
 	putReq.Header.Set("Content-Type", "application/json")
 	putRec := httptest.NewRecorder()
 	handler.ServeHTTP(putRec, putReq)
@@ -545,7 +545,7 @@ func TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets(t *testing.T) 
 		t.Fatalf("put response = %+v", putResponse.Data)
 	}
 
-	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks", nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks", nil)
 	getRec := httptest.NewRecorder()
 	handler.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusOK || strings.Contains(getRec.Body.String(), accessKey) || strings.Contains(getRec.Body.String(), secretKey) {
@@ -577,14 +577,14 @@ func TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets(t *testing.T) 
 		t.Fatalf("artifact sink configure audit missing: %+v", audit)
 	}
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/console/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", nil)
 	deleteRec := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
 		t.Fatalf("delete status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
 	}
 	missingRec := httptest.NewRecorder()
-	handler.ServeHTTP(missingRec, httptest.NewRequest(http.MethodDelete, "/api/v1/admin/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", nil))
+	handler.ServeHTTP(missingRec, httptest.NewRequest(http.MethodDelete, "/api/v1/console/plugins/"+plugins.ArtifactS3SinkPluginID+"/artifact-sinks/customer-media", nil))
 	if missingRec.Code != http.StatusNotFound {
 		t.Fatalf("missing delete status=%d body=%s", missingRec.Code, missingRec.Body.String())
 	}
@@ -599,11 +599,11 @@ func TestAdminArtifactSinkDestinationRBACAndInvalidPayloads(t *testing.T) {
 		t.Fatalf("CreateWorkspaceUser(): %v", err)
 	}
 	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
-		UserID: user.ID, Role: controlplane.RoleReadOnlyAuditor, ScopeType: controlplane.RoleScopeGlobal,
+		UserID: user.ID, Role: controlplane.RoleReadOnlyAuditor, ScopeType: controlplane.RoleScopeOrganization,
 	}); err != nil {
 		t.Fatalf("CreateRoleBinding(): %v", err)
 	}
-	baseURL := "/api/v1/admin/plugins/" + plugins.ArtifactS3SinkPluginID + "/artifact-sinks"
+	baseURL := "/api/v1/console/plugins/" + plugins.ArtifactS3SinkPluginID + "/artifact-sinks"
 	for _, test := range []struct {
 		method string
 		path   string
@@ -654,14 +654,14 @@ func TestAdminPluginDeliveriesEndpoint(t *testing.T) {
 	}))
 	defer webhook.Close()
 
-	enableReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/com.asterrouter.notification.webhook/enable", nil)
+	enableReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/com.asterrouter.notification.webhook/enable", nil)
 	enableRec := httptest.NewRecorder()
 	handler.ServeHTTP(enableRec, enableReq)
 	if enableRec.Code != http.StatusOK {
 		t.Fatalf("enable status = %d body=%s", enableRec.Code, enableRec.Body.String())
 	}
 	configBody := bytes.NewBufferString(`{"settings":{"min_severity":"warning","alert_types":"api_key_quota"},"secrets":{"webhook_url":"` + webhook.URL + `"}}`)
-	configReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/plugins/com.asterrouter.notification.webhook/config", configBody)
+	configReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/plugins/com.asterrouter.notification.webhook/config", configBody)
 	configReq.Header.Set("Content-Type", "application/json")
 	configRec := httptest.NewRecorder()
 	handler.ServeHTTP(configRec, configReq)
@@ -690,7 +690,7 @@ func TestAdminPluginDeliveriesEndpoint(t *testing.T) {
 		t.Fatalf("RecordGatewayUsage(): %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/com.asterrouter.notification.webhook/deliveries", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/com.asterrouter.notification.webhook/deliveries", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -753,7 +753,7 @@ func TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus(t *testing.T) {
 		"expires_at": expiresAt.Format(time.RFC3339),
 	}, now)
 
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewServiceWithOptions(plugins.NewMemoryRepository(), plugins.ServiceOptions{
 		SecretKey: "test-secret",
@@ -770,7 +770,7 @@ func TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus(t *testing.T) {
 	}
 	handler := New(Options{Runtime: RuntimeConfig{}, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: system.NewService(system.Config{Version: "test", BuildType: "source"})})
 
-	statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins/license/status", nil)
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/license/status", nil)
 	statusRec := httptest.NewRecorder()
 	handler.ServeHTTP(statusRec, statusReq)
 	if statusRec.Code != http.StatusOK {
@@ -793,7 +793,7 @@ func TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal license import: %v", err)
 	}
-	importReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/license/import", bytes.NewReader(body))
+	importReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/license/import", bytes.NewReader(body))
 	importReq.Header.Set("Content-Type", "application/json")
 	importRec := httptest.NewRecorder()
 	handler.ServeHTTP(importRec, importReq)
@@ -833,7 +833,7 @@ func TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus(t *testing.T) {
 func TestAdminPluginsRejectLockedPaidPlugin(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/plugins/com.asterrouter.notification.slack/enable", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/com.asterrouter.notification.slack/enable", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

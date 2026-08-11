@@ -52,7 +52,7 @@ func TestAccountBindingStartIsLimitedPerAccountAndClient(t *testing.T) {
 	}
 
 	for attempt := 1; attempt <= 10; attempt++ {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/account/identities/unsupported/bind", strings.NewReader(`{"return_path":"/admin/account"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/account/identities/unsupported/bind", strings.NewReader(`{"return_path":"/console/account"}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+loginResponse.Data.AccessToken)
 		rec := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func TestAccountBindingStartIsLimitedPerAccountAndClient(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/account/identities/unsupported/bind", strings.NewReader(`{"return_path":"/admin/account"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/account/identities/unsupported/bind", strings.NewReader(`{"return_path":"/console/account"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.AccessToken)
 	rec := httptest.NewRecorder()

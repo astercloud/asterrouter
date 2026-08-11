@@ -57,37 +57,6 @@ export const apiClient = axios.create({
 })
 
 apiClient.interceptors.request.use((config) => {
-  const path = String(config.url || '')
-  const sharedPrefixes = [
-    '/dashboard',
-    '/providers',
-    '/provider-health-checks',
-    '/routing-groups',
-    '/provider-accounts',
-    '/provider-account-health-checks',
-    '/gateway-models',
-    '/model-routes',
-    '/gateway-simulator',
-    '/api-keys',
-    '/policies',
-    '/pricing-rules',
-    '/usage',
-    '/gateway-traces',
-    '/alerts',
-    '/audit-logs',
-    '/plugins',
-    '/settings',
-    '/system',
-    '/cost-allocation'
-  ]
-  if (
-    path.startsWith('/admin/') &&
-    sharedPrefixes.some((prefix) => path === `/admin${prefix}` || path.startsWith(`/admin${prefix}/`))
-  ) {
-    if (window.location.pathname.startsWith('/console')) config.url = path.replace(/^\/admin/, '/console')
-    else if (window.location.pathname.startsWith('/operator')) config.url = path.replace(/^\/admin/, '/operator')
-		else if (window.location.pathname.startsWith('/platform')) config.url = path.replace(/^\/admin/, '/platform')
-  }
   config.headers['Accept-Language'] = getLocale()
   const token = localStorage.getItem('asterrouter_admin_token')
   if (token) {

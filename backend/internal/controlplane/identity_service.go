@@ -52,7 +52,7 @@ const (
 	dummyWorkspaceUserPasswordHash  = "$2a$10$wmA3Ghc6aFB2Rxw5TFl.RuY69eTsen./ma./DUx2BUj.yf/unXtKO"
 )
 
-var ErrDeploymentManagedAccount = errors.New("personal account is managed by deployment configuration")
+var ErrConfigManagedAccount = errors.New("account is managed by deployment configuration")
 
 var ErrUserEmailExists = errors.New("user email already exists")
 
@@ -249,7 +249,7 @@ func (s *Service) UpdateCurrentAccountProfile(ctx context.Context, actor string,
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return AccountProfile{}, err
 	}
-	if err := s.audit(ctx, actor, "account_profile_updated", "workspace_user", user.ID, "Updated personal account profile"); err != nil {
+	if err := s.audit(ctx, actor, "account_profile_updated", "workspace_user", user.ID, "Updated organization account profile"); err != nil {
 		return AccountProfile{}, err
 	}
 	return accountProfileFromUser(user), nil
@@ -284,11 +284,10 @@ func (s *Service) ChangeCurrentAccountPassword(ctx context.Context, actor string
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
 		return err
 	}
-	action, summary := "account_password_changed", "Changed personal account password"
+	action, summary := "account_password_changed", "Changed organization account password"
 	if err := s.audit(ctx, actor, action, "workspace_user", user.ID, summary); err != nil {
 		return err
 	}
-	_ = s.publishAccountSecurityNotification(ctx, user, "账户密码已更新", "您的账户密码刚刚发生变更。如非本人操作，请立即重置密码并撤销其他登录会话。", action)
 	return nil
 }
 
@@ -306,7 +305,7 @@ func (s *Service) CurrentAccountPasswordHash(ctx context.Context, actor string) 
 func accountProfileFromUser(user WorkspaceUser) AccountProfile {
 	return AccountProfile{
 		ID: user.ID, Email: user.Email, DisplayName: user.DisplayName, AvatarDataURL: user.AvatarDataURL,
-		Status: user.Status, Role: user.Role, BalanceMicros: user.BalanceMicros,
+		Status: user.Status, Role: user.Role,
 		ConcurrencyLimit: user.ConcurrencyLimit, RPMLimit: user.RPMLimit,
 		ExternalIssuer: user.ExternalIssuer, EmailVerified: user.EmailVerified,
 		PasswordEnabled: user.PasswordHash != "", TOTPEnabled: user.TOTPEnabled,
@@ -491,7 +490,6 @@ func (s *Service) CompletePasswordReset(ctx context.Context, token, password str
 		return WorkspaceUser{}, ErrResetTokenInvalid
 	}
 	_ = s.audit(ctx, user.Email, "password_reset_completed", "workspace_user", user.ID, "Completed password reset")
-	_ = s.publishAccountSecurityNotification(ctx, user, "账户密码已重置", "您的账户密码已通过密码找回流程重置，其他登录会话已失效。", "password_reset_completed")
 	return user, nil
 }
 
@@ -585,7 +583,6 @@ func (s *Service) confirmTOTP(ctx context.Context, actor, code string, includeRe
 	if err := s.audit(ctx, actor, "totp_enabled", "workspace_user", user.ID, "Enabled TOTP authentication"); err != nil {
 		return nil, err
 	}
-	_ = s.publishAccountSecurityNotification(ctx, user, "两步验证已启用", "您的账户已启用 TOTP 两步验证。", "totp_enabled")
 	return codes, nil
 }
 
@@ -605,7 +602,6 @@ func (s *Service) DisableTOTP(ctx context.Context, actor, code string) error {
 	if err := s.audit(ctx, actor, "totp_disabled", "workspace_user", user.ID, "Disabled TOTP authentication"); err != nil {
 		return err
 	}
-	_ = s.publishAccountSecurityNotification(ctx, user, "两步验证已关闭", "您的账户已关闭 TOTP 两步验证。如非本人操作，请立即检查账户安全。", "totp_disabled")
 	return nil
 }
 
@@ -792,7 +788,7 @@ func (s *Service) BindCurrentAuthIdentity(ctx context.Context, actor, issuer, su
 func (s *Service) SessionVersion(ctx context.Context, actor string) (int64, bool, error) {
 	user, err := s.workspaceUserForActor(ctx, actor)
 	if err != nil {
-		if errors.Is(err, ErrDeploymentManagedAccount) {
+		if errors.Is(err, ErrConfigManagedAccount) {
 			return 0, false, nil
 		}
 		return 0, false, err
@@ -912,7 +908,6 @@ func applyWorkspaceUserDefaults(user *WorkspaceUser, values []WorkspaceUserDefau
 	if len(values) == 0 {
 		return
 	}
-	user.BalanceMicros = max(values[0].BalanceMicros, 0)
 	user.ConcurrencyLimit = max(values[0].ConcurrencyLimit, 0)
 	user.RPMLimit = max(values[0].RPMLimit, 0)
 }
@@ -1101,23 +1096,51 @@ func (s *Service) roleBindingFromRequest(ctx context.Context, req RoleBindingReq
 	}
 	scopeType := strings.TrimSpace(req.ScopeType)
 	if scopeType == "" {
-		scopeType = RoleScopeGlobal
+		scopeType = RoleScopeOrganization
 	}
-	if !oneOf(scopeType, RoleScopeGlobal, RoleScopeResource, RoleScopeSurface, RoleScopeDepartment) {
+	if !oneOf(scopeType, RoleScopeOrganization, RoleScopeDepartment, RoleScopeGroup, RoleScopeApplication, RoleScopeResource) {
 		return RoleBinding{}, errors.New("invalid role scope")
 	}
 	scopeID := strings.TrimSpace(req.ScopeID)
-	if scopeType == RoleScopeGlobal {
+	if scopeType == RoleScopeOrganization {
 		scopeID = ""
 	} else if scopeID == "" {
 		return RoleBinding{}, errors.New("scope_id is required for scoped role bindings")
 	} else if scopeType == RoleScopeResource && !validRBACResource(scopeID) {
 		return RoleBinding{}, errors.New("invalid RBAC resource scope")
-	} else if scopeType == RoleScopeSurface && !validSurface(scopeID) {
-		return RoleBinding{}, errors.New("invalid surface scope")
 	} else if scopeType == RoleScopeDepartment {
 		if _, err := s.departmentByID(ctx, scopeID); err != nil {
 			return RoleBinding{}, errors.New("department scope does not exist")
+		}
+	} else if scopeType == RoleScopeGroup {
+		groups, err := s.repo.ListOrganizationGroups(ctx)
+		if err != nil {
+			return RoleBinding{}, err
+		}
+		found := false
+		for _, group := range groups {
+			if group.ID == scopeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return RoleBinding{}, errors.New("group scope does not exist")
+		}
+	} else if scopeType == RoleScopeApplication {
+		applications, err := s.repo.ListApplications(ctx)
+		if err != nil {
+			return RoleBinding{}, err
+		}
+		found := false
+		for _, application := range applications {
+			if application.ID == scopeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return RoleBinding{}, errors.New("application scope does not exist")
 		}
 	}
 	if createdAt.IsZero() {
@@ -1138,12 +1161,8 @@ func validRBACResource(resource string) bool {
 		RBACResourceDashboard, RBACResourceRouting, RBACResourceProviders, RBACResourceAPIKeys,
 		RBACResourceUsage, RBACResourceTraces, RBACResourceAIJobs, RBACResourceArtifacts, RBACResourceAlerts, RBACResourceIdentity,
 		RBACResourcePolicies, RBACResourceAudit, RBACResourceExports, RBACResourcePlugins,
-		RBACResourceSettings, RBACResourceSystem,
+		RBACResourceApplications, RBACResourceSettings, RBACResourceSystem,
 	)
-}
-
-func validSurface(surface string) bool {
-	return oneOf(surface, SurfacePersonal, SurfaceRelayOperator, SurfaceEnterprise, SurfacePlatform, SurfacePortal, SurfaceCustomer)
 }
 
 func validRole(role string) bool {
@@ -1183,7 +1202,7 @@ func (s *Service) workspaceUserForActor(ctx context.Context, actor string) (Work
 	if found {
 		return user, nil
 	}
-	return WorkspaceUser{}, ErrDeploymentManagedAccount
+	return WorkspaceUser{}, ErrConfigManagedAccount
 }
 
 func (s *Service) roleBindingByID(ctx context.Context, id string) (RoleBinding, error) {

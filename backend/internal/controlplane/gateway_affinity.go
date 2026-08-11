@@ -16,7 +16,7 @@ const (
 )
 
 type GatewayAffinityInput struct {
-	TenantID      string
+	ApplicationID string
 	PrincipalID   string
 	CredentialID  string
 	Model         string
@@ -72,7 +72,7 @@ func (s *Service) gatewayUpstreamAffinityValue(input GatewayAffinityInput, provi
 		principalID = strings.TrimSpace(input.CredentialID)
 	}
 	identity := strings.Join([]string{
-		"upstream_cache", input.TenantID, principalID, input.CredentialID, input.Model, input.Protocol,
+		"upstream_cache", input.ApplicationID, principalID, input.CredentialID, input.Model, input.Protocol,
 		input.RouteGroup, input.StickyKey, strconv.Itoa(input.PolicyVersion), provider.ID, provider.AccountID, provider.UpstreamModel,
 	}, "\x00")
 	mac := hmac.New(sha256.New, []byte(s.secretKey))
@@ -236,7 +236,7 @@ func (s *Service) gatewayAffinityScopeKey(kind string, input GatewayAffinityInpu
 		if principalID == "" {
 			principalID = strings.TrimSpace(input.CredentialID)
 		}
-		identity = strings.Join([]string{kind, input.TenantID, principalID, input.Model, input.Protocol, input.RouteGroup, strconv.Itoa(input.PolicyVersion)}, "\x00")
+		identity = strings.Join([]string{kind, input.ApplicationID, principalID, input.Model, input.Protocol, input.RouteGroup, strconv.Itoa(input.PolicyVersion)}, "\x00")
 	}
 	mac := hmac.New(sha256.New, []byte(s.secretKey))
 	_, _ = mac.Write([]byte(identity))

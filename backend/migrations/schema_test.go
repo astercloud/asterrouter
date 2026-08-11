@@ -16,7 +16,6 @@ import (
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
-	"github.com/astercloud/asterrouter/backend/internal/operator"
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	"github.com/astercloud/asterrouter/backend/internal/server"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
@@ -26,15 +25,11 @@ import (
 //go:embed *.sql
 var migrationFiles embed.FS
 
-//go:embed testdata/v017_schema.sql
-var v017SchemaFixture string
-
 var migrationNamePattern = regexp.MustCompile(`^(\d{3})_[a-z0-9_]+\.sql$`)
 
 func TestMigrationSnapshotSequence(t *testing.T) {
 	names := migrationNames(t)
 	previous := 0
-	missing := []int{}
 	for _, name := range names {
 		match := migrationNamePattern.FindStringSubmatch(name)
 		if match == nil {
@@ -47,13 +42,7 @@ func TestMigrationSnapshotSequence(t *testing.T) {
 		if number <= previous {
 			t.Fatalf("migration sequence is not strictly increasing at %q", name)
 		}
-		for candidate := previous + 1; candidate < number; candidate++ {
-			missing = append(missing, candidate)
-		}
 		previous = number
-	}
-	if !reflect.DeepEqual(missing, []int{19}) {
-		t.Fatalf("unexpected migration gaps: %v; only the documented historical 019 gap is allowed", missing)
 	}
 	if previous < 75 {
 		t.Fatalf("latest migration snapshot = %03d, want at least 075", previous)
@@ -122,86 +111,6 @@ func TestMigrationSnapshotsApplyToRuntimePostgres(t *testing.T) {
 	}
 	if tableCount < 25 {
 		t.Fatalf("migrated table count = %d, want at least 25", tableCount)
-	}
-}
-
-func TestV017SchemaUpgradesWithCandidateRuntime(t *testing.T) {
-	schema := testutil.NewPostgresSchema(t)
-	db := testutil.OpenPostgres(t, schema.URL)
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, v017SchemaFixture); err != nil {
-		t.Fatalf("initialize v0.17.0 schema fixture: %v", err)
-	}
-
-	now := time.Date(2026, time.July, 26, 9, 0, 0, 0, time.UTC)
-	const legacyUserID = "v017-user"
-	const legacyUserEmail = "Legacy.User+upgrade@Example.TEST."
-	const legacyTenantID = "v017-tenant"
-	if _, err := db.ExecContext(ctx, `
-INSERT INTO workspace_users(id, email, display_name, status, role, password_hash, email_verified, balance_micros, concurrency_limit, rpm_limit, session_version, created_at, updated_at)
-VALUES($1,$2,'Legacy User','active','developer','legacy-password-hash',TRUE,7000000,7,42,3,$3,$3)
-`, legacyUserID, legacyUserEmail, now); err != nil {
-		t.Fatalf("seed v0.17.0 user: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `
-INSERT INTO platform_tenants(id, name, slug, entitlement_reference, status, created_at, updated_at)
-VALUES($1,'Legacy Tenant','legacy-tenant','legacy-entitlement','active',$2,$2)
-`, legacyTenantID, now); err != nil {
-		t.Fatalf("seed v0.17.0 tenant: %v", err)
-	}
-
-	repo, err := controlplane.NewPostgresRepository(ctx, schema.URL)
-	if err != nil {
-		t.Fatalf("open candidate runtime over v0.17.0 schema: %v", err)
-	}
-	users, err := repo.ListWorkspaceUsers(ctx)
-	if err != nil || len(users) != 1 {
-		t.Fatalf("list upgraded users=%+v err=%v", users, err)
-	}
-	user := users[0]
-	if user.ID != legacyUserID || user.Email != legacyUserEmail || user.EmailNormalized != "legacy.user@example.test" || user.PasswordHash != "legacy-password-hash" || !user.EmailVerified || user.BalanceMicros != 7000000 || user.ConcurrencyLimit != 7 || user.RPMLimit != 42 || user.SessionVersion != 3 {
-		t.Fatalf("upgraded user=%+v", user)
-	}
-	tenants, err := repo.ListPlatformTenants(ctx)
-	if err != nil || len(tenants) != 1 {
-		t.Fatalf("list upgraded tenants=%+v err=%v", tenants, err)
-	}
-	tenant := tenants[0]
-	if tenant.ID != legacyTenantID || tenant.Name != "Legacy Tenant" || tenant.EntitlementReference != "legacy-entitlement" || tenant.ConcurrencyLimit != 0 {
-		t.Fatalf("upgraded tenant=%+v", tenant)
-	}
-	if err := repo.Close(); err != nil {
-		t.Fatalf("close candidate runtime: %v", err)
-	}
-
-	var capacityTableCount int
-	if err := db.QueryRowContext(ctx, `
-SELECT COUNT(*)
-FROM information_schema.tables
-WHERE table_schema = current_schema()
-  AND table_name IN ('gateway_provider_rate_samples', 'gateway_provider_capacity_leases')
-`).Scan(&capacityTableCount); err != nil {
-		t.Fatalf("count provider capacity tables: %v", err)
-	}
-	if capacityTableCount != 2 {
-		t.Fatalf("provider capacity tables=%d, want 2", capacityTableCount)
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE platform_tenants SET concurrency_limit=-1 WHERE id=$1`, legacyTenantID); err == nil {
-		t.Fatal("tenant concurrency constraint accepted a negative value")
-	}
-
-	reopened, err := controlplane.NewPostgresRepository(ctx, schema.URL)
-	if err != nil {
-		t.Fatalf("reopen candidate runtime after upgrade: %v", err)
-	}
-	defer reopened.Close()
-	users, err = reopened.ListWorkspaceUsers(ctx)
-	if err != nil || len(users) != 1 || users[0].EmailNormalized != "legacy.user@example.test" {
-		t.Fatalf("reopened upgraded users=%+v err=%v", users, err)
-	}
-	tenants, err = reopened.ListPlatformTenants(ctx)
-	if err != nil || len(tenants) != 1 || tenants[0].ConcurrencyLimit != 0 {
-		t.Fatalf("reopened upgraded tenants=%+v err=%v", tenants, err)
 	}
 }
 
@@ -353,8 +262,8 @@ func TestAIJobProgressMigrationIsIdempotentAndEnforcesConstraints(t *testing.T) 
 		t.Fatal(err)
 	}
 	job, created, err := svc.BeginDurableAIJob(ctx, gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "progress-migration-key", ProfileScope: controlplane.ProfileScopePlatform,
-		TenantID: "progress-migration-tenant", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "progress-migration-principal",
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "progress-migration-key",
+		ApplicationID: "progress-migration-application", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "progress-migration-principal",
 		ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
 	}, gatewaycore.CanonicalRequest{
 		ClientRequestID: "progress-migration-request", Fingerprint: "progress-migration-fingerprint", IdempotencyKey: "progress-migration-idem",
@@ -642,11 +551,6 @@ func initializeRuntimeSchema(t testing.TB, databaseURL string) {
 		t.Fatalf("initialize controlplane schema: %v", err)
 	}
 	defer controlRepo.Close()
-	operatorRepo, err := operator.NewRepository(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("initialize operator schema: %v", err)
-	}
-	defer operatorRepo.Close()
 	pluginRepo, _, err := plugins.NewRepository(ctx, databaseURL)
 	if err != nil {
 		t.Fatalf("initialize plugin schema: %v", err)

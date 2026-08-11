@@ -2,7 +2,6 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n, { setLocale } from '@/i18n'
 import * as control from '@/api/control'
-import * as platform from '@/api/platform'
 import type { ArtifactAdminDetail, ArtifactAdminRecord } from '@/types'
 import AdminArtifactsView from './AdminArtifactsView.vue'
 
@@ -15,22 +14,12 @@ vi.mock('@/api/control', () => ({
   retryArtifactDelivery: vi.fn()
 }))
 
-vi.mock('@/api/platform', () => ({
-  getPlatformArtifact: vi.fn(),
-  getPlatformArtifactContent: vi.fn(),
-  getPlatformArtifactRuntimes: vi.fn(),
-  getPlatformArtifacts: vi.fn(),
-  getPlatformArtifactSummary: vi.fn(),
-  retryPlatformArtifactDelivery: vi.fn()
-}))
-
 const artifact: ArtifactAdminRecord = {
   id: 'artifact-output-1',
   operation_id: 'operation-1',
   job_id: 'job-1',
   attempt_id: 'attempt-1',
-  profile_scope: 'platform',
-  tenant_id: 'tenant-1',
+	application_id: 'application-1',
   role: 'final',
   policy: 'customer_sink',
   status: 'delivery_failed',
@@ -72,7 +61,7 @@ const readyDetail: ArtifactAdminDetail = {
 describe('AdminArtifactsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    window.history.replaceState({}, '', '/admin/artifacts')
+    window.history.replaceState({}, '', '/console/artifacts')
     setLocale('en-US')
     vi.mocked(control.getArtifacts).mockResolvedValue([artifact])
     vi.mocked(control.getArtifactSummary).mockResolvedValue({ total: 1, size_bytes: 2048, by_status: { delivery_failed: 1 } })
@@ -80,16 +69,10 @@ describe('AdminArtifactsView', () => {
     vi.mocked(control.getArtifact).mockResolvedValue(detail)
     vi.mocked(control.getArtifactContent).mockResolvedValue(new Blob(['image'], { type: 'image/png' }))
     vi.mocked(control.retryArtifactDelivery).mockResolvedValue({ artifact_id: artifact.id, attempt_id: 'attempt-1', status: 'scheduled', scheduled_at: artifact.updated_at })
-    vi.mocked(platform.getPlatformArtifacts).mockResolvedValue([artifact])
-    vi.mocked(platform.getPlatformArtifactSummary).mockResolvedValue({ total: 1, size_bytes: 2048, by_status: { delivery_failed: 1 } })
-    vi.mocked(platform.getPlatformArtifactRuntimes).mockResolvedValue([{ kind: 'sink', id: 'platform-sink', status: 'registered' }])
-    vi.mocked(platform.getPlatformArtifact).mockResolvedValue(detail)
-    vi.mocked(platform.getPlatformArtifactContent).mockResolvedValue(new Blob(['image'], { type: 'image/png' }))
-    vi.mocked(platform.retryPlatformArtifactDelivery).mockResolvedValue({ artifact_id: artifact.id, attempt_id: 'attempt-1', status: 'scheduled', scheduled_at: artifact.updated_at })
   })
 
   it('applies an operation deep-link query on initial load', async () => {
-    window.history.replaceState({}, '', '/admin/artifacts?q=operation-1')
+    window.history.replaceState({}, '', '/console/artifacts?q=operation-1')
     const wrapper = mount(AdminArtifactsView, { global: { plugins: [i18n] } })
     await flushPromises()
 
@@ -158,24 +141,6 @@ describe('AdminArtifactsView', () => {
 
     expect(wrapper.get('.notice').text()).toContain('artifact service unavailable')
     expect(wrapper.get('.empty-cell').text()).toContain('No artifacts match')
-    wrapper.unmount()
-  })
-
-  it('uses the explicit platform operations when mounted for the platform surface', async () => {
-    const wrapper = mount(AdminArtifactsView, { props: { surface: 'platform' }, global: { plugins: [i18n] } })
-    await flushPromises()
-
-    expect(platform.getPlatformArtifacts).toHaveBeenCalledOnce()
-    expect(platform.getPlatformArtifactSummary).toHaveBeenCalledOnce()
-    expect(platform.getPlatformArtifactRuntimes).toHaveBeenCalledOnce()
-    expect(control.getArtifacts).not.toHaveBeenCalled()
-    expect(wrapper.get('.artifact-runtime-strip').text()).toContain('platform-sink')
-
-    await wrapper.get('button[aria-label="Details"]').trigger('click')
-    await flushPromises()
-    expect(platform.getPlatformArtifact).toHaveBeenCalledWith(artifact.id)
-    expect(platform.getPlatformArtifactContent).not.toHaveBeenCalled()
-    expect(control.getArtifact).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

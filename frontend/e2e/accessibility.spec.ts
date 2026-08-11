@@ -27,7 +27,7 @@ test('@smoke @j09 console overview has no serious accessibility violations', asy
   expect(blocking, JSON.stringify(blocking, null, 2)).toEqual([])
 })
 
-test('@smoke @j09 customer and account sessions are isolated, surface-safe, and keyboard-operable', async ({ browser, page }, testInfo) => {
+test('@smoke @j09 enterprise member sessions are isolated and keyboard-operable', async ({ browser, page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The cross-session workflow is viewport-independent and runs once on desktop.')
 
   const errors = captureBrowserErrors(page)
@@ -35,59 +35,45 @@ test('@smoke @j09 customer and account sessions are isolated, surface-safe, and 
   const adminToken = await loginTestPrincipal(page)
   const runID = `${testInfo.project.name}-${Date.now()}`
   const password = 'synthetic-password-123'
-  const [customerA, customerB] = await registerUsers(page, adminToken, [
-    { email: `surface-a-${runID}@example.test`, password, displayName: 'Surface Customer A', balanceMicros: 5_000_000 },
-    { email: `surface-b-${runID}@example.test`, password, displayName: 'Surface Customer B', balanceMicros: 50_000_000 }
+  const [memberA, memberB] = await registerUsers(page, adminToken, [
+    { email: `member-a-${runID}@example.test`, password, displayName: 'Enterprise Member A' },
+    { email: `member-b-${runID}@example.test`, password, displayName: 'Enterprise Member B' }
   ])
 
   await page.context().clearCookies()
   await page.evaluate(() => localStorage.clear())
-  await loginThroughPage(page, customerA.email, password, '/customer/overview')
-  await expect(page.getByRole('heading', { level: 1, name: 'Account overview' })).toBeVisible()
-  const customerAToken = await loginUser(page, customerA.email, password)
-  const customerABilling = await envelope<{ balance_micros: number }>(await page.request.get('/api/v1/customer/billing', {
-    headers: { Authorization: `Bearer ${customerAToken}` }
-  }))
-  expect(customerABilling.balance_micros).toBe(5_000_000)
+  await loginThroughPage(page, memberA.email, password, '/portal/overview')
+  await expect(page.getByRole('heading', { level: 1, name: 'Employee Portal' })).toBeVisible()
+  const memberAToken = await loginUser(page, memberA.email, password)
 
   const origin = new URL(page.url()).origin
   const otherContext = await browser.newContext()
   const otherPage = await otherContext.newPage()
   try {
-    await loginThroughPage(otherPage, customerB.email, password, `${origin}/customer/overview`)
-    await expect(otherPage.getByRole('heading', { level: 1, name: 'Account overview' })).toBeVisible()
-    const customerBToken = await loginUser(otherPage, customerB.email, password)
-    const customerBBilling = await envelope<{ balance_micros: number }>(await otherPage.request.get(`${origin}/api/v1/customer/billing`, {
-      headers: { Authorization: `Bearer ${customerBToken}` }
-    }))
-    expect(customerBBilling.balance_micros).toBe(50_000_000)
-    expect(customerBBilling.balance_micros).not.toBe(customerABilling.balance_micros)
-
-    await otherPage.goto(`${origin}/customer/account`)
-    await expect(otherPage.getByLabel('Email')).toHaveValue(customerB.email)
+    await loginThroughPage(otherPage, memberB.email, password, `${origin}/portal/overview`)
+    await expect(otherPage.getByRole('heading', { level: 1, name: 'Employee Portal' })).toBeVisible()
+    await otherPage.goto(`${origin}/portal/account`)
+    await expect(otherPage.getByLabel('Email')).toHaveValue(memberB.email)
   } finally {
     await otherContext.close()
   }
 
-  await page.goto('/customer/account')
-  await expect(page.getByLabel('Email')).toHaveValue(customerA.email)
-  expect([403, 404]).toContain((await page.request.get('/api/v1/admin/dashboard', { headers: { Authorization: `Bearer ${customerAToken}` } })).status())
-  expect((await page.request.get('/api/v1/operator/dashboard', { headers: { Authorization: `Bearer ${customerAToken}` } })).status()).toBe(403)
+  await page.goto('/portal/account')
+  await expect(page.getByLabel('Email')).toHaveValue(memberA.email)
+  expect([403, 404]).toContain((await page.request.get('/api/v1/console/dashboard', { headers: { Authorization: `Bearer ${memberAToken}` } })).status())
 
-  await page.goto('/admin/dashboard')
-  await expect(page).toHaveURL(/\/customer\/overview$/)
-  await page.goto('/operator/overview')
-  await expect(page).toHaveURL(/\/customer\/overview$/)
+  await page.goto('/console/workbench')
+  await expect(page).toHaveURL(/\/portal\/overview$/)
 
   const themeButton = page.getByRole('button', { name: 'Dark mode' })
   await focusWithTab(page, themeButton)
   await page.keyboard.press('Enter')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
 
-  const billingLink = page.getByRole('link', { name: 'Billing & recharge', exact: true })
-  await focusWithTab(page, billingLink)
+  const usageLink = page.getByRole('main').getByRole('link', { name: 'Usage', exact: true })
+  await focusWithTab(page, usageLink)
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/\/customer\/billing$/)
-  await expect(page.getByRole('heading', { level: 1, name: 'Billing & recharge' })).toBeVisible()
+  await expect(page).toHaveURL(/\/portal\/usage$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Employee Portal' })).toBeVisible()
   expect(errors).toEqual([])
 })

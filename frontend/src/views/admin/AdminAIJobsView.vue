@@ -10,35 +10,17 @@ import {
   getAIJobs as getAdminAIJobs,
   scheduleAIJobAttemptReconciliation as scheduleAdminAIJobAttemptReconciliation
 } from '@/api/control'
-import {
-  cancelPlatformAIJob,
-  getPlatformAIJob,
-  getPlatformAIJobRuntime,
-  getPlatformAIJobSummary,
-  getPlatformAIJobs,
-  schedulePlatformAIJobAttemptReconciliation
-} from '@/api/platform'
 import type { AIAttemptAdminRecord, AIJobAdminDetail, AIJobAdminRecord, AIJobListQuery, AIJobRuntimeStatus, AIJobSummary } from '@/types'
 
-const props = withDefaults(defineProps<{ surface?: 'admin' | 'platform' }>(), { surface: 'admin' })
 const { t } = useI18n()
-const operations = props.surface === 'platform'
-  ? {
-      cancelJob: cancelPlatformAIJob,
-      getJob: getPlatformAIJob,
-      getRuntime: getPlatformAIJobRuntime,
-      getSummary: getPlatformAIJobSummary,
-      getJobs: getPlatformAIJobs,
-      reconcileAttempt: schedulePlatformAIJobAttemptReconciliation
-    }
-  : {
-      cancelJob: cancelAdminAIJob,
-      getJob: getAdminAIJob,
-      getRuntime: getAdminAIJobRuntime,
-      getSummary: getAdminAIJobSummary,
-      getJobs: getAdminAIJobs,
-      reconcileAttempt: scheduleAdminAIJobAttemptReconciliation
-    }
+const operations = {
+  cancelJob: cancelAdminAIJob,
+  getJob: getAdminAIJob,
+  getRuntime: getAdminAIJobRuntime,
+  getSummary: getAdminAIJobSummary,
+  getJobs: getAdminAIJobs,
+  reconcileAttempt: scheduleAdminAIJobAttemptReconciliation
+}
 const jobs = ref<AIJobAdminRecord[]>([])
 const summary = ref<AIJobSummary>({ total: 0, by_status: {} })
 const runtime = ref<AIJobRuntimeStatus | null>(null)
@@ -255,7 +237,7 @@ onMounted(load)
               <td><strong>{{ job.model }}</strong><span>{{ job.id }} · {{ job.operation_id }}</span></td>
               <td><strong>{{ humanize(job.modality) }}</strong><span>{{ humanize(job.operation) }} · {{ humanize(job.protocol) }}</span></td>
               <td><span class="pill" :class="statusClass(job.status)">{{ humanize(job.status) }}</span><span v-if="job.error_type">{{ humanize(job.error_type) }}</span></td>
-              <td><strong>{{ job.artifact_sink_id || humanize(job.artifact_policy) }}</strong><span>{{ job.tenant_id || t('aiJobOps.internal') }}</span></td>
+              <td><strong>{{ job.artifact_sink_id || humanize(job.artifact_policy) }}</strong><span>{{ job.application_id || t('aiJobOps.internal') }}</span></td>
               <td><button class="icon-button" type="button" :title="t('common.details')" :aria-label="t('common.details')" @click="showDetail(job.id)"><Eye :size="17" /></button></td>
             </tr>
             <tr v-if="!jobs.length"><td colspan="6" class="empty-cell">{{ loading ? t('common.loading') : t('aiJobOps.empty') }}</td></tr>

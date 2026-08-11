@@ -88,15 +88,13 @@ jobs:
         working-directory: frontend
         run: npx playwright install --with-deps chromium
 
-      - name: Create isolated candidate-browser databases
+      - name: Create isolated candidate-browser database
         env:
           PGPASSWORD: asterrouter
         run: |
           set -euo pipefail
-          for database in platform_setup enterprise relay_operator personal platform; do
-            psql --host=127.0.0.1 --username=asterrouter --dbname=postgres \
-              --command="CREATE DATABASE asterrouter_release_test_journey_${database}"
-          done
+          psql --host=127.0.0.1 --username=asterrouter --dbname=postgres \
+            --command="CREATE DATABASE asterrouter_release_test_journey_enterprise"
 
       - name: Validate candidate browser journeys
         env:
@@ -147,10 +145,10 @@ jobs:
           name: asterrouter-release-browser-journeys
           path: |
             ${{ runner.temp }}/asterrouter-release-journeys/report.txt
-            ${{ runner.temp }}/asterrouter-release-journeys/runtime.log
             ${{ runner.temp }}/asterrouter-release-journeys/fake-upstream.log
             ${{ runner.temp }}/asterrouter-release-journeys/setup/report.txt
             ${{ runner.temp }}/asterrouter-release-journeys/setup/runtime.log
             ${{ runner.temp }}/asterrouter-release-journeys/setup/playwright
-            ${{ runner.temp }}/asterrouter-release-journeys/profiles
+            ${{ runner.temp }}/asterrouter-release-journeys/enterprise/runtime.log
+            ${{ runner.temp }}/asterrouter-release-journeys/enterprise/playwright
           if-no-files-found: ignore

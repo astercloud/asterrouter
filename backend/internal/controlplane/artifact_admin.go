@@ -25,8 +25,7 @@ type ArtifactAdminRecord struct {
 	JobID            string     `json:"job_id,omitempty"`
 	AttemptID        string     `json:"attempt_id,omitempty"`
 	SourceArtifactID string     `json:"source_artifact_id,omitempty"`
-	ProfileScope     string     `json:"profile_scope"`
-	TenantID         string     `json:"tenant_id,omitempty"`
+	ApplicationID    string     `json:"application_id,omitempty"`
 	Role             string     `json:"role"`
 	Policy           string     `json:"policy"`
 	Status           string     `json:"status"`
@@ -171,8 +170,8 @@ func (s *Service) RetryArtifactDelivery(ctx context.Context, actor, id string) (
 	requested := attempt
 	requested.ReconcileAfter = &now
 	requested.UpdatedAt = now
-	audit := scopeAuditLog(s.newAuditLog(actor, "retry_delivery", "artifact", artifact.ID, "Scheduled failed artifact delivery for retry"),
-		artifact.ProfileScope, artifact.TenantID, artifact.PrincipalID, artifact.IntegrationID, artifact.ExternalSubjectReference)
+	audit := applicationAuditLog(s.newAuditLog(actor, "retry_delivery", "artifact", artifact.ID, "Scheduled failed artifact delivery for retry"),
+		artifact.ApplicationID, artifact.PrincipalID, artifact.IntegrationID, artifact.ExternalSubjectReference)
 	if _, changed, err := s.repo.ScheduleArtifactDeliveryRetry(ctx, artifact.ID, requested, attempt.DispatchVersion, audit); err != nil {
 		return ArtifactDeliveryRetryResult{}, err
 	} else if !changed {
@@ -206,7 +205,7 @@ func validArtifactStatus(status string) bool {
 func (s *Service) artifactAdminRecord(ctx context.Context, artifact Artifact) (ArtifactAdminRecord, error) {
 	record := ArtifactAdminRecord{
 		ID: artifact.ID, OperationID: artifact.OperationID, JobID: artifact.JobID, AttemptID: artifact.AttemptID,
-		SourceArtifactID: artifact.SourceArtifactID, ProfileScope: artifact.ProfileScope, TenantID: artifact.TenantID,
+		SourceArtifactID: artifact.SourceArtifactID, ApplicationID: artifact.ApplicationID,
 		Role: artifact.Role, Policy: artifact.Policy, Status: artifact.Status, StatusVersion: artifact.StatusVersion,
 		MediaType: artifact.MediaType, SizeBytes: artifact.SizeBytes, SHA256: artifact.SHA256, StoreDriver: artifact.StoreDriver,
 		ErrorType: artifact.ErrorType, RetainUntil: artifact.RetainUntil, CreatedAt: artifact.CreatedAt, UpdatedAt: artifact.UpdatedAt,

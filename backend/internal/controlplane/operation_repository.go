@@ -13,7 +13,7 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/pricing"
 )
 
-const aiOperationSelectColumns = `id, profile_scope, tenant_id, credential_id, credential_source, integration_id,
+const aiOperationSelectColumns = `id, application_id, credential_id, credential_source, integration_id,
 principal_type, principal_id, external_subject_reference, client_request_id, request_fingerprint, idempotency_key,
 protocol, operation, modality, lane, model, artifact_policy, artifact_sink_id, status, error_type, created_at, updated_at, completed_at`
 
@@ -110,7 +110,7 @@ func (r *MemoryRepository) CreateAIOperation(_ context.Context, operation AIOper
 }
 
 func sameAIOperationIdempotencyScope(left, right AIOperation) bool {
-	return left.IdempotencyKey != "" && left.ProfileScope == right.ProfileScope && left.TenantID == right.TenantID &&
+	return left.IdempotencyKey != "" && left.ApplicationID == right.ApplicationID &&
 		left.CredentialSource == right.CredentialSource && left.CredentialID == right.CredentialID && left.IntegrationID == right.IntegrationID &&
 		left.PrincipalType == right.PrincipalType && left.PrincipalID == right.PrincipalID &&
 		left.ExternalSubjectReference == right.ExternalSubjectReference && left.Operation == right.Operation && left.IdempotencyKey == right.IdempotencyKey
@@ -425,16 +425,6 @@ func (r *MemoryRepository) ApplyUsageSettlement(_ context.Context, settlement Us
 			return false, err
 		}
 	}
-	for _, event := range settlement.PlatformEvents {
-		if _, exists := r.platformUsageDeliveryEvents[event.ID]; exists {
-			return false, fmt.Errorf("platform usage delivery event %q already exists", event.ID)
-		}
-		for _, current := range r.platformUsageDeliveryEvents {
-			if current.EventID == event.EventID || (current.SinkID == event.SinkID && current.UsageRecordID == event.UsageRecordID) {
-				return false, fmt.Errorf("platform usage delivery event is not unique")
-			}
-		}
-	}
 	for _, billing := range settlement.Ledgers {
 		if billing.Purpose == PricingPurposeUsageCost {
 			if err := settleMemoryBillingHoldForUsage(r, record, billing); err != nil {
@@ -479,9 +469,6 @@ func (r *MemoryRepository) ApplyUsageSettlement(_ context.Context, settlement Us
 	}
 	for _, outbox := range settlement.OutboxEvents {
 		r.transactionalOutboxEvents[outbox.ID] = outbox
-	}
-	for _, event := range settlement.PlatformEvents {
-		r.platformUsageDeliveryEvents[event.ID] = event
 	}
 	return true, nil
 }
@@ -638,7 +625,7 @@ func scanAIOperation(scanner apiKeyScanner) (AIOperation, error) {
 	var operation AIOperation
 	var completedAt sql.NullTime
 	err := scanner.Scan(
-		&operation.ID, &operation.ProfileScope, &operation.TenantID, &operation.CredentialID, &operation.CredentialSource, &operation.IntegrationID,
+		&operation.ID, &operation.ApplicationID, &operation.CredentialID, &operation.CredentialSource, &operation.IntegrationID,
 		&operation.PrincipalType, &operation.PrincipalID, &operation.ExternalSubjectReference, &operation.ClientRequestID,
 		&operation.RequestFingerprint, &operation.IdempotencyKey, &operation.Protocol, &operation.Operation, &operation.Modality,
 		&operation.Lane, &operation.Model, &operation.ArtifactPolicy, &operation.ArtifactSinkID, &operation.Status, &operation.ErrorType, &operation.CreatedAt, &operation.UpdatedAt, &completedAt,
@@ -656,13 +643,13 @@ func insertAIOperation(ctx context.Context, executor usageRecordExecutor, operat
 	normalizeAIOperation(&operation)
 	return executor.ExecContext(ctx, `
 INSERT INTO ai_operations(
-  id, profile_scope, tenant_id, credential_id, credential_source, integration_id,
+  id, application_id, credential_id, credential_source, integration_id,
   principal_type, principal_id, external_subject_reference, client_request_id, request_fingerprint, idempotency_key,
   protocol, operation, modality, lane, model, artifact_policy, artifact_sink_id, status, error_type, created_at, updated_at, completed_at
 )
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULL)
-ON CONFLICT (profile_scope, tenant_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key) WHERE idempotency_key <> '' DO NOTHING
-`, operation.ID, operation.ProfileScope, operation.TenantID, operation.CredentialID, operation.CredentialSource, operation.IntegrationID,
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,NULL)
+ON CONFLICT (application_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key) WHERE idempotency_key <> '' DO NOTHING
+`, operation.ID, operation.ApplicationID, operation.CredentialID, operation.CredentialSource, operation.IntegrationID,
 		operation.PrincipalType, operation.PrincipalID, operation.ExternalSubjectReference, operation.ClientRequestID,
 		operation.RequestFingerprint, operation.IdempotencyKey, operation.Protocol, operation.Operation, operation.Modality,
 		operation.Lane, operation.Model, operation.ArtifactPolicy, operation.ArtifactSinkID, operation.Status, operation.ErrorType, operation.CreatedAt, operation.UpdatedAt)
@@ -685,8 +672,8 @@ func (r *PostgresRepository) CreateAIOperation(ctx context.Context, operation AI
 	}
 	if rows == 0 {
 		row := tx.QueryRowContext(ctx, `SELECT `+aiOperationSelectColumns+` FROM ai_operations WHERE
-profile_scope=$1 AND tenant_id=$2 AND credential_source=$3 AND credential_id=$4 AND integration_id=$5 AND principal_type=$6 AND principal_id=$7 AND external_subject_reference=$8 AND operation=$9 AND idempotency_key=$10`,
-			operation.ProfileScope, operation.TenantID, operation.CredentialSource, operation.CredentialID, operation.IntegrationID,
+application_id=$1 AND credential_source=$2 AND credential_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7 AND operation=$8 AND idempotency_key=$9`,
+			operation.ApplicationID, operation.CredentialSource, operation.CredentialID, operation.IntegrationID,
 			operation.PrincipalType, operation.PrincipalID, operation.ExternalSubjectReference, operation.Operation, operation.IdempotencyKey)
 		existing, scanErr := scanAIOperation(row)
 		if scanErr != nil {
@@ -1071,14 +1058,6 @@ func (r *PostgresRepository) ApplyUsageSettlement(ctx context.Context, settlemen
 	}
 	for _, outbox := range settlement.OutboxEvents {
 		if err := insertTransactionalOutboxEvent(ctx, tx, outbox); err != nil {
-			return false, err
-		}
-	}
-	for _, event := range settlement.PlatformEvents {
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO platform_usage_delivery_events(id, sink_id, usage_record_id, event_id, payload_json, status, attempt_count, max_attempts, next_attempt_at, lease_until, lease_token, delivered_at, last_http_status, last_error, target_hint, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,'',NULL,0,'',$10,$11,$12)
-`, event.ID, event.SinkID, event.UsageRecordID, event.EventID, event.PayloadJSON, event.Status, event.AttemptCount, event.MaxAttempts, event.NextAttemptAt, event.TargetHint, event.CreatedAt, event.UpdatedAt); err != nil {
 			return false, err
 		}
 	}

@@ -42,9 +42,9 @@ usage() {
 Usage: install.sh [command] [options]
 
 Commands:
-  install [-v VERSION] [--deployment ROLE]  Install AsterRouter
-  upgrade [-v VERSION] [--deployment ROLE]  Upgrade AsterRouter
-  update [-v VERSION] [--deployment ROLE]   Alias for upgrade
+  install [-v VERSION]      Install AsterRouter
+  upgrade [-v VERSION]      Upgrade AsterRouter
+  update [-v VERSION]       Alias for upgrade
   rollback VERSION          Install a pinned release as rollback
   versions                  List available release versions
   install-command           Install / refresh ${COMMAND_PATH}
@@ -58,13 +58,6 @@ Environment overrides:
   ASTERROUTER_COMMAND_PATH  Default: ${COMMAND_PATH}
   ASTERROUTER_RELEASE_BASE_URL  Default: ${RELEASE_BASE_URL}
 
-Deployment roles:
-  personal | relay_operator | enterprise | platform
-
-New installations require --deployment (or ASTERROUTER_DEPLOYMENT_ROLE). It
-selects the single business deployment role before first start. Existing
-instances keep the role persisted in PostgreSQL; use a separate instance for
-another role.
 EOF
 }
 
@@ -184,19 +177,8 @@ create_dirs() {
   chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR" "$DATA_DIR" "$CONFIG_DIR"
 }
 
-valid_deployment_role() {
-  case "$1" in
-    personal|relay_operator|enterprise|platform) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 create_env_if_missing() {
-  local deployment_role="${1:-}"
   if [ -f "$ENV_FILE" ]; then
-    if [ -n "$deployment_role" ]; then
-      warn "--deployment is ignored because ${ENV_FILE} already exists; the persisted deployment role cannot be changed."
-    fi
     return
   fi
 
@@ -208,9 +190,6 @@ create_env_if_missing() {
 GIN_MODE=release
 ASTERROUTER_SERVER_HTTP_LISTEN=${DEFAULT_ADDR}
 ASTERROUTER_SERVER_HTTP_FRONTEND_DIR=${INSTALL_DIR}/frontend/dist
-# This value is selected during Linux installation and persisted on first start.
-# It is exactly one of personal, relay_operator, enterprise, or platform.
-ASTERROUTER_SERVER_BOOTSTRAP_DEPLOYMENT_ROLE=${deployment_role}
 
 ASTERROUTER_SERVER_SECURITY_ADMIN_USERNAME=admin
 ASTERROUTER_SERVER_SECURITY_ADMIN_PASSWORD=${admin_password}
@@ -311,20 +290,10 @@ install_command() {
 
 install_release() {
   local requested="${1:-}"
-  local deployment_role="${2:-}"
   local tag version os arch asset base_url tmp archive_name extract_dir backup_dir
 
   require_root
   require_commands
-
-  if [ -n "$deployment_role" ] && ! valid_deployment_role "$deployment_role"; then
-    error "Unsupported deployment role: ${deployment_role}. Use personal, relay_operator, enterprise, or platform."
-    exit 1
-  fi
-  if [ ! -f "$ENV_FILE" ] && [ -z "$deployment_role" ]; then
-    error "A deployment role is required for a new installation. Use --deployment personal, relay_operator, enterprise, or platform."
-    exit 1
-  fi
 
   os="$(detect_os)"
   arch="$(detect_arch)"
@@ -357,7 +326,7 @@ install_release() {
 
   create_user
   create_dirs
-  create_env_if_missing "$deployment_role"
+  create_env_if_missing
 
   if systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
@@ -435,8 +404,6 @@ parse_version_flag() {
 }
 
 REQUESTED_VERSION=""
-REQUESTED_DEPLOYMENT_ROLE="${ASTERROUTER_DEPLOYMENT_ROLE:-}"
-
 parse_install_flags() {
   REQUESTED_VERSION=""
   while [ "$#" -gt 0 ]; do
@@ -447,14 +414,6 @@ parse_install_flags() {
           exit 1
         fi
         REQUESTED_VERSION="$2"
-        shift 2
-        ;;
-      --deployment)
-        if [ -z "${2:-}" ]; then
-          error "--deployment requires a role."
-          exit 1
-        fi
-        REQUESTED_DEPLOYMENT_ROLE="$2"
         shift 2
         ;;
       *)
@@ -482,7 +441,7 @@ case "$command" in
     ;;
   install|upgrade|update)
     parse_install_flags "$@"
-    install_release "$REQUESTED_VERSION" "$REQUESTED_DEPLOYMENT_ROLE"
+    install_release "$REQUESTED_VERSION"
     ;;
   rollback)
     version="$(parse_version_flag "$@")"

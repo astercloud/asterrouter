@@ -20,7 +20,7 @@ func TestBillingHoldAdmissionIsAtomicAndIdempotent(t *testing.T) {
 		svc := NewService(repo, "/v1", "billing-hold-secret")
 		svc.now = func() time.Time { return base }
 		saveBillingHoldTestPricing(t, svc, "model-a")
-		auth := billingHoldTestAuth("tenant-budget", "credential-budget", 30)
+		auth := billingHoldTestAuth("application-budget", "credential-budget", 30)
 
 		var createdCount atomic.Int32
 		var budgetRejected atomic.Int32
@@ -97,7 +97,7 @@ func TestBillingHoldSettlementUsesActualCostAndPreservesIsolation(t *testing.T) 
 		svc := NewService(repo, "/v1", "billing-hold-secret")
 		svc.now = func() time.Time { return base }
 		saveBillingHoldTestPricing(t, svc, "model-a")
-		auth := billingHoldTestAuth("tenant-settle", "credential-settle", 100)
+		auth := billingHoldTestAuth("application-settle", "credential-settle", 100)
 		request := billingHoldTestRequest("settle")
 		operation, created, err := svc.BeginCanonicalOperation(ctx, auth, request)
 		if err != nil || !created {
@@ -134,11 +134,11 @@ func TestBillingHoldSettlementUsesActualCostAndPreservesIsolation(t *testing.T) 
 		if _, _, err := svc.BeginCanonicalOperation(ctx, tightBudget, billingHoldTestRequest("actual-cost-budget")); !errors.Is(err, ErrBillingHoldBudgetExceeded) {
 			t.Fatalf("actual settled cost budget error=%v", err)
 		}
-		otherTenant := billingHoldTestAuth("tenant-other", auth.CredentialID, 10)
-		if _, created, err := svc.BeginCanonicalOperation(ctx, otherTenant, billingHoldTestRequest("other-tenant")); err != nil || !created {
-			t.Fatalf("other tenant admission created=%t err=%v", created, err)
+		otherApplication := billingHoldTestAuth("application-other", auth.CredentialID, 10)
+		if _, created, err := svc.BeginCanonicalOperation(ctx, otherApplication, billingHoldTestRequest("other-application")); err != nil || !created {
+			t.Fatalf("other application admission created=%t err=%v", created, err)
 		}
-		otherCredential := billingHoldTestAuth(auth.TenantID, "credential-other", 10)
+		otherCredential := billingHoldTestAuth(auth.ApplicationID, "credential-other", 10)
 		if _, created, err := svc.BeginCanonicalOperation(ctx, otherCredential, billingHoldTestRequest("other-credential")); err != nil || !created {
 			t.Fatalf("other credential admission created=%t err=%v", created, err)
 		}
@@ -172,7 +172,7 @@ func TestDurableBillingHoldAdmissionAndQueuedCancellationAreAtomic(t *testing.T)
 		base := time.Date(2026, time.July, 15, 10, 0, 0, 0, time.UTC)
 		svc.now = func() time.Time { return base }
 		saveBillingHoldTestPricing(t, svc, "image-model")
-		auth := aiJobTestAuth("tenant-job-hold", "principal-job-hold")
+		auth := aiJobTestAuth("application-job-hold", "principal-job-hold")
 		auth.Limits.MonthlyBudgetMicros = 100
 		request := aiJobTestRequest("job-hold", "job-hold-fingerprint")
 
@@ -220,7 +220,7 @@ func TestBillingHoldMediaQuotaReservationAndSettlement(t *testing.T) {
 		base := time.Date(2026, time.July, 15, 11, 0, 0, 0, time.UTC)
 		svc := NewService(repo, "/v1", "media-quota-secret")
 		svc.now = func() time.Time { return base }
-		auth := billingHoldTestAuth("tenant-media", "credential-media", 0)
+		auth := billingHoldTestAuth("application-media", "credential-media", 0)
 		auth.Limits.MonthlyImageLimit = 2
 
 		requests := []gatewaycore.CanonicalRequest{billingHoldImageRequest("concurrent-a", 2), billingHoldImageRequest("concurrent-b", 2)}
@@ -295,7 +295,7 @@ func TestBillingHoldVideoAndAudioQuotaRequireBoundedDuration(t *testing.T) {
 		svc := NewService(repo, "/v1", "media-duration-secret")
 		svc.now = func() time.Time { return time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC) }
 
-		videoAuth := billingHoldTestAuth("tenant-video", "credential-video", 0)
+		videoAuth := billingHoldTestAuth("application-video", "credential-video", 0)
 		videoAuth.Limits.MonthlyVideoSecondsLimit = 2
 		if _, _, err := svc.BeginCanonicalOperation(ctx, videoAuth, billingHoldMediaRequest("video-missing", "video", 0, 0)); !errors.Is(err, ErrBillingHoldUsageEstimate) {
 			t.Fatalf("missing video duration error=%v", err)
@@ -307,7 +307,7 @@ func TestBillingHoldVideoAndAudioQuotaRequireBoundedDuration(t *testing.T) {
 			t.Fatalf("video overage error=%v", err)
 		}
 
-		audioAuth := billingHoldTestAuth("tenant-audio", "credential-audio", 0)
+		audioAuth := billingHoldTestAuth("application-audio", "credential-audio", 0)
 		audioAuth.Limits.MonthlyAudioSecondsLimit = 1
 		if _, _, err := svc.BeginCanonicalOperation(ctx, audioAuth, billingHoldMediaRequest("audio-missing", "audio", 0, 0)); !errors.Is(err, ErrBillingHoldUsageEstimate) {
 			t.Fatalf("missing audio duration error=%v", err)
@@ -319,7 +319,7 @@ func TestBillingHoldVideoAndAudioQuotaRequireBoundedDuration(t *testing.T) {
 			t.Fatalf("audio overage error=%v", err)
 		}
 
-		transcriptionAuth := billingHoldTestAuth("tenant-transcription", "credential-transcription", 0)
+		transcriptionAuth := billingHoldTestAuth("application-transcription", "credential-transcription", 0)
 		transcriptionAuth.Limits.MonthlyAudioSecondsLimit = 1
 		transcription := billingHoldMediaRequest("transcription-boundary", "audio", 0, 0)
 		transcription.Protocol = gatewaycore.ProtocolOpenAIAudioTranscriptions
@@ -378,7 +378,7 @@ func TestBillingHoldUsesRequestMaxCostMicros(t *testing.T) {
 	repo := NewMemoryRepository()
 	t.Cleanup(func() { _ = repo.Close() })
 	service := NewService(repo, "/v1", "request-max-cost-secret")
-	auth := billingHoldTestAuth("tenant-request-max", "credential-request-max", 100)
+	auth := billingHoldTestAuth("application-request-max", "credential-request-max", 100)
 	request := billingHoldTestRequest("request-max")
 	request.Payload = []byte(`{"max_cost_micros":75}`)
 
@@ -415,7 +415,7 @@ func TestBillingHoldSettlesCumulativeIncrementalUsage(t *testing.T) {
 			svc := NewService(repo, "/v1", "incremental-hold-secret")
 			saveBillingHoldTestPricing(t, svc, "model-a")
 			identity := testutil.UniqueID("incremental-hold")
-			auth := billingHoldTestAuth("tenant-"+identity, "credential-"+identity, 0)
+			auth := billingHoldTestAuth("application-"+identity, "credential-"+identity, 0)
 			request := billingHoldTestRequest(identity)
 			operation, created, err := svc.BeginCanonicalOperation(ctx, auth, request)
 			if err != nil || !created {
@@ -460,10 +460,10 @@ func TestBillingHoldSettlesCumulativeIncrementalUsage(t *testing.T) {
 	}
 }
 
-func billingHoldTestAuth(tenantID, credentialID string, budget int64) gatewaycore.CanonicalAuthContext {
+func billingHoldTestAuth(applicationID, credentialID string, budget int64) gatewaycore.CanonicalAuthContext {
 	return gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: credentialID, ProfileScope: ProfileScopePlatform,
-		TenantID: tenantID, PrincipalType: APIKeyTypeService, PrincipalID: "principal-" + tenantID,
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: credentialID,
+		ApplicationID: applicationID, PrincipalType: APIKeyTypeService, PrincipalID: "principal-" + applicationID,
 		Limits: gatewaycore.CanonicalLimits{MonthlyBudgetMicros: budget},
 	}
 }

@@ -4,16 +4,16 @@ import { ApiClientError } from '@/api/client'
 import PluginFrontendView from './PluginFrontendView.vue'
 
 const push = vi.fn()
-const getPluginFrontendContribution = vi.fn()
+const getPluginWorkbench = vi.fn()
 const getPluginFrontendAsset = vi.fn()
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { pluginId: 'com.asterrouter.imagegen.workbench' }, path: '/admin/plugins/com.asterrouter.imagegen.workbench/workbench' }),
+  useRoute: () => ({ params: { pluginId: 'com.asterrouter.imagegen.workbench' }, path: '/console/system/plugins/com.asterrouter.imagegen.workbench/workbench' }),
   useRouter: () => ({ push })
 }))
 
 vi.mock('@/api/plugins', () => ({
-  getPluginFrontendContribution: (...args: unknown[]) => getPluginFrontendContribution(...args),
+  getPluginWorkbench: (...args: unknown[]) => getPluginWorkbench(...args),
   getPluginFrontendAsset: (...args: unknown[]) => getPluginFrontendAsset(...args)
 }))
 
@@ -26,12 +26,12 @@ describe('PluginFrontendView', () => {
 
   it('retries a newly installed frontend contribution before showing an error', async () => {
     vi.useFakeTimers()
-    getPluginFrontendContribution
+    getPluginWorkbench
       .mockRejectedValueOnce(new ApiClientError('not found', 404, 1404))
       .mockResolvedValueOnce({
-        schema_version: 'astercloud.plugin-frontend-contribution.v1',
+        schema_version: 'astercloud.plugin-workbench.v1',
         plugin_id: 'com.asterrouter.imagegen.workbench',
-        surfaces: [{ surface: 'admin.plugins', slot: 'plugin-workbench', title: '图片生成工作台', asset: 'assets/index.js' }]
+        workbench: { title: '图片生成工作台', asset: 'assets/index.js' }
       })
     getPluginFrontendAsset.mockResolvedValue('')
 
@@ -39,17 +39,17 @@ describe('PluginFrontendView', () => {
     await vi.runAllTimersAsync()
     await flushPromises()
 
-    expect(getPluginFrontendContribution).toHaveBeenCalledTimes(2)
+    expect(getPluginWorkbench).toHaveBeenCalledTimes(2)
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('正在加载已安装插件工作台')
     wrapper.unmount()
   })
 
   it('ignores source-only asset keys while inlining packaged assets', async () => {
-    getPluginFrontendContribution.mockResolvedValue({
-      schema_version: 'astercloud.plugin-frontend-contribution.v1',
+    getPluginWorkbench.mockResolvedValue({
+      schema_version: 'astercloud.plugin-workbench.v1',
       plugin_id: 'com.asterrouter.imagegen.workbench',
-      surfaces: [{ surface: 'admin.plugins', slot: 'plugin-workbench', title: '图片生成工作台', asset: 'assets/index.js' }]
+      workbench: { title: '图片生成工作台', asset: 'assets/index.js' }
     })
     getPluginFrontendAsset.mockImplementation((_id: string, path: string) => {
       if (path === 'assets/index.js') {

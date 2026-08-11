@@ -55,8 +55,8 @@ func TestArtifactRepositoryContract(t *testing.T) {
 				t.Fatalf("role query=%+v err=%v", query, err)
 			}
 			query, err = repo.QueryArtifacts(ctx, ArtifactQuery{
-				ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
-				Policy: GatewayArtifactPolicyManaged, Limit: 10,
+				ApplicationID: operation.ApplicationID,
+				Policy:        GatewayArtifactPolicyManaged, Limit: 10,
 			})
 			if err != nil || len(query) != 1 || query[0].ID != artifact.ID {
 				t.Fatalf("scope and policy query=%+v err=%v", query, err)
@@ -65,11 +65,11 @@ func TestArtifactRepositoryContract(t *testing.T) {
 			if err != nil || len(query) != 1 || query[0].ID != artifact.ID {
 				t.Fatalf("search query=%+v err=%v", query, err)
 			}
-			query, err = repo.QueryArtifacts(ctx, ArtifactQuery{TenantID: "other-tenant", Limit: 10})
+			query, err = repo.QueryArtifacts(ctx, ArtifactQuery{ApplicationID: "other-application", Limit: 10})
 			if err != nil || len(query) != 0 {
-				t.Fatalf("other tenant query=%+v err=%v", query, err)
+				t.Fatalf("other application query=%+v err=%v", query, err)
 			}
-			summary, err := repo.SummarizeArtifacts(ctx, ArtifactQuery{ProfileScope: operation.ProfileScope, Limit: 1, Offset: 99})
+			summary, err := repo.SummarizeArtifacts(ctx, ArtifactQuery{ApplicationID: operation.ApplicationID, Limit: 1, Offset: 99})
 			if err != nil || summary.Total != 1 || summary.ByStatus[ArtifactStatusPending] != 1 || summary.SizeBytes != 0 {
 				t.Fatalf("artifact summary=%+v err=%v", summary, err)
 			}
@@ -144,7 +144,7 @@ func TestArtifactAdmissionRollsBackOnOutboxConflict(t *testing.T) {
 
 func artifactTestOperation(id, principalID string, at time.Time) AIOperation {
 	return AIOperation{
-		ID: id, ProfileScope: ProfileScopePlatform, TenantID: "tenant-artifact", CredentialID: "credential-artifact",
+		ID: id, ApplicationID: "application-artifact", CredentialID: "credential-artifact",
 		CredentialSource: "api_key", PrincipalType: GatewayPrincipalTypeService, PrincipalID: principalID,
 		RequestFingerprint: id + "-fingerprint", Protocol: "aster_jobs", Operation: "image_generation", Modality: "image",
 		Lane: "durable", Model: "image-model", Status: AIOperationStatusAccepted, CreatedAt: at, UpdatedAt: at,
@@ -155,7 +155,7 @@ func artifactTestOperation(id, principalID string, at time.Time) AIOperation {
 func artifactAdmissionRecords(t *testing.T, operation AIOperation, id string, at time.Time) (Artifact, ArtifactEvent, TransactionalOutboxEvent) {
 	t.Helper()
 	artifact := Artifact{
-		ID: id, OperationID: operation.ID, ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
+		ID: id, OperationID: operation.ID, ApplicationID: operation.ApplicationID,
 		IntegrationID: operation.IntegrationID, PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID,
 		ExternalSubjectReference: operation.ExternalSubjectReference, Role: ArtifactRoleFinal, Policy: GatewayArtifactPolicyManaged,
 		Status: ArtifactStatusPending, StatusVersion: 1, StoreDriver: ArtifactStoreDriverNone,

@@ -20,7 +20,7 @@ func TestRoutingAffinityCoordinatorMakesFirstProviderWinAcrossServices(t *testin
 	serviceA.SetRoutingAffinityCoordinator(coordinator)
 	serviceB.SetRoutingAffinityCoordinator(coordinator)
 	input := GatewayAffinityInput{
-		TenantID: "tenant-a", PrincipalID: "principal-a", CredentialID: "credential-a",
+		ApplicationID: "application-a", PrincipalID: "principal-a", CredentialID: "credential-a",
 		Model: "public-model", Protocol: "openai_chat_completions", RouteGroup: "default", StickyKey: "session-a", PolicyVersion: 1,
 	}
 	providerA := GatewayProvider{ID: "provider-a", AccountID: "account-a", RouteID: "route-a", StickyEnabled: true, StickyTTLSeconds: 1800}
@@ -50,7 +50,7 @@ func TestRoutingAffinityCoordinatorFailureFallsBackToRepository(t *testing.T) {
 	service := NewService(repo, "/v1", "fallback-affinity-secret")
 	service.now = func() time.Time { return now }
 	service.SetRoutingAffinityCoordinator(&memoryRoutingAffinityCoordinator{fail: true, bindings: map[string]RoutingAffinityBinding{}})
-	input := GatewayAffinityInput{TenantID: "tenant", PrincipalID: "principal", CredentialID: "credential", Model: "model", Protocol: "openai_chat_completions", RouteGroup: "default", PolicyVersion: 1}
+	input := GatewayAffinityInput{ApplicationID: "application", PrincipalID: "principal", CredentialID: "credential", Model: "model", Protocol: "openai_chat_completions", RouteGroup: "default", PolicyVersion: 1}
 	providerA := GatewayProvider{ID: "provider-a"}
 	providerB := GatewayProvider{ID: "provider-b"}
 	if err := service.BindGatewayCandidateAffinity(ctx, input, providerB); err != nil {

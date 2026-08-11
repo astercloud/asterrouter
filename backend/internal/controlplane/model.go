@@ -16,7 +16,6 @@ const (
 
 	APIKeyTypeWorkspace = "workspace"
 	APIKeyTypeUser      = "user"
-	APIKeyTypeCustomer  = "customer"
 	APIKeyTypeService   = "service"
 
 	GatewayScopeInvoke          = "gateway:invoke"
@@ -57,10 +56,8 @@ const (
 	GatewayArtifactPolicyCustomerSink = "customer_sink"
 	GatewayArtifactPolicyMetadataOnly = "metadata_only"
 
-	ProfileScopePlatform = "platform"
-
-	PlatformTenantStatusActive   = "active"
-	PlatformTenantStatusDisabled = "disabled"
+	ApplicationStatusActive   = "active"
+	ApplicationStatusDisabled = "disabled"
 
 	GatewayPrincipalStatusActive   = "active"
 	GatewayPrincipalStatusDisabled = "disabled"
@@ -73,14 +70,6 @@ const (
 	ExternalAuthIntegrationStatusDisabled = "disabled"
 	ExternalAuthIntegrationProtocolHMAC   = "hmac_signed_context"
 	ExternalAuthIntegrationProtocolJWT    = "jwt_jwks"
-
-	PlatformUsageSinkStatusActive   = "active"
-	PlatformUsageSinkStatusDisabled = "disabled"
-
-	PlatformUsageDeliveryStatusPending    = "pending"
-	PlatformUsageDeliveryStatusDelivering = "delivering"
-	PlatformUsageDeliveryStatusDelivered  = "delivered"
-	PlatformUsageDeliveryStatusDeadLetter = "dead_letter"
 
 	AccountStatusActive   = "active"
 	AccountStatusError    = "error"
@@ -321,12 +310,9 @@ type APIKeyRecord struct {
 	Prefix                   string     `json:"prefix"`
 	Status                   string     `json:"status"`
 	KeyType                  string     `json:"key_type"`
-	CustomerID               string     `json:"customer_id"`
 	OwnerUserID              string     `json:"owner_user_id"`
-	ProfileScope             string     `json:"profile_scope"`
-	PlatformTenantID         string     `json:"platform_tenant_id"`
+	ApplicationID            string     `json:"application_id"`
 	GatewayPrincipalID       string     `json:"gateway_principal_id"`
-	TenantID                 string     `json:"tenant_id"`
 	PrincipalType            string     `json:"principal_type"`
 	PrincipalReference       string     `json:"principal_reference"`
 	PolicyID                 string     `json:"policy_id"`
@@ -380,9 +366,8 @@ type APIKeyCreateRequest struct {
 	ArtifactSinkID           string   `json:"artifact_sink_id"`
 	ExpiresAt                string   `json:"expires_at"`
 	KeyType                  string   `json:"key_type"`
-	CustomerID               string   `json:"customer_id"`
 	OwnerUserID              string   `json:"owner_user_id"`
-	PlatformTenantID         string   `json:"platform_tenant_id"`
+	ApplicationID            string   `json:"application_id"`
 	GatewayPrincipalID       string   `json:"gateway_principal_id"`
 }
 
@@ -409,9 +394,8 @@ type APIKeyUpdateRequest struct {
 	ExpiresAt                string   `json:"expires_at"`
 	Status                   string   `json:"status"`
 	KeyType                  string   `json:"key_type"`
-	CustomerID               string   `json:"customer_id"`
 	OwnerUserID              string   `json:"owner_user_id"`
-	PlatformTenantID         string   `json:"platform_tenant_id"`
+	ApplicationID            string   `json:"application_id"`
 	GatewayPrincipalID       string   `json:"gateway_principal_id"`
 }
 
@@ -419,10 +403,10 @@ type APIKeyRotateRequest struct {
 	GracePeriodSeconds int `json:"grace_period_seconds"`
 }
 
-// PlatformTenant owns the gateway relationship with a product, partner, or
+// Application owns the gateway relationship with a product, partner, or
 // API customer. It intentionally stores only an opaque entitlement reference;
 // the connected product remains the source of truth for users and orders.
-type PlatformTenant struct {
+type Application struct {
 	ID                   string    `json:"id"`
 	Name                 string    `json:"name"`
 	Slug                 string    `json:"slug"`
@@ -433,7 +417,7 @@ type PlatformTenant struct {
 	UpdatedAt            time.Time `json:"updated_at"`
 }
 
-type PlatformTenantRequest struct {
+type ApplicationRequest struct {
 	Name                 string `json:"name"`
 	Slug                 string `json:"slug"`
 	EntitlementReference string `json:"entitlement_reference"`
@@ -441,12 +425,12 @@ type PlatformTenantRequest struct {
 	Status               string `json:"status"`
 }
 
-// GatewayPrincipal is a non-human caller identity inside a Platform Tenant.
+// GatewayPrincipal is a non-human caller identity inside an application.
 // It is not an AsterRouter workspace user and never creates an external login
 // account, session, subscription, or balance.
 type GatewayPrincipal struct {
 	ID                       string    `json:"id"`
-	TenantID                 string    `json:"tenant_id"`
+	ApplicationID            string    `json:"application_id"`
 	Name                     string    `json:"name"`
 	PrincipalType            string    `json:"principal_type"`
 	ExternalSubjectReference string    `json:"external_subject_reference"`
@@ -456,7 +440,7 @@ type GatewayPrincipal struct {
 }
 
 type GatewayPrincipalRequest struct {
-	TenantID                 string `json:"tenant_id"`
+	ApplicationID            string `json:"application_id"`
 	Name                     string `json:"name"`
 	PrincipalType            string `json:"principal_type"`
 	ExternalSubjectReference string `json:"external_subject_reference"`
@@ -468,7 +452,7 @@ type GatewayPrincipalRequest struct {
 // session, refresh token, subscription, or customer profile.
 type ExternalAuthIntegration struct {
 	ID                 string    `json:"id"`
-	TenantID           string    `json:"tenant_id"`
+	ApplicationID      string    `json:"application_id"`
 	GatewayPrincipalID string    `json:"gateway_principal_id"`
 	Name               string    `json:"name"`
 	Protocol           string    `json:"protocol"`
@@ -494,7 +478,7 @@ type ExternalAuthIntegration struct {
 }
 
 type ExternalAuthIntegrationRequest struct {
-	TenantID           string   `json:"tenant_id"`
+	ApplicationID      string   `json:"application_id"`
 	GatewayPrincipalID string   `json:"gateway_principal_id"`
 	Name               string   `json:"name"`
 	Protocol           string   `json:"protocol"`
@@ -523,71 +507,6 @@ type ExternalAuthIntegrationCreateResponse struct {
 	Secret string                  `json:"secret"`
 }
 
-// PlatformUsageSink is a Platform-controlled destination for signed,
-// metering-only usage events. It is bound to one External Auth Integration;
-// it does not carry a product user, login token, subscription, or balance.
-type PlatformUsageSink struct {
-	ID                        string    `json:"id"`
-	TenantID                  string    `json:"tenant_id"`
-	ExternalAuthIntegrationID string    `json:"external_auth_integration_id"`
-	Name                      string    `json:"name"`
-	EndpointURLCiphertext     string    `json:"-"`
-	EndpointURLHint           string    `json:"endpoint_url_hint"`
-	SigningSecretCiphertext   string    `json:"-"`
-	SigningSecretHint         string    `json:"signing_secret_hint"`
-	Status                    string    `json:"status"`
-	MaxAttempts               int       `json:"max_attempts"`
-	CreatedAt                 time.Time `json:"created_at"`
-	UpdatedAt                 time.Time `json:"updated_at"`
-}
-
-type PlatformUsageSinkRequest struct {
-	TenantID                  string `json:"tenant_id"`
-	ExternalAuthIntegrationID string `json:"external_auth_integration_id"`
-	Name                      string `json:"name"`
-	EndpointURL               string `json:"endpoint_url"`
-	SigningSecret             string `json:"signing_secret"`
-	Status                    string `json:"status"`
-	MaxAttempts               int    `json:"max_attempts"`
-}
-
-type PlatformUsageSinkCreateResponse struct {
-	Record        PlatformUsageSink `json:"record"`
-	SigningSecret string            `json:"signing_secret"`
-}
-
-// PlatformUsageDeliveryEvent is a durable, immutable usage snapshot. Payload
-// stays internal so delivery history cannot be used to read metering details
-// outside the authorized Platform observability surface.
-type PlatformUsageDeliveryEvent struct {
-	ID             string     `json:"id"`
-	SinkID         string     `json:"sink_id"`
-	UsageRecordID  string     `json:"usage_record_id"`
-	EventID        string     `json:"event_id"`
-	Status         string     `json:"status"`
-	AttemptCount   int        `json:"attempt_count"`
-	MaxAttempts    int        `json:"max_attempts"`
-	NextAttemptAt  time.Time  `json:"next_attempt_at"`
-	LeaseUntil     *time.Time `json:"lease_until,omitempty"`
-	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
-	LastHTTPStatus int        `json:"last_http_status"`
-	LastError      string     `json:"last_error,omitempty"`
-	TargetHint     string     `json:"target_hint"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-
-	PayloadJSON string `json:"-"`
-	LeaseToken  string `json:"-"`
-}
-
-type PlatformUsageDeliveryQuery struct {
-	SinkID     string
-	DeliveryID string
-	Status     string
-	Limit      int
-	Offset     int
-}
-
 type APIKeyCreateResponse struct {
 	Record APIKeyRecord `json:"record"`
 	Key    string       `json:"key"`
@@ -600,9 +519,8 @@ type AuditLog struct {
 	ResourceType              string    `json:"resource_type"`
 	ResourceID                string    `json:"resource_id"`
 	Summary                   string    `json:"summary"`
-	ProfileScope              string    `json:"profile_scope"`
-	PlatformTenantID          string    `json:"platform_tenant_id"`
-	PlatformTenantName        string    `json:"platform_tenant_name"`
+	ApplicationID             string    `json:"application_id"`
+	ApplicationName           string    `json:"application_name"`
 	GatewayPrincipalID        string    `json:"gateway_principal_id"`
 	GatewayPrincipalName      string    `json:"gateway_principal_name"`
 	ExternalAuthIntegrationID string    `json:"external_auth_integration_id"`
@@ -627,10 +545,8 @@ type UsageRecord struct {
 	UsageSource               string          `json:"usage_source"`
 	RequestFingerprint        string          `json:"request_fingerprint"`
 	APIKeyID                  string          `json:"api_key_id"`
-	CustomerID                string          `json:"customer_id"`
-	ProfileScope              string          `json:"profile_scope"`
-	PlatformTenantID          string          `json:"platform_tenant_id"`
-	PlatformTenantName        string          `json:"platform_tenant_name"`
+	ApplicationID             string          `json:"application_id"`
+	ApplicationName           string          `json:"application_name"`
 	GatewayPrincipalID        string          `json:"gateway_principal_id"`
 	GatewayPrincipalName      string          `json:"gateway_principal_name"`
 	ExternalAuthIntegrationID string          `json:"external_auth_integration_id"`
@@ -762,9 +678,7 @@ type UsageQuery struct {
 	Search                    string
 	APIKeyID                  string
 	APIKeyIDs                 []string
-	CustomerID                string
-	ProfileScope              string
-	PlatformTenantID          string
+	ApplicationID             string
 	GatewayPrincipalID        string
 	ExternalAuthIntegrationID string
 	Model                     string
@@ -783,9 +697,8 @@ type GatewayTrace struct {
 	RequestFingerprint        string    `json:"request_fingerprint"`
 	APIKeyID                  string    `json:"api_key_id"`
 	APIFingerprint            string    `json:"api_fingerprint"`
-	ProfileScope              string    `json:"profile_scope"`
-	PlatformTenantID          string    `json:"platform_tenant_id"`
-	PlatformTenantName        string    `json:"platform_tenant_name"`
+	ApplicationID             string    `json:"application_id"`
+	ApplicationName           string    `json:"application_name"`
 	GatewayPrincipalID        string    `json:"gateway_principal_id"`
 	GatewayPrincipalName      string    `json:"gateway_principal_name"`
 	ExternalAuthIntegrationID string    `json:"external_auth_integration_id"`
@@ -824,8 +737,7 @@ type GatewayTraceQuery struct {
 	Search                    string
 	APIKeyID                  string
 	APIKeyIDs                 []string
-	ProfileScope              string
-	PlatformTenantID          string
+	ApplicationID             string
 	GatewayPrincipalID        string
 	ExternalAuthIntegrationID string
 	Model                     string
@@ -853,8 +765,7 @@ type AuditLogQuery struct {
 	Search                    string
 	Action                    string
 	ResourceType              string
-	ProfileScope              string
-	PlatformTenantID          string
+	ApplicationID             string
 	GatewayPrincipalID        string
 	ExternalAuthIntegrationID string
 	CreatedFrom               time.Time
@@ -883,7 +794,7 @@ type GatewayAuthContext struct {
 	APIKey                   APIKeyRecord             `json:"api_key"`
 	Policy                   *GovernancePolicy        `json:"policy,omitempty"`
 	PolicySource             string                   `json:"policy_source,omitempty"`
-	PlatformTenant           *PlatformTenant          `json:"platform_tenant,omitempty"`
+	Application              *Application             `json:"application,omitempty"`
 	GatewayPrincipal         *GatewayPrincipal        `json:"gateway_principal,omitempty"`
 	ExternalAuthIntegration  *ExternalAuthIntegration `json:"external_auth_integration,omitempty"`
 	ExternalSubjectReference string                   `json:"external_subject_reference,omitempty"`

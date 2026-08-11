@@ -104,3 +104,30 @@ func TestSMTPMailerRejectsPlaintextServerWithoutSTARTTLS(t *testing.T) {
 		t.Fatalf("plaintext SMTP commands = %#v, want only EHLO", received)
 	}
 }
+
+func TestSMTPConnectionTestRequiresSTARTTLS(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		_, _ = fmt.Fprint(conn, "220 smtp.example.test ESMTP\r\n")
+		reader := bufio.NewReader(conn)
+		if _, readErr := reader.ReadString('\n'); readErr == nil {
+			_, _ = fmt.Fprint(conn, "250 smtp.example.test\r\n")
+		}
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	err = (SMTPMailer{Config: SMTPConfig{Host: "127.0.0.1", Port: port}}).TestConnection(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "STARTTLS") {
+		t.Fatalf("TestConnection() error = %v, want mandatory STARTTLS failure", err)
+	}
+}

@@ -46,8 +46,8 @@ func registerCSVExportJobRoutes(group *gin.RouterGroup, control *controlplane.Se
 	})
 	group.POST("", func(c *gin.Context) {
 		kind := exportJobKind(c)
-		if kind == "audit_logs" && !principalAccess(c).Global {
-			httpx.Error(c, http.StatusForbidden, 1451, "department-scoped access does not include global audit logs")
+		if kind == "audit_logs" && !principalAccess(c).OrganizationWide {
+			httpx.Error(c, http.StatusForbidden, 1451, "department-scoped access does not include organization-wide audit logs")
 			return
 		}
 		filename, run, ok := exportJobRunner(c, control, kind)
@@ -101,7 +101,7 @@ func registerCSVExportJobRoutes(group *gin.RouterGroup, control *controlplane.Se
 }
 
 func exportJobVisible(c *gin.Context, job csvExportJob) bool {
-	return principalAccess(c).Global || (job.Owner != "" && job.Owner == actor(c))
+	return principalAccess(c).OrganizationWide || (job.Owner != "" && job.Owner == actor(c))
 }
 
 func runCSVExportJob(store CSVExportJobStore, id string, run func(context.Context) ([][]string, error)) {
@@ -442,7 +442,6 @@ func usageQuery(c *gin.Context) controlplane.UsageQuery {
 		Offset:      intQuery(c, "offset", 0),
 		Search:      strings.TrimSpace(c.Query("q")),
 		APIKeyID:    strings.TrimSpace(c.Query("api_key_id")),
-		CustomerID:  strings.TrimSpace(c.Query("customer_id")),
 		Model:       strings.TrimSpace(c.Query("model")),
 		ProviderID:  strings.TrimSpace(c.Query("provider_id")),
 		AccountID:   strings.TrimSpace(c.Query("provider_account_id")),

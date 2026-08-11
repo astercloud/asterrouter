@@ -141,7 +141,6 @@ func normalizeSupplyUtilizationQuery(query SupplyUtilizationQuery, now time.Time
 	if duration <= 0 || duration > supplyMaximumWindow || query.To.After(now.Add(time.Minute)) {
 		return SupplyUtilizationQuery{}, ErrSupplyWindowInvalid
 	}
-	query.ProfileScope = strings.TrimSpace(query.ProfileScope)
 	query.APIKeyIDs = normalizedSupplyIDs(query.APIKeyIDs)
 	return query, nil
 }
@@ -168,7 +167,7 @@ func (s *Service) listSupplyTraces(ctx context.Context, query SupplyUtilizationQ
 	out := make([]GatewayTrace, 0, supplyFactPageSize)
 	for offset := 0; offset < supplyMaximumFactRows; offset += supplyFactPageSize {
 		page, err := s.repo.QueryGatewayTraces(ctx, GatewayTraceQuery{
-			Limit: supplyFactPageSize, Offset: offset, APIKeyIDs: query.APIKeyIDs, ProfileScope: query.ProfileScope,
+			Limit: supplyFactPageSize, Offset: offset, APIKeyIDs: query.APIKeyIDs,
 			CreatedFrom: query.From, CreatedTo: query.To,
 		})
 		if err != nil {
@@ -186,7 +185,7 @@ func (s *Service) listSupplyUsage(ctx context.Context, query SupplyUtilizationQu
 	out := make([]UsageRecord, 0, supplyFactPageSize)
 	for offset := 0; offset < supplyMaximumFactRows; offset += supplyFactPageSize {
 		page, err := s.repo.QueryUsageRecords(ctx, UsageQuery{
-			Limit: supplyFactPageSize, Offset: offset, APIKeyIDs: query.APIKeyIDs, ProfileScope: query.ProfileScope,
+			Limit: supplyFactPageSize, Offset: offset, APIKeyIDs: query.APIKeyIDs,
 			CreatedFrom: query.From, CreatedTo: query.To,
 		})
 		if err != nil {

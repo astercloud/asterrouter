@@ -47,7 +47,7 @@ type ExternalAuthContextClaims struct {
 	Version           int      `json:"v"`
 	IntegrationID     string   `json:"integration_id"`
 	KeyID             string   `json:"key_id"`
-	TenantID          string   `json:"tenant_id"`
+	ApplicationID     string   `json:"application_id"`
 	SubjectReference  string   `json:"subject_ref"`
 	Audience          string   `json:"aud"`
 	IssuedAt          int64    `json:"iat"`
@@ -89,7 +89,7 @@ func (s *Service) CreateExternalAuthIntegration(ctx context.Context, actor strin
 	if err := s.repo.SaveExternalAuthIntegration(ctx, integration); err != nil {
 		return ExternalAuthIntegrationCreateResponse{}, err
 	}
-	if err := s.auditPlatform(ctx, actor, "create", "external_auth_integration", integration.ID, fmt.Sprintf("Created external auth integration %s", integration.Name), &identity.tenant, &identity.principal); err != nil {
+	if err := s.auditApplication(ctx, actor, "create", "external_auth_integration", integration.ID, fmt.Sprintf("Created external auth integration %s", integration.Name), &identity.application, &identity.principal); err != nil {
 		return ExternalAuthIntegrationCreateResponse{}, err
 	}
 	return ExternalAuthIntegrationCreateResponse{Record: externalAuthIntegrationPublic(integration), Secret: secret}, nil
@@ -103,14 +103,14 @@ func (s *Service) UpdateExternalAuthIntegration(ctx context.Context, actor, id s
 	if strings.TrimSpace(req.Protocol) == "" {
 		req.Protocol = existing.Protocol
 	}
-	if strings.TrimSpace(req.TenantID) == "" {
-		req.TenantID = existing.TenantID
+	if strings.TrimSpace(req.ApplicationID) == "" {
+		req.ApplicationID = existing.ApplicationID
 	}
 	if strings.TrimSpace(req.GatewayPrincipalID) == "" {
 		req.GatewayPrincipalID = existing.GatewayPrincipalID
 	}
-	if req.TenantID != existing.TenantID || req.GatewayPrincipalID != existing.GatewayPrincipalID {
-		return ExternalAuthIntegration{}, errors.New("external auth integration tenant_id and gateway_principal_id are immutable")
+	if req.ApplicationID != existing.ApplicationID || req.GatewayPrincipalID != existing.GatewayPrincipalID {
+		return ExternalAuthIntegration{}, errors.New("external auth integration application_id and gateway_principal_id are immutable")
 	}
 	if strings.TrimSpace(req.KeyID) != existing.KeyID {
 		return ExternalAuthIntegration{}, errors.New("external auth integration key_id is immutable")
@@ -137,7 +137,7 @@ func (s *Service) UpdateExternalAuthIntegration(ctx context.Context, actor, id s
 	if err := s.repo.SaveExternalAuthIntegration(ctx, integration); err != nil {
 		return ExternalAuthIntegration{}, err
 	}
-	if err := s.auditPlatform(ctx, actor, "update", "external_auth_integration", integration.ID, fmt.Sprintf("Updated external auth integration %s", integration.Name), &identity.tenant, &identity.principal); err != nil {
+	if err := s.auditApplication(ctx, actor, "update", "external_auth_integration", integration.ID, fmt.Sprintf("Updated external auth integration %s", integration.Name), &identity.application, &identity.principal); err != nil {
 		return ExternalAuthIntegration{}, err
 	}
 	return externalAuthIntegrationPublic(integration), nil
@@ -151,7 +151,7 @@ func (s *Service) RotateExternalAuthIntegrationSecret(ctx context.Context, actor
 	if integration.Protocol != ExternalAuthIntegrationProtocolHMAC {
 		return ExternalAuthIntegrationCreateResponse{}, errors.New("jwt/jwks integrations do not have a shared secret to rotate")
 	}
-	identity, err := s.platformCredentialIdentity(ctx, integration.TenantID, integration.GatewayPrincipalID)
+	identity, err := s.applicationCredentialIdentity(ctx, integration.ApplicationID, integration.GatewayPrincipalID)
 	if err != nil {
 		return ExternalAuthIntegrationCreateResponse{}, err
 	}
@@ -167,79 +167,79 @@ func (s *Service) RotateExternalAuthIntegrationSecret(ctx context.Context, actor
 	if err := s.repo.SaveExternalAuthIntegration(ctx, integration); err != nil {
 		return ExternalAuthIntegrationCreateResponse{}, err
 	}
-	if err := s.auditPlatform(ctx, actor, "rotate_secret", "external_auth_integration", integration.ID, "Rotated external auth integration secret", &identity.tenant, &identity.principal); err != nil {
+	if err := s.auditApplication(ctx, actor, "rotate_secret", "external_auth_integration", integration.ID, "Rotated external auth integration secret", &identity.application, &identity.principal); err != nil {
 		return ExternalAuthIntegrationCreateResponse{}, err
 	}
 	return ExternalAuthIntegrationCreateResponse{Record: externalAuthIntegrationPublic(integration), Secret: secret}, nil
 }
 
-func (s *Service) externalAuthIntegrationFromRequest(ctx context.Context, req ExternalAuthIntegrationRequest, existing *ExternalAuthIntegration, create bool) (ExternalAuthIntegration, string, platformCredentialIdentity, error) {
+func (s *Service) externalAuthIntegrationFromRequest(ctx context.Context, req ExternalAuthIntegrationRequest, existing *ExternalAuthIntegration, create bool) (ExternalAuthIntegration, string, applicationCredentialIdentity, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len([]rune(name)) > 120 {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration name must contain 1 to 120 characters")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration name must contain 1 to 120 characters")
 	}
 	protocol := strings.TrimSpace(req.Protocol)
 	if protocol == "" {
 		protocol = ExternalAuthIntegrationProtocolHMAC
 	}
 	if protocol != ExternalAuthIntegrationProtocolHMAC && protocol != ExternalAuthIntegrationProtocolJWT {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration protocol must be hmac_signed_context or jwt_jwks")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration protocol must be hmac_signed_context or jwt_jwks")
 	}
 	keyID := strings.TrimSpace(req.KeyID)
 	if !externalAuthKeyIDPattern.MatchString(keyID) {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration key_id must use 1 to 120 letters, digits, underscores, or hyphens")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration key_id must use 1 to 120 letters, digits, underscores, or hyphens")
 	}
 	audience := strings.TrimSpace(req.Audience)
 	if audience == "" || len([]rune(audience)) > externalAuthAudienceMaxCharacters {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration audience must contain 1 to 512 characters")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration audience must contain 1 to 512 characters")
 	}
 	issuer, jwksURL, subjectClaim, modelsClaim, qpsLimitClaim, monthlyTokenClaim, err := externalAuthJWTConfiguration(req, protocol)
 	if err != nil {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, err
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, err
 	}
 	models := cleanStringList(req.ModelAllowlist)
 	if len(models) == 0 {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration model_allowlist must not be empty")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration model_allowlist must not be empty")
 	}
 	if req.QPSLimit <= 0 || req.MonthlyTokenLimit <= 0 {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration qps_limit and monthly_token_limit must be greater than zero")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration qps_limit and monthly_token_limit must be greater than zero")
 	}
 	maxTTL := req.MaxTTLSeconds
 	if maxTTL == 0 {
 		maxTTL = externalAuthDefaultTTLSeconds
 	}
 	if maxTTL < externalAuthMinimumTTLSeconds || maxTTL > externalAuthMaximumTTLSeconds {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, fmt.Errorf("external auth integration max_ttl_seconds must be between %d and %d", externalAuthMinimumTTLSeconds, externalAuthMaximumTTLSeconds)
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, fmt.Errorf("external auth integration max_ttl_seconds must be between %d and %d", externalAuthMinimumTTLSeconds, externalAuthMaximumTTLSeconds)
 	}
 	status := strings.TrimSpace(req.Status)
 	if status == "" {
 		status = ExternalAuthIntegrationStatusActive
 	}
 	if !oneOf(status, ExternalAuthIntegrationStatusActive, ExternalAuthIntegrationStatusDisabled) {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration status must be active or disabled")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration status must be active or disabled")
 	}
-	identity, err := s.platformCredentialIdentity(ctx, req.TenantID, req.GatewayPrincipalID)
+	identity, err := s.applicationCredentialIdentity(ctx, req.ApplicationID, req.GatewayPrincipalID)
 	if err != nil {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, err
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, err
 	}
 	if identity.principal.PrincipalType != GatewayPrincipalTypeService && identity.principal.PrincipalType != GatewayPrincipalTypeIntegration {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration gateway principal must be a service or integration")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration gateway principal must be a service or integration")
 	}
-	if identity.tenant.Status != PlatformTenantStatusActive || identity.principal.Status != GatewayPrincipalStatusActive {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration tenant and gateway principal must be active")
+	if identity.application.Status != ApplicationStatusActive || identity.principal.Status != GatewayPrincipalStatusActive {
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration application and gateway principal must be active")
 	}
 	policyID := strings.TrimSpace(req.PolicyID)
 	if policyID != "" {
 		policy, err := s.governancePolicyByID(ctx, policyID)
 		if err != nil {
-			return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, err
+			return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, err
 		}
 		if policy.Status != GovernancePolicyStatusActive {
-			return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration policy must be active")
+			return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration policy must be active")
 		}
 	}
 	integration := ExternalAuthIntegration{
-		TenantID: req.TenantID, GatewayPrincipalID: req.GatewayPrincipalID, Name: name,
+		ApplicationID: req.ApplicationID, GatewayPrincipalID: req.GatewayPrincipalID, Name: name,
 		Protocol: protocol, KeyID: keyID, Audience: audience, PolicyID: policyID,
 		Issuer: issuer, JWKSURL: jwksURL, SubjectClaim: subjectClaim, ModelsClaim: modelsClaim,
 		QPSLimitClaim: qpsLimitClaim, MonthlyTokenClaim: monthlyTokenClaim,
@@ -257,18 +257,18 @@ func (s *Service) externalAuthIntegrationFromRequest(ctx context.Context, req Ex
 			secret = "asc_" + randomToken(32)
 		}
 		if len(secret) < 24 || len(secret) > 4096 {
-			return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("external auth integration secret must contain 24 to 4096 characters")
+			return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("external auth integration secret must contain 24 to 4096 characters")
 		}
 		ciphertext, err := encryptSecret(s.secretKey, secret)
 		if err != nil {
-			return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, err
+			return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, err
 		}
 		integration.SecretConfigured = true
 		integration.SecretHint = maskSecret(secret)
 		integration.SecretCiphertext = ciphertext
 	}
 	if integration.Status == ExternalAuthIntegrationStatusActive && integration.Protocol == ExternalAuthIntegrationProtocolHMAC && !integration.SecretConfigured {
-		return ExternalAuthIntegration{}, "", platformCredentialIdentity{}, errors.New("active external auth integration requires a secret")
+		return ExternalAuthIntegration{}, "", applicationCredentialIdentity{}, errors.New("active external auth integration requires a secret")
 	}
 	return integration, secret, identity, nil
 }
@@ -332,8 +332,8 @@ func (s *Service) requireExternalAuthIntegrationUnique(ctx context.Context, inte
 		if item.ID == exceptID {
 			continue
 		}
-		if item.TenantID == integration.TenantID && strings.EqualFold(item.Name, integration.Name) {
-			return errors.New("external auth integration name already exists for platform tenant")
+		if item.ApplicationID == integration.ApplicationID && strings.EqualFold(item.Name, integration.Name) {
+			return errors.New("external auth integration name already exists for application")
 		}
 		if item.KeyID == integration.KeyID {
 			return errors.New("external auth integration key_id already exists")
@@ -399,7 +399,7 @@ func (s *Service) AuthenticateExternalAuthContext(ctx context.Context, token str
 	if err != nil || integration.Status != ExternalAuthIntegrationStatusActive || integration.Protocol != ExternalAuthIntegrationProtocolHMAC || !integration.SecretConfigured || integration.SecretCiphertext == "" {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
-	if claims.KeyID != integration.KeyID || claims.TenantID != integration.TenantID || claims.Audience != integration.Audience {
+	if claims.KeyID != integration.KeyID || claims.ApplicationID != integration.ApplicationID || claims.Audience != integration.Audience {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
 	secret, err := decryptSecret(s.secretKey, integration.SecretCiphertext)
@@ -414,7 +414,7 @@ func (s *Service) AuthenticateExternalAuthContext(ctx context.Context, token str
 	if err := validateExternalAuthContextClaims(claims, integration, s.nowUTC()); err != nil {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
-	identity, err := s.activePlatformCredentialIdentity(ctx, integration.TenantID, integration.GatewayPrincipalID)
+	identity, err := s.activeApplicationCredentialIdentity(ctx, integration.ApplicationID, integration.GatewayPrincipalID)
 	if err != nil || (identity.principal.PrincipalType != GatewayPrincipalTypeService && identity.principal.PrincipalType != GatewayPrincipalTypeIntegration) {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
@@ -426,13 +426,13 @@ func (s *Service) AuthenticateExternalAuthContext(ctx context.Context, token str
 	key := APIKeyRecord{
 		ID: "eai_subject_" + prefix(subjectHash, 32), Name: "External delegated subject",
 		Fingerprint: prefix(subjectHash, 12), Prefix: "ctx_", Status: APIKeyStatusActive,
-		KeyType: APIKeyTypeService, ProfileScope: ProfileScopePlatform,
-		PlatformTenantID: integration.TenantID, GatewayPrincipalID: integration.GatewayPrincipalID,
+		KeyType:       APIKeyTypeService,
+		ApplicationID: integration.ApplicationID, GatewayPrincipalID: integration.GatewayPrincipalID,
 		PolicyID: integration.PolicyID, ModelAllowlist: cleanStringList(claims.ModelAllowlist),
 		QPSLimit: claims.QPSLimit, MonthlyTokenLimit: claims.MonthlyTokenLimit,
 	}
 	return GatewayAuthContext{
-		APIKey: key, Policy: policy, PolicySource: source, PlatformTenant: &identity.tenant,
+		APIKey: key, Policy: policy, PolicySource: source, Application: &identity.application,
 		GatewayPrincipal: &identity.principal, ExternalAuthIntegration: &integration,
 		ExternalSubjectReference: claims.SubjectReference,
 	}, nil
@@ -475,7 +475,7 @@ func (s *Service) AuthenticateExternalJWT(ctx context.Context, token string) (Ga
 	if err != nil {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
-	identity, err := s.activePlatformCredentialIdentity(ctx, integration.TenantID, integration.GatewayPrincipalID)
+	identity, err := s.activeApplicationCredentialIdentity(ctx, integration.ApplicationID, integration.GatewayPrincipalID)
 	if err != nil || (identity.principal.PrincipalType != GatewayPrincipalTypeService && identity.principal.PrincipalType != GatewayPrincipalTypeIntegration) {
 		return GatewayAuthContext{}, ErrGatewayUnauthorized
 	}
@@ -487,12 +487,12 @@ func (s *Service) AuthenticateExternalJWT(ctx context.Context, token string) (Ga
 	keyRecord := APIKeyRecord{
 		ID: "eai_subject_" + prefix(subjectHash, 32), Name: "External delegated subject",
 		Fingerprint: prefix(subjectHash, 12), Prefix: "jwt_", Status: APIKeyStatusActive,
-		KeyType: APIKeyTypeService, ProfileScope: ProfileScopePlatform,
-		PlatformTenantID: integration.TenantID, GatewayPrincipalID: integration.GatewayPrincipalID,
+		KeyType:       APIKeyTypeService,
+		ApplicationID: integration.ApplicationID, GatewayPrincipalID: integration.GatewayPrincipalID,
 		PolicyID: integration.PolicyID, ModelAllowlist: models, QPSLimit: qpsLimit, MonthlyTokenLimit: monthlyTokenLimit,
 	}
 	return GatewayAuthContext{
-		APIKey: keyRecord, Policy: policy, PolicySource: source, PlatformTenant: &identity.tenant,
+		APIKey: keyRecord, Policy: policy, PolicySource: source, Application: &identity.application,
 		GatewayPrincipal: &identity.principal, ExternalAuthIntegration: &integration,
 		ExternalSubjectReference: subject,
 	}, nil

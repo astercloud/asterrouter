@@ -20,8 +20,7 @@ const destination: ArtifactSinkDestination = {
   bucket: 'customer-media',
   prefix: 'generated',
   reference_base_url: 'https://media.example/generated',
-  allowed_profile_scope: 'platform',
-  allowed_tenant_id: 'tenant-a',
+	allowed_application_id: 'application-a',
   path_style: true,
   enabled: true,
   secret_hints: {

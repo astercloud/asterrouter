@@ -24,7 +24,7 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 	}
 	account := createGatewayTestAccount(t, control, provider, "upstream-model", "account-secret", 10, 2)
 	incompletePriceBody := fmt.Sprintf(`{"provider_id":%q,"provider_account_id":%q,"upstream_model":"upstream-model","protocol":"openai_chat_completions","currency":"USD","uncached_input_micros_per_1m_tokens":1000000,"cache_read_micros_per_1m_tokens":100000,"cache_write_5m_micros_per_1m_tokens":1250000,"output_micros_per_1m_tokens":2000000,"request_micros":0,"reference_input_micros_per_1m_tokens":1000000,"reference_output_micros_per_1m_tokens":2000000}`, provider.ID, account.ID)
-	incompletePrice := httptest.NewRequest(http.MethodPost, "/api/v1/admin/procurement-prices", bytes.NewBufferString(incompletePriceBody))
+	incompletePrice := httptest.NewRequest(http.MethodPost, "/api/v1/console/procurement-prices", bytes.NewBufferString(incompletePriceBody))
 	incompletePrice.Header.Set("Content-Type", "application/json")
 	incompletePriceRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(incompletePriceRecorder, incompletePrice)
@@ -33,7 +33,7 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 	}
 
 	priceBody := fmt.Sprintf(`{"provider_id":%q,"provider_account_id":%q,"upstream_model":"upstream-model","protocol":"openai_chat_completions","currency":"USD","uncached_input_micros_per_1m_tokens":1000000,"cache_read_micros_per_1m_tokens":100000,"cache_write_5m_micros_per_1m_tokens":1250000,"cache_write_1h_micros_per_1m_tokens":2000000,"output_micros_per_1m_tokens":2000000,"request_micros":0,"reference_input_micros_per_1m_tokens":1000000,"reference_output_micros_per_1m_tokens":2000000,"quoted_multiplier":0.2,"recharge_multiplier":1,"source_kind":"manual","confidence":"estimated","status":"active"}`, provider.ID, account.ID)
-	create := httptest.NewRequest(http.MethodPost, "/api/v1/admin/procurement-prices", bytes.NewBufferString(priceBody))
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/console/procurement-prices", bytes.NewBufferString(priceBody))
 	create.Header.Set("Content-Type", "application/json")
 	createRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(createRecorder, create)
@@ -42,7 +42,7 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 	}
 
 	capabilityBody := fmt.Sprintf(`{"provider_account_id":%q,"upstream_model":"upstream-model","protocol":"openai_chat_completions","support_status":"claimed","pool_affinity_grade":"unknown","affinity_transport":"header","affinity_field":"X-Session-ID","cache_control_mode":"prompt_cache_key","usage_schema":"openai"}`, account.ID)
-	capability := httptest.NewRequest(http.MethodPut, "/api/v1/admin/provider-cache-capabilities", bytes.NewBufferString(capabilityBody))
+	capability := httptest.NewRequest(http.MethodPut, "/api/v1/console/provider-cache-capabilities", bytes.NewBufferString(capabilityBody))
 	capability.Header.Set("Content-Type", "application/json")
 	capabilityRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(capabilityRecorder, capability)
@@ -58,7 +58,7 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 		t.Fatal(err)
 	}
 	billingBody := fmt.Sprintf(`{"provider_id":%q,"provider_account_id":%q,"external_line_id":"line-route-test","external_request_id":"upstream-request-route-test","upstream_model":"upstream-model","currency":"USD","amount_micros":77,"source_kind":"api","confidence":"exact"}`, provider.ID, account.ID)
-	billing := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-billing-lines", bytes.NewBufferString(billingBody))
+	billing := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-billing-lines", bytes.NewBufferString(billingBody))
 	billing.Header.Set("Content-Type", "application/json")
 	billingRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(billingRecorder, billing)
@@ -75,7 +75,7 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 		t.Fatalf("billing response=%+v", billingResponse.Data)
 	}
 
-	report := httptest.NewRequest(http.MethodGet, "/api/v1/admin/effective-pricing/report?model=upstream-model&protocol=openai_chat_completions&window_hours=24", nil)
+	report := httptest.NewRequest(http.MethodGet, "/api/v1/console/effective-pricing/report?model=upstream-model&protocol=openai_chat_completions&window_hours=24", nil)
 	reportRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(reportRecorder, report)
 	if reportRecorder.Code != http.StatusOK || !bytes.Contains(reportRecorder.Body.Bytes(), []byte(`"cost_available":true`)) || !bytes.Contains(reportRecorder.Body.Bytes(), []byte(`"cache_read_micros_per_1m_tokens":100000`)) || !bytes.Contains(reportRecorder.Body.Bytes(), []byte(`"cost_confidence":"exact"`)) {
@@ -85,7 +85,7 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 
 func TestEffectivePricingPolicyEndpointRejectsUnsafeValues(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
-	request := httptest.NewRequest(http.MethodPut, "/api/v1/admin/effective-pricing/policy", bytes.NewBufferString(`{"mode":"canary","window_hours":24,"min_sample_count":0,"min_metrics_coverage":0.8,"min_billing_consistency":0.95,"min_cost_improvement":0.08,"max_error_rate_regression":0.005,"max_p95_latency_regression":0.2,"canary_percent":5,"supplier_affinity_ttl_seconds":86400,"account_affinity_ttl_seconds":1800}`))
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/console/effective-pricing/policy", bytes.NewBufferString(`{"mode":"canary","window_hours":24,"min_sample_count":0,"min_metrics_coverage":0.8,"min_billing_consistency":0.95,"min_cost_improvement":0.08,"max_error_rate_regression":0.005,"max_p95_latency_regression":0.2,"canary_percent":5,"supplier_affinity_ttl_seconds":86400,"account_affinity_ttl_seconds":1800}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -114,7 +114,7 @@ func TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLi
 	}
 	account := createGatewayTestAccount(t, control, provider, "model", "account-billing-secret", 10, 2)
 	body := fmt.Sprintf(`{"provider_account_id":%q,"adapter_id":"auto"}`, account.ID)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-billing-sources/inspect", bytes.NewBufferString(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-billing-sources/inspect", bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -130,7 +130,7 @@ func TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLi
 	}
 
 	configureBody := fmt.Sprintf(`{"provider_account_id":%q,"adapter_id":"sub2api_compatible","status":"observe_only","automatic_sync_enabled":true,"sync_interval_seconds":3600}`, account.ID)
-	configure := httptest.NewRequest(http.MethodPut, "/api/v1/admin/provider-billing-sources", bytes.NewBufferString(configureBody))
+	configure := httptest.NewRequest(http.MethodPut, "/api/v1/console/provider-billing-sources", bytes.NewBufferString(configureBody))
 	configure.Header.Set("Content-Type", "application/json")
 	configureRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(configureRecorder, configure)
@@ -147,21 +147,21 @@ func TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLi
 		t.Fatalf("configured source=%+v", configured.Data)
 	}
 
-	list := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-billing-sources", nil)
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-billing-sources", nil)
 	listRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(listRecorder, list)
 	if listRecorder.Code != http.StatusOK || !bytes.Contains(listRecorder.Body.Bytes(), []byte(configured.Data.ID)) {
 		t.Fatalf("list status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
 	}
 
-	syncRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-billing-sources/"+configured.Data.ID+"/sync", nil)
+	syncRequest := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-billing-sources/"+configured.Data.ID+"/sync", nil)
 	syncRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(syncRecorder, syncRequest)
 	if syncRecorder.Code != http.StatusOK || !bytes.Contains(syncRecorder.Body.Bytes(), []byte(`"status":"succeeded"`)) {
 		t.Fatalf("sync status=%d body=%s", syncRecorder.Code, syncRecorder.Body.String())
 	}
 
-	evidence := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-billing-sources/"+configured.Data.ID+"/evidence?limit=20", nil)
+	evidence := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-billing-sources/"+configured.Data.ID+"/evidence?limit=20", nil)
 	evidenceRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(evidenceRecorder, evidence)
 	if evidenceRecorder.Code != http.StatusOK || !bytes.Contains(evidenceRecorder.Body.Bytes(), []byte(`"amount_micros":9250000`)) || !bytes.Contains(evidenceRecorder.Body.Bytes(), []byte(`"scope":"total"`)) {
@@ -169,7 +169,7 @@ func TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLi
 	}
 
 	staleBody := fmt.Sprintf(`{"provider_account_id":%q,"adapter_id":"sub2api_compatible","status":"disabled","automatic_sync_enabled":false,"sync_interval_seconds":3600,"version":1}`, account.ID)
-	stale := httptest.NewRequest(http.MethodPut, "/api/v1/admin/provider-billing-sources", bytes.NewBufferString(staleBody))
+	stale := httptest.NewRequest(http.MethodPut, "/api/v1/console/provider-billing-sources", bytes.NewBufferString(staleBody))
 	stale.Header.Set("Content-Type", "application/json")
 	staleRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(staleRecorder, stale)
@@ -177,7 +177,7 @@ func TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLi
 		t.Fatalf("stale status=%d body=%s", staleRecorder.Code, staleRecorder.Body.String())
 	}
 
-	badRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-billing-sources/inspect", bytes.NewBufferString(`{"provider_account_id":"missing"}`))
+	badRequest := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-billing-sources/inspect", bytes.NewBufferString(`{"provider_account_id":"missing"}`))
 	badRequest.Header.Set("Content-Type", "application/json")
 	badRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(badRecorder, badRequest)
@@ -188,7 +188,7 @@ func TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLi
 
 func TestEffectivePricingDecisionEvaluationsEndpointReturnsEmptyHistory(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/effective-pricing/decisions/decision-missing/evaluations?limit=20", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/console/effective-pricing/decisions/decision-missing/evaluations?limit=20", nil)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte(`"data":[]`)) {
@@ -236,7 +236,7 @@ func TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfir
 		t.Fatal(err)
 	}
 
-	invalid := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-cache-probes", bytes.NewBufferString(fmt.Sprintf(`{"provider_account_id":%q,"upstream_model":"probe-model","protocol":"openai_chat_completions","prefix_tokens":256}`, account.ID)))
+	invalid := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-cache-probes", bytes.NewBufferString(fmt.Sprintf(`{"provider_account_id":%q,"upstream_model":"probe-model","protocol":"openai_chat_completions","prefix_tokens":256}`, account.ID)))
 	invalid.Header.Set("Content-Type", "application/json")
 	invalidRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(invalidRecorder, invalid)
@@ -244,7 +244,7 @@ func TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfir
 		t.Fatalf("invalid status=%d calls=%d body=%s", invalidRecorder.Code, calls.Load(), invalidRecorder.Body.String())
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-cache-probes", bytes.NewBufferString(fmt.Sprintf(`{"provider_account_id":%q,"upstream_model":"probe-model","protocol":"openai_chat_completions","prefix_tokens":256,"max_cost_micros":100000}`, account.ID)))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-cache-probes", bytes.NewBufferString(fmt.Sprintf(`{"provider_account_id":%q,"upstream_model":"probe-model","protocol":"openai_chat_completions","prefix_tokens":256,"max_cost_micros":100000}`, account.ID)))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)

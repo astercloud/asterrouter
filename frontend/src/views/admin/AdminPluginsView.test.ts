@@ -47,7 +47,6 @@ const catalogPlugin = {
   vendor: 'AsterRouter',
   status: 'enabled',
   entitlement_status: 'included',
-  surfaces: ['platform'],
   entry_point: '',
   configurable: true,
   packages: [],
@@ -177,7 +176,6 @@ describe('AdminPluginsView workbench', () => {
       tier: 'free_core',
       version: '0.2.1',
       vendor: 'AsterCloud',
-      surfaces: ['personal', 'enterprise'],
       status: 'enabled',
       frontend_available: true,
       packages: [{

@@ -7,128 +7,63 @@ vi.mock('@/api/settings', () => ({ getPublicSettings: vi.fn() }))
 
 const getPublicSettingsMock = vi.mocked(getPublicSettings)
 
-describe('router guards', () => {
+describe('enterprise router guards', () => {
   beforeEach(async () => {
+    localStorage.clear()
     getPublicSettingsMock.mockReset()
     getPublicSettingsMock.mockResolvedValue(makePublicSettings())
     clearPublicSettingsCache()
     await router.replace('/legal/test-fixture')
     clearPublicSettingsCache()
-    getPublicSettingsMock.mockReset()
   })
 
-  it('sends an incomplete deployment to setup', async () => {
+  it('sends an incomplete instance to enterprise setup', async () => {
     getPublicSettingsMock.mockResolvedValue(makePublicSettings({ setup_completed: false }))
-
     await router.push('/')
-
     expect(router.currentRoute.value.fullPath).toBe('/setup')
   })
 
-  it('uses the enabled default profile as the authenticated entry', async () => {
+  it('opens the management console for an administrator', async () => {
     localStorage.setItem('asterrouter_admin_token', 'token')
-    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'personal', enabled_profiles: ['personal'] }))
-
-    await router.push('/')
-
-    expect(router.currentRoute.value.fullPath).toBe('/console/overview')
-  })
-
-  it('routes relay customers and operators to different entries', async () => {
-    localStorage.setItem('asterrouter_admin_token', 'token')
-    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'relay_operator', enabled_profiles: ['relay_operator'] }))
-    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'developer' })))
-
-    await router.push('/')
-    expect(router.currentRoute.value.fullPath).toBe('/customer/overview')
-
-    clearPublicSettingsCache()
     localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'super_admin' })))
-    await router.replace('/login')
     await router.push('/')
-    expect(router.currentRoute.value.fullPath).toBe('/operator/overview')
+    expect(router.currentRoute.value.fullPath).toBe('/console/workbench')
   })
 
-  it('redirects anonymous protected navigation and preserves the target', async () => {
-    getPublicSettingsMock.mockResolvedValue(makePublicSettings())
+  it('opens the service portal for a developer', async () => {
+    localStorage.setItem('asterrouter_admin_token', 'token')
+    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'developer' })))
+    await router.push('/')
+    expect(router.currentRoute.value.fullPath).toBe('/portal/overview')
+  })
 
-    await router.push('/admin/providers?status=active')
-
+  it('preserves an anonymous protected target through login', async () => {
+    await router.push('/console/model-services?status=active')
     expect(router.currentRoute.value.path).toBe('/login')
-    expect(router.currentRoute.value.query.redirect).toBe('/admin/providers?status=active')
+    expect(router.currentRoute.value.query.redirect).toBe('/console/model-services?status=active')
   })
 
-  it('redirects a disabled surface to the configured entry', async () => {
+  it('prevents a developer from entering the management console', async () => {
     localStorage.setItem('asterrouter_admin_token', 'token')
-    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'personal', enabled_profiles: ['personal'] }))
-
-    await router.push('/admin/dashboard')
-
-    expect(router.currentRoute.value.fullPath).toBe('/console/overview')
+    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'developer' })))
+    await router.push('/console/organization')
+    expect(router.currentRoute.value.fullPath).toBe('/portal/overview')
   })
 
-  it('does not render unavailable administrator surfaces for a developer session', async () => {
-    localStorage.setItem('asterrouter_admin_token', 'token')
-    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'developer', allowed_surfaces: ['portal', 'customer'] })))
-    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'relay_operator', enabled_profiles: ['relay_operator', 'enterprise'] }))
-
-    await router.push('/admin/dashboard')
-    expect(router.currentRoute.value.fullPath).toBe('/customer/overview')
-
-    await router.push('/operator/overview')
-    expect(router.currentRoute.value.fullPath).toBe('/customer/overview')
+  it('registers only the two product entry trees', () => {
+    const paths = router.getRoutes().map((route) => route.path)
+    for (const legacy of ['/admin', '/operator', '/customer', '/platform']) expect(paths).not.toContain(legacy)
+    for (const current of [
+      '/console/workbench', '/console/applications', '/console/model-services',
+      '/console/policies/access', '/console/policies/routing', '/console/usage',
+      '/console/organization', '/console/system', '/portal/overview',
+      '/portal/applications', '/portal/access', '/portal/usage', '/portal/account'
+    ]) expect(paths).toContain(current)
   })
 
-  it('honors server-derived surface bindings for a developer session', async () => {
-    localStorage.setItem('asterrouter_admin_token', 'token')
-    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'developer', allowed_surfaces: ['portal', 'customer', 'relay_operator'] })))
-    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'relay_operator', enabled_profiles: ['relay_operator'] }))
-
-    await router.push('/operator/overview')
-    expect(router.currentRoute.value.fullPath).toBe('/operator/overview')
-  })
-
-  it('uses the platform entry only for an explicitly bound platform operator', async () => {
-    localStorage.setItem('asterrouter_admin_token', 'token')
-    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({
-      role: 'platform_admin',
-      allowed_surfaces: ['platform']
-    })))
-    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'platform', enabled_profiles: ['platform'] }))
-
-    await router.push('/')
-
-    expect(router.currentRoute.value.fullPath).toBe('/platform/overview')
-  })
-
-  it('redirects an unbound user away from the enabled platform surface', async () => {
-    localStorage.setItem('asterrouter_admin_token', 'token')
-    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({
-      role: 'platform_admin',
-      allowed_surfaces: ['personal']
-    })))
-    getPublicSettingsMock.mockResolvedValue(makePublicSettings({ default_profile: 'personal', enabled_profiles: ['personal', 'platform'] }))
-
-    await router.push('/platform/overview')
-
-    expect(router.currentRoute.value.fullPath).toBe('/console/overview')
-  })
-
-  it('passes an explicit platform surface to shared operation views', () => {
-    for (const path of ['/platform/ai-jobs', '/platform/artifacts']) {
-      const route = router.getRoutes().find((item) => item.path === path)
-      expect(route?.props.default).toEqual({ surface: 'platform' })
+  it('registers every public account workflow as a first-class route', () => {
+    for (const path of ['/login', '/register', '/forgot-password', '/resend-verification', '/reset-password', '/verify-email']) {
+      expect(router.getRoutes().some((route) => route.path === path)).toBe(true)
     }
   })
-
-	it('registers the enterprise first-access route with localized metadata', () => {
-		const route = router.getRoutes().find((item) => item.path === '/admin/onboarding')
-		expect(route?.meta).toMatchObject({ titleKey: 'admin.onboarding', descriptionKey: 'onboarding.subtitle' })
-	})
-
-	it('registers every public account workflow as a first-class route', () => {
-		for (const path of ['/login', '/register', '/forgot-password', '/resend-verification', '/reset-password', '/verify-email']) {
-			expect(router.getRoutes().some((route) => route.path === path)).toBe(true)
-		}
-	})
 })

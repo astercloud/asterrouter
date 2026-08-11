@@ -285,7 +285,7 @@ func executeDirectMedia(c *gin.Context, control *controlplane.Service, adapter c
 	}
 	defer credentialPermit.Release()
 	affinity := controlplane.GatewayAffinityInput{
-		TenantID: canonicalAuth.TenantID, PrincipalID: canonicalAuth.PrincipalID, CredentialID: canonicalAuth.CredentialID,
+		ApplicationID: canonicalAuth.ApplicationID, PrincipalID: canonicalAuth.PrincipalID, CredentialID: canonicalAuth.CredentialID,
 		Model: request.Model, Protocol: string(request.Protocol), RouteGroup: plan.RouteGroup, StickyKey: request.StickyKey,
 		PolicyVersion: canonicalAuth.PolicyVersion,
 	}

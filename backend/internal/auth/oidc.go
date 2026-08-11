@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -60,13 +61,14 @@ type OIDCService struct {
 	provider    *oidc.Provider
 	oauthConfig *oauth2.Config
 	verifier    *oidc.IDTokenVerifier
+	client      *http.Client
 }
 
 func (s *OIDCService) Initialize(ctx context.Context) error {
 	if s == nil || !s.config.Enabled {
 		return ErrOIDCDisabled
 	}
-	provider, err := oidc.NewProvider(ctx, s.config.IssuerURL)
+	provider, err := oidc.NewProvider(s.clientContext(ctx), s.config.IssuerURL)
 	if err != nil {
 		return fmt.Errorf("oidc discovery: %w", err)
 	}
@@ -155,7 +157,7 @@ func NewOIDCService(cfg OIDCConfig) (*OIDCService, error) {
 			return nil, fmt.Errorf("%w: redirect_url must be an https URL", ErrOIDCInvalidConfig)
 		}
 	}
-	return &OIDCService{config: cfg, states: make(map[string]OIDCState)}, nil
+	return &OIDCService{config: cfg, states: make(map[string]OIDCState), client: newExternalIdentityHTTPClient()}, nil
 }
 
 func (s *OIDCService) Begin(now time.Time) (OIDCState, error) {
@@ -226,7 +228,7 @@ func (s *OIDCService) Complete(ctx context.Context, state, code string, now time
 	if err != nil {
 		return OIDCProfile{}, err
 	}
-	token, err := config.Exchange(ctx, strings.TrimSpace(code), oauth2.VerifierOption(entry.Verifier))
+	token, err := config.Exchange(s.clientContext(ctx), strings.TrimSpace(code), oauth2.VerifierOption(entry.Verifier))
 	if err != nil {
 		return OIDCProfile{}, fmt.Errorf("exchange oidc authorization code: %w", err)
 	}
@@ -257,6 +259,17 @@ func (s *OIDCService) pruneLocked(now time.Time) {
 			delete(s.states, key)
 		}
 	}
+}
+
+func (s *OIDCService) clientContext(ctx context.Context) context.Context {
+	if client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && client != nil {
+		return ctx
+	}
+	client := s.client
+	if client == nil {
+		client = newExternalIdentityHTTPClient()
+	}
+	return oidc.ClientContext(ctx, client)
 }
 
 func randomURLToken(size int) (string, error) {

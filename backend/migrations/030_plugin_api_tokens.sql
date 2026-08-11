@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS plugin_api_tokens (
   token_prefix TEXT NOT NULL,
   token_hash TEXT NOT NULL UNIQUE,
   scopes_json TEXT NOT NULL DEFAULT '[]',
-  surfaces_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL,
   expires_at TIMESTAMPTZ,
   last_used_at TIMESTAMPTZ,

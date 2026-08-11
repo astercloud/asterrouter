@@ -154,7 +154,7 @@ func TestMetricsRecordRecoveredPanicAsServerError(t *testing.T) {
 
 func TestMetricsExposeBoundedCapacityAdmissionsAndProviderSnapshots(t *testing.T) {
 	metrics := newServerMetrics()
-	metrics.ObserveCapacityAdmission(controlplane.CapacityAdmissionEvent{Scope: "tenant", Result: "rejected", Reason: "tenant_concurrency_exhausted"})
+	metrics.ObserveCapacityAdmission(controlplane.CapacityAdmissionEvent{Scope: "application", Result: "rejected", Reason: "application_concurrency_exhausted"})
 	metrics.ObserveCapacityAdmission(controlplane.CapacityAdmissionEvent{Scope: "provider_account", Result: "acquired"})
 	metrics.ObserveCapacityAdmission(controlplane.CapacityAdmissionEvent{Scope: "sensitive-scope", Result: "sensitive-result", Reason: "sensitive-reason"})
 	metrics.setProviderCapacitySnapshotSource(func(context.Context) ([]controlplane.ProviderCapacityMetricSnapshot, error) {
@@ -166,7 +166,7 @@ func TestMetricsExposeBoundedCapacityAdmissionsAndProviderSnapshots(t *testing.T
 	})
 	body := metrics.render()
 	for _, expected := range []string{
-		`asterrouter_capacity_admissions_total{scope="tenant",result="rejected",reason="tenant_concurrency"} 1`,
+		`asterrouter_capacity_admissions_total{scope="application",result="rejected",reason="application_concurrency"} 1`,
 		`asterrouter_capacity_admissions_total{scope="provider_account",result="acquired",reason="none"} 1`,
 		`asterrouter_capacity_admissions_total{scope="other",result="other",reason="other"} 1`,
 		"asterrouter_provider_capacity_snapshot_status 1",

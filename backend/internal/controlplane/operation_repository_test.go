@@ -547,8 +547,8 @@ func TestUsageLedgerTransactionRollsBackOnOutboxConflict(t *testing.T) {
 
 func operationTestAuth() gatewaycore.CanonicalAuthContext {
 	return gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "key-operation", ProfileScope: "platform",
-		TenantID: "tenant-operation", PrincipalType: APIKeyTypeService, PrincipalID: "principal-operation",
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "key-operation",
+		ApplicationID: "application-operation", PrincipalType: APIKeyTypeService, PrincipalID: "principal-operation",
 	}
 }
 

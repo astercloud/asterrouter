@@ -34,6 +34,15 @@ func (m SMTPMailer) SendHTML(ctx context.Context, to, subject, html string) erro
 	return m.send(ctx, to, subject, "text/html", html)
 }
 
+func (m SMTPMailer) TestConnection(ctx context.Context) error {
+	client, err := m.openClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return nil
+}
+
 func (m SMTPMailer) send(ctx context.Context, to, subject, contentType, body string) error {
 	cfg := m.Config
 	if strings.TrimSpace(cfg.Host) == "" || cfg.Port < 1 || strings.TrimSpace(cfg.From) == "" {
@@ -57,48 +66,11 @@ func (m SMTPMailer) send(ctx context.Context, to, subject, contentType, body str
 	if err != nil {
 		return err
 	}
-	timeout := m.Timeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
-	address := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
-	dialer := net.Dialer{Timeout: timeout}
-	var conn net.Conn
-	if cfg.UseTLS {
-		conn, err = tls.DialWithDialer(&dialer, "tcp", address, &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12})
-	} else {
-		conn, err = dialer.DialContext(ctx, "tcp", address)
-	}
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	deadline := time.Now().Add(timeout)
-	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
-		deadline = contextDeadline
-	}
-	if err := conn.SetDeadline(deadline); err != nil {
-		return err
-	}
-	client, err := smtp.NewClient(conn, cfg.Host)
+	client, err := m.openClient(ctx)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	if !cfg.UseTLS {
-		ok, _ := client.Extension("STARTTLS")
-		if !ok {
-			return errors.New("SMTP server does not support STARTTLS")
-		}
-		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
-			return err
-		}
-	}
-	if cfg.Username != "" {
-		if err := client.Auth(smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)); err != nil {
-			return err
-		}
-	}
 	if err := client.Mail(fromAddress.Address); err != nil {
 		return err
 	}
@@ -116,7 +88,71 @@ func (m SMTPMailer) send(ctx context.Context, to, subject, contentType, body str
 		_ = writer.Close()
 		return err
 	}
-	return writer.Close()
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m SMTPMailer) openClient(ctx context.Context) (*smtp.Client, error) {
+	cfg := m.Config
+	cfg.Host = strings.TrimSpace(cfg.Host)
+	if cfg.Host == "" || cfg.Port < 1 || cfg.Port > 65535 {
+		return nil, errors.New("SMTP host and a valid port are required")
+	}
+	timeout := m.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	address := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = conn.Close()
+		}
+	}()
+	deadline := time.Now().Add(timeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
+	if cfg.UseTLS {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12})
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return nil, err
+		}
+		conn = tlsConn
+	}
+	client, err := smtp.NewClient(conn, cfg.Host)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.UseTLS {
+		ok, _ := client.Extension("STARTTLS")
+		if !ok {
+			_ = client.Close()
+			return nil, errors.New("SMTP server does not support STARTTLS")
+		}
+		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
+			_ = client.Close()
+			return nil, err
+		}
+	}
+	if cfg.Username != "" {
+		if err := client.Auth(smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)); err != nil {
+			_ = client.Close()
+			return nil, err
+		}
+	}
+	closeOnError = false
+	return client, nil
 }
 
 func parseSMTPAddress(value string) (*mail.Address, error) {

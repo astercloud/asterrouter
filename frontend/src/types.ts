@@ -11,8 +11,6 @@ export interface PublicSettings {
   public_base_url: string
   api_base_url: string
   gateway_base_path: string
-  default_profile: string
-  enabled_profiles: string[]
   setup_completed: boolean
   default_locale: string
   enabled_locales: string[]
@@ -57,7 +55,6 @@ export interface PublicSettings {
 export interface AuthUser {
   username: string
   role: string
-	allowed_surfaces?: Array<'personal' | 'relay_operator' | 'enterprise' | 'platform' | 'portal' | 'customer'>
 	display_name?: string
 	email?: string
 	avatar_data_url?: string
@@ -78,7 +75,6 @@ export interface AccountProfile {
 	avatar_data_url?: string
 	status: string
 	role: string
-	balance_micros: number
 	concurrency_limit: number
 	rpm_limit: number
 	external_issuer?: string
@@ -146,7 +142,6 @@ export interface AdminSettings extends PublicSettings {
 	trusted_proxy_cidrs: string[]
 	turnstile_secret_key?: string
 	turnstile_configured: boolean
-	default_balance_micros: number
 	default_concurrency: number
 	default_rpm: number
 	auth_source_defaults: Record<string, AuthSourceDefault>
@@ -206,9 +201,42 @@ export interface EmailTemplate {
 	html: string
 }
 
+export interface EmailTemplateEventInfo {
+	event: string
+	placeholders: string[]
+}
+
+export interface EmailTemplateSummary {
+	event: string
+	locale: 'en-US' | 'zh-CN'
+	customized: boolean
+}
+
+export interface EmailTemplateCatalog {
+	events: EmailTemplateEventInfo[]
+	locales: Array<'en-US' | 'zh-CN'>
+	templates: EmailTemplateSummary[]
+	placeholders: string[]
+}
+
+export interface EmailTemplateDetail extends EmailTemplate {
+	customized: boolean
+	placeholders: string[]
+}
+
+export interface SMTPTestConfig {
+	smtp_host: string
+	smtp_port: number
+	smtp_username: string
+	smtp_password?: string
+	smtp_from: string
+	smtp_from_name: string
+	smtp_use_tls: boolean
+}
+
 export interface CustomEndpoint { name: string; endpoint: string; description: string }
 export interface CustomMenuItem { id: string; label: string; url: string; open_in_new_tab: boolean }
-export interface AuthSourceDefault { enabled: boolean; balance_micros: number; concurrency: number; rpm: number }
+export interface AuthSourceDefault { enabled: boolean; concurrency: number; rpm: number }
 
 export interface LocaleInfo {
   code: string
@@ -368,16 +396,18 @@ export interface RoleBinding {
   id: string
   user_id: string
   role: string
-  scope_type: string
+  scope_type: RoleScopeType
   scope_id: string
   created_at: string
   updated_at: string
 }
 
+export type RoleScopeType = 'organization' | 'department' | 'group' | 'application' | 'resource'
+
 export interface RoleBindingRequest {
   user_id: string
   role: string
-  scope_type: string
+  scope_type: RoleScopeType
   scope_id: string
 }
 
@@ -660,9 +690,8 @@ export interface GatewaySimulation {
   candidates: GatewaySimulationCandidate[]
 }
 
-export type PricingSurface = 'admin' | 'platform' | 'operator'
-export type PricingPurpose = 'usage_cost' | 'customer_charge'
-export type PricingScopeType = 'global' | 'operator_plan'
+export type PricingPurpose = 'usage_cost'
+export type PricingScopeType = 'global'
 
 export interface PricingFacts {
   total_input_tokens?: number
@@ -798,7 +827,6 @@ export interface PricingPublishRequest {
   expected_lock_version: number
   expected_active_version_id: string
   expression_hash: string
-  acknowledge_customer_impact: boolean
 }
 
 export interface PricingValidationError {
@@ -1324,12 +1352,9 @@ export interface APIKeyRecord {
   prefix: string
   status: string
   key_type: string
-  customer_id: string
   owner_user_id: string
-  profile_scope: string
-  platform_tenant_id: string
   gateway_principal_id: string
-  tenant_id: string
+  application_id: string
   principal_type: string
   principal_reference: string
   policy_id: string
@@ -1383,9 +1408,8 @@ export interface APIKeyCreateRequest {
   artifact_sink_id?: string
   expires_at: string
   key_type?: string
-  customer_id?: string
   owner_user_id?: string
-  platform_tenant_id?: string
+  application_id?: string
   gateway_principal_id?: string
 }
 
@@ -1412,9 +1436,8 @@ export interface APIKeyUpdateRequest {
   expires_at: string
   status: string
   key_type?: string
-  customer_id?: string
   owner_user_id?: string
-  platform_tenant_id?: string
+  application_id?: string
   gateway_principal_id?: string
 }
 
@@ -1422,7 +1445,7 @@ export interface APIKeyRotateRequest {
   grace_period_seconds: number
 }
 
-export interface PlatformTenant {
+export interface Application {
   id: string
   name: string
   slug: string
@@ -1433,7 +1456,7 @@ export interface PlatformTenant {
   updated_at: string
 }
 
-export interface PlatformTenantRequest {
+export interface ApplicationRequest {
   name: string
   slug: string
   entitlement_reference: string
@@ -1443,7 +1466,7 @@ export interface PlatformTenantRequest {
 
 export interface GatewayPrincipal {
   id: string
-  tenant_id: string
+  application_id: string
   name: string
   principal_type: 'service' | 'developer' | 'integration'
   external_subject_reference: string
@@ -1453,7 +1476,7 @@ export interface GatewayPrincipal {
 }
 
 export interface GatewayPrincipalRequest {
-  tenant_id: string
+  application_id: string
   name: string
   principal_type: 'service' | 'developer' | 'integration'
   external_subject_reference: string
@@ -1462,7 +1485,7 @@ export interface GatewayPrincipalRequest {
 
 export interface ExternalAuthIntegration {
   id: string
-  tenant_id: string
+  application_id: string
   gateway_principal_id: string
   name: string
   protocol: 'hmac_signed_context' | 'jwt_jwks'
@@ -1487,7 +1510,7 @@ export interface ExternalAuthIntegration {
 }
 
 export interface ExternalAuthIntegrationRequest {
-  tenant_id: string
+  application_id: string
   gateway_principal_id: string
   name: string
   protocol?: 'hmac_signed_context' | 'jwt_jwks'
@@ -1513,52 +1536,6 @@ export interface ExternalAuthIntegrationCreateResponse {
   secret: string
 }
 
-export interface PlatformUsageSink {
-  id: string
-  tenant_id: string
-  external_auth_integration_id: string
-  name: string
-  endpoint_url_hint: string
-  signing_secret_hint: string
-  status: 'active' | 'disabled'
-  max_attempts: number
-  created_at: string
-  updated_at: string
-}
-
-export interface PlatformUsageSinkRequest {
-  tenant_id: string
-  external_auth_integration_id: string
-  name: string
-  endpoint_url: string
-  signing_secret?: string
-  status: 'active' | 'disabled'
-  max_attempts: number
-}
-
-export interface PlatformUsageSinkCreateResponse {
-  record: PlatformUsageSink
-  signing_secret: string
-}
-
-export interface PlatformUsageDeliveryEvent {
-  id: string
-  sink_id: string
-  usage_record_id: string
-  event_id: string
-  status: 'pending' | 'delivering' | 'delivered' | 'dead_letter'
-  attempt_count: number
-  max_attempts: number
-  next_attempt_at: string
-  lease_until?: string
-  delivered_at?: string
-  last_http_status: number
-  last_error?: string
-  target_hint: string
-  created_at: string
-  updated_at: string
-}
-
 export interface APIKeyCreateResponse {
   record: APIKeyRecord
   key: string
@@ -1571,9 +1548,8 @@ export interface AuditLog {
   resource_type: string
   resource_id: string
   summary: string
-  profile_scope: string
-  platform_tenant_id: string
-  platform_tenant_name: string
+	application_id: string
+  application_name: string
   gateway_principal_id: string
   gateway_principal_name: string
   created_at: string
@@ -1701,7 +1677,6 @@ export interface Plugin {
   vendor: string
   status: string
   entitlement_status: string
-  surfaces: string[]
   entry_point: string
   configurable: boolean
   frontend_available?: boolean
@@ -1836,8 +1811,7 @@ export interface ArtifactSinkDestination {
   bucket: string
   prefix?: string
   reference_base_url?: string
-  allowed_profile_scope?: string
-  allowed_tenant_id?: string
+	allowed_application_id?: string
   path_style: boolean
   enabled: boolean
   secret_hints: Record<string, string>
@@ -1851,8 +1825,7 @@ export interface ArtifactSinkDestinationRequest {
   bucket: string
   prefix: string
   reference_base_url: string
-  allowed_profile_scope: string
-  allowed_tenant_id: string
+	allowed_application_id: string
   path_style: boolean
   enabled: boolean
   secrets: Record<string, string>
@@ -1865,7 +1838,6 @@ export interface PluginAPIToken {
   plugin_id?: string
   token_prefix: string
   scopes: string[]
-  surfaces: string[]
   status: string
   expires_at?: string
   last_used_at?: string
@@ -1877,7 +1849,6 @@ export interface PluginAPITokenCreateRequest {
   name: string
   plugin_id?: string
   scopes: string[]
-  surfaces: string[]
   expires_at?: string
 }
 
@@ -1974,18 +1945,16 @@ export interface PluginCatalog {
   plugins: Plugin[]
 }
 
-export interface PluginFrontendContributionSurface {
-  surface: string
-  slot: string
+export interface PluginWorkbenchDefinition {
   title: string
   asset: string
   style?: string
 }
 
-export interface PluginFrontendContribution {
+export interface PluginWorkbenchManifest {
   schema_version: string
   plugin_id: string
-  surfaces: PluginFrontendContributionSurface[]
+  workbench: PluginWorkbenchDefinition
 }
 
 export interface SidecarRuntimeStatus {
@@ -2013,10 +1982,8 @@ export interface UsageRecord {
   usage_source: string
   request_fingerprint: string
   api_key_id: string
-  customer_id: string
-  profile_scope: string
-  platform_tenant_id: string
-  platform_tenant_name: string
+	application_id: string
+  application_name: string
   gateway_principal_id: string
   gateway_principal_name: string
   api_fingerprint: string
@@ -2062,14 +2029,7 @@ export interface UsageDimension {
   attributes?: Record<string, string>
 }
 
-export interface OperatorCustomerGroup { id:string; name:string; description:string; status:string; created_at:string; updated_at:string }
-export interface OperatorPlan { id:string; name:string; description:string; monthly_fee_micros:number; included_tokens:number; monthly_limit_micros:number; status:string; created_at:string; updated_at:string }
-export interface OperatorCustomer { id:string; name:string; email:string; group_id:string; plan_id:string; status:string; balance_micros:number; credit_micros:number; notes:string; created_at:string; updated_at:string }
-export interface OperatorBalanceEntry { id:string; customer_id:string; kind:string; amount_micros:number; balance_after_micros:number; currency:string; billing_ledger_id:string; reference:string; note:string; actor:string; created_at:string }
-export interface OperatorRiskRule { id:string; name:string; rule_type:string; threshold:number; window_minutes:number; action:string; description:string; status:string; created_at:string; updated_at:string }
 export interface GatewayRiskBlock { api_key_id:string; rule_id:string; reason:string; expires_at:string; created_at:string }
-export interface OperatorNotice { id:string; title:string; content:string; audience:string; status:string; publish_at?:string; created_at:string; updated_at:string }
-export interface OperatorDashboard { customers:number; active_customers:number; plans:number; balance_micros:number; risk_rules:number; published_notices:number }
 
 export interface UsageModelSummary {
   model: string
@@ -2333,8 +2293,7 @@ export interface ArtifactListQuery {
   limit?: number
   offset?: number
   q?: string
-  profile_scope?: string
-  tenant_id?: string
+	application_id?: string
   operation_id?: string
   job_id?: string
   attempt_id?: string
@@ -2349,8 +2308,7 @@ export interface ArtifactAdminRecord {
   job_id?: string
   attempt_id?: string
   source_artifact_id?: string
-  profile_scope: string
-  tenant_id?: string
+	application_id?: string
   role: string
   policy: string
   status: string
@@ -2410,8 +2368,7 @@ export interface AIJobListQuery {
   limit?: number
   offset?: number
   q?: string
-  profile_scope?: string
-  tenant_id?: string
+	application_id?: string
   model?: string
   modality?: string
   operation?: string
@@ -2422,8 +2379,7 @@ export interface AIJobListQuery {
 export interface AIJobAdminRecord {
   id: string
   operation_id: string
-  profile_scope: string
-  tenant_id?: string
+	application_id?: string
   protocol: string
   operation: string
   modality: string
@@ -2536,9 +2492,8 @@ export interface GatewayTrace {
   request_fingerprint: string
   api_key_id: string
   api_fingerprint: string
-  profile_scope: string
-  platform_tenant_id: string
-  platform_tenant_name: string
+	application_id: string
+  application_name: string
   gateway_principal_id: string
   gateway_principal_name: string
   model: string

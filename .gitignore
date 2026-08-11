@@ -21,6 +21,7 @@ frontend/test-results/
 
 # Local agent notes and product drafts
 docs/*
+!docs/README.md
 !docs/product-positioning.md
 !docs/goal/
 !docs/goal/**

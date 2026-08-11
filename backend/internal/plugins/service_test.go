@@ -33,40 +33,25 @@ func TestServiceSeedsBuiltinPluginCatalog(t *testing.T) {
 	}
 }
 
-func TestServiceFiltersCatalogAndActionsBySurface(t *testing.T) {
+func TestServiceCatalogIncludesEnterprisePlugins(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository())
 	if err := svc.EnsureSeedData(ctx); err != nil {
 		t.Fatalf("EnsureSeedData(): %v", err)
 	}
-	personal, err := svc.CatalogForSurface(ctx, "personal")
+	catalog, err := svc.Catalog(ctx)
 	if err != nil {
-		t.Fatalf("CatalogForSurface(personal): %v", err)
+		t.Fatalf("Catalog(): %v", err)
 	}
-	for _, plugin := range personal.Plugins {
-		if plugin.ID == "com.asterrouter.enterprise.audit-baseline" {
-			t.Fatal("enterprise-only plugin leaked into personal catalog")
-		}
+	if findPluginForCatalogTest(catalog.Plugins, "com.asterrouter.core.gateway") == nil {
+		t.Fatal("gateway core is missing from the plugin catalog")
 	}
-	if err := svc.RequireSurface(ctx, "com.asterrouter.enterprise.audit-baseline", "personal"); !errors.Is(err, ErrPluginSurface) {
-		t.Fatalf("RequireSurface(personal) = %v, want ErrPluginSurface", err)
-	}
-	if err := svc.RequireSurface(ctx, "com.asterrouter.enterprise.audit-baseline", "enterprise"); err != nil {
-		t.Fatalf("RequireSurface(enterprise): %v", err)
-	}
-	platform, err := svc.CatalogForSurface(ctx, "platform")
-	if err != nil {
-		t.Fatalf("CatalogForSurface(platform): %v", err)
-	}
-	if findPluginForSurfaceTest(platform.Plugins, "com.asterrouter.core.gateway") == nil {
-		t.Fatal("gateway core is missing from the platform catalog")
-	}
-	if findPluginForSurfaceTest(platform.Plugins, "com.asterrouter.provider.openai-compatible") != nil {
-		t.Fatal("provider plugin leaked into the platform catalog before profile-scoped provider isolation exists")
+	if findPluginForCatalogTest(catalog.Plugins, "com.asterrouter.enterprise.audit-baseline") == nil {
+		t.Fatal("audit baseline is missing from the plugin catalog")
 	}
 }
 
-func findPluginForSurfaceTest(plugins []Plugin, id string) *Plugin {
+func findPluginForCatalogTest(plugins []Plugin, id string) *Plugin {
 	for index := range plugins {
 		if plugins[index].ID == id {
 			return &plugins[index]

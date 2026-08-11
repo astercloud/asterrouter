@@ -56,8 +56,7 @@ type Artifact struct {
 	JobID                    string     `json:"job_id,omitempty"`
 	AttemptID                string     `json:"attempt_id,omitempty"`
 	SourceArtifactID         string     `json:"source_artifact_id,omitempty"`
-	ProfileScope             string     `json:"-"`
-	TenantID                 string     `json:"-"`
+	ApplicationID            string     `json:"-"`
 	IntegrationID            string     `json:"-"`
 	PrincipalType            string     `json:"-"`
 	PrincipalID              string     `json:"-"`
@@ -94,8 +93,7 @@ type ArtifactEvent struct {
 
 type ArtifactQuery struct {
 	Owner            *ArtifactOwner
-	ProfileScope     string
-	TenantID         string
+	ApplicationID    string
 	Search           string
 	OperationID      string
 	JobID            string
@@ -148,14 +146,14 @@ type ArtifactOwner = AIJobOwner
 
 func artifactOwnerFromOperation(operation AIOperation) ArtifactOwner {
 	return ArtifactOwner{
-		ProfileScope: operation.ProfileScope, TenantID: operation.TenantID, IntegrationID: operation.IntegrationID,
+		ApplicationID: operation.ApplicationID, IntegrationID: operation.IntegrationID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID,
 		ExternalSubjectReference: operation.ExternalSubjectReference,
 	}
 }
 
 func artifactOwnerMatches(artifact Artifact, owner ArtifactOwner) bool {
-	return artifact.ProfileScope == owner.ProfileScope && artifact.TenantID == owner.TenantID &&
+	return artifact.ApplicationID == owner.ApplicationID &&
 		artifact.IntegrationID == owner.IntegrationID && artifact.PrincipalType == owner.PrincipalType &&
 		artifact.PrincipalID == owner.PrincipalID && artifact.ExternalSubjectReference == owner.ExternalSubjectReference
 }

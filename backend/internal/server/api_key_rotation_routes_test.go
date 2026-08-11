@@ -21,7 +21,7 @@ func TestAdminAPIKeyRotationAcceptsGracePeriod(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys/"+created.Record.ID+"/rotate", bytes.NewBufferString(`{"grace_period_seconds":300}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/api-keys/"+created.Record.ID+"/rotate", bytes.NewBufferString(`{"grace_period_seconds":300}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -60,7 +60,7 @@ func TestAdminAPIKeyRotationRejectsInvalidGracePeriodWithoutMutation(t *testing.
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys/"+created.Record.ID+"/rotate", bytes.NewBufferString(`{"grace_period_seconds":86401}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/api-keys/"+created.Record.ID+"/rotate", bytes.NewBufferString(`{"grace_period_seconds":86401}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

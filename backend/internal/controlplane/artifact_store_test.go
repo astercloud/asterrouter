@@ -28,10 +28,10 @@ func TestArtifactStoresPutRangeAndDelete(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			payload := []byte("0123456789")
-			if written, err := test.store.Put(ctx, "tenant/artifact/content", bytes.NewReader(payload), -1, "application/octet-stream"); err != nil || written != int64(len(payload)) {
+			if written, err := test.store.Put(ctx, "application/artifact/content", bytes.NewReader(payload), -1, "application/octet-stream"); err != nil || written != int64(len(payload)) {
 				t.Fatalf("Put() written=%d err=%v", written, err)
 			}
-			opened, err := test.store.Open(ctx, "tenant/artifact/content", &ArtifactByteRange{Offset: 3, Length: 4})
+			opened, err := test.store.Open(ctx, "application/artifact/content", &ArtifactByteRange{Offset: 3, Length: 4})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -40,13 +40,13 @@ func TestArtifactStoresPutRangeAndDelete(t *testing.T) {
 			if readErr != nil || string(data) != "3456" || opened.Offset != 3 || opened.SizeBytes != 4 || opened.TotalBytes != 10 {
 				t.Fatalf("Open() data=%q read=%+v err=%v", data, opened, readErr)
 			}
-			if _, err := test.store.Open(ctx, "tenant/artifact/content", &ArtifactByteRange{Offset: 10}); !errors.Is(err, ErrArtifactUnavailable) {
+			if _, err := test.store.Open(ctx, "application/artifact/content", &ArtifactByteRange{Offset: 10}); !errors.Is(err, ErrArtifactUnavailable) {
 				t.Fatalf("unsatisfiable range error=%v", err)
 			}
-			if err := test.store.Delete(ctx, "tenant/artifact/content"); err != nil {
+			if err := test.store.Delete(ctx, "application/artifact/content"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := test.store.Open(ctx, "tenant/artifact/content", nil); !errors.Is(err, ErrArtifactUnavailable) {
+			if _, err := test.store.Open(ctx, "application/artifact/content", nil); !errors.Is(err, ErrArtifactUnavailable) {
 				t.Fatalf("deleted Open() error=%v", err)
 			}
 		})
@@ -70,14 +70,14 @@ func TestS3ArtifactStoreRangeAndUnavailableMapping(t *testing.T) {
 		Body: io.NopCloser(bytes.NewBufferString("3456")), ContentLength: aws.Int64(4), ContentRange: aws.String("bytes 3-6/10"),
 	}}
 	store := &S3ArtifactStore{client: client, config: S3ArtifactStoreConfig{Bucket: "bucket", Prefix: "artifacts"}}
-	opened, err := store.Open(context.Background(), "tenant/content", &ArtifactByteRange{Offset: 3, Length: 4})
-	if err != nil || opened.Offset != 3 || opened.SizeBytes != 4 || opened.TotalBytes != 10 || aws.ToString(client.lastGet.Range) != "bytes=3-6" || aws.ToString(client.lastGet.Key) != "artifacts/tenant/content" {
+	opened, err := store.Open(context.Background(), "application/content", &ArtifactByteRange{Offset: 3, Length: 4})
+	if err != nil || opened.Offset != 3 || opened.SizeBytes != 4 || opened.TotalBytes != 10 || aws.ToString(client.lastGet.Range) != "bytes=3-6" || aws.ToString(client.lastGet.Key) != "artifacts/application/content" {
 		t.Fatalf("Open() opened=%+v input=%+v err=%v", opened, client.lastGet, err)
 	}
 	_ = opened.Body.Close()
 	client.getResult = nil
 	client.getErr = codedArtifactStoreError{code: "InvalidRange"}
-	if _, err := store.Open(context.Background(), "tenant/content", &ArtifactByteRange{Offset: 99}); !errors.Is(err, ErrArtifactUnavailable) {
+	if _, err := store.Open(context.Background(), "application/content", &ArtifactByteRange{Offset: 99}); !errors.Is(err, ErrArtifactUnavailable) {
 		t.Fatalf("InvalidRange error=%v", err)
 	}
 }

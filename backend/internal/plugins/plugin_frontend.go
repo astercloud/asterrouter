@@ -9,14 +9,14 @@ import (
 	"strings"
 )
 
-var ErrPluginFrontendNotFound = errors.New("plugin frontend contribution is not available")
+var ErrPluginFrontendNotFound = errors.New("plugin workbench is not available")
 
-func (s *Service) PluginFrontendContribution(ctx context.Context, pluginID string) ([]byte, error) {
+func (s *Service) PluginWorkbench(ctx context.Context, pluginID string) ([]byte, error) {
 	frontendDir, err := s.pluginFrontendDir(ctx, pluginID)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(filepath.Join(frontendDir, "contribution.json"))
+	raw, err := os.ReadFile(filepath.Join(frontendDir, "workbench.json"))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPluginFrontendNotFound, err)
 	}

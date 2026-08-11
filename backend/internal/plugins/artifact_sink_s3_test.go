@@ -89,7 +89,6 @@ func TestArtifactSinkDestinationValidation(t *testing.T) {
 		{name: "HTTP reference URL", mutate: func(request *ArtifactSinkDestinationRequest) { request.ReferenceBaseURL = "http://cdn.example/files" }},
 		{name: "R2 without endpoint", mutate: func(request *ArtifactSinkDestinationRequest) { request.Provider = "r2"; request.Endpoint = "" }},
 		{name: "OSS without endpoint", mutate: func(request *ArtifactSinkDestinationRequest) { request.Provider = "oss"; request.Endpoint = "" }},
-		{name: "unknown profile scope", mutate: func(request *ArtifactSinkDestinationRequest) { request.AllowedProfileScope = "unknown" }},
 		{name: "missing access key", mutate: func(request *ArtifactSinkDestinationRequest) { delete(request.Secrets, artifactSinkAccessKey) }},
 		{name: "missing secret key", mutate: func(request *ArtifactSinkDestinationRequest) { delete(request.Secrets, artifactSinkSecretKey) }},
 	}
@@ -132,18 +131,15 @@ func TestArtifactSinkFactoryReceivesDecryptedConfiguration(t *testing.T) {
 	}
 }
 
-func TestS3ArtifactSinkOwnerIdempotencyAndReferences(t *testing.T) {
+func TestS3ArtifactSinkApplicationOwnershipIdempotencyAndReferences(t *testing.T) {
 	store := &artifactSinkTestStore{}
 	sink := &s3ArtifactSink{destination: artifactSinkDestinationRecord{
 		ID: "customer-media", Provider: "r2", Bucket: "media", Prefix: "generated",
-		ReferenceBaseURL: "https://cdn.example/media", AllowedProfileScope: "platform", AllowedTenantID: "tenant-a",
+		ReferenceBaseURL: "https://cdn.example/media", AllowedApplicationID: "application-a",
 	}, store: store}
-	owner := controlplane.ArtifactOwner{ProfileScope: "platform", TenantID: "tenant-a", PrincipalID: "principal-a", ExternalSubjectReference: "customer@example.com"}
-	if sink.Accepts(controlplane.ArtifactOwner{ProfileScope: "enterprise", TenantID: "tenant-a"}) {
-		t.Fatal("sink accepted an unauthorized profile")
-	}
-	if sink.Accepts(controlplane.ArtifactOwner{ProfileScope: "platform", TenantID: "tenant-b"}) {
-		t.Fatal("sink accepted an unauthorized tenant")
+	owner := controlplane.ArtifactOwner{ApplicationID: "application-a", PrincipalID: "principal-a", ExternalSubjectReference: "customer@example.com"}
+	if sink.Accepts(controlplane.ArtifactOwner{ApplicationID: "application-b"}) {
+		t.Fatal("sink accepted an unauthorized application")
 	}
 	request := controlplane.ArtifactSinkRequest{
 		SinkID: sink.ID(), IdempotencyKey: "artifact-1", ArtifactID: "artifact-1", MediaType: "image/png", ExpectedSizeBytes: 7, Owner: owner,
@@ -165,7 +161,7 @@ func TestS3ArtifactSinkOwnerIdempotencyAndReferences(t *testing.T) {
 	otherRequest := request
 	otherRequest.Owner.PrincipalID = "principal-b"
 	if _, err := sink.DeliverArtifact(context.Background(), otherRequest, bytes.NewBufferString("content")); err != nil {
-		t.Fatalf("DeliverArtifact(other tenant identity): %v", err)
+		t.Fatalf("DeliverArtifact(other application identity): %v", err)
 	}
 	if store.puts[2] == store.puts[0] {
 		t.Fatalf("different owners shared object key %q", store.puts[0])

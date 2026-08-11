@@ -48,12 +48,12 @@ test('@auth registration, email verification, TOTP, and recovery-code sign-in wo
     data: { username: 'demo', password: 'demo', agreement_accepted: true }
   }))
   const adminHeaders = { Authorization: `Bearer ${adminLogin.access_token}` }
-  const settings = await envelope<Record<string, unknown>>(await page.request.get('/api/v1/admin/settings', { headers: adminHeaders }))
+  const settings = await envelope<Record<string, unknown>>(await page.request.get('/api/v1/console/settings', { headers: adminHeaders }))
   const email = `e2e-auth-${Date.now()}@example.test`
   const password = 'synthetic-password-123'
 
   try {
-    await envelope(await page.request.put('/api/v1/admin/settings', {
+    await envelope(await page.request.put('/api/v1/console/settings', {
       headers: adminHeaders,
       data: {
         ...settings,
@@ -126,7 +126,7 @@ test('@auth registration, email verification, TOTP, and recovery-code sign-in wo
     await expect(page).toHaveURL(new RegExp(`${entryPath}$`))
     expect(browserErrors).toEqual([])
   } finally {
-    await envelope(await page.request.put('/api/v1/admin/settings', { headers: adminHeaders, data: settings }))
+    await envelope(await page.request.put('/api/v1/console/settings', { headers: adminHeaders, data: settings }))
   }
 })
 

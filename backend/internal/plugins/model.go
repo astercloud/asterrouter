@@ -23,10 +23,10 @@ const (
 	LicenseStatusExpired = "expired"
 	LicenseStatusInvalid = "invalid"
 
-	TierCore          = "core"
-	TierFreeCore      = "free_core"
-	TierProfileBundle = "profile_bundle"
-	TierPaidAddon     = "paid_addon"
+	TierCore             = "core"
+	TierFreeCore         = "free_core"
+	TierEnterpriseBundle = "enterprise_bundle"
+	TierPaidAddon        = "paid_addon"
 
 	EntitlementIncluded = "included"
 	EntitlementFree     = "free"
@@ -53,7 +53,6 @@ type Plugin struct {
 	Vendor            string    `json:"vendor"`
 	Status            string    `json:"status"`
 	EntitlementStatus string    `json:"entitlement_status"`
-	Surfaces          []string  `json:"surfaces"`
 	EntryPoint        string    `json:"entry_point"`
 	Configurable      bool      `json:"configurable"`
 	FrontendAvailable bool      `json:"frontend_available"`
@@ -131,35 +130,33 @@ type ConfigRequest struct {
 }
 
 type ArtifactSinkDestination struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Provider            string            `json:"provider"`
-	Endpoint            string            `json:"endpoint,omitempty"`
-	Region              string            `json:"region"`
-	Bucket              string            `json:"bucket"`
-	Prefix              string            `json:"prefix,omitempty"`
-	ReferenceBaseURL    string            `json:"reference_base_url,omitempty"`
-	AllowedProfileScope string            `json:"allowed_profile_scope,omitempty"`
-	AllowedTenantID     string            `json:"allowed_tenant_id,omitempty"`
-	PathStyle           bool              `json:"path_style"`
-	Enabled             bool              `json:"enabled"`
-	SecretHints         map[string]string `json:"secret_hints"`
+	ID                   string            `json:"id"`
+	Name                 string            `json:"name"`
+	Provider             string            `json:"provider"`
+	Endpoint             string            `json:"endpoint,omitempty"`
+	Region               string            `json:"region"`
+	Bucket               string            `json:"bucket"`
+	Prefix               string            `json:"prefix,omitempty"`
+	ReferenceBaseURL     string            `json:"reference_base_url,omitempty"`
+	AllowedApplicationID string            `json:"allowed_application_id,omitempty"`
+	PathStyle            bool              `json:"path_style"`
+	Enabled              bool              `json:"enabled"`
+	SecretHints          map[string]string `json:"secret_hints"`
 }
 
 type ArtifactSinkDestinationRequest struct {
-	Name                string            `json:"name"`
-	Provider            string            `json:"provider"`
-	Endpoint            string            `json:"endpoint"`
-	Region              string            `json:"region"`
-	Bucket              string            `json:"bucket"`
-	Prefix              string            `json:"prefix"`
-	ReferenceBaseURL    string            `json:"reference_base_url"`
-	AllowedProfileScope string            `json:"allowed_profile_scope"`
-	AllowedTenantID     string            `json:"allowed_tenant_id"`
-	PathStyle           bool              `json:"path_style"`
-	Enabled             bool              `json:"enabled"`
-	Secrets             map[string]string `json:"secrets"`
-	ClearSessionToken   bool              `json:"clear_session_token"`
+	Name                 string            `json:"name"`
+	Provider             string            `json:"provider"`
+	Endpoint             string            `json:"endpoint"`
+	Region               string            `json:"region"`
+	Bucket               string            `json:"bucket"`
+	Prefix               string            `json:"prefix"`
+	ReferenceBaseURL     string            `json:"reference_base_url"`
+	AllowedApplicationID string            `json:"allowed_application_id"`
+	PathStyle            bool              `json:"path_style"`
+	Enabled              bool              `json:"enabled"`
+	Secrets              map[string]string `json:"secrets"`
+	ClearSessionToken    bool              `json:"clear_session_token"`
 }
 
 type PluginAPIToken struct {
@@ -168,7 +165,6 @@ type PluginAPIToken struct {
 	PluginID    string     `json:"plugin_id,omitempty"`
 	TokenPrefix string     `json:"token_prefix"`
 	Scopes      []string   `json:"scopes"`
-	Surfaces    []string   `json:"surfaces"`
 	Status      string     `json:"status"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
@@ -180,7 +176,6 @@ type PluginAPITokenCreateRequest struct {
 	Name      string     `json:"name"`
 	PluginID  string     `json:"plugin_id"`
 	Scopes    []string   `json:"scopes"`
-	Surfaces  []string   `json:"surfaces"`
 	ExpiresAt *time.Time `json:"expires_at"`
 }
 

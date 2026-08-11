@@ -37,7 +37,7 @@ func TestPostgresRepositoryPersistsSettingsAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestPostgresRepositorySerializesConflictingDeploymentProfiles(t *testing.T) {
+func TestPostgresRepositorySerializesConcurrentSetup(t *testing.T) {
 	schema := testutil.NewPostgresSchema(t)
 	ctx := context.Background()
 	repositories := make([]*PostgresRepository, 2)
@@ -48,14 +48,14 @@ func TestPostgresRepositorySerializesConflictingDeploymentProfiles(t *testing.T)
 		}
 		repositories[index] = repo
 	}
-	profiles := []string{"enterprise", "platform"}
+	organizationNames := []string{"First Organization", "Second Organization"}
 	start := make(chan struct{})
 	results := make(chan error, len(repositories))
 	for index, repo := range repositories {
-		go func(repository *PostgresRepository, profile string) {
+		go func(repository *PostgresRepository, organizationName string) {
 			<-start
-			results <- repository.InitializeDeploymentProfile(ctx, profile)
-		}(repo, profiles[index])
+			results <- repository.CompleteSetup(ctx, organizationName)
+		}(repo, organizationNames[index])
 	}
 	close(start)
 
@@ -66,10 +66,10 @@ func TestPostgresRepositorySerializesConflictingDeploymentProfiles(t *testing.T)
 		switch {
 		case err == nil:
 			succeeded++
-		case errors.Is(err, ErrDeploymentProfileInitialized):
+		case errors.Is(err, ErrSetupCompleted):
 			conflicted++
 		default:
-			t.Fatalf("InitializeDeploymentProfile() unexpected error: %v", err)
+			t.Fatalf("CompleteSetup() unexpected error: %v", err)
 		}
 	}
 	if succeeded != 1 || conflicted != 1 {
@@ -90,12 +90,8 @@ func TestPostgresRepositorySerializesConflictingDeploymentProfiles(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetAll(): %v", err)
 	}
-	persistedProfiles := normalizeProfiles(parseStringList(values[KeyEnabledProfiles], nil))
-	if !parseBool(values[KeySetupCompleted]) || len(persistedProfiles) != 1 || values[KeyDefaultProfile] != persistedProfiles[0] {
-		t.Fatalf("persisted deployment profile is inconsistent: %#v", values)
-	}
-	if persistedProfiles[0] != "enterprise" && persistedProfiles[0] != "platform" {
-		t.Fatalf("persisted unexpected deployment profile: %#v", values)
+	if !parseBool(values[KeySetupCompleted]) || (values[KeySiteName] != organizationNames[0] && values[KeySiteName] != organizationNames[1]) {
+		t.Fatalf("persisted setup is inconsistent: %#v", values)
 	}
 }
 
@@ -153,5 +149,26 @@ func TestPostgresReplaceIfUnchangedIsAtomicAndPersistent(t *testing.T) {
 	}
 	if values["first"] != "new-first" || values["second"] != "new-second" {
 		t.Fatalf("replacement did not persist: %#v", values)
+	}
+}
+
+func TestPostgresSetIfAbsentDoesNotOverwrite(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	repo, err := NewPostgresRepository(t.Context(), schema.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	inserted, err := repo.SetIfAbsent(t.Context(), "key", "first")
+	if err != nil || !inserted {
+		t.Fatalf("SetIfAbsent(first) = %v, %v", inserted, err)
+	}
+	inserted, err = repo.SetIfAbsent(t.Context(), "key", "second")
+	if err != nil || inserted {
+		t.Fatalf("SetIfAbsent(second) = %v, %v", inserted, err)
+	}
+	values, err := repo.GetAll(t.Context())
+	if err != nil || values["key"] != "first" {
+		t.Fatalf("GetAll() = %#v, %v", values, err)
 	}
 }

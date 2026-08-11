@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const billingHoldSelectColumns = `id, operation_id, profile_scope, tenant_id, credential_id, credential_source,
+const billingHoldSelectColumns = `id, operation_id, application_id, credential_id, credential_source,
 	integration_id, principal_type, principal_id, external_subject_reference, request_fingerprint, status, version,
 	reserved_amount_micros, reserved_usage_dimensions, settled_amount_micros, currency, estimate_source, reason,
 budget_period_start, expires_at, created_at, updated_at, settled_at, released_at`
@@ -26,7 +26,7 @@ func scanBillingHold(scanner billingHoldScanner) (BillingHold, error) {
 	var releasedAt sql.NullTime
 	var reservedUsageJSON []byte
 	err := scanner.Scan(
-		&hold.ID, &hold.OperationID, &hold.ProfileScope, &hold.TenantID, &hold.CredentialID, &hold.CredentialSource,
+		&hold.ID, &hold.OperationID, &hold.ApplicationID, &hold.CredentialID, &hold.CredentialSource,
 		&hold.IntegrationID, &hold.PrincipalType, &hold.PrincipalID, &hold.ExternalSubjectReference,
 		&hold.RequestFingerprint, &hold.Status, &hold.Version, &hold.ReservedAmountMicros, &reservedUsageJSON, &hold.SettledAmountMicros,
 		&hold.Currency, &hold.EstimateSource, &hold.Reason, &hold.BudgetPeriodStart,
@@ -151,8 +151,8 @@ func (r *PostgresRepository) CreateAIOperationWithBillingHold(ctx context.Contex
 
 func findPostgresAIOperationByIdempotencyScope(ctx context.Context, executor aiJobExecutor, operation AIOperation) (AIOperation, error) {
 	return scanAIOperation(executor.QueryRowContext(ctx, `SELECT `+aiOperationSelectColumns+` FROM ai_operations WHERE
-profile_scope=$1 AND tenant_id=$2 AND credential_source=$3 AND credential_id=$4 AND integration_id=$5 AND principal_type=$6 AND principal_id=$7 AND external_subject_reference=$8 AND operation=$9 AND idempotency_key=$10`,
-		operation.ProfileScope, operation.TenantID, operation.CredentialSource, operation.CredentialID, operation.IntegrationID,
+application_id=$1 AND credential_source=$2 AND credential_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7 AND operation=$8 AND idempotency_key=$9`,
+		operation.ApplicationID, operation.CredentialSource, operation.CredentialID, operation.IntegrationID,
 		operation.PrincipalType, operation.PrincipalID, operation.ExternalSubjectReference, operation.Operation, operation.IdempotencyKey))
 }
 
@@ -163,13 +163,13 @@ func insertBillingHold(ctx context.Context, executor usageRecordExecutor, hold B
 	}
 	_, err = executor.ExecContext(ctx, `
 INSERT INTO billing_holds(
-  id, operation_id, profile_scope, tenant_id, credential_id, credential_source, integration_id, principal_type,
+  id, operation_id, application_id, credential_id, credential_source, integration_id, principal_type,
   principal_id, external_subject_reference, request_fingerprint, status, version, reserved_amount_micros,
 	  reserved_usage_dimensions, settled_amount_micros, currency, estimate_source, reason, budget_period_start, expires_at,
   created_at, updated_at, settled_at, released_at
 )
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20,$21,$22,$23,NULL,NULL)
-`, hold.ID, hold.OperationID, hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.CredentialSource,
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18,$19,$20,$21,$22,NULL,NULL)
+`, hold.ID, hold.OperationID, hold.ApplicationID, hold.CredentialID, hold.CredentialSource,
 		hold.IntegrationID, hold.PrincipalType, hold.PrincipalID, hold.ExternalSubjectReference, hold.RequestFingerprint,
 		hold.Status, hold.Version, hold.ReservedAmountMicros, reservedUsageJSON, hold.SettledAmountMicros, hold.Currency,
 		hold.EstimateSource, hold.Reason, hold.BudgetPeriodStart, hold.ExpiresAt, hold.CreatedAt, hold.UpdatedAt)
@@ -190,7 +190,7 @@ func enforceMemoryBillingHoldBudget(r *MemoryRepository, admission BillingHoldAd
 			continue
 		}
 		operation, found := r.aiOperations[entry.OperationID]
-		if found && sameBillingCredentialScope(operation.ProfileScope, operation.TenantID, operation.CredentialID, hold) {
+		if found && sameBillingCredentialScope(operation.ApplicationID, operation.CredentialID, hold) {
 			if entry.AmountMicros > 0 {
 				exposure += entry.AmountMicros
 			}
@@ -201,12 +201,12 @@ func enforceMemoryBillingHoldBudget(r *MemoryRepository, admission BillingHoldAd
 			continue
 		}
 		operation, found := r.aiOperations[record.OperationID]
-		if found && sameBillingCredentialScope(operation.ProfileScope, operation.TenantID, operation.CredentialID, hold) {
+		if found && sameBillingCredentialScope(operation.ApplicationID, operation.CredentialID, hold) {
 			settledUsage = addUsageDimensionTotals(settledUsage, UsageDimensionsTotals(record.UsageDimensions))
 		}
 	}
 	for _, current := range r.billingHolds {
-		if billingHoldCountsAgainstBudget(current.Status) && current.BudgetPeriodStart.Equal(hold.BudgetPeriodStart) && sameBillingCredentialScope(current.ProfileScope, current.TenantID, current.CredentialID, hold) {
+		if billingHoldCountsAgainstBudget(current.Status) && current.BudgetPeriodStart.Equal(hold.BudgetPeriodStart) && sameBillingCredentialScope(current.ApplicationID, current.CredentialID, hold) {
 			exposure += nonNegativeInt64(current.ReservedAmountMicros)
 			activeUsage = addUsageDimensionTotals(activeUsage, UsageDimensionsTotals(current.ReservedUsageDimensions))
 		}
@@ -217,8 +217,8 @@ func enforceMemoryBillingHoldBudget(r *MemoryRepository, admission BillingHoldAd
 	return enforceUsageDimensionLimits(admission, addUsageDimensionTotals(settledUsage, activeUsage))
 }
 
-func sameBillingCredentialScope(profileScope, tenantID, credentialID string, hold BillingHold) bool {
-	return profileScope == hold.ProfileScope && tenantID == hold.TenantID && credentialID == hold.CredentialID
+func sameBillingCredentialScope(applicationID, credentialID string, hold BillingHold) bool {
+	return applicationID == hold.ApplicationID && credentialID == hold.CredentialID
 }
 
 func enforcePostgresBillingHoldBudget(ctx context.Context, tx *sql.Tx, admission BillingHoldAdmission) error {
@@ -226,7 +226,7 @@ func enforcePostgresBillingHoldBudget(ctx context.Context, tx *sql.Tx, admission
 		return nil
 	}
 	hold := admission.Hold
-	lockKey := strings.Join([]string{"billing_hold", hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.BudgetPeriodStart.Format("2006-01")}, "\n")
+	lockKey := strings.Join([]string{"billing_hold", hold.ApplicationID, hold.CredentialID, hold.BudgetPeriodStart.Format("2006-01")}, "\n")
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
 		return err
 	}
@@ -239,16 +239,16 @@ SELECT
     SELECT SUM(entry.amount_micros)
     FROM billing_ledger_entries entry
     JOIN ai_operations operation ON operation.id = entry.operation_id
-    WHERE operation.profile_scope=$1 AND operation.tenant_id=$2 AND operation.credential_id=$3
-	      AND entry.purpose=$4 AND entry.status=$5 AND entry.created_at >= $6 AND entry.created_at < $7
+    WHERE operation.application_id=$1 AND operation.credential_id=$2
+	      AND entry.purpose=$3 AND entry.status=$4 AND entry.created_at >= $5 AND entry.created_at < $6
   ), 0),
   COALESCE((
     SELECT SUM(reserved_amount_micros)
     FROM billing_holds
-    WHERE profile_scope=$1 AND tenant_id=$2 AND credential_id=$3 AND budget_period_start=$6
-      AND status IN ($8,$9,$10)
+    WHERE application_id=$1 AND credential_id=$2 AND budget_period_start=$5
+	      AND status IN ($7,$8,$9)
   ), 0)
-	`, hold.ProfileScope, hold.TenantID, hold.CredentialID, PricingPurposeUsageCost, BillingLedgerStatusApplied,
+	`, hold.ApplicationID, hold.CredentialID, PricingPurposeUsageCost, BillingLedgerStatusApplied,
 		hold.BudgetPeriodStart, periodEnd, BillingHoldStatusReserved, BillingHoldStatusCommitted, BillingHoldStatusDisputed).Scan(&settled, &active); err != nil {
 		return err
 	}
@@ -263,9 +263,9 @@ SELECT
   COALESCE(SUM(COALESCE((record.usage_dimensions->'input_audio_milliseconds'->>'quantity')::BIGINT, 0) + COALESCE((record.usage_dimensions->'output_audio_milliseconds'->>'quantity')::BIGINT, 0)), 0)
 FROM usage_records record
 JOIN ai_operations operation ON operation.id=record.operation_id
-WHERE operation.profile_scope=$1 AND operation.tenant_id=$2 AND operation.credential_id=$3
-  AND record.created_at >= $4 AND record.created_at < $5
-`, hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.BudgetPeriodStart, periodEnd).Scan(&settledImages, &settledVideoMS, &settledAudioMS); err != nil {
+WHERE operation.application_id=$1 AND operation.credential_id=$2
+	  AND record.created_at >= $3 AND record.created_at < $4
+`, hold.ApplicationID, hold.CredentialID, hold.BudgetPeriodStart, periodEnd).Scan(&settledImages, &settledVideoMS, &settledAudioMS); err != nil {
 		return err
 	}
 	var activeImages, activeVideoMS, activeAudioMS int64
@@ -275,9 +275,9 @@ SELECT
   COALESCE(SUM(COALESCE((reserved_usage_dimensions->'input_video_milliseconds'->>'quantity')::BIGINT, 0) + COALESCE((reserved_usage_dimensions->'output_video_milliseconds'->>'quantity')::BIGINT, 0)), 0),
   COALESCE(SUM(COALESCE((reserved_usage_dimensions->'input_audio_milliseconds'->>'quantity')::BIGINT, 0) + COALESCE((reserved_usage_dimensions->'output_audio_milliseconds'->>'quantity')::BIGINT, 0)), 0)
 FROM billing_holds
-WHERE profile_scope=$1 AND tenant_id=$2 AND credential_id=$3 AND budget_period_start=$4
-  AND status IN ($5,$6,$7)
-`, hold.ProfileScope, hold.TenantID, hold.CredentialID, hold.BudgetPeriodStart,
+WHERE application_id=$1 AND credential_id=$2 AND budget_period_start=$3
+	  AND status IN ($4,$5,$6)
+`, hold.ApplicationID, hold.CredentialID, hold.BudgetPeriodStart,
 		BillingHoldStatusReserved, BillingHoldStatusCommitted, BillingHoldStatusDisputed).Scan(&activeImages, &activeVideoMS, &activeAudioMS); err != nil {
 		return err
 	}

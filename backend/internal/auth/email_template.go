@@ -9,10 +9,15 @@ import (
 )
 
 type EmailTemplateData struct {
-	SiteName, UserName, ActionURL, Title, Amount, Limit, Period, Message string
+	SiteName, UserName, ActionURL, Limit, Period string
 }
 
-type EmailTemplateDefinition struct{ Event, Locale, Subject, HTML string }
+type EmailTemplateDefinition struct {
+	Event   string `json:"event"`
+	Locale  string `json:"locale"`
+	Subject string `json:"subject"`
+	HTML    string `json:"html"`
+}
 
 func DefaultEmailTemplates() []EmailTemplateDefinition {
 	return []EmailTemplateDefinition{
@@ -20,14 +25,8 @@ func DefaultEmailTemplates() []EmailTemplateDefinition {
 		{Event: "email_verification", Locale: "en-US", Subject: "Verify your {{.SiteName}} account", HTML: `<h2>Verify email</h2><p>Hello {{.UserName}}, verify your account:</p><p><a href="{{.ActionURL}}">Verify email</a></p>`},
 		{Event: "password_reset", Locale: "zh-CN", Subject: "重置您的 {{.SiteName}} 密码", HTML: `<h2>重置密码</h2><p><a href="{{.ActionURL}}">设置新密码</a></p>`},
 		{Event: "password_reset", Locale: "en-US", Subject: "Reset your {{.SiteName}} password", HTML: `<h2>Reset password</h2><p><a href="{{.ActionURL}}">Set a new password</a></p>`},
-		{Event: "balance_low", Locale: "zh-CN", Subject: "{{.SiteName}} 余额提醒", HTML: `<h2>余额提醒</h2><p>当前余额：{{.Amount}}</p>`},
-		{Event: "balance_low", Locale: "en-US", Subject: "{{.SiteName}} balance alert", HTML: `<h2>Balance alert</h2><p>Current balance: {{.Amount}}</p>`},
 		{Event: "quota_limit", Locale: "zh-CN", Subject: "{{.SiteName}} 额度通知", HTML: `<h2>额度通知</h2><p>{{.Period}} 使用额度：{{.Limit}}</p>`},
 		{Event: "quota_limit", Locale: "en-US", Subject: "{{.SiteName}} quota notification", HTML: `<h2>Quota notification</h2><p>{{.Period}} limit: {{.Limit}}</p>`},
-		{Event: "subscription_expiry", Locale: "zh-CN", Subject: "{{.SiteName}} 访问授权即将到期", HTML: `<h2>授权到期提醒</h2><p>{{.Message}}</p>`},
-		{Event: "subscription_expiry", Locale: "en-US", Subject: "{{.SiteName}} access expires soon", HTML: `<h2>Expiration notice</h2><p>{{.Message}}</p>`},
-		{Event: "customer_notification", Locale: "zh-CN", Subject: "{{.SiteName}} 通知：{{.Title}}", HTML: `<h2>{{.Title}}</h2><p>{{.Message}}</p>{{if .ActionURL}}<p><a href="{{.ActionURL}}">查看详情</a></p>{{end}}`},
-		{Event: "customer_notification", Locale: "en-US", Subject: "{{.SiteName}} notification: {{.Title}}", HTML: `<h2>{{.Title}}</h2><p>{{.Message}}</p>{{if .ActionURL}}<p><a href="{{.ActionURL}}">View details</a></p>{{end}}`},
 	}
 }
 

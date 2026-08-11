@@ -10,9 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerAIJobAdminRoutes(group *gin.RouterGroup, control *controlplane.Service, runtime AIJobRuntimeStatusProvider, profileScope string) {
+func registerAIJobAdminRoutes(group *gin.RouterGroup, control *controlplane.Service, runtime AIJobRuntimeStatusProvider) {
 	group.GET("/ai-jobs", func(c *gin.Context) {
-		data, err := control.ListAIJobsAdmin(c.Request.Context(), aiJobAdminQuery(c, profileScope))
+		data, err := control.ListAIJobsAdmin(c.Request.Context(), aiJobAdminQuery(c))
 		if err != nil {
 			writeAIJobAdminError(c, err)
 			return
@@ -20,7 +20,7 @@ func registerAIJobAdminRoutes(group *gin.RouterGroup, control *controlplane.Serv
 		httpx.OK(c, data)
 	})
 	group.GET("/ai-jobs/summary", func(c *gin.Context) {
-		data, err := control.AIJobSummaryAdmin(c.Request.Context(), aiJobAdminQuery(c, profileScope))
+		data, err := control.AIJobSummaryAdmin(c.Request.Context(), aiJobAdminQuery(c))
 		if err != nil {
 			writeAIJobAdminError(c, err)
 			return
@@ -36,9 +36,6 @@ func registerAIJobAdminRoutes(group *gin.RouterGroup, control *controlplane.Serv
 	})
 	group.GET("/ai-jobs/:id", func(c *gin.Context) {
 		data, err := control.AIJobAdmin(c.Request.Context(), c.Param("id"))
-		if err == nil && !aiJobAdminScopeMatches(data.Job, profileScope) {
-			err = controlplane.ErrAIJobNotFound
-		}
 		if err != nil {
 			writeAIJobAdminError(c, err)
 			return
@@ -47,9 +44,6 @@ func registerAIJobAdminRoutes(group *gin.RouterGroup, control *controlplane.Serv
 	})
 	group.POST("/ai-jobs/:id/cancel", func(c *gin.Context) {
 		data, err := control.AIJobAdmin(c.Request.Context(), c.Param("id"))
-		if err == nil && !aiJobAdminScopeMatches(data.Job, profileScope) {
-			err = controlplane.ErrAIJobNotFound
-		}
 		if err != nil {
 			writeAIJobAdminError(c, err)
 			return
@@ -63,9 +57,6 @@ func registerAIJobAdminRoutes(group *gin.RouterGroup, control *controlplane.Serv
 	})
 	group.POST("/ai-jobs/:id/attempts/:attemptID/reconcile", func(c *gin.Context) {
 		data, err := control.AIJobAdmin(c.Request.Context(), c.Param("id"))
-		if err == nil && !aiJobAdminScopeMatches(data.Job, profileScope) {
-			err = controlplane.ErrAIJobNotFound
-		}
 		if err != nil {
 			writeAIJobAdminError(c, err)
 			return
@@ -79,22 +70,14 @@ func registerAIJobAdminRoutes(group *gin.RouterGroup, control *controlplane.Serv
 	})
 }
 
-func aiJobAdminQuery(c *gin.Context, profileScope string) controlplane.AIJobQuery {
-	if strings.TrimSpace(profileScope) == "" {
-		profileScope = strings.TrimSpace(c.Query("profile_scope"))
-	}
+func aiJobAdminQuery(c *gin.Context) controlplane.AIJobQuery {
 	return controlplane.AIJobQuery{
-		Search: strings.TrimSpace(c.Query("q")), ProfileScope: strings.TrimSpace(profileScope),
-		TenantID: strings.TrimSpace(c.Query("tenant_id")), Model: strings.TrimSpace(c.Query("model")),
+		Search:        strings.TrimSpace(c.Query("q")),
+		ApplicationID: strings.TrimSpace(c.Query("application_id")), Model: strings.TrimSpace(c.Query("model")),
 		Modality: strings.TrimSpace(c.Query("modality")), Operation: strings.TrimSpace(c.Query("operation")),
 		Status: strings.TrimSpace(c.Query("status")), ArtifactPolicy: strings.TrimSpace(c.Query("artifact_policy")),
 		Limit: intQuery(c, "limit", 50), Offset: intQuery(c, "offset", 0),
 	}
-}
-
-func aiJobAdminScopeMatches(job controlplane.AIJobAdminRecord, profileScope string) bool {
-	profileScope = strings.TrimSpace(profileScope)
-	return profileScope == "" || job.ProfileScope == profileScope
 }
 
 func writeAIJobAdminError(c *gin.Context, err error) {

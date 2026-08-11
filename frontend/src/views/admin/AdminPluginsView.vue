@@ -90,22 +90,13 @@ const apiTokenRevokeID = ref('')
 const apiTokenModal = ref(false)
 const apiTokenSecret = ref('')
 const apiTokens = ref<PluginAPIToken[]>([])
-const currentPluginSurface = window.location.pathname.startsWith('/console')
-  ? 'personal'
-  : window.location.pathname.startsWith('/operator')
-    ? 'relay_operator'
-    : window.location.pathname.startsWith('/platform')
-      ? 'platform'
-      : 'enterprise'
 const apiTokenForm = ref({
   name: '',
   pluginID: '',
   scopes: ['catalog:read'],
-  surfaces: [currentPluginSurface],
   expiresAt: ''
 })
 const apiTokenScopeOptions = ['catalog:read', 'plugin:read', 'plugin:action', 'artifact:write', 'job:write', 'event:read']
-const apiTokenSurfaceOptions = [currentPluginSurface]
 const feedClientInfo = ref<OfficialFeedClientInfo | null>(null)
 const feedStatuses = ref<OfficialFeedStatus[]>([])
 const feedImportModal = ref(false)
@@ -230,7 +221,7 @@ const filteredPlugins = computed(() => {
     if (tierFilter.value && plugin.tier !== tierFilter.value) return false
     if (statusFilter.value && plugin.status !== statusFilter.value) return false
     if (!keyword) return true
-    return [plugin.name, plugin.description, plugin.plugin_id, plugin.category, plugin.vendor, plugin.surfaces.join(' ')].some((value) =>
+    return [plugin.name, plugin.description, plugin.plugin_id, plugin.category, plugin.vendor].some((value) =>
       value.toLowerCase().includes(keyword)
     )
   })
@@ -325,7 +316,6 @@ async function savePluginAPIToken() {
       name: apiTokenForm.value.name,
       plugin_id: apiTokenForm.value.pluginID || undefined,
       scopes: apiTokenForm.value.scopes,
-      surfaces: apiTokenForm.value.surfaces,
       expires_at: apiTokenForm.value.expiresAt ? new Date(apiTokenForm.value.expiresAt).toISOString() : undefined
     })
     apiTokens.value = [result.token, ...apiTokens.value]
@@ -333,7 +323,6 @@ async function savePluginAPIToken() {
     apiTokenForm.value.name = ''
     apiTokenForm.value.pluginID = ''
     apiTokenForm.value.scopes = ['catalog:read']
-    apiTokenForm.value.surfaces = [currentPluginSurface]
     apiTokenForm.value.expiresAt = ''
     message.value = t('plugins.apiTokenCreated')
   } catch (err) {
@@ -1389,7 +1378,6 @@ onMounted(load)
               <th>{{ t('plugins.apiTokenName') }}</th>
               <th>{{ t('plugins.apiTokenPlugin') }}</th>
               <th>{{ t('plugins.apiTokenScopes') }}</th>
-              <th>{{ t('plugins.surfaces') }}</th>
               <th>{{ t('plugins.apiTokenActivity') }}</th>
               <th>{{ t('common.actions') }}</th>
             </tr>
@@ -1402,7 +1390,6 @@ onMounted(load)
               </td>
               <td><span>{{ token.plugin_id || t('plugins.catalogOnly') }}</span></td>
               <td><span>{{ token.scopes.join(', ') }}</span></td>
-              <td><span>{{ token.surfaces.join(', ') }}</span></td>
               <td>
                 <span class="pill" :class="statusClass(token.status)">{{ token.status }}</span>
                 <span>{{ t('plugins.lastUsed') }}: {{ formatOptionalTime(token.last_used_at) }}</span>
@@ -1591,15 +1578,6 @@ onMounted(load)
 
         <section class="plugin-detail-section">
           <div class="plugin-section-title">
-            <h3>{{ t('plugins.surfaces') }}</h3>
-          </div>
-          <div class="chip-list">
-            <span v-for="surface in activePlugin.surfaces" :key="surface" class="pill">{{ surface }}</span>
-          </div>
-        </section>
-
-        <section class="plugin-detail-section">
-          <div class="plugin-section-title">
             <h3>{{ t('plugins.packages') }}</h3>
           </div>
           <div v-if="pluginPackages(activePlugin).length" class="package-list">
@@ -1728,15 +1706,6 @@ onMounted(load)
               <label v-for="scope in apiTokenScopeOptions" :key="scope" class="checkbox-row">
                 <input v-model="apiTokenForm.scopes" type="checkbox" :value="scope" />
                 <span>{{ scope }}</span>
-              </label>
-            </div>
-          </fieldset>
-          <fieldset class="form-span-2 token-option-group">
-            <legend>{{ t('plugins.surfaces') }}</legend>
-            <div class="token-option-grid">
-              <label v-for="surface in apiTokenSurfaceOptions" :key="surface" class="checkbox-row">
-                <input v-model="apiTokenForm.surfaces" type="checkbox" :value="surface" />
-                <span>{{ surface }}</span>
               </label>
             </div>
           </fieldset>

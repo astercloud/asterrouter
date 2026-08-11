@@ -26,8 +26,7 @@ type DestinationForm = {
   bucket: string
   prefix: string
   referenceBaseURL: string
-  allowedProfileScope: string
-  allowedTenantID: string
+	allowedApplicationID: string
   pathStyle: boolean
   enabled: boolean
   accessKey: string
@@ -42,7 +41,7 @@ const editingDestination = computed(() => destinations.value.find((item) => item
 function blankForm(): DestinationForm {
   return {
     id: '', name: '', provider: 's3', endpoint: '', region: 'us-east-1', bucket: '', prefix: '', referenceBaseURL: '',
-    allowedProfileScope: '', allowedTenantID: '', pathStyle: false, enabled: true,
+	allowedApplicationID: '', pathStyle: false, enabled: true,
     accessKey: '', secretKey: '', sessionToken: '', clearSessionToken: false
   }
 }
@@ -77,8 +76,7 @@ async function openEdit(destination: ArtifactSinkDestination) {
     bucket: destination.bucket,
     prefix: destination.prefix || '',
     referenceBaseURL: destination.reference_base_url || '',
-    allowedProfileScope: destination.allowed_profile_scope || '',
-    allowedTenantID: destination.allowed_tenant_id || '',
+	allowedApplicationID: destination.allowed_application_id || '',
     pathStyle: destination.path_style,
     enabled: destination.enabled,
     accessKey: '',
@@ -116,8 +114,7 @@ async function saveDestination() {
     bucket: form.bucket.trim(),
     prefix: form.prefix.trim(),
     reference_base_url: form.referenceBaseURL.trim(),
-    allowed_profile_scope: form.allowedProfileScope,
-    allowed_tenant_id: form.allowedTenantID.trim(),
+	allowed_application_id: form.allowedApplicationID.trim(),
     path_style: form.pathStyle,
     enabled: form.enabled,
     secrets,
@@ -159,8 +156,7 @@ function providerLabel(provider: ArtifactSinkProvider): string {
 }
 
 function ownerLabel(destination: ArtifactSinkDestination): string {
-  const profile = destination.allowed_profile_scope || t('plugins.artifactSinkAnyProfile')
-  return destination.allowed_tenant_id ? `${profile} / ${destination.allowed_tenant_id}` : profile
+	return destination.allowed_application_id || t('plugins.artifactSinkAnyApplication')
 }
 
 watch(() => props.pluginId, load)
@@ -276,19 +272,9 @@ onMounted(load)
             <label for="artifact-sink-reference">{{ t('plugins.artifactSinkReferenceURL') }}</label>
             <input id="artifact-sink-reference" v-model="form.referenceBaseURL" type="url" placeholder="https://" autocomplete="off" />
           </div>
-          <div class="field">
-            <label for="artifact-sink-profile">{{ t('plugins.artifactSinkProfileScope') }}</label>
-            <select id="artifact-sink-profile" v-model="form.allowedProfileScope">
-              <option value="">{{ t('plugins.artifactSinkAnyProfile') }}</option>
-              <option value="personal">personal</option>
-              <option value="relay_operator">relay_operator</option>
-              <option value="enterprise">enterprise</option>
-              <option value="platform">platform</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="artifact-sink-tenant">{{ t('plugins.artifactSinkTenant') }}</label>
-            <input id="artifact-sink-tenant" v-model="form.allowedTenantID" :placeholder="t('plugins.artifactSinkAnyTenant')" autocomplete="off" />
+		  <div class="field">
+            <label for="artifact-sink-application">{{ t('plugins.artifactSinkApplication') }}</label>
+            <input id="artifact-sink-application" v-model="form.allowedApplicationID" :placeholder="t('plugins.artifactSinkAnyApplication')" autocomplete="off" />
           </div>
           <div class="field">
             <label for="artifact-sink-access-key">{{ t('plugins.artifactSinkAccessKey') }}</label>

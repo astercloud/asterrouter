@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -17,12 +16,11 @@ import (
 )
 
 var (
-	ErrDeploymentProfileInitialized = errors.New("setup is already completed; create a separate instance for a different business model")
-	ErrSettingsChanged              = errors.New("settings changed concurrently")
-	ErrUnsupportedDeploymentProfile = errors.New("unsupported deployment profile")
+	ErrSetupCompleted  = errors.New("setup is already completed")
+	ErrSettingsChanged = errors.New("settings changed concurrently")
 )
 
-const deploymentProfileAdvisoryLock int64 = 0x6173746572736574
+const setupAdvisoryLock int64 = 0x6173746572736574
 
 type ValueReplacement struct {
 	Expected string
@@ -32,10 +30,11 @@ type ValueReplacement struct {
 type Repository interface {
 	GetAll(ctx context.Context) (map[string]string, error)
 	SetMultiple(ctx context.Context, values map[string]string) error
+	SetIfAbsent(ctx context.Context, key, value string) (bool, error)
 	ReplaceIfUnchanged(ctx context.Context, replacements map[string]ValueReplacement) error
 	ConsumeInvitationCode(ctx context.Context, code string) error
 	RestoreInvitationCode(ctx context.Context, code string) error
-	InitializeDeploymentProfile(ctx context.Context, profile string) error
+	CompleteSetup(ctx context.Context, organizationName string) error
 	Health(ctx context.Context) error
 	Close() error
 }
@@ -80,6 +79,16 @@ func (r *MemoryRepository) SetMultiple(_ context.Context, values map[string]stri
 	return nil
 }
 
+func (r *MemoryRepository) SetIfAbsent(_ context.Context, key, value string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.entries[key]; exists {
+		return false, nil
+	}
+	r.entries[key] = Entry{Key: key, Value: value, UpdatedAt: time.Now().UTC()}
+	return true, nil
+}
+
 func (r *MemoryRepository) ReplaceIfUnchanged(_ context.Context, replacements map[string]ValueReplacement) error {
 	if len(replacements) == 0 {
 		return nil
@@ -121,23 +130,14 @@ func (r *MemoryRepository) RestoreInvitationCode(_ context.Context, code string)
 	return nil
 }
 
-func (r *MemoryRepository) InitializeDeploymentProfile(_ context.Context, profile string) error {
-	profile = strings.TrimSpace(profile)
-	if !isProfile(profile) {
-		return fmt.Errorf("%w %q", ErrUnsupportedDeploymentProfile, profile)
-	}
+func (r *MemoryRepository) CompleteSetup(_ context.Context, organizationName string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	current := make(map[string]string, 3)
-	for _, key := range []string{KeySetupCompleted, KeyEnabledProfiles, KeyDefaultProfile} {
-		current[key] = r.entries[key].Value
-	}
-	if deploymentProfileInitialized(current) {
-		return ErrDeploymentProfileInitialized
+	if parseBool(r.entries[KeySetupCompleted].Value) {
+		return ErrSetupCompleted
 	}
 	now := time.Now().UTC()
-	for key, value := range deploymentProfileValues(profile) {
+	for key, value := range map[string]string{KeySiteName: strings.TrimSpace(organizationName), KeySetupCompleted: "true"} {
 		r.entries[key] = Entry{Key: key, Value: value, UpdatedAt: now}
 	}
 	return nil
@@ -224,6 +224,19 @@ func (r *PostgresRepository) SetMultiple(ctx context.Context, values map[string]
 	return err
 }
 
+func (r *PostgresRepository) SetIfAbsent(ctx context.Context, key, value string) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `
+INSERT INTO settings (key, value, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (key) DO NOTHING
+`, key, value)
+	if err != nil {
+		return false, err
+	}
+	inserted, err := result.RowsAffected()
+	return inserted == 1, err
+}
+
 func (r *PostgresRepository) ReplaceIfUnchanged(ctx context.Context, replacements map[string]ValueReplacement) (err error) {
 	if len(replacements) == 0 {
 		return nil
@@ -305,11 +318,7 @@ func (r *PostgresRepository) updateInvitationCodes(ctx context.Context, code str
 	return tx.Commit()
 }
 
-func (r *PostgresRepository) InitializeDeploymentProfile(ctx context.Context, profile string) (err error) {
-	profile = strings.TrimSpace(profile)
-	if !isProfile(profile) {
-		return fmt.Errorf("%w %q", ErrUnsupportedDeploymentProfile, profile)
-	}
+func (r *PostgresRepository) CompleteSetup(ctx context.Context, organizationName string) (err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -320,14 +329,14 @@ func (r *PostgresRepository) InitializeDeploymentProfile(ctx context.Context, pr
 		}
 	}()
 
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, deploymentProfileAdvisoryLock); err != nil {
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, setupAdvisoryLock); err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, `
 SELECT key, value
 FROM settings
-WHERE key IN ($1, $2, $3)
-`, KeySetupCompleted, KeyEnabledProfiles, KeyDefaultProfile)
+WHERE key = $1
+`, KeySetupCompleted)
 	if err != nil {
 		return err
 	}
@@ -347,10 +356,10 @@ WHERE key IN ($1, $2, $3)
 	if err = rows.Close(); err != nil {
 		return err
 	}
-	if deploymentProfileInitialized(current) {
-		return ErrDeploymentProfileInitialized
+	if parseBool(current[KeySetupCompleted]) {
+		return ErrSetupCompleted
 	}
-	if err = setMultipleTx(ctx, tx, deploymentProfileValues(profile)); err != nil {
+	if err = setMultipleTx(ctx, tx, map[string]string{KeySiteName: strings.TrimSpace(organizationName), KeySetupCompleted: "true"}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -407,19 +416,6 @@ func restoreInvitationCodeValue(raw, code string) (string, error) {
 	}
 	encoded, err := json.Marshal(append(codes, code))
 	return string(encoded), err
-}
-
-func deploymentProfileInitialized(values map[string]string) bool {
-	return parseBool(values[KeySetupCompleted]) || values[KeyEnabledProfiles] != "" || values[KeyDefaultProfile] != ""
-}
-
-func deploymentProfileValues(profile string) map[string]string {
-	encodedProfiles, _ := json.Marshal([]string{profile})
-	return map[string]string{
-		KeyDefaultProfile:  profile,
-		KeyEnabledProfiles: string(encodedProfiles),
-		KeySetupCompleted:  "true",
-	}
 }
 
 func (r *PostgresRepository) Health(ctx context.Context) error {

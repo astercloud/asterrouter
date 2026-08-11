@@ -59,10 +59,10 @@ func (index *RedisAIJobReadyIndex) Register(ctx context.Context, entry AIJobRead
 	if len(payload) > index.maxPayload {
 		return fmt.Errorf("%w: ready entry exceeds %d bytes", ErrAIJobReadyIndexConfig, index.maxPayload)
 	}
-	profileDigest, tenantDigest, principalDigest := redisAIJobReadyScopeDigests(entry)
+	applicationDigest, principalDigest := redisAIJobReadyScopeDigests(entry)
 	result, err := redisAIJobReadyRegisterScript.Run(ctx, index.client,
 		[]string{index.entriesKey, index.ownersKey, index.allKey, index.principalsKey},
-		entry.JobID, entry.StatusVersion, string(payload), entry.ReadyAt.UnixMilli(), profileDigest, tenantDigest, principalDigest, index.prefix,
+		entry.JobID, entry.StatusVersion, string(payload), entry.ReadyAt.UnixMilli(), applicationDigest, principalDigest, index.prefix,
 	).Int()
 	if err != nil {
 		return err
@@ -140,9 +140,8 @@ func (index *RedisAIJobReadyIndex) scopeKey(digest string) string {
 	return index.prefix + ":scope:" + digest
 }
 
-func redisAIJobReadyScopeDigests(entry AIJobReadyEntry) (string, string, string) {
-	return hashAPIKey(aiJobReadyScopeKey(aiJobReadyScopeForEntry(AIJobReadyScopeProfile, entry))),
-		hashAPIKey(aiJobReadyScopeKey(aiJobReadyScopeForEntry(AIJobReadyScopeTenant, entry))),
+func redisAIJobReadyScopeDigests(entry AIJobReadyEntry) (string, string) {
+	return hashAPIKey(aiJobReadyScopeKey(aiJobReadyScopeForEntry(AIJobReadyScopeApplication, entry))),
 		hashAPIKey(aiJobReadyScopeKey(aiJobReadyScopeForEntry(AIJobReadyScopePrincipal, entry)))
 }
 
@@ -181,17 +180,16 @@ if existing then
   local old_owner = split_owner(redis.call('HGET', KEYS[2], ARGV[1]))
   redis.call('ZREM', KEYS[3], ARGV[1])
   for _, digest in ipairs(old_owner) do
-    redis.call('ZREM', scope_key(ARGV[8], digest), ARGV[1])
-  end
-  refresh_principal(ARGV[8], KEYS[4], old_owner[3])
+	  redis.call('ZREM', scope_key(ARGV[7], digest), ARGV[1])
+	end
+	refresh_principal(ARGV[7], KEYS[4], old_owner[2])
 end
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
-redis.call('HSET', KEYS[2], ARGV[1], ARGV[5] .. '|' .. ARGV[6] .. '|' .. ARGV[7])
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[5] .. '|' .. ARGV[6])
 redis.call('ZADD', KEYS[3], ARGV[4], ARGV[1])
-redis.call('ZADD', scope_key(ARGV[8], ARGV[5]), ARGV[4], ARGV[1])
-redis.call('ZADD', scope_key(ARGV[8], ARGV[6]), ARGV[4], ARGV[1])
-redis.call('ZADD', scope_key(ARGV[8], ARGV[7]), ARGV[4], ARGV[1])
-refresh_principal(ARGV[8], KEYS[4], ARGV[7])
+redis.call('ZADD', scope_key(ARGV[7], ARGV[5]), ARGV[4], ARGV[1])
+redis.call('ZADD', scope_key(ARGV[7], ARGV[6]), ARGV[4], ARGV[1])
+refresh_principal(ARGV[7], KEYS[4], ARGV[6])
 return 1
 `)
 
@@ -232,7 +230,7 @@ redis.call('ZREM', KEYS[3], ARGV[1])
 for _, digest in ipairs(owner) do
   redis.call('ZREM', scope_key(ARGV[4], digest), ARGV[1])
 end
-refresh_principal(ARGV[4], KEYS[4], owner[3])
+refresh_principal(ARGV[4], KEYS[4], owner[2])
 return 1
 `)
 
