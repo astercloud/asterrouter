@@ -35,6 +35,8 @@ describe('control API contracts', () => {
     expect(await control.getProviderAccountHealthChecks()).toEqual([{ id: 'check-2', models: [] }])
     client.get.mockResolvedValueOnce({ data: null })
     expect(await control.getRoutingGroups()).toEqual([])
+    client.get.mockResolvedValueOnce({ data: null })
+    expect(await control.getRoutingPolicies()).toEqual([])
     client.get.mockResolvedValueOnce({ data: undefined })
     expect(await control.getGatewayModels()).toEqual([])
     client.get.mockResolvedValueOnce({ data: null })
@@ -172,6 +174,9 @@ describe('control API contracts', () => {
       { run: () => control.getRoutingGroups(), method: 'get', args: ['/console/routing-groups'] },
       { run: () => control.createRoutingGroup(payload), method: 'post', args: ['/console/routing-groups', payload] },
       { run: () => control.updateRoutingGroup('group-1', payload), method: 'put', args: ['/console/routing-groups/group-1', payload] },
+      { run: () => control.getRoutingPolicies(), method: 'get', args: ['/console/routing-policies'] },
+      { run: () => control.createRoutingPolicy(payload), method: 'post', args: ['/console/routing-policies', payload] },
+      { run: () => control.updateRoutingPolicy('policy-1', payload), method: 'put', args: ['/console/routing-policies/policy-1', payload] },
       { run: () => control.getProviderAccounts(), method: 'get', args: ['/console/provider-accounts'] },
       { run: () => control.getProviderAccountHealthChecks(), method: 'get', args: ['/console/provider-account-health-checks'] },
       { run: () => control.createProviderAccount(payload), method: 'post', args: ['/console/provider-accounts', payload] },

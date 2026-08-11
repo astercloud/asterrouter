@@ -3,7 +3,7 @@ import { getPublicSettings } from '@/api/settings'
 import type { AuthUser, PublicSettings } from '@/types'
 import { canAccessEntry, entryForUser, productEntryForPath } from './access'
 
-const EntryRedirectView = () => import('@/views/EntryRedirectView.vue')
+const MarketingHomeView = () => import('@/views/MarketingHomeView.vue')
 const LoginView = () => import('@/views/LoginView.vue')
 const LegalDocumentView = () => import('@/views/LegalDocumentView.vue')
 const AccountProfileView = () => import('@/views/AccountProfileView.vue')
@@ -35,6 +35,7 @@ const AdminPoliciesView = () => import('@/views/admin/AdminPoliciesView.vue')
 const AdminProviderAccountsView = () => import('@/views/admin/AdminProviderAccountsView.vue')
 const AdminProvidersView = () => import('@/views/admin/AdminProvidersView.vue')
 const AdminRoutingGroupsView = () => import('@/views/admin/AdminRoutingGroupsView.vue')
+const AdminRoutingPolicyView = () => import('@/views/admin/AdminRoutingPolicyView.vue')
 const AdminSettingsView = () => import('@/views/admin/AdminSettingsView.vue')
 const AdminUsageView = () => import('@/views/admin/AdminUsageView.vue')
 const AdminUsersView = () => import('@/views/admin/AdminUsersView.vue')
@@ -79,7 +80,7 @@ function defaultEntry(settings: PublicSettings | null): string {
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', component: EntryRedirectView },
+    { path: '/', component: MarketingHomeView, meta: { titleKey: 'marketing.metaTitle', descriptionKey: 'marketing.metaDescription' } },
     { path: '/login', component: LoginView, meta: { titleKey: 'auth.signIn', descriptionKey: 'auth.signInToAccount' } },
     { path: '/register', component: LoginView, meta: { titleKey: 'auth.createAccount', descriptionKey: 'auth.registrationHelp' } },
     { path: '/forgot-password', component: LoginView, meta: { titleKey: 'auth.forgotPassword', descriptionKey: 'auth.resetEmailHelp' } },
@@ -104,7 +105,7 @@ const router = createRouter({
         { path: 'model-services/pricing', component: AdminPricingView, meta: { titleKey: 'pricingRules.adminTitle', descriptionKey: 'pricingRules.adminSubtitle' } },
         { path: 'model-services/effective-pricing', component: AdminEffectivePricingView, meta: { titleKey: 'admin.effectivePricing', descriptionKey: 'effectivePricing.subtitle' } },
         { path: 'policies/access', component: AdminPoliciesView, meta: { titleKey: 'policy.access.title', descriptionKey: 'policy.access.subtitle' } },
-        { path: 'policies/routing', component: AdminRoutingGroupsView, meta: { titleKey: 'policy.routing.title', descriptionKey: 'policy.routing.subtitle' } },
+        { path: 'policies/routing', component: AdminRoutingPolicyView, meta: { titleKey: 'policy.routing.title', descriptionKey: 'policy.routing.subtitle' } },
         { path: 'usage', component: AdminUsageView, meta: { titleKey: 'console.usageCost', descriptionKey: 'console.usageCostSubtitle' } },
         { path: 'usage/supply', component: AdminSupplyView, meta: { titleKey: 'admin.supply', descriptionKey: 'supply.subtitle' } },
         { path: 'usage/cost-allocation', component: AdminCostAllocationView, meta: { titleKey: 'admin.costAllocation', descriptionKey: 'costAllocation.subtitle' } },
@@ -144,9 +145,9 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const token = localStorage.getItem('asterrouter_admin_token')
+  if (to.path === '/') return true
   const settings = await loadPublicSettings()
   const entry = defaultEntry(settings)
-  if (to.path === '/') return entry
 
   const publicAuthPath = ['/login', '/register', '/forgot-password', '/resend-verification', '/reset-password', '/verify-email'].includes(to.path)
   if (publicAuthPath) {

@@ -119,6 +119,8 @@ import type {
   ProcurementPriceRequest,
   RoutingGroup,
   RoutingGroupRequest,
+  RoutingPolicy,
+  RoutingPolicyRequest,
   SupplyUtilizationReport,
   UsageReport,
   WorkspaceUser,
@@ -307,6 +309,21 @@ export async function createRoutingGroup(payload: RoutingGroupRequest): Promise<
 
 export async function updateRoutingGroup(id: string, payload: RoutingGroupRequest): Promise<RoutingGroup> {
   const response = await apiClient.put<RoutingGroup>(`/console/routing-groups/${id}`, payload)
+  return response.data
+}
+
+export async function getRoutingPolicies(): Promise<RoutingPolicy[]> {
+  const response = await apiClient.get<RoutingPolicy[] | null>('/console/routing-policies')
+  return listOrEmpty(response.data)
+}
+
+export async function createRoutingPolicy(payload: RoutingPolicyRequest): Promise<RoutingPolicy> {
+  const response = await apiClient.post<RoutingPolicy>('/console/routing-policies', payload)
+  return response.data
+}
+
+export async function updateRoutingPolicy(id: string, payload: RoutingPolicyRequest): Promise<RoutingPolicy> {
+  const response = await apiClient.put<RoutingPolicy>(`/console/routing-policies/${id}`, payload)
   return response.data
 }
 

@@ -44,8 +44,45 @@ func TestMigrationSnapshotSequence(t *testing.T) {
 		}
 		previous = number
 	}
-	if previous < 75 {
-		t.Fatalf("latest migration snapshot = %03d, want at least 075", previous)
+	if previous < 76 {
+		t.Fatalf("latest migration snapshot = %03d, want at least 076", previous)
+	}
+}
+
+func TestRoutingPolicyMigrationIsIdempotentAndEnforcesOneActivePolicyPerGroup(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	db := testutil.OpenPostgres(t, schema.URL)
+	body, err := migrationFiles.ReadFile("076_routing_policies.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		if _, err := db.ExecContext(context.Background(), string(body)); err != nil {
+			t.Fatalf("apply 076 run %d: %v", run+1, err)
+		}
+	}
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	insert := func(id, routeGroup, status string, version int) error {
+		_, err := db.ExecContext(ctx, `
+INSERT INTO routing_policies(id,name,route_group,status,strategy,version,created_at,updated_at)
+VALUES($1,$1,$2,$3,'{"preset":"balanced","resource_batches":[]}'::jsonb,$4,$5,$5)`, id, routeGroup, status, version, now)
+		return err
+	}
+	if err := insert("policy-active", "default", "active", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := insert("policy-active-duplicate", "default", "active", 1); err == nil {
+		t.Fatal("partial unique index accepted two active policies for one route group")
+	}
+	if err := insert("policy-disabled", "default", "disabled", 1); err != nil {
+		t.Fatalf("disabled policy should coexist with active policy: %v", err)
+	}
+	if err := insert("policy-invalid-status", "other", "draft", 1); err == nil {
+		t.Fatal("routing policy status constraint accepted draft")
+	}
+	if err := insert("policy-invalid-version", "other", "disabled", 0); err == nil {
+		t.Fatal("routing policy version constraint accepted zero")
 	}
 }
 

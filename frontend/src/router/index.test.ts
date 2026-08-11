@@ -17,23 +17,25 @@ describe('enterprise router guards', () => {
     clearPublicSettingsCache()
   })
 
-  it('sends an incomplete instance to enterprise setup', async () => {
+  it('keeps the official website public before enterprise setup', async () => {
     getPublicSettingsMock.mockResolvedValue(makePublicSettings({ setup_completed: false }))
     await router.push('/')
-    expect(router.currentRoute.value.fullPath).toBe('/setup')
+    expect(router.currentRoute.value.fullPath).toBe('/')
   })
 
-  it('opens the management console for an administrator', async () => {
+  it('keeps the website public and routes an administrator from sign-in to the console', async () => {
     localStorage.setItem('asterrouter_admin_token', 'token')
     localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'super_admin' })))
     await router.push('/')
+    expect(router.currentRoute.value.fullPath).toBe('/')
+    await router.push('/login')
     expect(router.currentRoute.value.fullPath).toBe('/console/workbench')
   })
 
-  it('opens the service portal for a developer', async () => {
+  it('routes a signed-in developer from sign-in to the service portal', async () => {
     localStorage.setItem('asterrouter_admin_token', 'token')
     localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'developer' })))
-    await router.push('/')
+    await router.push('/login')
     expect(router.currentRoute.value.fullPath).toBe('/portal/overview')
   })
 

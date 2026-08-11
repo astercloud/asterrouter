@@ -53,6 +53,7 @@
   --success-bg: #ecfdf5;
   --focus-ring: rgba(20, 184, 166, 0.3);
   --primary-shadow: rgba(20, 184, 166, 0.25);
+  --policy-accent: var(--primary-700);
   --radius-sm: 8px;
   --radius-control: 12px;
   --radius-card: 16px;
@@ -185,6 +186,7 @@
   --success-bg: rgba(6, 78, 59, 0.3);
   --focus-ring: rgba(45, 212, 191, 0.28);
   --primary-shadow: rgba(20, 184, 166, 0.2);
+  --policy-accent: var(--primary-300);
   --mesh-gradient:
     radial-gradient(at 40% 20%, rgba(20, 184, 166, 0.08) 0, transparent 46%),
     radial-gradient(at 82% 0%, rgba(6, 182, 212, 0.04) 0, transparent 42%);

@@ -208,6 +208,40 @@ func registerProviderAdminRoutes(admin *gin.RouterGroup, control *controlplane.S
 }
 
 func registerRoutingAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {
+	admin.GET("/routing-policies", func(c *gin.Context) {
+		data, err := control.ListRoutingPolicies(c.Request.Context())
+		if err != nil {
+			httpx.Error(c, http.StatusInternalServerError, 1110, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.POST("/routing-policies", func(c *gin.Context) {
+		var req controlplane.RoutingPolicyRequest
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1514, "invalid routing policy payload")
+			return
+		}
+		data, err := control.CreateRoutingPolicy(c.Request.Context(), actor(c), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1515, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
+	admin.PUT("/routing-policies/:id", func(c *gin.Context) {
+		var req controlplane.RoutingPolicyRequest
+		if err := decodeStrictAdminJSON(c, &req); err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1514, "invalid routing policy payload")
+			return
+		}
+		data, err := control.UpdateRoutingPolicy(c.Request.Context(), actor(c), c.Param("id"), req)
+		if err != nil {
+			httpx.Error(c, http.StatusBadRequest, 1515, err.Error())
+			return
+		}
+		httpx.OK(c, data)
+	})
 	admin.GET("/routing-groups", func(c *gin.Context) {
 		data, err := control.ListRoutingGroups(c.Request.Context())
 		if err != nil {

@@ -379,6 +379,7 @@ func TestAdminRoutesResolveResourceDomains(t *testing.T) {
 	tests := map[string]string{
 		"/api/v1/console/dashboard":                  controlplane.RBACResourceDashboard,
 		"/api/v1/console/model-routes":               controlplane.RBACResourceRouting,
+		"/api/v1/console/routing-policies":           controlplane.RBACResourceRouting,
 		"/api/v1/console/provider-accounts":          controlplane.RBACResourceProviders,
 		"/api/v1/console/api-keys":                   controlplane.RBACResourceAPIKeys,
 		"/api/v1/onboarding/sessions":                controlplane.RBACResourceProviders,

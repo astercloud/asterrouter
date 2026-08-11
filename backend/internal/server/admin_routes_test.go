@@ -828,6 +828,77 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 	}
 }
 
+func TestAdminRoutingPolicyEndpoints(t *testing.T) {
+	handler := newTestHandler(t, RuntimeConfig{})
+	body := bytes.NewBufferString(`{"name":"Enterprise default","route_group":"default","status":"active","strategy":{"preset":"balanced","sticky_ttl_seconds":900,"failover_before_first_byte":true,"low_price_pool_mode":"auto"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/routing-policies", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create routing policy status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Data controlplane.RoutingPolicy `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode routing policy: %v", err)
+	}
+	if created.Data.ID == "" || created.Data.Version != 1 || !created.Data.Strategy.FailoverBeforeFirstByte {
+		t.Fatalf("unexpected routing policy: %+v", created.Data)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/routing-policies", nil)
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list routing policies status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listed struct {
+		Data []controlplane.RoutingPolicy `json:"data"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode routing policies: %v", err)
+	}
+	if len(listed.Data) != 1 || listed.Data[0].ID != created.Data.ID {
+		t.Fatalf("unexpected routing policy list: %+v", listed.Data)
+	}
+
+	updateBody := bytes.NewBufferString(`{"name":"Enterprise stable","route_group":"default","status":"active","strategy":{"preset":"stability","sticky_ttl_seconds":1200,"low_price_pool_mode":"none"}}`)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/routing-policies/"+created.Data.ID, updateBody)
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	handler.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update routing policy status=%d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	var updated struct {
+		Data controlplane.RoutingPolicy `json:"data"`
+	}
+	if err := json.Unmarshal(updateRec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode updated routing policy: %v", err)
+	}
+	if updated.Data.Version != 2 || updated.Data.Name != "Enterprise stable" || updated.Data.Strategy.Preset != controlplane.RoutingPolicyPresetStability {
+		t.Fatalf("unexpected updated routing policy: %+v", updated.Data)
+	}
+
+	missingReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/routing-policies/missing", bytes.NewBufferString(`{"name":"Missing","strategy":{"preset":"balanced","sticky_ttl_seconds":900}}`))
+	missingReq.Header.Set("Content-Type", "application/json")
+	missingRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusBadRequest {
+		t.Fatalf("missing routing policy update status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/routing-policies", bytes.NewBufferString(`{"name":"bad","route_group":"default","strategy":{"preset":"random","sticky_ttl_seconds":900}}`))
+	badReq.Header.Set("Content-Type", "application/json")
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid routing policy status=%d body=%s", badRec.Code, badRec.Body.String())
+	}
+}
+
 func TestAdminProviderAccountClearCooldownEndpoint(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 	provider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{

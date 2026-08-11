@@ -117,6 +117,8 @@ type Repository interface {
 	DeleteRoleBinding(ctx context.Context, id string) error
 	ListRoutingGroups(ctx context.Context) ([]RoutingGroup, error)
 	SaveRoutingGroup(ctx context.Context, group RoutingGroup) error
+	ListRoutingPolicies(ctx context.Context) ([]RoutingPolicy, error)
+	SaveRoutingPolicy(ctx context.Context, policy RoutingPolicy) error
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccount, error)
 	SaveProviderAccount(ctx context.Context, account ProviderAccount) error
 	DeleteProviderAccount(ctx context.Context, id string) error
@@ -239,6 +241,7 @@ type MemoryRepository struct {
 	authIdentities                  map[string]AuthIdentity
 	roleBindings                    map[string]RoleBinding
 	groups                          map[string]RoutingGroup
+	policies                        map[string]RoutingPolicy
 	accounts                        map[string]ProviderAccount
 	accountModels                   map[string]map[string]ProviderAccountModel
 	gatewayModels                   map[string]GatewayModel
@@ -298,6 +301,7 @@ func NewMemoryRepository() *MemoryRepository {
 		authIdentities:                  map[string]AuthIdentity{},
 		roleBindings:                    map[string]RoleBinding{},
 		groups:                          map[string]RoutingGroup{},
+		policies:                        map[string]RoutingPolicy{},
 		accounts:                        map[string]ProviderAccount{},
 		accountModels:                   map[string]map[string]ProviderAccountModel{},
 		gatewayModels:                   map[string]GatewayModel{},
@@ -406,6 +410,29 @@ func (r *MemoryRepository) SaveRoutingGroup(_ context.Context, group RoutingGrou
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.groups[group.ID] = group
+	return nil
+}
+
+func (r *MemoryRepository) ListRoutingPolicies(context.Context) ([]RoutingPolicy, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]RoutingPolicy, 0, len(r.policies))
+	for _, policy := range r.policies {
+		out = append(out, policy)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	return out, nil
+}
+
+func (r *MemoryRepository) SaveRoutingPolicy(_ context.Context, policy RoutingPolicy) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.policies[policy.ID] = policy
 	return nil
 }
 
@@ -1300,6 +1327,29 @@ ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS peak_rate_enabled BOOLEAN NO
 ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS peak_start TEXT NOT NULL DEFAULT '';
 ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS peak_end TEXT NOT NULL DEFAULT '';
 ALTER TABLE routing_groups ADD COLUMN IF NOT EXISTS peak_rate_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1;
+
+CREATE TABLE IF NOT EXISTS routing_policies (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  route_group TEXT NOT NULL DEFAULT 'default',
+  status TEXT NOT NULL DEFAULT 'active',
+  strategy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  CONSTRAINT routing_policies_name_check CHECK (btrim(name) <> ''),
+  CONSTRAINT routing_policies_route_group_check CHECK (btrim(route_group) <> '' AND route_group !~ '[ :\t\r\n]'),
+  CONSTRAINT routing_policies_status_check CHECK (status IN ('active', 'disabled')),
+  CONSTRAINT routing_policies_strategy_object_check CHECK (jsonb_typeof(strategy) = 'object'),
+  CONSTRAINT routing_policies_version_check CHECK (version > 0)
+);
+
+CREATE INDEX IF NOT EXISTS routing_policies_route_group_idx
+  ON routing_policies(route_group, status);
+
+CREATE UNIQUE INDEX IF NOT EXISTS routing_policies_one_active_per_group_idx
+  ON routing_policies(route_group) WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS provider_accounts (
   id TEXT PRIMARY KEY,
@@ -3008,6 +3058,53 @@ ON CONFLICT(id) DO UPDATE SET
 		group.CreatedAt,
 		group.UpdatedAt,
 	)
+	return err
+}
+
+func (r *PostgresRepository) ListRoutingPolicies(ctx context.Context) ([]RoutingPolicy, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, name, description, route_group, status, strategy::text, version, created_at, updated_at
+FROM routing_policies
+ORDER BY updated_at DESC, name ASC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RoutingPolicy, 0)
+	for rows.Next() {
+		var policy RoutingPolicy
+		var strategy string
+		if err := rows.Scan(&policy.ID, &policy.Name, &policy.Description, &policy.RouteGroup, &policy.Status, &strategy, &policy.Version, &policy.CreatedAt, &policy.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(strategy) != "" {
+			if err := json.Unmarshal([]byte(strategy), &policy.Strategy); err != nil {
+				return nil, fmt.Errorf("decode routing policy %s: %w", policy.ID, err)
+			}
+		}
+		out = append(out, policy)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgresRepository) SaveRoutingPolicy(ctx context.Context, policy RoutingPolicy) error {
+	strategy, err := json.Marshal(policy.Strategy)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, `
+INSERT INTO routing_policies(id, name, description, route_group, status, strategy, version, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9)
+ON CONFLICT(id) DO UPDATE SET
+  name = EXCLUDED.name,
+  description = EXCLUDED.description,
+  route_group = EXCLUDED.route_group,
+  status = EXCLUDED.status,
+  strategy = EXCLUDED.strategy,
+  version = EXCLUDED.version,
+  updated_at = EXCLUDED.updated_at
+`, policy.ID, policy.Name, policy.Description, policy.RouteGroup, policy.Status, string(strategy), policy.Version, policy.CreatedAt, policy.UpdatedAt)
 	return err
 }
 
