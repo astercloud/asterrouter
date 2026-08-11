@@ -150,34 +150,7 @@ func (s *Service) EnsureLocalAdmin(ctx context.Context, username, password strin
 		if user.ID != username {
 			continue
 		}
-		changed := false
-		if user.Status != WorkspaceUserStatusActive {
-			user.Status = WorkspaceUserStatusActive
-			changed = true
-		}
-		if user.Role != RoleSuperAdmin {
-			user.Role = RoleSuperAdmin
-			changed = true
-		}
-		if user.DisplayName == "" {
-			user.DisplayName = username
-			changed = true
-		}
-		if user.PasswordHash == "" {
-			hash, hashErr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-			if hashErr != nil {
-				return WorkspaceUser{}, hashErr
-			}
-			user.PasswordHash = string(hash)
-			changed = true
-		}
-		if changed {
-			user.UpdatedAt = time.Now().UTC()
-			if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
-				return WorkspaceUser{}, err
-			}
-		}
-		return user, nil
+		return s.ensureLocalAdminState(ctx, user, username, password)
 	}
 
 	email := strings.ToLower(username)
@@ -202,10 +175,52 @@ func (s *Service) EnsureLocalAdmin(ctx context.Context, username, password strin
 	}
 	applyWorkspaceUserDefaults(&user, defaults)
 	if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
+		// Multiple HA instances can observe an empty table and bootstrap the
+		// same account concurrently. The losing insert may report the email
+		// unique constraint before the id conflict is visible to PostgreSQL.
+		// Accept only the matching account created by the competing instance;
+		// a different account must remain a hard conflict.
+		if errors.Is(err, ErrUserEmailExists) {
+			current, found, findErr := s.repo.FindWorkspaceUserByID(ctx, username)
+			if findErr == nil && found && strings.EqualFold(current.Email, email) {
+				return s.ensureLocalAdminState(ctx, current, username, password)
+			}
+		}
 		return WorkspaceUser{}, err
 	}
 	if err := s.audit(ctx, systemActor, "bootstrap", "workspace_user", user.ID, "Provisioned local administrator account"); err != nil {
 		return WorkspaceUser{}, err
+	}
+	return user, nil
+}
+
+func (s *Service) ensureLocalAdminState(ctx context.Context, user WorkspaceUser, username, password string) (WorkspaceUser, error) {
+	changed := false
+	if user.Status != WorkspaceUserStatusActive {
+		user.Status = WorkspaceUserStatusActive
+		changed = true
+	}
+	if user.Role != RoleSuperAdmin {
+		user.Role = RoleSuperAdmin
+		changed = true
+	}
+	if user.DisplayName == "" {
+		user.DisplayName = username
+		changed = true
+	}
+	if user.PasswordHash == "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return WorkspaceUser{}, err
+		}
+		user.PasswordHash = string(hash)
+		changed = true
+	}
+	if changed {
+		user.UpdatedAt = time.Now().UTC()
+		if err := s.repo.SaveWorkspaceUser(ctx, user); err != nil {
+			return WorkspaceUser{}, err
+		}
 	}
 	return user, nil
 }

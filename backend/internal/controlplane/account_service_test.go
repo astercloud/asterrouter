@@ -122,6 +122,22 @@ func TestEnsureLocalAdminPersistsAccountState(t *testing.T) {
 	}
 }
 
+func TestEnsureLocalAdminRejectsEmailOwnedByAnotherAccount(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	if err := repo.SaveWorkspaceUser(ctx, WorkspaceUser{
+		ID: "existing-user", Email: "admin@local.invalid", Status: WorkspaceUserStatusActive, Role: RoleDeveloper,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveWorkspaceUser(): %v", err)
+	}
+
+	svc := NewService(repo, "/v1")
+	if _, err := svc.EnsureLocalAdmin(ctx, "admin", "bootstrap-password"); err == nil || !strings.Contains(err.Error(), "already belongs to another user") {
+		t.Fatalf("EnsureLocalAdmin() error = %v, want conflicting account", err)
+	}
+}
+
 func TestRecoveryCodeCanDisableTOTP(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1", "test-secret")

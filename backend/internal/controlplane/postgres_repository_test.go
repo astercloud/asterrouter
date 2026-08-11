@@ -87,6 +87,66 @@ func TestPostgresRepositorySerializesConcurrentMigrations(t *testing.T) {
 	}
 }
 
+type workspaceUserSaveBarrier struct {
+	Repository
+	reached chan<- struct{}
+	release <-chan struct{}
+}
+
+func (r workspaceUserSaveBarrier) SaveWorkspaceUser(ctx context.Context, user WorkspaceUser) error {
+	r.reached <- struct{}{}
+	<-r.release
+	return r.Repository.SaveWorkspaceUser(ctx, user)
+}
+
+func TestPostgresServicesConcurrentlyBootstrapOneLocalAdmin(t *testing.T) {
+	schema := testutil.NewPostgresSchema(t)
+	ctx := context.Background()
+	firstRepo, err := NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatalf("NewPostgresRepository(first): %v", err)
+	}
+	defer firstRepo.Close()
+	secondRepo, err := NewPostgresRepository(ctx, schema.URL)
+	if err != nil {
+		t.Fatalf("NewPostgresRepository(second): %v", err)
+	}
+	defer secondRepo.Close()
+
+	reached := make(chan struct{}, 2)
+	release := make(chan struct{})
+	first := NewService(workspaceUserSaveBarrier{Repository: firstRepo, reached: reached, release: release}, "/v1", "test-secret")
+	second := NewService(workspaceUserSaveBarrier{Repository: secondRepo, reached: reached, release: release}, "/v1", "test-secret")
+	results := make(chan error, 2)
+	for _, service := range []*Service{first, second} {
+		go func(service *Service) {
+			_, err := service.EnsureLocalAdmin(ctx, "admin", "bootstrap-password")
+			results <- err
+		}(service)
+	}
+	for range 2 {
+		select {
+		case <-reached:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for concurrent administrator inserts")
+		}
+	}
+	close(release)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent EnsureLocalAdmin(): %v", err)
+		}
+	}
+
+	users, err := firstRepo.ListWorkspaceUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListWorkspaceUsers(): %v", err)
+	}
+	if len(users) != 1 || users[0].ID != "admin" || users[0].Role != RoleSuperAdmin {
+		t.Fatalf("bootstrapped users = %#v", users)
+	}
+}
+
 func TestListParsersNormalizeJSONNull(t *testing.T) {
 	if values := parseStringList("null"); values == nil || len(values) != 0 {
 		t.Fatalf("parseStringList(null) = %#v, want []", values)
