@@ -1,3 +1,5 @@
+import { marketingEn } from './marketing'
+
 export default {
   common: {
     save: 'Save',
@@ -1882,6 +1884,29 @@ export default {
     emptyTraces: '',
     next: 'Common entries',
     nextHelp: 'Open the key, usage, and alert pages available to this employee account.'
+  },
+  marketing: marketingEn,
+  routingPolicy: {
+    title: 'Routing Policies', subtitle: 'Codify resource scope, cost boundaries, quality preferences, and failover as an auditable enterprise routing contract.',
+    newPolicy: 'New policy', policyLibrary: 'Policy library', policyList: 'Routing policy list', name: 'Policy name', description: 'Description', routeGroup: 'Route group', routeGroupHelp: 'Must exactly match the model route_group.', status: 'Status', preset: 'Preference', guardrails: 'Guardrails', updatedAt: 'Updated', active: 'Active', enabled: 'Enabled', disabled: 'Disabled', unnamed: 'Unnamed policy',
+    defaultName: 'Enterprise default routing', defaultDescription: 'A balanced cost, quality, and reliability policy for production applications.', createTitle: 'Create routing policy', editTitle: 'Edit routing policy', identityHelp: 'Keep one active policy per route group to avoid implicit rule merging.',
+    presetTitle: 'Choose a decision preference', presetHelp: 'The preset controls candidate scoring. Hard constraints always take precedence.',
+    presets: {
+      cost: { name: 'Cost first', help: 'Prefer lower-cost eligible resources for offline and high-volume workloads.' },
+      speed: { name: 'Speed first', help: 'Prefer resources with more capacity headroom and lower current load for interactive apps.' },
+      stability: { name: 'Stability first', help: 'Prefer non-probe resources and administrator-defined stable routes for critical production paths.' },
+      balanced: { name: 'Balanced', help: 'Combine route priority, account priority, capacity headroom, and configured weight.' }
+    },
+    flowTitle: 'How one request is decided', flowHelp: 'Candidates move through fixed stages so every routing decision is consistent and explainable.',
+    flow: { scope: 'Candidate scope', hardRules: 'Hard filters', preference: 'Preference scoring', fallback: 'Ordered fallback', failover: 'Failover' },
+    hardRulesTitle: 'Hard constraints and cost guardrails', hardRulesHelp: 'Resources that violate a constraint are removed before scoring. Preferences cannot override these limits.',
+    nativeProtocolOnly: 'Native protocol only', nativeProtocolShort: 'Native protocol', nativeProtocolOnlyHelp: 'Require direct protocol compatibility to reduce translation uncertainty.', protocolRules: 'Protocol admission rules', protocolRulesHelp: 'When the allowlist is non-empty, protocols not explicitly allowed are rejected. Deny rules take precedence.', protocolNeutral: 'Use default', protocolAllow: 'Allow', protocolDeny: 'Deny', protocols: { openai_chat_completions: 'OpenAI Chat Completions', openai_responses: 'OpenAI Responses', openai_embeddings: 'OpenAI Embeddings', anthropic_messages: 'Anthropic Messages', anthropic_count_tokens: 'Anthropic Token Count', gemini_generate_content: 'Gemini Generate Content', openai_images_generations: 'OpenAI Image Generation', openai_media_generations: 'OpenAI Media Generation', openai_audio_transcriptions: 'OpenAI Audio Transcription', openai_audio_translations: 'OpenAI Audio Translation', openai_audio_speech: 'OpenAI Speech Generation', realtime: 'Realtime Session', aster_jobs: 'Aster Asynchronous Jobs' }, inputPriceCap: 'Maximum input price', outputPriceCap: 'Maximum output price', usdPerMillion: 'USD per million tokens; 0 means unlimited', relativePriceCap: 'Maximum cheapest-price multiple', relativePriceCapHelp: 'Exclude resources priced above this multiple of the cheapest eligible option; 0 means unlimited.', priceFactsMissing: 'No active USD procurement prices are available. Cost rules are saved but do not exclude existing candidates until price facts exist.',
+    lowPricePoolTitle: 'Low-price candidate pool', lowPricePoolHelp: 'Build a cost-controlled candidate set before applying preference scoring.', poolMode: 'Pool mode', poolModes: { auto: 'Automatic balance', strict: 'Cheapest only', percentile: 'Custom price percentile', none: 'No price filtering' }, poolPercent: 'Price percentile retained (%)', minCandidates: 'Minimum candidates',
+    modelScopeTitle: 'Model scope', modelScopeHelp: 'An empty allowlist permits all models. The denylist always wins.', allowedModels: 'Allowed models', deniedModels: 'Denied models', onePerLine: 'One model ID per line',
+    batchesTitle: 'Ordered resource batches', batchesHelp: 'Resources score within a batch. The next batch is only tried after every resource in the current batch fails.', addBatch: 'Add batch', batchName: 'Batch {index}', batchLabel: 'Batch name', moveUp: 'Move batch up', moveDown: 'Move batch down', removeBatch: 'Remove batch', noAccounts: 'No route resources available', emptyBatches: 'No fixed resource batches', emptyBatchesHelp: 'Without batches, all eligible resources in the route group use dynamic fallback.',
+    resilienceTitle: 'Stickiness and failover', resilienceHelp: 'Control session consistency and when a failed upstream may be replaced.', failoverBeforeFirstByte: 'Enable pre-first-byte failover', failoverBeforeFirstByteHelp: 'Try the next candidate when an upstream fails before output. Switching always stops once output begins.', failoverShort: 'Pre-byte failover', stickyRouting: 'Sticky routing', stickyRoutingHelp: 'Keep a session on the same healthy upstream whenever possible.', stickyTTL: 'Sticky TTL', seconds: 'seconds', smartOptimization: 'Effective-cost optimization', smartOptimizationHelp: 'Allow quality-gated effective-cost decisions to adjust ordering inside the current resource batch.',
+    preview: { title: 'Decision preview', live: 'Live', currentPolicy: 'Current policy', preset: 'Preference', models: 'Model scope', hardRules: 'Hard constraints', batches: 'Fallback batches', resources: 'Pinned resources', allModels: 'All models', modelCount: '{count} allowed models', noHardRules: 'None', ruleCount: '{count} rules', dynamicFallback: 'Dynamic candidates', batchCount: '{count} batches', safetyTitle: 'Streaming safety boundary', safetyHelp: 'Upstreams cannot change after the first byte, preserving a single response source.' },
+    validationRequired: 'Enter a policy name and route group.', created: 'Routing policy created', updated: 'Routing policy updated', savePolicy: 'Save policy', unsavedPolicy: 'Unsaved new policy', saveHint: 'After saving, the new version applies to subsequent requests matching this route group.', empty: 'No routing policies. Create the enterprise default policy.'
   },
   pricingRules: {
     adminTitle: 'Expression Pricing',

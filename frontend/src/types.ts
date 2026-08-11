@@ -478,6 +478,54 @@ export interface RoutingGroupRequest {
   sort_order: number
 }
 
+export interface RoutingPolicyBatch {
+  name: string
+  provider_account_ids: string[]
+}
+
+export type RoutingPolicyPreset = 'cost' | 'speed' | 'stability' | 'balanced'
+export type RoutingPolicyLowPricePoolMode = 'auto' | 'strict' | 'percentile' | 'none'
+
+export interface RoutingPolicyStrategy {
+  preset: RoutingPolicyPreset
+  smart_optimization: boolean
+  failover_before_first_byte: boolean
+  sticky_routing: boolean
+  sticky_ttl_seconds: number
+  native_protocol_only: boolean
+  absolute_max_input_per_1m: number
+  absolute_max_output_per_1m: number
+  max_price_multiple_of_cheapest: number
+  low_price_pool_mode: RoutingPolicyLowPricePoolMode
+  low_price_pool_percent: number
+  low_price_pool_min_candidates: number
+  resource_batches: RoutingPolicyBatch[]
+  allowed_models: string[]
+  denied_models: string[]
+  allowed_protocols: string[]
+  denied_protocols: string[]
+}
+
+export interface RoutingPolicy {
+  id: string
+  name: string
+  description: string
+  route_group: string
+  status: string
+  strategy: RoutingPolicyStrategy
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface RoutingPolicyRequest {
+  name: string
+  description: string
+  route_group: string
+  status: string
+  strategy: RoutingPolicyStrategy
+}
+
 export interface ProviderAccountTempUnschedulableRule {
   status_code: number
   keywords: string[]

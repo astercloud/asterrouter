@@ -1,3 +1,5 @@
+import { marketingZh } from './marketing'
+
 export default {
   common: {
     save: '保存',
@@ -1882,6 +1884,29 @@ export default {
     emptyTraces: '',
     next: '常用入口',
     nextHelp: '进入当前员工账号可操作的 Key、用量和告警页面。'
+  },
+  marketing: marketingZh,
+  routingPolicy: {
+    title: '路由策略', subtitle: '把资源范围、成本边界、质量偏好和故障切换固化为一份可审计的企业路由合同。',
+    newPolicy: '新建策略', policyLibrary: '策略库', policyList: '路由策略列表', name: '策略名称', description: '策略说明', routeGroup: '路由组标识', routeGroupHelp: '与模型路由的 route_group 精确匹配。', status: '状态', preset: '策略偏好', guardrails: '关键约束', updatedAt: '最近更新', active: '启用', enabled: '已启用', disabled: '停用', unnamed: '未命名策略',
+    defaultName: '企业默认路由策略', defaultDescription: '适用于生产应用的成本、质量与稳定性均衡策略。', createTitle: '创建路由策略', editTitle: '编辑路由策略', identityHelp: '一个路由组只应对应一份生效策略，避免多层规则隐式覆盖。',
+    presetTitle: '选择决策偏好', presetHelp: '预设决定候选资源的评分顺序，硬约束始终优先于偏好。',
+    presets: {
+      cost: { name: '成本优先', help: '优先选择合格候选中的低成本资源，适合离线和大批量任务。' },
+      speed: { name: '速度优先', help: '优先容量余量高、当前负载低的资源，适合交互式应用。' },
+      stability: { name: '稳定优先', help: '优先非探测状态和管理员明确的稳定线路，适合关键生产链路。' },
+      balanced: { name: '综合均衡', help: '综合路由优先级、账号优先级、容量余量和权重排序。' }
+    },
+    flowTitle: '一次请求如何决策', flowHelp: '按照固定阶段收敛候选，保证每次路由都有一致且可解释的判断顺序。',
+    flow: { scope: '候选资源范围', hardRules: '硬约束淘汰', preference: '偏好评分', fallback: '有序降级', failover: '故障切换' },
+    hardRulesTitle: '硬约束与成本护栏', hardRulesHelp: '任何不满足条件的资源都会在评分前被淘汰，偏好不能绕过这些限制。',
+    nativeProtocolOnly: '仅使用原生协议', nativeProtocolShort: '原生协议', nativeProtocolOnlyHelp: '要求上游格式与客户端协议直接兼容，减少转换带来的不确定性。', protocolRules: '协议准入规则', protocolRulesHelp: '允许列表一旦非空，未明确允许的协议都会被拒绝；禁止规则优先。', protocolNeutral: '跟随默认', protocolAllow: '允许', protocolDeny: '禁止', protocols: { openai_chat_completions: 'OpenAI Chat Completions', openai_responses: 'OpenAI Responses', openai_embeddings: 'OpenAI Embeddings', anthropic_messages: 'Anthropic Messages', anthropic_count_tokens: 'Anthropic Token 计数', gemini_generate_content: 'Gemini Generate Content', openai_images_generations: 'OpenAI 图片生成', openai_media_generations: 'OpenAI 媒体生成', openai_audio_transcriptions: 'OpenAI 音频转写', openai_audio_translations: 'OpenAI 音频翻译', openai_audio_speech: 'OpenAI 语音生成', realtime: '实时会话', aster_jobs: 'Aster 异步任务' }, inputPriceCap: '输入价格绝对上限', outputPriceCap: '输出价格绝对上限', usdPerMillion: '美元 / 百万 Token，0 表示不限制', relativePriceCap: '相对最低价倍数', relativePriceCapHelp: '超过当前最低合格价倍数的资源会被淘汰，0 表示不限制。', priceFactsMissing: '尚未导入有效的 USD 采购价。成本规则已保存，但在价格事实可用前不会淘汰现有候选。',
+    lowPricePoolTitle: '低价候选池', lowPricePoolHelp: '先形成成本可控的候选集合，再按策略偏好排序。', poolMode: '候选池模式', poolModes: { auto: '自动平衡', strict: '仅最低价', percentile: '自定义价格分位', none: '不按价格筛选' }, poolPercent: '保留价格分位（%）', minCandidates: '最少候选数',
+    modelScopeTitle: '模型范围', modelScopeHelp: '白名单为空时允许全部模型；黑名单始终优先。', allowedModels: '允许模型', deniedModels: '禁止模型', onePerLine: '每行一个模型 ID',
+    batchesTitle: '有序资源批次', batchesHelp: '同一批次内参与评分；只有当前批次全部失败后才进入下一批次。', addBatch: '添加批次', batchName: '第 {index} 批', batchLabel: '批次名称', moveUp: '上移批次', moveDown: '下移批次', removeBatch: '移除批次', noAccounts: '暂无可用路由资源', emptyBatches: '尚未配置固定资源批次', emptyBatchesHelp: '不配置时使用路由组内全部合格资源动态降级。',
+    resilienceTitle: '粘性路由与故障切换', resilienceHelp: '控制请求在资源之间保持一致，以及上游失败时何时允许切换。', failoverBeforeFirstByte: '启用首字节前故障切换', failoverBeforeFirstByteHelp: '上游在输出前失败时尝试下一候选；一旦开始输出，始终禁止切换，避免内容拼接或重复。', failoverShort: '首字节切换', stickyRouting: '启用粘性路由', stickyRoutingHelp: '同一会话在资源健康时尽量保持到同一上游。', stickyTTL: '粘性有效期', seconds: '秒', smartOptimization: '有效成本动态优化', smartOptimizationHelp: '允许已经通过质量门槛的有效成本决策在当前资源批次内调整候选顺序。',
+    preview: { title: '策略决策预览', live: '实时', currentPolicy: '当前策略', preset: '决策偏好', models: '模型范围', hardRules: '硬约束', batches: '降级批次', resources: '指定资源', allModels: '全部模型', modelCount: '{count} 个允许模型', noHardRules: '未配置', ruleCount: '{count} 项', dynamicFallback: '动态候选', batchCount: '{count} 个批次', safetyTitle: '流式安全边界', safetyHelp: '首字节后禁止切换上游，确保流式响应来源唯一。' },
+    validationRequired: '请填写策略名称和路由组标识。', created: '路由策略已创建', updated: '路由策略已更新', savePolicy: '保存策略', unsavedPolicy: '未保存的新策略', saveHint: '保存后新版本将立即用于匹配该路由组的后续请求。', empty: '暂无路由策略，请创建企业默认策略。'
   },
   pricingRules: {
     adminTitle: '表达式计费',

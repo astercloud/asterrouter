@@ -37,14 +37,15 @@ Enterprise applications and employees
 
 ## Product shape
 
-There are only two user-facing surfaces:
+There is one public product entry and two authenticated work surfaces:
 
 | Surface | Purpose | Entry |
 | --- | --- | --- |
+| Official Website | Public product scope, routing model, and enterprise boundary | `/` |
 | Management Console | Administrators and application owners manage the enterprise gateway | `/console` |
 | Service Portal | Employees and developers view authorized access and usage | `/portal` |
 
-The console is organized around Workbench, Applications, Model Services, Policies, Usage & Cost, Organization & Access, and System. A single-member workspace, a SaaS integration, or a larger department changes permissions and enabled capabilities, not the product shape.
+The website is informational and never acts as another control plane. The console is organized around Workbench, Applications, Model Services, Policies, Usage & Cost, Organization & Access, and System. A SaaS integration or a larger department changes permissions and enabled capabilities, not the authenticated product shape.
 
 ## Strategy is the product advantage
 
@@ -57,7 +58,7 @@ Identity -> Access Policy -> Candidate Supply -> Routing Policy
 
 Access Policy answers whether a request is allowed and within which limits. Routing Policy selects among approved supply routes using explicit guardrails, cost and reliability preferences, capacity, and failover rules. Every decision is explainable and recorded.
 
-The four built-in routing preferences are **Balanced**, **Cost First**, **Reliability First**, and **Fixed Order**. They are routing preferences, not deployment modes or separate products.
+The four built-in routing preferences are **Cost First**, **Speed First**, **Stability First**, and **Balanced**. Fixed order is expressed through ordered resource batches, not a fifth preference.
 
 ## Enterprise boundary
 
