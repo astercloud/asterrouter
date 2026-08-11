@@ -53,9 +53,9 @@ func TestCurrentAccountProfileUpdateAndPasswordChange(t *testing.T) {
 	}
 }
 
-func TestCurrentAccountProfileRejectsDeploymentManagedActor(t *testing.T) {
+func TestCurrentAccountProfileRejectsConfigManagedActor(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1")
-	if _, err := svc.CurrentAccountProfile(context.Background(), "admin"); err != ErrDeploymentManagedAccount {
+	if _, err := svc.CurrentAccountProfile(context.Background(), "admin"); err != ErrConfigManagedAccount {
 		t.Fatalf("CurrentAccountProfile(admin) error = %v", err)
 	}
 }

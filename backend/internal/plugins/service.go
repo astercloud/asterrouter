@@ -16,7 +16,6 @@ import (
 
 var (
 	ErrPluginNotFound                  = errors.New("plugin not found")
-	ErrPluginSurface                   = errors.New("plugin is not available on this surface")
 	ErrPluginLocked                    = errors.New("plugin entitlement is missing")
 	ErrPluginCoreRequired              = errors.New("core plugin cannot be disabled")
 	ErrPluginNotConfigurable           = errors.New("plugin is not configurable")
@@ -165,22 +164,11 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 }
 
 func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
-	return s.catalog(ctx, "")
-}
-
-func (s *Service) CatalogForSurface(ctx context.Context, surface string) (Catalog, error) {
-	return s.catalog(ctx, strings.TrimSpace(surface))
-}
-
-func (s *Service) catalog(ctx context.Context, surface string) (Catalog, error) {
 	plugins, err := s.repo.ListPlugins(ctx)
 	if err != nil {
 		return Catalog{}, err
 	}
 	for index := range plugins {
-		if surface != "" && !pluginSurfaceAllowed(plugins[index], surface) {
-			continue
-		}
 		plugin, err := s.applyLocalEntitlement(ctx, plugins[index])
 		if err != nil {
 			return Catalog{}, err
@@ -191,47 +179,11 @@ func (s *Service) catalog(ctx context.Context, surface string) (Catalog, error) 
 			return Catalog{}, err
 		}
 		plugins[index].Packages = packages
-		if _, err := s.PluginFrontendContribution(ctx, plugins[index].ID); err == nil {
+		if _, err := s.PluginWorkbench(ctx, plugins[index].ID); err == nil {
 			plugins[index].FrontendAvailable = true
 		}
 	}
-	filtered := make([]Plugin, 0, len(plugins))
-	for _, plugin := range plugins {
-		if surface == "" || pluginSurfaceAllowed(plugin, surface) {
-			filtered = append(filtered, plugin)
-		}
-	}
-	return Catalog{Summary: summarize(filtered), Plugins: filtered}, nil
-}
-
-func (s *Service) RequireSurface(ctx context.Context, id string, surface string) error {
-	plugin, ok, err := s.repo.FindPlugin(ctx, strings.TrimSpace(id))
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return ErrPluginNotFound
-	}
-	if !pluginSurfaceAllowed(plugin, strings.TrimSpace(surface)) {
-		return ErrPluginSurface
-	}
-	return nil
-}
-
-func pluginSurfaceAllowed(plugin Plugin, surface string) bool {
-	if surface == "" {
-		return true
-	}
-	for _, item := range plugin.Surfaces {
-		if strings.TrimSpace(item) == surface {
-			return true
-		}
-		// Keep old catalog records readable while they are refreshed.
-		if surface == "enterprise" && (item == "admin" || item == "portal") {
-			return true
-		}
-	}
-	return false
+	return Catalog{Summary: summarize(plugins), Plugins: plugins}, nil
 }
 
 func (s *Service) Enable(ctx context.Context, id string) (Plugin, error) {

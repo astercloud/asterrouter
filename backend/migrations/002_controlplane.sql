@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS api_keys (
   prefix TEXT NOT NULL,
   status TEXT NOT NULL,
   key_type TEXT NOT NULL DEFAULT 'workspace',
-  customer_id TEXT NOT NULL DEFAULT '',
   policy_id TEXT NOT NULL DEFAULT '',
   model_allowlist TEXT NOT NULL DEFAULT '[]',
   qps_limit INTEGER NOT NULL DEFAULT 0,

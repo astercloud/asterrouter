@@ -19,18 +19,13 @@ func registerPluginOpenRoutes(group *gin.RouterGroup, svc *plugins.Service, cont
 			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
 			return
 		}
-		surface := pluginOpenSurface(c)
-		if surface == "" {
-			httpx.Error(c, http.StatusBadRequest, 1776, "surface is required")
-			return
-		}
-		token, err := svc.AuthorizePluginAPIToken(c.Request.Context(), bearerToken(c), plugins.PluginAPIScopeCatalogRead, "", surface)
+		token, err := svc.AuthorizePluginAPIToken(c.Request.Context(), bearerToken(c), plugins.PluginAPIScopeCatalogRead, "")
 		if err != nil {
 			writePluginOpenAuthError(c, err)
 			return
 		}
 		c.Set("actor", "plugin-api:"+token.ID)
-		catalog, err := svc.CatalogForSurface(c.Request.Context(), surface)
+		catalog, err := svc.Catalog(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1777, err.Error())
 			return
@@ -43,19 +38,10 @@ func registerPluginOpenRoutes(group *gin.RouterGroup, svc *plugins.Service, cont
 			httpx.Error(c, http.StatusServiceUnavailable, 1700, "plugin service is not available")
 			return
 		}
-		surface := pluginOpenSurface(c)
-		if surface == "" {
-			httpx.Error(c, http.StatusBadRequest, 1776, "surface is required")
-			return
-		}
 		pluginID := strings.TrimSpace(c.Param("id"))
-		token, err := svc.AuthorizePluginAPIToken(c.Request.Context(), bearerToken(c), plugins.PluginAPIScopeAction, pluginID, surface)
+		token, err := svc.AuthorizePluginAPIToken(c.Request.Context(), bearerToken(c), plugins.PluginAPIScopeAction, pluginID)
 		if err != nil {
 			writePluginOpenAuthError(c, err)
-			return
-		}
-		if err := svc.RequireSurface(c.Request.Context(), pluginID, surface); err != nil {
-			writePluginAPITokenError(c, err)
 			return
 		}
 		c.Set("actor", "plugin-api:"+token.ID)
@@ -71,14 +57,6 @@ func registerPluginOpenRoutes(group *gin.RouterGroup, svc *plugins.Service, cont
 		_, _ = io.Copy(c.Writer, response.Body)
 		_ = recordPluginEvent(c, control, "open_api_action", pluginID, fmt.Sprintf("Invoked plugin action %s", strings.TrimPrefix(c.Param("action"), "/")))
 	})
-}
-
-func pluginOpenSurface(c *gin.Context) string {
-	surface := strings.TrimSpace(c.Query("surface"))
-	if surface == "" {
-		surface = strings.TrimSpace(c.GetHeader("X-Aster-Surface"))
-	}
-	return surface
 }
 
 func writePluginOpenAuthError(c *gin.Context, err error) {

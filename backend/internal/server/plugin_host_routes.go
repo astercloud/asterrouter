@@ -115,7 +115,7 @@ func writeProviderCallbackError(c *gin.Context, err error) {
 	case errors.Is(err, controlplane.ErrProviderCallbackInvalid):
 		httpx.Error(c, http.StatusBadRequest, 1796, "invalid provider callback")
 	case errors.Is(err, controlplane.ErrProviderCallbackBinding):
-		// Do not disclose whether another tenant's attempt or task exists.
+		// Do not disclose whether another application's attempt or task exists.
 		httpx.Error(c, http.StatusNotFound, 1798, "provider callback target was not found")
 	case errors.Is(err, controlplane.ErrProviderCallbackReplayConflict):
 		httpx.Error(c, http.StatusConflict, 1799, "provider callback event conflicts with a previous event")

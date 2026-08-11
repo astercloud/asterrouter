@@ -28,9 +28,8 @@ type alertInput struct {
 	DedupeKey                 string
 	Metadata                  map[string]string
 	ObservedAt                time.Time
-	ProfileScope              string
-	PlatformTenantID          string
-	PlatformTenantName        string
+	ApplicationID             string
+	ApplicationName           string
 	GatewayPrincipalID        string
 	GatewayPrincipalName      string
 	ExternalAuthIntegrationID string
@@ -138,9 +137,8 @@ func (s *Service) upsertAlert(ctx context.Context, input alertInput) error {
 	event.Summary = strings.TrimSpace(input.Summary)
 	event.ResourceType = strings.TrimSpace(input.ResourceType)
 	event.ResourceID = strings.TrimSpace(input.ResourceID)
-	event.ProfileScope = strings.TrimSpace(input.ProfileScope)
-	event.PlatformTenantID = strings.TrimSpace(input.PlatformTenantID)
-	event.PlatformTenantName = strings.TrimSpace(input.PlatformTenantName)
+	event.ApplicationID = strings.TrimSpace(input.ApplicationID)
+	event.ApplicationName = strings.TrimSpace(input.ApplicationName)
 	event.GatewayPrincipalID = strings.TrimSpace(input.GatewayPrincipalID)
 	event.GatewayPrincipalName = strings.TrimSpace(input.GatewayPrincipalName)
 	event.ExternalAuthIntegrationID = strings.TrimSpace(input.ExternalAuthIntegrationID)
@@ -326,12 +324,11 @@ func (s *Service) syncGatewayErrorRateAlert(ctx context.Context, auth GatewayAut
 }
 
 func applyGatewayPlatformSnapshotToAlertInput(input *alertInput, auth GatewayAuthContext) {
-	if input == nil || auth.APIKey.ProfileScope != ProfileScopePlatform || auth.PlatformTenant == nil || auth.GatewayPrincipal == nil {
+	if input == nil || auth.Application == nil || auth.GatewayPrincipal == nil {
 		return
 	}
-	input.ProfileScope = ProfileScopePlatform
-	input.PlatformTenantID = auth.PlatformTenant.ID
-	input.PlatformTenantName = auth.PlatformTenant.Name
+	input.ApplicationID = auth.Application.ID
+	input.ApplicationName = auth.Application.Name
 	input.GatewayPrincipalID = auth.GatewayPrincipal.ID
 	input.GatewayPrincipalName = auth.GatewayPrincipal.Name
 	if auth.ExternalAuthIntegration != nil {
@@ -345,19 +342,17 @@ func (s *Service) applyPlatformAlertIdentityForKey(ctx context.Context, input *a
 		return
 	}
 	key, err := s.apiKeyByID(ctx, apiKeyID)
-	if err != nil || key.ProfileScope != ProfileScopePlatform {
+	if err != nil || !isApplicationAPIKey(key) {
 		return
 	}
-	identity, err := s.platformCredentialIdentity(ctx, key.PlatformTenantID, key.GatewayPrincipalID)
+	identity, err := s.applicationCredentialIdentity(ctx, key.ApplicationID, key.GatewayPrincipalID)
 	if err != nil {
-		input.ProfileScope = ProfileScopePlatform
-		input.PlatformTenantID = key.PlatformTenantID
+		input.ApplicationID = key.ApplicationID
 		input.GatewayPrincipalID = key.GatewayPrincipalID
 		return
 	}
-	input.ProfileScope = ProfileScopePlatform
-	input.PlatformTenantID = identity.tenant.ID
-	input.PlatformTenantName = identity.tenant.Name
+	input.ApplicationID = identity.application.ID
+	input.ApplicationName = identity.application.Name
 	input.GatewayPrincipalID = identity.principal.ID
 	input.GatewayPrincipalName = identity.principal.Name
 }

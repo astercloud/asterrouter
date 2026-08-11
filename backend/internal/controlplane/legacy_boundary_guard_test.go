@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestProjectApplicationBoundaryCannotBeRestored(t *testing.T) {
+func TestOrganizationApplicationBoundaryCannotRestoreProjectModel(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve guard location")
@@ -17,15 +17,12 @@ func TestProjectApplicationBoundaryCannotBeRestored(t *testing.T) {
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "../../.."))
 	forbidden := []string{
 		"project_id",
-		"application_id",
 		"project_budget",
 		"project_admin",
 		"RoleProjectAdmin",
 		"RoleScopeProject",
 		"CostAllocationByProject",
-		"CostAllocationByApplication",
 		"/projects",
-		"/applications",
 	}
 	for _, relativeRoot := range []string{"backend", "frontend/src", "README.md"} {
 		root := filepath.Join(repositoryRoot, relativeRoot)

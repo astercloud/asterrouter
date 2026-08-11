@@ -22,8 +22,7 @@ type RealtimeSession struct {
 	ID                   string     `json:"id"`
 	OperationID          string     `json:"operation_id"`
 	AttemptID            string     `json:"attempt_id"`
-	ProfileScope         string     `json:"profile_scope"`
-	TenantID             string     `json:"tenant_id"`
+	ApplicationID        string     `json:"application_id"`
 	CredentialID         string     `json:"credential_id"`
 	PrincipalType        string     `json:"principal_type"`
 	PrincipalID          string     `json:"principal_id"`

@@ -16,13 +16,15 @@ const (
 )
 
 type PrincipalAccess struct {
-	Actor         string   `json:"actor"`
-	Role          string   `json:"role"`
-	Global        bool     `json:"global"`
-	Permissions   []string `json:"permissions"`
-	ResolvedFrom  string   `json:"resolved_from"`
-	Resource      string   `json:"resource,omitempty"`
-	DepartmentIDs []string `json:"department_ids,omitempty"`
+	Actor            string   `json:"actor"`
+	Role             string   `json:"role"`
+	OrganizationWide bool     `json:"organization_wide"`
+	Permissions      []string `json:"permissions"`
+	ResolvedFrom     string   `json:"resolved_from"`
+	Resource         string   `json:"resource,omitempty"`
+	DepartmentIDs    []string `json:"department_ids,omitempty"`
+	GroupIDs         []string `json:"group_ids,omitempty"`
+	ApplicationIDs   []string `json:"application_ids,omitempty"`
 }
 
 func (s *Service) PrincipalAccess(ctx context.Context, actor string) (PrincipalAccess, error) {
@@ -36,11 +38,11 @@ func (s *Service) principalAccessForResource(ctx context.Context, actor string, 
 	}
 	if isLocalAdminActor(actor) {
 		return PrincipalAccess{
-			Actor:        actor,
-			Role:         RoleSuperAdmin,
-			Global:       true,
-			Permissions:  permissionsForRole(RoleSuperAdmin, resource),
-			ResolvedFrom: "local_admin",
+			Actor:            actor,
+			Role:             RoleSuperAdmin,
+			OrganizationWide: true,
+			Permissions:      permissionsForRole(RoleSuperAdmin, resource),
+			ResolvedFrom:     "local_admin",
 		}, nil
 	}
 	users, err := s.repo.ListWorkspaceUsers(ctx)
@@ -52,12 +54,12 @@ func (s *Service) principalAccessForResource(ctx context.Context, actor string, 
 		return PrincipalAccess{Actor: actor, Role: RoleDeveloper, ResolvedFrom: "unmatched"}, nil
 	}
 	access := PrincipalAccess{
-		Actor:        actor,
-		Role:         user.Role,
-		Global:       user.Role != RoleDeveloper,
-		Permissions:  permissionsForRole(user.Role, resource),
-		ResolvedFrom: "workspace_user",
-		Resource:     resource,
+		Actor:            actor,
+		Role:             user.Role,
+		OrganizationWide: user.Role != RoleDeveloper,
+		Permissions:      permissionsForRole(user.Role, resource),
+		ResolvedFrom:     "workspace_user",
+		Resource:         resource,
 	}
 	bindings, err := s.repo.ListRoleBindings(ctx)
 	if err != nil {
@@ -67,17 +69,21 @@ func (s *Service) principalAccessForResource(ctx context.Context, actor string, 
 		if binding.UserID != user.ID {
 			continue
 		}
-		if binding.ScopeType != RoleScopeGlobal && binding.ScopeType != RoleScopeDepartment && (binding.ScopeType != RoleScopeResource || binding.ScopeID != resource) {
+		if binding.ScopeType != RoleScopeOrganization && binding.ScopeType != RoleScopeDepartment && binding.ScopeType != RoleScopeGroup && binding.ScopeType != RoleScopeApplication && (binding.ScopeType != RoleScopeResource || binding.ScopeID != resource) {
 			continue
 		}
 		access.Permissions = mergePermissions(access.Permissions, permissionsForRole(binding.Role, resource))
 		if roleRank(binding.Role) > roleRank(access.Role) {
 			access.Role = binding.Role
 		}
-		if binding.ScopeType == RoleScopeGlobal {
-			access.Global = true
+		if binding.ScopeType == RoleScopeOrganization {
+			access.OrganizationWide = true
 		} else if binding.ScopeType == RoleScopeDepartment && !contains(access.DepartmentIDs, binding.ScopeID) {
 			access.DepartmentIDs = append(access.DepartmentIDs, binding.ScopeID)
+		} else if binding.ScopeType == RoleScopeGroup && !contains(access.GroupIDs, binding.ScopeID) {
+			access.GroupIDs = append(access.GroupIDs, binding.ScopeID)
+		} else if binding.ScopeType == RoleScopeApplication && !contains(access.ApplicationIDs, binding.ScopeID) {
+			access.ApplicationIDs = append(access.ApplicationIDs, binding.ScopeID)
 		}
 	}
 	return access, nil
@@ -87,15 +93,13 @@ func (s *Service) ActorCan(ctx context.Context, actor string, permission string)
 	return s.ActorCanResource(ctx, actor, permission, "")
 }
 
-// ActorIsSystemAdministrator identifies the narrow authority allowed to change
-// installation-level Profile Bundles. A platform administrator is not a
-// system administrator merely because it can operate a Platform Surface.
+// ActorIsSystemAdministrator identifies the narrow installation-level authority.
 func (s *Service) ActorIsSystemAdministrator(ctx context.Context, actor string) (bool, error) {
 	access, err := s.PrincipalAccess(ctx, actor)
 	if err != nil {
 		return false, err
 	}
-	return access.Global && access.Role == RoleSuperAdmin, nil
+	return access.OrganizationWide && access.Role == RoleSuperAdmin, nil
 }
 
 func (s *Service) ActorCanResource(ctx context.Context, actor string, permission string, resource string) (bool, PrincipalAccess, error) {
@@ -104,84 +108,6 @@ func (s *Service) ActorCanResource(ctx context.Context, actor string, permission
 		return false, PrincipalAccess{}, err
 	}
 	return contains(access.Permissions, permission), access, nil
-}
-
-// ActorCanSurfaceResource resolves permissions for a dedicated control-plane
-// surface. Surface bindings are intentionally not global grants: they add
-// permissions only while the matching surface is handling the request.
-func (s *Service) ActorCanSurfaceResource(ctx context.Context, actor, surface, permission, resource string) (bool, PrincipalAccess, error) {
-	access, err := s.principalAccessForResource(ctx, actor, resource)
-	if err != nil || access.Global {
-		return err == nil && contains(access.Permissions, permission), access, err
-	}
-	actor = strings.TrimSpace(actor)
-	if actor == "" {
-		actor = "local-admin"
-	}
-	users, err := s.repo.ListWorkspaceUsers(ctx)
-	if err != nil {
-		return false, PrincipalAccess{}, err
-	}
-	user, ok := workspaceUserByActor(users, actor)
-	if !ok || user.Status != WorkspaceUserStatusActive {
-		return false, access, nil
-	}
-	bindings, err := s.repo.ListRoleBindings(ctx)
-	if err != nil {
-		return false, PrincipalAccess{}, err
-	}
-	for _, binding := range bindings {
-		if binding.UserID != user.ID || binding.ScopeType != RoleScopeSurface || binding.ScopeID != surface {
-			continue
-		}
-		access.Permissions = mergePermissions(access.Permissions, permissionsForRole(binding.Role, resource))
-		if roleRank(binding.Role) > roleRank(access.Role) {
-			access.Role = binding.Role
-		}
-	}
-	return contains(access.Permissions, permission), access, nil
-}
-
-func (s *Service) ActorCanSurface(ctx context.Context, actor string, surface string) (bool, error) {
-	actor = strings.TrimSpace(actor)
-	if actor == "" {
-		actor = "local-admin"
-	}
-	if isLocalAdminActor(actor) {
-		return true, nil
-	}
-	users, err := s.repo.ListWorkspaceUsers(ctx)
-	if err != nil {
-		return false, err
-	}
-	user, ok := workspaceUserByActor(users, actor)
-	if !ok || user.Status != WorkspaceUserStatusActive {
-		return false, nil
-	}
-	if surface == SurfacePortal || surface == SurfaceCustomer || user.Role == RoleSuperAdmin {
-		return true, nil
-	}
-	bindings, err := s.repo.ListRoleBindings(ctx)
-	if err != nil {
-		return false, err
-	}
-	if surface == SurfaceEnterprise {
-		if user.Role != RoleDeveloper {
-			return true, nil
-		}
-		for _, binding := range bindings {
-			if binding.UserID == user.ID && (binding.ScopeType == RoleScopeGlobal || binding.ScopeType == RoleScopeResource || binding.ScopeType == RoleScopeDepartment || (binding.ScopeType == RoleScopeSurface && binding.ScopeID == surface)) && binding.Role != RoleDeveloper {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-	for _, binding := range bindings {
-		if binding.UserID == user.ID && binding.ScopeType == RoleScopeSurface && binding.ScopeID == surface && (binding.Role == RoleSuperAdmin || binding.Role == RolePlatformAdmin) {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func permissionsForRole(role string, resource string) []string {

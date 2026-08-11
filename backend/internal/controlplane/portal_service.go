@@ -79,7 +79,6 @@ func (s *Service) CreatePortalAPIKey(ctx context.Context, actor string, req APIK
 		return APIKeyCreateResponse{}, errors.New("portal principal cannot manage workspace keys")
 	}
 	req.KeyType = APIKeyTypeUser
-	req.CustomerID = ""
 	req.OwnerUserID = scope.UserID
 	return s.CreateAPIKey(ctx, portalActor(scope.Actor), req)
 }
@@ -150,7 +149,7 @@ func (s *Service) portalScopeForActor(ctx context.Context, actor string) (portal
 		return portalScope{}, err
 	}
 	for _, binding := range bindings {
-		if binding.UserID == user.ID && binding.ScopeType == RoleScopeGlobal && roleCanManageKeys(binding.Role) {
+		if binding.UserID == user.ID && binding.ScopeType == RoleScopeOrganization && roleCanManageKeys(binding.Role) {
 			scope.CanManageKeys = true
 		}
 	}

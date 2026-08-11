@@ -11,7 +11,7 @@ import (
 
 func TestManualRetentionCleanupEndpointReturnsEvidence(t *testing.T) {
 	handler, _ := newTestRuntime(t, RuntimeConfig{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/settings/retention/cleanup", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/settings/retention/cleanup", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

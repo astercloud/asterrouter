@@ -63,7 +63,7 @@ func TestSupplyRoutesEnforceUsageReadPermission(t *testing.T) {
 		t.Fatalf("CreateWorkspaceUser(): %v", err)
 	}
 	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
-		UserID: developer.ID, Role: controlplane.RoleDeveloper, ScopeType: controlplane.RoleScopeGlobal,
+		UserID: developer.ID, Role: controlplane.RoleDeveloper, ScopeType: controlplane.RoleScopeOrganization,
 	}); err != nil {
 		t.Fatalf("CreateRoleBinding(): %v", err)
 	}

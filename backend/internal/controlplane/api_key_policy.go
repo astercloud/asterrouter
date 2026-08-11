@@ -8,7 +8,7 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 )
 
-const gatewayDefaultTenantID = "workspace"
+const gatewayDefaultApplicationID = defaultApplicationID
 
 var errInvalidAPIKeyPolicy = errors.New("invalid api key policy")
 
@@ -148,22 +148,16 @@ func applyAPIKeyPolicy(record *APIKeyRecord, fields apiKeyPolicyFields) {
 	record.ArtifactSinkID = fields.artifactSinkID
 }
 
-func applyAPIKeyPrincipal(record *APIKeyRecord, platformIdentity *platformCredentialIdentity) {
-	if platformIdentity != nil {
-		record.ProfileScope = ProfileScopePlatform
-		record.PlatformTenantID = platformIdentity.tenant.ID
-		record.GatewayPrincipalID = platformIdentity.principal.ID
-		record.TenantID = platformIdentity.tenant.ID
-		record.PrincipalType = platformIdentity.principal.PrincipalType
-		record.PrincipalReference = platformIdentity.principal.ID
+func applyAPIKeyPrincipal(record *APIKeyRecord, applicationIdentity *applicationCredentialIdentity) {
+	if applicationIdentity != nil {
+		record.GatewayPrincipalID = applicationIdentity.principal.ID
+		record.ApplicationID = applicationIdentity.application.ID
+		record.PrincipalType = applicationIdentity.principal.PrincipalType
+		record.PrincipalReference = applicationIdentity.principal.ID
 	} else {
-		record.TenantID = gatewayDefaultTenantID
+		record.ApplicationID = gatewayDefaultApplicationID
 		record.PrincipalType = record.KeyType
 		record.PrincipalReference = record.ID
-		if record.KeyType == APIKeyTypeCustomer {
-			record.TenantID = record.CustomerID
-			record.PrincipalReference = record.CustomerID
-		}
 		if record.KeyType == APIKeyTypeUser {
 			record.PrincipalReference = record.OwnerUserID
 		}
@@ -171,6 +165,10 @@ func applyAPIKeyPrincipal(record *APIKeyRecord, platformIdentity *platformCreden
 	if record.RotationFamilyID == "" {
 		record.RotationFamilyID = "key_family_" + randomID(10)
 	}
+}
+
+func isApplicationAPIKey(record APIKeyRecord) bool {
+	return strings.TrimSpace(record.ApplicationID) != "" && strings.TrimSpace(record.GatewayPrincipalID) != ""
 }
 
 func effectiveAPIKeyPolicy(record APIKeyRecord) apiKeyPolicyFields {

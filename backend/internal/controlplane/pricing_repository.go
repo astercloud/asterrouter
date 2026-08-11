@@ -16,8 +16,8 @@ const pricingSchema = `
 CREATE TABLE IF NOT EXISTS pricing_rules (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  purpose TEXT NOT NULL CHECK (purpose IN ('usage_cost','customer_charge')),
-  scope_type TEXT NOT NULL CHECK (scope_type IN ('global','operator_plan')),
+  purpose TEXT NOT NULL CHECK (purpose = 'usage_cost'),
+  scope_type TEXT NOT NULL CHECK (scope_type = 'global'),
   scope_id TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('active','disabled')),
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
   updated_by TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
-  CHECK ((scope_type = 'global' AND scope_id = '') OR (scope_type = 'operator_plan' AND scope_id <> '')),
+  CHECK (scope_id = ''),
   CHECK (model <> '')
 );
 
@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS pricing_rule_versions_rule_revision_idx
 
 CREATE TABLE IF NOT EXISTS pricing_evaluations (
   id TEXT PRIMARY KEY,
-  purpose TEXT NOT NULL CHECK (purpose IN ('usage_cost','customer_charge')),
+  purpose TEXT NOT NULL CHECK (purpose = 'usage_cost'),
   phase TEXT NOT NULL CHECK (phase IN ('estimate','settlement','replay')),
   operation_id TEXT NOT NULL DEFAULT '',
   attempt_id TEXT NOT NULL DEFAULT '',
@@ -95,7 +95,7 @@ CREATE INDEX IF NOT EXISTS pricing_evaluations_usage_idx
 
 CREATE TABLE IF NOT EXISTS billing_hold_pricing_versions (
   hold_id TEXT NOT NULL REFERENCES billing_holds(id) ON DELETE RESTRICT,
-  purpose TEXT NOT NULL CHECK (purpose IN ('usage_cost','customer_charge')),
+  purpose TEXT NOT NULL CHECK (purpose = 'usage_cost'),
   pricing_rule_version_id TEXT NOT NULL REFERENCES pricing_rule_versions(id) ON DELETE RESTRICT,
   estimate_evaluation_id TEXT NOT NULL REFERENCES pricing_evaluations(id) ON DELETE RESTRICT,
   settlement_evaluation_id TEXT NOT NULL DEFAULT '',
@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS billing_ledger_entries (
   usage_version INTEGER NOT NULL,
   usage_record_id TEXT NOT NULL,
   request_fingerprint TEXT NOT NULL,
-  purpose TEXT NOT NULL CHECK (purpose IN ('usage_cost','customer_charge')),
+  purpose TEXT NOT NULL CHECK (purpose = 'usage_cost'),
   amount_micros BIGINT NOT NULL,
   currency TEXT NOT NULL DEFAULT 'USD' CHECK (currency = 'USD'),
   pricing_evaluation_id TEXT NOT NULL REFERENCES pricing_evaluations(id) ON DELETE RESTRICT,

@@ -20,27 +20,24 @@ import (
 )
 
 type ServiceOptions struct {
-	Version         string
-	EnabledProfiles []string
-	DefaultProfile  string
-	StorageMode     string
-	DemoMode        bool
-	SecretKey       string
+	Version     string
+	StorageMode string
+	DemoMode    bool
+	SecretKey   string
 }
 
 type Service struct {
-	repo            Repository
-	version         string
-	enabledProfiles []string
-	defaultProfile  string
-	storageMode     string
-	demoMode        bool
-	secretKey       string
+	repo        Repository
+	version     string
+	storageMode string
+	demoMode    bool
+	secretKey   string
 }
 
 var (
-	ErrInvitationCodeRequired = errors.New("invitation code is required")
-	ErrInvitationCodeInvalid  = errors.New("invitation code is invalid")
+	ErrInvitationCodeRequired   = errors.New("invitation code is required")
+	ErrInvitationCodeInvalid    = errors.New("invitation code is invalid")
+	ErrOrganizationNameRequired = errors.New("organization_name is required")
 )
 
 func NewService(repo Repository, opts ServiceOptions) *Service {
@@ -57,13 +54,11 @@ func NewService(repo Repository, opts ServiceOptions) *Service {
 		secretKey = "asterrouter-local-development-secret"
 	}
 	return &Service{
-		repo:            repo,
-		version:         version,
-		enabledProfiles: normalizeProfiles(opts.EnabledProfiles),
-		defaultProfile:  strings.TrimSpace(opts.DefaultProfile),
-		storageMode:     storageMode,
-		demoMode:        opts.DemoMode,
-		secretKey:       secretKey,
+		repo:        repo,
+		version:     version,
+		storageMode: storageMode,
+		demoMode:    opts.DemoMode,
+		secretKey:   secretKey,
 	}
 }
 
@@ -84,22 +79,7 @@ func (s *Service) Admin(ctx context.Context) (AdminSettings, error) {
 	for key, value := range raw {
 		merged[key] = value
 	}
-	if len(s.enabledProfiles) > 0 && raw[KeyEnabledProfiles] == "" && raw[KeyDefaultProfile] == "" {
-		defaultProfile := s.defaultProfile
-		if defaultProfile == "" {
-			defaultProfile = s.enabledProfiles[0]
-		}
-		if !containsString(s.enabledProfiles, defaultProfile) {
-			defaultProfile = s.enabledProfiles[0]
-		}
-		encodedProfiles, _ := json.Marshal(s.enabledProfiles)
-		merged[KeyEnabledProfiles] = string(encodedProfiles)
-		merged[KeyDefaultProfile] = defaultProfile
-		merged[KeySetupCompleted] = "true"
-	}
-	if s.demoMode && len(s.enabledProfiles) == 0 && raw[KeyEnabledProfiles] == "" && raw[KeyDefaultProfile] == "" {
-		merged[KeyEnabledProfiles] = `["personal","relay_operator","enterprise","platform"]`
-		merged[KeyDefaultProfile] = "personal"
+	if s.demoMode && raw[KeySetupCompleted] == "" {
 		merged[KeySetupCompleted] = "true"
 	}
 	return s.parse(merged), nil
@@ -109,9 +89,6 @@ func (s *Service) Update(ctx context.Context, in AdminSettings) (AdminSettings, 
 	current, err := s.Admin(ctx)
 	if err != nil {
 		return AdminSettings{}, err
-	}
-	if profileConfigurationChanged(current, in) {
-		return AdminSettings{}, errors.New("change the active deployment profile from the deployment switcher")
 	}
 	in.EmailTemplates = current.EmailTemplates
 	values, err := valuesFromAdminSettings(in)
@@ -159,117 +136,15 @@ func (s *Service) Update(ctx context.Context, in AdminSettings) (AdminSettings, 
 	return s.Admin(ctx)
 }
 
-func profileConfigurationChanged(current, next AdminSettings) bool {
-	if strings.TrimSpace(current.DefaultProfile) != strings.TrimSpace(next.DefaultProfile) {
-		return true
+func (s *Service) CompleteSetup(ctx context.Context, organizationName string) (AdminSettings, error) {
+	organizationName = strings.TrimSpace(organizationName)
+	if organizationName == "" {
+		return AdminSettings{}, ErrOrganizationNameRequired
 	}
-	return !sameProfiles(normalizeProfiles(current.EnabledProfiles), normalizeProfiles(next.EnabledProfiles))
-}
-
-func (s *Service) ApplyProfiles(ctx context.Context, profiles []string, defaultProfile string) (AdminSettings, error) {
-	enabledProfiles := normalizeProfiles(profiles)
-	if len(enabledProfiles) == 0 {
-		return AdminSettings{}, errors.New("at least one profile is required")
-	}
-	if !s.demoMode && len(enabledProfiles) != 1 {
-		return AdminSettings{}, errors.New("exactly one active deployment profile is supported")
-	}
-	defaultProfile = strings.TrimSpace(defaultProfile)
-	if defaultProfile == "" {
-		defaultProfile = enabledProfiles[0]
-	}
-	if !containsString(enabledProfiles, defaultProfile) {
-		return AdminSettings{}, fmt.Errorf("default profile %q is not enabled", defaultProfile)
-	}
-	if !s.demoMode {
-		raw, err := s.repo.GetAll(ctx)
-		if err != nil {
-			return AdminSettings{}, err
-		}
-		if !parseBool(raw[KeySetupCompleted]) {
-			if err := s.repo.InitializeDeploymentProfile(ctx, defaultProfile); err != nil {
-				return AdminSettings{}, err
-			}
-			return s.Admin(ctx)
-		}
-	}
-	encodedProfiles, _ := json.Marshal(enabledProfiles)
-	if err := s.repo.SetMultiple(ctx, map[string]string{
-		KeyDefaultProfile:  defaultProfile,
-		KeyEnabledProfiles: string(encodedProfiles),
-		KeySetupCompleted:  "true",
-	}); err != nil {
+	if err := s.repo.CompleteSetup(ctx, organizationName); err != nil {
 		return AdminSettings{}, err
 	}
 	return s.Admin(ctx)
-}
-
-func sameProfiles(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-// ApplyInitialProfile completes a fresh installation with one primary product
-// profile. Subsequent profile changes go through ApplyProfiles so they can be
-// authorized as an installation-level operation.
-func (s *Service) ApplyInitialProfile(ctx context.Context, profile string) (AdminSettings, error) {
-	profile = strings.TrimSpace(profile)
-	if !isProfile(profile) {
-		return AdminSettings{}, fmt.Errorf("%w %q", ErrUnsupportedDeploymentProfile, profile)
-	}
-	if err := s.repo.InitializeDeploymentProfile(ctx, profile); err != nil {
-		return AdminSettings{}, err
-	}
-	return s.Admin(ctx)
-}
-
-// BootstrapProfile persists the configured non-interactive installation
-// profile exactly once. Environment configuration is bootstrap input only;
-// PostgreSQL becomes the source of truth immediately afterwards.
-func (s *Service) BootstrapProfile(ctx context.Context) error {
-	if s.defaultProfile != "" && !isProfile(s.defaultProfile) {
-		return fmt.Errorf("%w %q", ErrUnsupportedDeploymentProfile, s.defaultProfile)
-	}
-	if len(s.enabledProfiles) == 0 {
-		return nil
-	}
-	if len(s.enabledProfiles) != 1 {
-		return errors.New("exactly one bootstrap profile is required")
-	}
-	profile := s.enabledProfiles[0]
-	if s.defaultProfile != "" && s.defaultProfile != profile {
-		return errors.New("bootstrap default profile must match the enabled profile")
-	}
-	if err := s.repo.InitializeDeploymentProfile(ctx, profile); err == nil {
-		return nil
-	} else if !errors.Is(err, ErrDeploymentProfileInitialized) {
-		return err
-	}
-	// Environment configuration is bootstrap input only. Runtime profile
-	// changes are persisted by the system profile endpoint, but the stored
-	// single-profile state must still be complete before startup continues.
-	raw, err := s.repo.GetAll(ctx)
-	if err != nil {
-		return err
-	}
-	_, err = persistedDeploymentProfile(raw)
-	return err
-}
-
-func persistedDeploymentProfile(raw map[string]string) (string, error) {
-	profiles := normalizeProfiles(parseStringList(raw[KeyEnabledProfiles], nil))
-	defaultProfile := strings.TrimSpace(raw[KeyDefaultProfile])
-	if !parseBool(raw[KeySetupCompleted]) || len(profiles) != 1 || defaultProfile == "" || profiles[0] != defaultProfile {
-		return "", errors.New("persisted deployment profile is incomplete or invalid; repair the stored state explicitly instead of overwriting it")
-	}
-	return defaultProfile, nil
 }
 
 func (s *Service) Health(ctx context.Context) error {
@@ -377,12 +252,9 @@ func (s *Service) ResolveSMTPConfig(ctx context.Context, candidate SMTPSettings)
 }
 
 var emailTemplatePlaceholders = map[string][]string{
-	"email_verification":    {"{{.SiteName}}", "{{.UserName}}", "{{.ActionURL}}"},
-	"password_reset":        {"{{.SiteName}}", "{{.ActionURL}}"},
-	"balance_low":           {"{{.SiteName}}", "{{.Amount}}"},
-	"quota_limit":           {"{{.SiteName}}", "{{.Period}}", "{{.Limit}}"},
-	"subscription_expiry":   {"{{.SiteName}}", "{{.Message}}"},
-	"customer_notification": {"{{.SiteName}}", "{{.Title}}", "{{.Message}}", "{{.ActionURL}}"},
+	"email_verification": {"{{.SiteName}}", "{{.UserName}}", "{{.ActionURL}}"},
+	"password_reset":     {"{{.SiteName}}", "{{.ActionURL}}"},
+	"quota_limit":        {"{{.SiteName}}", "{{.Period}}", "{{.Limit}}"},
 }
 
 func (s *Service) EmailTemplateCatalog(ctx context.Context) (EmailTemplateCatalog, error) {
@@ -622,14 +494,6 @@ func (s *Service) LoginSecurity(ctx context.Context) (LoginSecuritySettings, err
 
 func (s *Service) parse(values map[string]string) AdminSettings {
 	_, offset := time.Now().Zone()
-	enabledProfiles := parseProfileList(values[KeyEnabledProfiles])
-	defaultProfile := strings.TrimSpace(values[KeyDefaultProfile])
-	if defaultProfile == "" && len(enabledProfiles) > 0 {
-		defaultProfile = enabledProfiles[0]
-	}
-	if defaultProfile != "" && !containsString(enabledProfiles, defaultProfile) {
-		enabledProfiles = normalizeProfiles(append([]string{defaultProfile}, enabledProfiles...))
-	}
 	return AdminSettings{
 		PublicSettings: PublicSettings{
 			SiteName:                 values[KeySiteName],
@@ -638,8 +502,6 @@ func (s *Service) parse(values map[string]string) AdminSettings {
 			PublicBaseURL:            values[KeyPublicBaseURL],
 			APIBaseURL:               "/api/v1",
 			GatewayBasePath:          values[KeyGatewayBasePath],
-			DefaultProfile:           defaultProfile,
-			EnabledProfiles:          enabledProfiles,
 			SetupCompleted:           parseBool(values[KeySetupCompleted]),
 			DefaultLocale:            values[KeyDefaultLocale],
 			EnabledLocales:           parseStringList(values[KeyEnabledLocales], []string{"en-US", "zh-CN"}),
@@ -677,15 +539,14 @@ func (s *Service) parse(values map[string]string) AdminSettings {
 		FeishuConfigured:           strings.TrimSpace(values[KeyFeishuAppSecret]) != "",
 		GitHubOAuthClientID:        values[KeyGitHubOAuthClientID], GitHubOAuthConfigured: strings.TrimSpace(values[KeyGitHubOAuthSecret]) != "", GoogleOAuthClientID: values[KeyGoogleOAuthClientID], GoogleOAuthConfigured: strings.TrimSpace(values[KeyGoogleOAuthSecret]) != "",
 		DingTalkClientID: values[KeyDingTalkClientID], DingTalkConfigured: strings.TrimSpace(values[KeyDingTalkClientSecret]) != "",
-		InvitationCodes:      parseStringList(values[KeyInvitationCodes], []string{}),
-		TrustedProxyHeaders:  parseBool(values[KeyTrustedProxyHeaders]),
-		TrustedProxyCIDRs:    parseStringList(values[KeyTrustedProxyCIDRs], []string{}),
-		TurnstileConfigured:  strings.TrimSpace(values[KeyTurnstileSecretKey]) != "",
-		DefaultBalanceMicros: parseInt64(values[KeyDefaultBalanceMicros], 0),
-		DefaultConcurrency:   parseInt(values[KeyDefaultConcurrency], 5),
-		DefaultRPM:           parseInt(values[KeyDefaultRPM], 0),
-		AuthSourceDefaults:   parseAuthSourceDefaults(values[KeyAuthSourceDefaults]),
-		SMTPHost:             values[KeySMTPHost], SMTPPort: parseInt(values[KeySMTPPort], 587), SMTPUsername: values[KeySMTPUsername], SMTPFrom: values[KeySMTPFrom], SMTPFromName: values[KeySMTPFromName], SMTPUseTLS: parseBool(values[KeySMTPUseTLS]), SMTPConfigured: strings.TrimSpace(values[KeySMTPHost]) != "" && strings.TrimSpace(values[KeySMTPFrom]) != "",
+		InvitationCodes:     parseStringList(values[KeyInvitationCodes], []string{}),
+		TrustedProxyHeaders: parseBool(values[KeyTrustedProxyHeaders]),
+		TrustedProxyCIDRs:   parseStringList(values[KeyTrustedProxyCIDRs], []string{}),
+		TurnstileConfigured: strings.TrimSpace(values[KeyTurnstileSecretKey]) != "",
+		DefaultConcurrency:  parseInt(values[KeyDefaultConcurrency], 5),
+		DefaultRPM:          parseInt(values[KeyDefaultRPM], 0),
+		AuthSourceDefaults:  parseAuthSourceDefaults(values[KeyAuthSourceDefaults]),
+		SMTPHost:            values[KeySMTPHost], SMTPPort: parseInt(values[KeySMTPPort], 587), SMTPUsername: values[KeySMTPUsername], SMTPFrom: values[KeySMTPFrom], SMTPFromName: values[KeySMTPFromName], SMTPUseTLS: parseBool(values[KeySMTPUseTLS]), SMTPConfigured: strings.TrimSpace(values[KeySMTPHost]) != "" && strings.TrimSpace(values[KeySMTPFrom]) != "",
 		EmailTemplates:      parseEmailTemplates(values[KeyEmailTemplates]),
 		LoginAgreementTitle: values[KeyLoginAgreementTitle], LoginAgreementContent: values[KeyLoginAgreementContent],
 		DefaultPageSize: parseInt(values[KeyDefaultPageSize], 20), PageSizeOptions: parseIntList(values[KeyPageSizeOptions], []int{10, 20, 50}), HomeContent: values[KeyHomeContent], HideImportButton: parseBool(values[KeyHideImportButton]),
@@ -720,8 +581,6 @@ func defaults() map[string]string {
 		KeyPublicBaseURL:            "",
 		KeyDefaultLocale:            "en-US",
 		KeyEnabledLocales:           `["en-US","zh-CN"]`,
-		KeyDefaultProfile:           "",
-		KeyEnabledProfiles:          "[]",
 		KeySetupCompleted:           "false",
 		KeyGatewayBasePath:          "/v1",
 		KeyOIDCEnabled:              "false",
@@ -736,7 +595,7 @@ func defaults() map[string]string {
 		KeyFeishuAppSecret:          "",
 		KeyGitHubOAuthEnabled:       "false", KeyGitHubOAuthClientID: "", KeyGitHubOAuthSecret: "", KeyGoogleOAuthEnabled: "false", KeyGoogleOAuthClientID: "", KeyGoogleOAuthSecret: "",
 		KeyDingTalkEnabled: "false", KeyDingTalkClientID: "", KeyDingTalkClientSecret: "",
-		KeyRegistrationEnabled: "false", KeyEmailVerifyEnabled: "false", KeyPasswordResetEnabled: "false", KeyAllowedEmailDomains: "[]", KeyInvitationRequired: "false", KeyInvitationCodes: "[]", KeyTOTPEnabled: "false", KeyTrustedProxyHeaders: "false", KeyTrustedProxyCIDRs: "[]", KeyTurnstileEnabled: "false", KeyTurnstileSiteKey: "", KeyTurnstileSecretKey: "", KeyDefaultBalanceMicros: "0", KeyDefaultConcurrency: "5", KeyDefaultRPM: "0", KeySMTPHost: "", KeySMTPPort: "587", KeySMTPUsername: "", KeySMTPPassword: "", KeySMTPFrom: "", KeySMTPFromName: "", KeySMTPUseTLS: "false", KeyLoginAgreementEnabled: "false", KeyLoginAgreementTitle: "Terms of Service", KeyLoginAgreementContent: "",
+		KeyRegistrationEnabled: "false", KeyEmailVerifyEnabled: "false", KeyPasswordResetEnabled: "false", KeyAllowedEmailDomains: "[]", KeyInvitationRequired: "false", KeyInvitationCodes: "[]", KeyTOTPEnabled: "false", KeyTrustedProxyHeaders: "false", KeyTrustedProxyCIDRs: "[]", KeyTurnstileEnabled: "false", KeyTurnstileSiteKey: "", KeyTurnstileSecretKey: "", KeyDefaultConcurrency: "5", KeyDefaultRPM: "0", KeySMTPHost: "", KeySMTPPort: "587", KeySMTPUsername: "", KeySMTPPassword: "", KeySMTPFrom: "", KeySMTPFromName: "", KeySMTPUseTLS: "false", KeyLoginAgreementEnabled: "false", KeyLoginAgreementTitle: "Terms of Service", KeyLoginAgreementContent: "",
 		KeyAuthSourceDefaults: "{}",
 		KeyEmailTemplates:     "[]",
 		KeyBackendMode:        "false", KeyDefaultPageSize: "20", KeyPageSizeOptions: "[10,20,50]", KeySupportContact: "", KeyDocumentationURL: "", KeyHomeContent: "", KeyHideImportButton: "false", KeyLoginAgreementMode: "modal", KeyLoginAgreementUpdatedAt: "", KeyLegalDocuments: "[]",
@@ -764,14 +623,6 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 		if !isLocale(locale) {
 			return nil, fmt.Errorf("unsupported locale %q", locale)
 		}
-	}
-	enabledProfiles := normalizeProfiles(in.EnabledProfiles)
-	defaultProfile := strings.TrimSpace(in.DefaultProfile)
-	if defaultProfile == "" && len(enabledProfiles) > 0 {
-		defaultProfile = enabledProfiles[0]
-	}
-	if defaultProfile != "" && !containsString(enabledProfiles, defaultProfile) {
-		return nil, fmt.Errorf("default profile %q is not enabled", defaultProfile)
 	}
 	if in.GatewayBasePath == "" || !strings.HasPrefix(in.GatewayBasePath, "/") {
 		return nil, errors.New("gateway_base_path must start with /")
@@ -824,7 +675,7 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 	if in.DingTalkEnabled && !in.DingTalkConfigured && strings.TrimSpace(in.DingTalkClientSecret) == "" {
 		return nil, errors.New("dingtalk_client_secret is required")
 	}
-	if in.DefaultBalanceMicros < 0 || in.DefaultConcurrency < 0 || in.DefaultRPM < 0 {
+	if in.DefaultConcurrency < 0 || in.DefaultRPM < 0 {
 		return nil, errors.New("default user limits cannot be negative")
 	}
 	if err := validateAuthSourceDefaults(in.AuthSourceDefaults); err != nil {
@@ -922,7 +773,6 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 		return nil, err
 	}
 	locales, _ := json.Marshal(in.EnabledLocales)
-	profiles, _ := json.Marshal(enabledProfiles)
 	domains, _ := json.Marshal(normalizedDomains)
 	proxyCIDRs, _ := json.Marshal(trustedProxyCIDRs)
 	invitationCodes, _ := json.Marshal(in.InvitationCodes)
@@ -942,9 +792,6 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 		KeyPublicBaseURL:            strings.TrimSpace(in.PublicBaseURL),
 		KeyDefaultLocale:            in.DefaultLocale,
 		KeyEnabledLocales:           string(locales),
-		KeyDefaultProfile:           defaultProfile,
-		KeyEnabledProfiles:          string(profiles),
-		KeySetupCompleted:           strconv.FormatBool(in.SetupCompleted),
 		KeyGatewayBasePath:          in.GatewayBasePath,
 		KeyOIDCEnabled:              strconv.FormatBool(in.OIDCEnabled),
 		KeyOIDCProviderName:         strings.TrimSpace(in.OIDCProviderName),
@@ -958,7 +805,7 @@ func valuesFromAdminSettings(in AdminSettings) (map[string]string, error) {
 		KeyFeishuAppSecret:          strings.TrimSpace(in.FeishuAppSecret),
 		KeyGitHubOAuthEnabled:       strconv.FormatBool(in.GitHubOAuthEnabled), KeyGitHubOAuthClientID: strings.TrimSpace(in.GitHubOAuthClientID), KeyGitHubOAuthSecret: strings.TrimSpace(in.GitHubOAuthClientSecret), KeyGoogleOAuthEnabled: strconv.FormatBool(in.GoogleOAuthEnabled), KeyGoogleOAuthClientID: strings.TrimSpace(in.GoogleOAuthClientID), KeyGoogleOAuthSecret: strings.TrimSpace(in.GoogleOAuthClientSecret),
 		KeyDingTalkEnabled: strconv.FormatBool(in.DingTalkEnabled), KeyDingTalkClientID: strings.TrimSpace(in.DingTalkClientID), KeyDingTalkClientSecret: strings.TrimSpace(in.DingTalkClientSecret),
-		KeyRegistrationEnabled: strconv.FormatBool(in.RegistrationEnabled), KeyEmailVerifyEnabled: strconv.FormatBool(in.EmailVerifyEnabled), KeyPasswordResetEnabled: strconv.FormatBool(in.PasswordResetEnabled), KeyAllowedEmailDomains: string(domains), KeyInvitationRequired: strconv.FormatBool(in.InvitationRequired), KeyInvitationCodes: string(invitationCodes), KeyTOTPEnabled: strconv.FormatBool(in.TOTPEnabled), KeyTrustedProxyHeaders: strconv.FormatBool(in.TrustedProxyHeaders), KeyTrustedProxyCIDRs: string(proxyCIDRs), KeyTurnstileEnabled: strconv.FormatBool(in.TurnstileEnabled), KeyTurnstileSiteKey: strings.TrimSpace(in.TurnstileSiteKey), KeyTurnstileSecretKey: strings.TrimSpace(in.TurnstileSecretKey), KeyDefaultBalanceMicros: strconv.FormatInt(in.DefaultBalanceMicros, 10), KeyDefaultConcurrency: strconv.Itoa(in.DefaultConcurrency), KeyDefaultRPM: strconv.Itoa(in.DefaultRPM), KeySMTPHost: strings.TrimSpace(in.SMTPHost), KeySMTPPort: strconv.Itoa(in.SMTPPort), KeySMTPUsername: strings.TrimSpace(in.SMTPUsername), KeySMTPPassword: strings.TrimSpace(in.SMTPPassword), KeySMTPFrom: strings.TrimSpace(in.SMTPFrom), KeySMTPFromName: strings.TrimSpace(in.SMTPFromName), KeySMTPUseTLS: strconv.FormatBool(in.SMTPUseTLS), KeyLoginAgreementEnabled: strconv.FormatBool(in.LoginAgreementEnabled), KeyLoginAgreementTitle: strings.TrimSpace(in.LoginAgreementTitle), KeyLoginAgreementContent: strings.TrimSpace(in.LoginAgreementContent),
+		KeyRegistrationEnabled: strconv.FormatBool(in.RegistrationEnabled), KeyEmailVerifyEnabled: strconv.FormatBool(in.EmailVerifyEnabled), KeyPasswordResetEnabled: strconv.FormatBool(in.PasswordResetEnabled), KeyAllowedEmailDomains: string(domains), KeyInvitationRequired: strconv.FormatBool(in.InvitationRequired), KeyInvitationCodes: string(invitationCodes), KeyTOTPEnabled: strconv.FormatBool(in.TOTPEnabled), KeyTrustedProxyHeaders: strconv.FormatBool(in.TrustedProxyHeaders), KeyTrustedProxyCIDRs: string(proxyCIDRs), KeyTurnstileEnabled: strconv.FormatBool(in.TurnstileEnabled), KeyTurnstileSiteKey: strings.TrimSpace(in.TurnstileSiteKey), KeyTurnstileSecretKey: strings.TrimSpace(in.TurnstileSecretKey), KeyDefaultConcurrency: strconv.Itoa(in.DefaultConcurrency), KeyDefaultRPM: strconv.Itoa(in.DefaultRPM), KeySMTPHost: strings.TrimSpace(in.SMTPHost), KeySMTPPort: strconv.Itoa(in.SMTPPort), KeySMTPUsername: strings.TrimSpace(in.SMTPUsername), KeySMTPPassword: strings.TrimSpace(in.SMTPPassword), KeySMTPFrom: strings.TrimSpace(in.SMTPFrom), KeySMTPFromName: strings.TrimSpace(in.SMTPFromName), KeySMTPUseTLS: strconv.FormatBool(in.SMTPUseTLS), KeyLoginAgreementEnabled: strconv.FormatBool(in.LoginAgreementEnabled), KeyLoginAgreementTitle: strings.TrimSpace(in.LoginAgreementTitle), KeyLoginAgreementContent: strings.TrimSpace(in.LoginAgreementContent),
 		KeyEmailTemplates:     string(emailTemplates),
 		KeyAuthSourceDefaults: string(authSourceDefaults),
 		KeyBackendMode:        strconv.FormatBool(in.BackendMode), KeyDefaultPageSize: strconv.Itoa(in.DefaultPageSize), KeyPageSizeOptions: string(pageSizes), KeySupportContact: strings.TrimSpace(in.SupportContact), KeyDocumentationURL: strings.TrimSpace(in.DocumentationURL), KeyHomeContent: in.HomeContent, KeyHideImportButton: strconv.FormatBool(in.HideImportButton), KeyLoginAgreementMode: strings.TrimSpace(in.LoginAgreementMode), KeyLoginAgreementUpdatedAt: strings.TrimSpace(in.LoginAgreementUpdatedAt), KeyLegalDocuments: string(legalDocuments),
@@ -1053,7 +900,7 @@ func validateAuthSourceDefaults(values map[string]AuthSourceDefault) error {
 		if !allowed[source] {
 			return fmt.Errorf("unsupported auth source default %q", source)
 		}
-		if value.BalanceMicros < 0 || value.Concurrency < 0 || value.RPM < 0 {
+		if value.Concurrency < 0 || value.RPM < 0 {
 			return fmt.Errorf("auth source default %q cannot be negative", source)
 		}
 	}
@@ -1106,7 +953,7 @@ func validateCustomNavigation(endpoints []CustomEndpoint, items []CustomMenuItem
 }
 
 func validateAndMarshalEmailTemplates(templates []EmailTemplate) ([]byte, error) {
-	allowedEvents := map[string]bool{"email_verification": true, "password_reset": true, "balance_low": true, "quota_limit": true, "subscription_expiry": true, "customer_notification": true}
+	allowedEvents := map[string]bool{"email_verification": true, "password_reset": true, "quota_limit": true}
 	seen := map[string]bool{}
 	for _, item := range templates {
 		key := item.Event + ":" + item.Locale
@@ -1251,36 +1098,8 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func parseProfileList(value string) []string {
-	var out []string
-	if err := json.Unmarshal([]byte(value), &out); err == nil {
-		if normalized := normalizeProfiles(out); len(normalized) > 0 {
-			return normalized
-		}
-	}
-	return []string{}
-}
-
 func isLocale(value string) bool {
 	return value == "en-US" || value == "zh-CN"
-}
-
-func isProfile(value string) bool {
-	return value == "personal" || value == "relay_operator" || value == "enterprise" || value == "platform"
-}
-
-func normalizeProfiles(values []string) []string {
-	out := make([]string, 0, len(values))
-	seen := map[string]bool{}
-	for _, value := range values {
-		profile := strings.TrimSpace(value)
-		if !isProfile(profile) || seen[profile] {
-			continue
-		}
-		seen[profile] = true
-		out = append(out, profile)
-	}
-	return out
 }
 
 func containsString(values []string, target string) bool {

@@ -105,7 +105,7 @@ func TestPostgresBackupRestoreRehearsal(t *testing.T) {
 	plugin := plugins.Plugin{
 		ID: "plugin-recovery", PluginID: "recovery.plugin", Name: "Recovery Plugin", Category: "testing", Type: "builtin",
 		Tier: plugins.TierFreeCore, Version: "1.0.0", Vendor: "AsterRouter", Status: plugins.StatusEnabled,
-		EntitlementStatus: plugins.EntitlementFree, Surfaces: []string{"admin"}, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		EntitlementStatus: plugins.EntitlementFree, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	if err := pluginRepo.SavePlugin(ctx, plugin); err != nil {
 		t.Fatalf("SavePlugin(): %v", err)

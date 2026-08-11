@@ -32,8 +32,8 @@ func TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	job, _, err := control.BeginDurableAIJob(ctx, gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "admin-job-key", ProfileScope: controlplane.ProfileScopePlatform,
-		TenantID: "admin-job-tenant", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "admin-job-principal",
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "admin-job-key",
+		ApplicationID: "admin-job-application", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "admin-job-principal",
 		ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary,
 	}, gatewaycore.CanonicalRequest{
 		ID: "admin-job-request", Fingerprint: "admin-job-fingerprint", IdempotencyKey: "admin-job-idempotency",
@@ -44,7 +44,7 @@ func TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ai-jobs?status=queued", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/console/ai-jobs?status=queued", nil)
 	request.Header.Set("Authorization", "Bearer secret")
 	list := httptest.NewRecorder()
 	handler.ServeHTTP(list, request)
@@ -58,7 +58,7 @@ func TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions(t *testing.T) {
 		t.Fatalf("list=%+v err=%v", listResponse.Data, err)
 	}
 
-	detailRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ai-jobs/"+job.ID, nil)
+	detailRequest := httptest.NewRequest(http.MethodGet, "/api/v1/console/ai-jobs/"+job.ID, nil)
 	detailRequest.Header.Set("Authorization", "Bearer secret")
 	detail := httptest.NewRecorder()
 	handler.ServeHTTP(detail, detailRequest)
@@ -66,7 +66,7 @@ func TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions(t *testing.T) {
 		t.Fatalf("detail status=%d body=%s", detail.Code, detail.Body.String())
 	}
 
-	runtimeRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ai-jobs/runtime", nil)
+	runtimeRequest := httptest.NewRequest(http.MethodGet, "/api/v1/console/ai-jobs/runtime", nil)
 	runtimeRequest.Header.Set("Authorization", "Bearer secret")
 	runtime := httptest.NewRecorder()
 	handler.ServeHTTP(runtime, runtimeRequest)
@@ -74,7 +74,7 @@ func TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions(t *testing.T) {
 		t.Fatalf("runtime status=%d body=%s", runtime.Code, runtime.Body.String())
 	}
 
-	cancelRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/ai-jobs/"+job.ID+"/cancel", nil)
+	cancelRequest := httptest.NewRequest(http.MethodPost, "/api/v1/console/ai-jobs/"+job.ID+"/cancel", nil)
 	cancelRequest.Header.Set("Authorization", "Bearer secret")
 	cancel := httptest.NewRecorder()
 	handler.ServeHTTP(cancel, cancelRequest)
@@ -82,7 +82,7 @@ func TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions(t *testing.T) {
 		t.Fatalf("cancel status=%d body=%s", cancel.Code, cancel.Body.String())
 	}
 
-	invalidRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ai-jobs?status=invalid", nil)
+	invalidRequest := httptest.NewRequest(http.MethodGet, "/api/v1/console/ai-jobs?status=invalid", nil)
 	invalidRequest.Header.Set("Authorization", "Bearer secret")
 	invalid := httptest.NewRecorder()
 	handler.ServeHTTP(invalid, invalidRequest)
@@ -105,7 +105,7 @@ func TestAdminAIJobRBACRequiresGlobalScope(t *testing.T) {
 	if _, err := control.CreateRoleBinding(ctx, "tester", controlplane.RoleBindingRequest{UserID: manager.ID, Role: controlplane.RolePlatformAdmin, ScopeType: controlplane.RoleScopeDepartment, ScopeID: department.ID}); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ai-jobs", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/console/ai-jobs", nil)
 	request.Header.Set("Authorization", "Bearer secret")
 	request.Header.Set("X-Actor", manager.Email)
 	record := httptest.NewRecorder()

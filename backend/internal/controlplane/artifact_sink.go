@@ -124,7 +124,7 @@ func (s *Service) ensureCustomerSinkProviderOutput(
 
 func artifactOwnerFromJob(job AIJob) ArtifactOwner {
 	return ArtifactOwner{
-		ProfileScope: job.ProfileScope, TenantID: job.TenantID, IntegrationID: job.IntegrationID,
+		ApplicationID: job.ApplicationID, IntegrationID: job.IntegrationID,
 		PrincipalType: job.PrincipalType, PrincipalID: job.PrincipalID, ExternalSubjectReference: job.ExternalSubjectReference,
 	}
 }

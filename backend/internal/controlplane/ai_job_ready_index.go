@@ -15,10 +15,9 @@ var (
 )
 
 const (
-	AIJobReadyScopeAll       = "all"
-	AIJobReadyScopeProfile   = "profile"
-	AIJobReadyScopeTenant    = "tenant"
-	AIJobReadyScopePrincipal = "principal"
+	AIJobReadyScopeAll         = "all"
+	AIJobReadyScopeApplication = "application"
+	AIJobReadyScopePrincipal   = "principal"
 )
 
 // AIJobReadyEntry contains scheduling metadata only. Request payloads,
@@ -28,8 +27,7 @@ type AIJobReadyEntry struct {
 	Status                   string    `json:"status"`
 	StatusVersion            int       `json:"status_version"`
 	FenceToken               int64     `json:"fence_token"`
-	ProfileScope             string    `json:"profile_scope"`
-	TenantID                 string    `json:"tenant_id"`
+	ApplicationID            string    `json:"application_id"`
 	CredentialSource         string    `json:"credential_source"`
 	IntegrationID            string    `json:"integration_id"`
 	PrincipalType            string    `json:"principal_type"`
@@ -52,8 +50,7 @@ type AIJobReadyQuery struct {
 
 type AIJobReadyScope struct {
 	Level                    string
-	ProfileScope             string
-	TenantID                 string
+	ApplicationID            string
 	CredentialSource         string
 	IntegrationID            string
 	PrincipalType            string
@@ -77,7 +74,7 @@ func newAIJobReadyEntry(job AIJob) (AIJobReadyEntry, error) {
 	}
 	entry := AIJobReadyEntry{
 		JobID: job.ID, Status: job.Status, StatusVersion: job.StatusVersion, FenceToken: job.FenceToken,
-		ProfileScope: job.ProfileScope, TenantID: job.TenantID, CredentialSource: job.CredentialSource,
+		ApplicationID: job.ApplicationID, CredentialSource: job.CredentialSource,
 		IntegrationID: job.IntegrationID, PrincipalType: job.PrincipalType, PrincipalID: job.PrincipalID,
 		ExternalSubjectReference: job.ExternalSubjectReference, Priority: job.Priority, ReadyAt: readyAt, CreatedAt: job.CreatedAt,
 	}
@@ -94,8 +91,7 @@ func normalizeAIJobReadyEntry(entry *AIJobReadyEntry) {
 	}
 	entry.JobID = strings.TrimSpace(entry.JobID)
 	entry.Status = strings.TrimSpace(entry.Status)
-	entry.ProfileScope = strings.TrimSpace(entry.ProfileScope)
-	entry.TenantID = strings.TrimSpace(entry.TenantID)
+	entry.ApplicationID = strings.TrimSpace(entry.ApplicationID)
 	entry.CredentialSource = strings.TrimSpace(entry.CredentialSource)
 	entry.IntegrationID = strings.TrimSpace(entry.IntegrationID)
 	entry.PrincipalType = strings.TrimSpace(entry.PrincipalType)
@@ -113,7 +109,7 @@ func aiJobReadyAt(job AIJob) time.Time {
 }
 
 func validateAIJobReadyEntry(entry AIJobReadyEntry) error {
-	if strings.TrimSpace(entry.JobID) == "" || entry.StatusVersion <= 0 || strings.TrimSpace(entry.TenantID) == "" ||
+	if strings.TrimSpace(entry.JobID) == "" || entry.StatusVersion <= 0 || strings.TrimSpace(entry.ApplicationID) == "" ||
 		strings.TrimSpace(entry.PrincipalID) == "" || entry.ReadyAt.IsZero() || entry.CreatedAt.IsZero() ||
 		!oneOf(entry.Status, AIJobStatusQueued, AIJobStatusDispatching) {
 		return ErrAIJobReadyIndexConfig
@@ -127,7 +123,7 @@ func (entry AIJobReadyEntry) reference() AIJobReadyReference {
 
 func aiJobReadyScopeForEntry(level string, entry AIJobReadyEntry) AIJobReadyScope {
 	return AIJobReadyScope{
-		Level: level, ProfileScope: entry.ProfileScope, TenantID: entry.TenantID, CredentialSource: entry.CredentialSource,
+		Level: level, ApplicationID: entry.ApplicationID, CredentialSource: entry.CredentialSource,
 		IntegrationID: entry.IntegrationID, PrincipalType: entry.PrincipalType, PrincipalID: entry.PrincipalID,
 		ExternalSubjectReference: entry.ExternalSubjectReference,
 	}
@@ -137,14 +133,12 @@ func validateAIJobReadyScope(scope AIJobReadyScope) error {
 	switch scope.Level {
 	case AIJobReadyScopeAll:
 		return nil
-	case AIJobReadyScopeProfile:
-		return nil
-	case AIJobReadyScopeTenant:
-		if strings.TrimSpace(scope.TenantID) != "" {
+	case AIJobReadyScopeApplication:
+		if strings.TrimSpace(scope.ApplicationID) != "" {
 			return nil
 		}
 	case AIJobReadyScopePrincipal:
-		if strings.TrimSpace(scope.TenantID) != "" && strings.TrimSpace(scope.PrincipalID) != "" {
+		if strings.TrimSpace(scope.ApplicationID) != "" && strings.TrimSpace(scope.PrincipalID) != "" {
 			return nil
 		}
 	}
@@ -155,13 +149,11 @@ func aiJobReadyScopeKey(scope AIJobReadyScope) string {
 	switch scope.Level {
 	case AIJobReadyScopeAll:
 		return AIJobReadyScopeAll
-	case AIJobReadyScopeProfile:
-		return strings.TrimSpace(scope.ProfileScope)
-	case AIJobReadyScopeTenant:
-		return strings.Join([]string{strings.TrimSpace(scope.ProfileScope), strings.TrimSpace(scope.TenantID)}, "\x00")
+	case AIJobReadyScopeApplication:
+		return strings.TrimSpace(scope.ApplicationID)
 	case AIJobReadyScopePrincipal:
 		return strings.Join([]string{
-			strings.TrimSpace(scope.ProfileScope), strings.TrimSpace(scope.TenantID), strings.TrimSpace(scope.CredentialSource),
+			strings.TrimSpace(scope.ApplicationID), strings.TrimSpace(scope.CredentialSource),
 			strings.TrimSpace(scope.IntegrationID), strings.TrimSpace(scope.PrincipalType), strings.TrimSpace(scope.PrincipalID),
 			strings.TrimSpace(scope.ExternalSubjectReference),
 		}, "\x00")

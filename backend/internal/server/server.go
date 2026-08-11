@@ -13,7 +13,6 @@ import (
 	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
 	"github.com/astercloud/asterrouter/backend/internal/httpx"
-	operatorcore "github.com/astercloud/asterrouter/backend/internal/operator"
 	"github.com/astercloud/asterrouter/backend/internal/plugins"
 	"github.com/astercloud/asterrouter/backend/internal/settings"
 	"github.com/astercloud/asterrouter/backend/internal/system"
@@ -30,7 +29,6 @@ type Options struct {
 	DingTalkService    *auth.DingTalkService
 	SettingsService    *settings.Service
 	ControlService     *controlplane.Service
-	OperatorService    *operatorcore.Service
 	PluginService      *plugins.Service
 	SystemService      *system.Service
 	ExportJobStore     CSVExportJobStore
@@ -97,7 +95,6 @@ func New(opts Options) http.Handler {
 		}
 		if opts.SettingsService != nil {
 			dispatchers = append(dispatchers, emailAlertDispatcher{control: opts.ControlService, settings: opts.SettingsService})
-			opts.ControlService.SetCustomerNotificationDispatcher(customerEmailNotificationDispatcher{settings: opts.SettingsService})
 		}
 		opts.ControlService.SetAlertDispatcher(dispatchers)
 		if opts.AuthService != nil {
@@ -135,13 +132,6 @@ func New(opts Options) http.Handler {
 			if err := opts.ControlService.Health(c.Request.Context()); err != nil {
 				metrics.recordReadiness(false)
 				writeReadinessUnavailable(c, "control_plane", err)
-				return
-			}
-		}
-		if opts.OperatorService != nil {
-			if err := opts.OperatorService.Health(c.Request.Context()); err != nil {
-				metrics.recordReadiness(false)
-				writeReadinessUnavailable(c, "operator", err)
 				return
 			}
 		}
@@ -196,48 +186,29 @@ func New(opts Options) http.Handler {
 			return
 		}
 		httpx.OK(c, gin.H{
-			"default_profile":  data.DefaultProfile,
-			"enabled_profiles": data.EnabledProfiles,
-			"setup_completed":  data.SetupCompleted,
+			"setup_completed": data.SetupCompleted,
 		})
 	})
-	api.POST("/setup/profiles", func(c *gin.Context) {
+	api.POST("/setup", func(c *gin.Context) {
 		var req struct {
-			Profile string `json:"profile"`
+			OrganizationName string `json:"organization_name"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1400, "invalid request")
 			return
 		}
-		profile := strings.TrimSpace(req.Profile)
-		data, err := opts.SettingsService.ApplyInitialProfile(c.Request.Context(), profile)
+		data, err := opts.SettingsService.CompleteSetup(c.Request.Context(), req.OrganizationName)
 		if err != nil {
-			if errors.Is(err, settings.ErrUnsupportedDeploymentProfile) {
+			switch {
+			case errors.Is(err, settings.ErrOrganizationNameRequired):
 				httpx.Error(c, http.StatusBadRequest, 1401, err.Error())
-				return
-			}
-			if !errors.Is(err, settings.ErrDeploymentProfileInitialized) {
+			case errors.Is(err, settings.ErrSetupCompleted):
+				httpx.Error(c, http.StatusConflict, 1401, err.Error())
+			default:
 				_ = c.Error(err)
-				httpx.Error(c, http.StatusInternalServerError, 1401, "failed to initialize deployment profile")
-				return
+				httpx.Error(c, http.StatusInternalServerError, 1401, "failed to complete setup")
 			}
-			data, err = opts.SettingsService.Admin(c.Request.Context())
-			if err != nil {
-				_ = c.Error(err)
-				httpx.Error(c, http.StatusInternalServerError, 1401, "failed to load deployment profile")
-				return
-			}
-			if !data.SetupCompleted || len(data.EnabledProfiles) != 1 || data.EnabledProfiles[0] != profile || data.DefaultProfile != profile {
-				httpx.Error(c, http.StatusBadRequest, 1401, settings.ErrDeploymentProfileInitialized.Error())
-				return
-			}
-		}
-		if profile == controlplane.ProfileScopePlatform && opts.ControlService != nil {
-			if err := opts.ControlService.EnsurePlatformBootstrap(c.Request.Context()); err != nil {
-				_ = c.Error(err)
-				httpx.Error(c, http.StatusInternalServerError, 1402, "failed to initialize platform domain")
-				return
-			}
+			return
 		}
 		httpx.OK(c, data.PublicSettings)
 	})
@@ -1078,59 +1049,26 @@ func New(opts Options) http.Handler {
 	})
 	registerPluginOpenRoutes(api.Group("/open/plugins"), opts.PluginService, opts.ControlService)
 	registerPluginHostRoutes(api.Group("/plugin-host"), opts.PluginService, opts.ControlService)
-	systemAPI := api.Group("/system")
-	systemAPI.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	systemAPI.Use(requireSystemAdministrator(opts.ControlService))
-	systemAPI.GET("/profiles", func(c *gin.Context) {
-		current, err := opts.SettingsService.Admin(c.Request.Context())
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1004, err.Error())
-			return
-		}
-		httpx.OK(c, profileBundleResponse(current))
-	})
-	systemAPI.PUT("/profiles", func(c *gin.Context) {
-		var req profileBundleRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1402, "invalid profile bundle payload")
-			return
-		}
-		current, err := opts.SettingsService.ApplyProfiles(c.Request.Context(), req.EnabledProfiles, req.DefaultProfile)
-		if err != nil {
-			httpx.Error(c, http.StatusBadRequest, 1403, err.Error())
-			return
-		}
-		if current.DefaultProfile == controlplane.ProfileScopePlatform && opts.ControlService != nil {
-			if err := opts.ControlService.EnsurePlatformBootstrap(c.Request.Context()); err != nil {
-				httpx.Error(c, http.StatusInternalServerError, 1404, "failed to initialize platform domain")
-				return
-			}
-		}
-		httpx.OK(c, profileBundleResponse(current))
-	})
-
-	admin := api.Group("/admin")
-	admin.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	admin.Use(requireProfile(opts.SettingsService, "enterprise"))
-	admin.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceEnterprise))
-	admin.Use(requireRBAC(opts.ControlService))
-	registerAdminRoutes(admin, opts.ControlService, exportJobStore, opts.AIJobRuntime)
-	registerAPIKeyClientRoutes(admin.Group("/api-keys"), opts.ControlService, opts.SettingsService)
-	registerPluginRoutes(admin.Group("/plugins"), opts.PluginService, opts.ControlService, "enterprise")
-	registerSystemRoutes(admin.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
+	applications := api.Group("/applications")
+	applications.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
+	applications.Use(requireRBAC(opts.ControlService))
+	registerApplicationRoutes(applications, opts.ControlService)
+	console := api.Group("/console")
+	console.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
+	console.Use(requireRBAC(opts.ControlService))
+	registerAdminRoutes(console, opts.ControlService, exportJobStore, opts.AIJobRuntime)
+	registerAPIKeyClientRoutes(console.Group("/api-keys"), opts.ControlService, opts.SettingsService)
+	registerPluginRoutes(console.Group("/plugins"), opts.PluginService, opts.ControlService)
+	registerSystemRoutes(console.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
 	onboarding := api.Group("/onboarding")
 	onboarding.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	onboarding.Use(requireProfile(opts.SettingsService, "enterprise"))
-	onboarding.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceEnterprise))
 	onboarding.Use(requireRBAC(opts.ControlService))
 	registerOnboardingRoutes(onboarding, opts.ControlService, opts.SettingsService)
 	supply := api.Group("/supply")
 	supply.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	supply.Use(requireProfile(opts.SettingsService, "enterprise"))
-	supply.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceEnterprise))
 	supply.Use(requireRBAC(opts.ControlService))
 	registerSupplyRoutes(supply, opts.ControlService)
-	admin.GET("/settings", func(c *gin.Context) {
+	console.GET("/settings", func(c *gin.Context) {
 		data, err := opts.SettingsService.Admin(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1004, err.Error())
@@ -1138,7 +1076,7 @@ func New(opts Options) http.Handler {
 		}
 		httpx.OK(c, data)
 	})
-	admin.PUT("/settings", func(c *gin.Context) {
+	console.PUT("/settings", func(c *gin.Context) {
 		var req settings.AdminSettings
 		if err := c.ShouldBindJSON(&req); err != nil {
 			httpx.Error(c, http.StatusBadRequest, 1402, "invalid settings payload")
@@ -1147,9 +1085,6 @@ func New(opts Options) http.Handler {
 		previous, err := opts.SettingsService.Admin(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1004, err.Error())
-			return
-		}
-		if !requireProfileBundleChange(c, opts.ControlService, previous, req) {
 			return
 		}
 		data, err := opts.SettingsService.Update(c.Request.Context(), req)
@@ -1176,7 +1111,7 @@ func New(opts Options) http.Handler {
 		data.RuntimeRestartRequired = len(data.RuntimeRestartReasons) > 0
 		httpx.OK(c, data)
 	})
-	admin.POST("/settings/retention/cleanup", func(c *gin.Context) {
+	console.POST("/settings/retention/cleanup", func(c *gin.Context) {
 		data, err := opts.SettingsService.Admin(c.Request.Context())
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1004, err.Error())
@@ -1189,52 +1124,11 @@ func New(opts Options) http.Handler {
 		}
 		httpx.OK(c, result)
 	})
-	registerEmailSettings(admin, opts.SettingsService)
+	registerEmailSettings(console, opts.SettingsService)
 
 	portal := api.Group("/portal")
 	portal.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	portal.Use(requireProfile(opts.SettingsService, "enterprise"))
-	portal.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfacePortal))
 	registerPortalRoutes(portal, opts.ControlService, opts.SettingsService)
-
-	customer := api.Group("/customer")
-	customer.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	customer.Use(requireProfile(opts.SettingsService, "relay_operator"))
-	customer.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceCustomer))
-	registerPortalRoutes(customer, opts.ControlService, opts.SettingsService)
-	registerCustomerRoutes(customer, opts.ControlService)
-
-	operatorAPI := api.Group("/operator")
-	operatorAPI.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	operatorAPI.Use(requireProfile(opts.SettingsService, "relay_operator"))
-	operatorAPI.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfaceRelayOperator))
-	registerOperatorRoutes(operatorAPI, opts.OperatorService, opts.ControlService)
-	registerSharedCoreRoutes(operatorAPI, opts.ControlService, false)
-	registerSurfaceSettings(operatorAPI, opts.SettingsService, opts.ControlService)
-	registerSystemRoutes(operatorAPI.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
-	registerPluginRoutes(operatorAPI.Group("/plugins"), opts.PluginService, opts.ControlService, "relay_operator")
-
-	consoleAPI := api.Group("/console")
-	consoleAPI.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	consoleAPI.Use(requireProfile(opts.SettingsService, "personal"))
-	consoleAPI.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfacePersonal))
-	registerSharedCoreRoutes(consoleAPI, opts.ControlService, true)
-	consoleAPI.GET("/dashboard", func(c *gin.Context) {
-		data, err := opts.ControlService.Dashboard(c.Request.Context())
-		sharedCoreResponse(c, data, err)
-	})
-	registerSurfaceSettings(consoleAPI, opts.SettingsService, opts.ControlService)
-	registerSystemRoutes(consoleAPI.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
-	registerPluginRoutes(consoleAPI.Group("/plugins"), opts.PluginService, opts.ControlService, "personal")
-
-	platformAPI := api.Group("/platform")
-	platformAPI.Use(requireAdminAuth(opts.Runtime.AdminToken, opts.AuthService))
-	platformAPI.Use(requireProfile(opts.SettingsService, "platform"))
-	platformAPI.Use(requireSurfaceAccess(opts.ControlService, controlplane.SurfacePlatform))
-	platformAPI.Use(requireSurfaceRBAC(opts.ControlService, controlplane.SurfacePlatform))
-	registerPlatformRoutes(platformAPI, opts.ControlService, opts.PluginService, opts.AIJobRuntime)
-	registerSurfaceSettings(platformAPI, opts.SettingsService, opts.ControlService)
-	registerSystemRoutes(platformAPI.Group("/system"), opts.SystemService, opts.SettingsService, opts.ControlService)
 	registerGatewayRoutes(r, opts.ControlService, opts.DurableAIJobs, opts.PluginService)
 
 	serveSPA(r, opts.Runtime.FrontendDir)
@@ -1246,21 +1140,8 @@ func writeReadinessUnavailable(c *gin.Context, dependency string, err error) {
 	httpx.Error(c, http.StatusServiceUnavailable, 1001, "service dependency is unavailable")
 }
 
-func enrichLoginResult(ctx context.Context, control *controlplane.Service, result auth.LoginResult) auth.LoginResult {
-	result.User.AllowedSurfaces = allowedSurfacesForActor(ctx, control, result.User.Username)
+func enrichLoginResult(_ context.Context, _ *controlplane.Service, result auth.LoginResult) auth.LoginResult {
 	return result
-}
-
-type profileBundleRequest struct {
-	EnabledProfiles []string `json:"enabled_profiles"`
-	DefaultProfile  string   `json:"default_profile"`
-}
-
-func profileBundleResponse(current settings.AdminSettings) profileBundleRequest {
-	return profileBundleRequest{
-		EnabledProfiles: current.EnabledProfiles,
-		DefaultProfile:  current.DefaultProfile,
-	}
 }
 
 func agreementAccepted(ctx context.Context, service *settings.Service, accepted bool) bool {
@@ -1362,9 +1243,9 @@ func retentionCutoff(days int) time.Time {
 }
 
 func workspaceUserDefaults(admin settings.AdminSettings, source string) controlplane.WorkspaceUserDefaults {
-	result := controlplane.WorkspaceUserDefaults{BalanceMicros: admin.DefaultBalanceMicros, ConcurrencyLimit: admin.DefaultConcurrency, RPMLimit: admin.DefaultRPM}
+	result := controlplane.WorkspaceUserDefaults{ConcurrencyLimit: admin.DefaultConcurrency, RPMLimit: admin.DefaultRPM}
 	if override, ok := admin.AuthSourceDefaults[source]; ok && override.Enabled {
-		result = controlplane.WorkspaceUserDefaults{BalanceMicros: override.BalanceMicros, ConcurrencyLimit: override.Concurrency, RPMLimit: override.RPM}
+		result = controlplane.WorkspaceUserDefaults{ConcurrencyLimit: override.Concurrency, RPMLimit: override.RPM}
 	}
 	return result
 }

@@ -20,7 +20,7 @@ func TestArtifactServiceLifecycleIsolationRangeAndDeletion(t *testing.T) {
 	}
 	base := time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return base }
-	auth := aiJobTestAuth("tenant-artifact-service", "principal-artifact-service")
+	auth := aiJobTestAuth("application-artifact-service", "principal-artifact-service")
 	job, _, err := svc.BeginDurableAIJob(context.Background(), auth, aiJobTestRequest("artifact-service-idem", "artifact-service-fingerprint"))
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestArtifactServiceIntegrityFailureMetadataAndRetention(t *testing.T) {
 	}
 	base := time.Date(2026, time.July, 15, 13, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return base }
-	auth := aiJobTestAuth("tenant-artifact-integrity", "principal-artifact-integrity")
+	auth := aiJobTestAuth("application-artifact-integrity", "principal-artifact-integrity")
 	job, _, err := svc.BeginDurableAIJob(context.Background(), auth, aiJobTestRequest("artifact-integrity-idem", "artifact-integrity-fingerprint"))
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestArtifactDeletionFailureCanRetry(t *testing.T) {
 	}
 	base := time.Date(2026, time.July, 15, 14, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return base }
-	auth := aiJobTestAuth("tenant-delete-retry", "principal-delete-retry")
+	auth := aiJobTestAuth("application-delete-retry", "principal-delete-retry")
 	job, _, err := svc.BeginDurableAIJob(context.Background(), auth, aiJobTestRequest("delete-retry-idem", "delete-retry-fingerprint"))
 	if err != nil {
 		t.Fatal(err)

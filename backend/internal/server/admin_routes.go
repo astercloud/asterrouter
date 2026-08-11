@@ -22,11 +22,11 @@ func registerAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service, 
 	registerRoutingAdminRoutes(admin, control)
 	registerGatewayModelAdminRoutes(admin, control)
 	registerAPIKeyAdminRoutes(admin, control)
-	registerPricingRuleRoutes(admin, control, PricingSurfaceAdmin)
+	registerPricingRuleRoutes(admin, control)
 	registerEffectivePricingAdminRoutes(admin, control)
-	registerAIJobAdminRoutes(admin, control, runtime, "")
-	registerArtifactAdminRoutes(admin, control, "")
-	registerObservabilityAdminRoutesForScope(admin, control, "")
+	registerAIJobAdminRoutes(admin, control, runtime)
+	registerArtifactAdminRoutes(admin, control)
+	registerObservabilityAdminRoutes(admin, control)
 	registerAlertAdminRoutes(admin, control)
 	registerCSVExportJobRoutes(admin.Group("/export-jobs"), control, exportJobs)
 }
@@ -385,7 +385,7 @@ func registerAPIKeyAdminRoutes(admin *gin.RouterGroup, control *controlplane.Ser
 			httpx.Error(c, http.StatusBadRequest, 1506, "invalid api key payload")
 			return
 		}
-		if access := principalAccess(c); !access.Global && len(access.DepartmentIDs) > 0 {
+		if access := principalAccess(c); !access.OrganizationWide && len(access.DepartmentIDs) > 0 {
 			if req.KeyType != controlplane.APIKeyTypeUser || req.OwnerUserID == "" {
 				httpx.Error(c, http.StatusForbidden, 1451, "department-scoped administrators can only create owned user keys")
 				return
@@ -449,10 +449,9 @@ func registerAPIKeyAdminRoutes(admin *gin.RouterGroup, control *controlplane.Ser
 	})
 }
 
-func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *controlplane.Service, profileScope string) {
+func registerObservabilityAdminRoutes(admin *gin.RouterGroup, control *controlplane.Service) {
 	admin.GET("/audit-logs", func(c *gin.Context) {
 		query := auditLogQuery(c)
-		query.ProfileScope = profileScope
 		data, err := control.ListAuditLogsQuery(c.Request.Context(), query)
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1106, err.Error())
@@ -462,7 +461,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/audit-logs/summary", func(c *gin.Context) {
 		query := auditLogQuery(c)
-		query.ProfileScope = profileScope
 		data, err := control.AuditLogSummaryQuery(c.Request.Context(), query)
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1106, err.Error())
@@ -472,7 +470,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/audit-logs/export", func(c *gin.Context) {
 		query := auditLogQuery(c)
-		query.ProfileScope = profileScope
 		totalLimit, baseOffset := exportWindow(c)
 		data, err := collectAuditLogsForExportQuery(c.Request.Context(), control, query, totalLimit, baseOffset)
 		if err != nil {
@@ -483,7 +480,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/usage", func(c *gin.Context) {
 		query, err := scopeUsageQuery(c.Request.Context(), control, principalAccess(c), usageQuery(c))
-		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1107, err.Error())
 			return
@@ -497,7 +493,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/usage/export", func(c *gin.Context) {
 		query, err := scopeUsageQuery(c.Request.Context(), control, principalAccess(c), usageQuery(c))
-		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1107, err.Error())
 			return
@@ -512,7 +507,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/cost-allocation", func(c *gin.Context) {
 		query, err := scopeUsageQuery(c.Request.Context(), control, principalAccess(c), usageQuery(c))
-		query.ProfileScope = profileScope
 		if err != nil {
 			writeCostAllocationError(c, err)
 			return
@@ -526,7 +520,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/cost-allocation/export", func(c *gin.Context) {
 		query, err := scopeUsageQuery(c.Request.Context(), control, principalAccess(c), usageQuery(c))
-		query.ProfileScope = profileScope
 		if err != nil {
 			writeCostAllocationError(c, err)
 			return
@@ -541,7 +534,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/gateway-traces", func(c *gin.Context) {
 		query, err := scopeGatewayTraceQuery(c.Request.Context(), control, principalAccess(c), gatewayTraceQuery(c))
-		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1109, err.Error())
 			return
@@ -555,7 +547,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/gateway-traces/summary", func(c *gin.Context) {
 		query, err := scopeGatewayTraceQuery(c.Request.Context(), control, principalAccess(c), gatewayTraceQuery(c))
-		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1109, err.Error())
 			return
@@ -569,7 +560,6 @@ func registerObservabilityAdminRoutesForScope(admin *gin.RouterGroup, control *c
 	})
 	admin.GET("/gateway-traces/export", func(c *gin.Context) {
 		query, err := scopeGatewayTraceQuery(c.Request.Context(), control, principalAccess(c), gatewayTraceQuery(c))
-		query.ProfileScope = profileScope
 		if err != nil {
 			httpx.Error(c, http.StatusInternalServerError, 1109, err.Error())
 			return

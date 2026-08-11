@@ -87,7 +87,7 @@ func TestRedisAIJobReadyIndexCoordinatesConcurrentSchedulers(t *testing.T) {
 	svc.SetAIJobReadyIndex(index)
 	for jobIndex := 0; jobIndex < 20; jobIndex++ {
 		marker := "redis-scheduler-" + string(rune('a'+jobIndex))
-		if _, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("tenant-redis", "principal-"+marker), aiJobTestRequest(marker, marker)); err != nil {
+		if _, _, err := svc.BeginDurableAIJob(ctx, aiJobTestAuth("application-redis", "principal-"+marker), aiJobTestRequest(marker, marker)); err != nil {
 			t.Fatal(err)
 		}
 	}

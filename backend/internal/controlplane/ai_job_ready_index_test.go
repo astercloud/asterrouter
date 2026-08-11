@@ -28,8 +28,7 @@ func TestMemoryAIJobReadyIndexContract(t *testing.T) {
 		t.Fatalf("fair candidates=%+v err=%v", candidates, err)
 	}
 	assertAIJobReadyCount(t, index, AIJobReadyScope{Level: AIJobReadyScopeAll}, 4)
-	assertAIJobReadyCount(t, index, AIJobReadyScope{Level: AIJobReadyScopeProfile, ProfileScope: "platform"}, 4)
-	assertAIJobReadyCount(t, index, AIJobReadyScope{Level: AIJobReadyScopeTenant, ProfileScope: "platform", TenantID: "tenant-a"}, 4)
+	assertAIJobReadyCount(t, index, AIJobReadyScope{Level: AIJobReadyScopeApplication, ApplicationID: "application-a"}, 4)
 	assertAIJobReadyCount(t, index, aiJobReadyScopeForEntry(AIJobReadyScopePrincipal, principalAOld), 2)
 
 	newer := principalAOld
@@ -64,7 +63,7 @@ func TestNewAIJobReadyEntryRejectsPayloadStateAndUsesLeaseDeadline(t *testing.T)
 	leaseUntil := base.Add(time.Minute)
 	job := AIJob{
 		ID: "job-ready", Status: AIJobStatusDispatching, StatusVersion: 2, FenceToken: 1,
-		ProfileScope: "platform", TenantID: "tenant-a", PrincipalID: "principal-a",
+		ApplicationID: "application-a", PrincipalID: "principal-a",
 		RequestPayload: "must-not-be-indexed", RequestPayloadCiphertext: "must-not-be-indexed",
 		QueueLeaseUntil: &leaseUntil, NextEligibleAt: base, CreatedAt: base,
 	}
@@ -80,7 +79,7 @@ func TestNewAIJobReadyEntryRejectsPayloadStateAndUsesLeaseDeadline(t *testing.T)
 
 func readyIndexTestEntry(jobID, principalID string, version int, readyAt time.Time) AIJobReadyEntry {
 	return AIJobReadyEntry{
-		JobID: jobID, Status: AIJobStatusQueued, StatusVersion: version, ProfileScope: "platform", TenantID: "tenant-a",
+		JobID: jobID, Status: AIJobStatusQueued, StatusVersion: version, ApplicationID: "application-a",
 		CredentialSource: "api_key", PrincipalType: "customer", PrincipalID: principalID,
 		Priority: 1, ReadyAt: readyAt, CreatedAt: readyAt.Add(-time.Minute),
 	}

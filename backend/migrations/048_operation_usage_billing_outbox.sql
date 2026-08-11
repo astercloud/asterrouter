@@ -1,7 +1,6 @@
 CREATE TABLE IF NOT EXISTS ai_operations (
   id TEXT PRIMARY KEY,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL,
+  application_id TEXT NOT NULL,
   credential_id TEXT NOT NULL,
   credential_source TEXT NOT NULL,
   integration_id TEXT NOT NULL DEFAULT '',
@@ -24,11 +23,11 @@ CREATE TABLE IF NOT EXISTS ai_operations (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ai_operations_idempotency_idx
-  ON ai_operations(profile_scope, tenant_id, credential_id, idempotency_key)
+  ON ai_operations(application_id, credential_id, idempotency_key)
   WHERE idempotency_key <> '';
 
-CREATE INDEX IF NOT EXISTS ai_operations_tenant_created_idx
-  ON ai_operations(profile_scope, tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ai_operations_application_created_idx
+  ON ai_operations(application_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS ai_attempts (
   id TEXT PRIMARY KEY,
@@ -56,7 +55,7 @@ CREATE TABLE IF NOT EXISTS billing_ledger_entries (
   usage_version INTEGER NOT NULL,
   usage_record_id TEXT NOT NULL,
   request_fingerprint TEXT NOT NULL,
-  purpose TEXT NOT NULL CHECK (purpose IN ('usage_cost', 'customer_charge')),
+  purpose TEXT NOT NULL CHECK (purpose = 'usage_cost'),
   amount_micros BIGINT NOT NULL,
   currency TEXT NOT NULL DEFAULT 'USD' CHECK (currency = 'USD'),
   pricing_evaluation_id TEXT NOT NULL REFERENCES pricing_evaluations(id) ON DELETE RESTRICT,

@@ -30,7 +30,7 @@ func TestAdminAlertEndpoints(t *testing.T) {
 		t.Fatalf("RecordGatewayUsage(): %v", err)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/alerts?type=api_key_quota&status=active", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/alerts?type=api_key_quota&status=active", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -47,7 +47,7 @@ func TestAdminAlertEndpoints(t *testing.T) {
 	}
 	alertID := listResp.Data[0].ID
 
-	summaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/alerts/summary?type=api_key_quota&status=active", nil)
+	summaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/alerts/summary?type=api_key_quota&status=active", nil)
 	summaryRec := httptest.NewRecorder()
 	handler.ServeHTTP(summaryRec, summaryReq)
 	if summaryRec.Code != http.StatusOK {
@@ -63,7 +63,7 @@ func TestAdminAlertEndpoints(t *testing.T) {
 		t.Fatalf("summary mismatch: %+v", summaryResp.Data)
 	}
 
-	ackReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/alerts/"+alertID+"/acknowledge", nil)
+	ackReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/alerts/"+alertID+"/acknowledge", nil)
 	ackRec := httptest.NewRecorder()
 	handler.ServeHTTP(ackRec, ackReq)
 	if ackRec.Code != http.StatusOK {
@@ -79,7 +79,7 @@ func TestAdminAlertEndpoints(t *testing.T) {
 		t.Fatalf("ack mismatch: %+v", ackResp.Data)
 	}
 
-	resolveReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/alerts/"+alertID+"/resolve", nil)
+	resolveReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/alerts/"+alertID+"/resolve", nil)
 	resolveRec := httptest.NewRecorder()
 	handler.ServeHTTP(resolveRec, resolveReq)
 	if resolveRec.Code != http.StatusOK {

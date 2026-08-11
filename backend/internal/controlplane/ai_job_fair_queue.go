@@ -24,8 +24,7 @@ type aiJobFairLevelStats struct {
 
 type aiJobFairCandidate struct {
 	Job               *AIJob
-	ProfileKey        string
-	TenantKey         string
+	ApplicationKey    string
 	PrincipalKey      string
 	EffectivePriority int
 }
@@ -38,23 +37,20 @@ func rankAIJobFairCandidates(candidates, jobs []AIJob, activities []aiJobDispatc
 	for index := range candidates {
 		remaining = append(remaining, newAIJobFairCandidate(&candidates[index], now))
 	}
-	profileStats := map[string]*aiJobFairLevelStats{}
-	tenantStats := map[string]*aiJobFairLevelStats{}
+	applicationStats := map[string]*aiJobFairLevelStats{}
 	principalStats := map[string]*aiJobFairLevelStats{}
 	for _, job := range jobs {
 		if !aiJobInFlightForFairness(job.Status) {
 			continue
 		}
-		fairStats(profileStats, aiJobProfileFairKey(job)).InFlight++
-		fairStats(tenantStats, aiJobTenantFairKey(job)).InFlight++
+		fairStats(applicationStats, aiJobApplicationFairKey(job)).InFlight++
 		fairStats(principalStats, aiJobPrincipalFairKey(job)).InFlight++
 	}
 	for _, activity := range activities {
 		if activity.DispatchedAt.IsZero() {
 			continue
 		}
-		updateAIJobLastDispatch(fairStats(profileStats, aiJobProfileFairKey(activity.Job)), activity.DispatchedAt)
-		updateAIJobLastDispatch(fairStats(tenantStats, aiJobTenantFairKey(activity.Job)), activity.DispatchedAt)
+		updateAIJobLastDispatch(fairStats(applicationStats, aiJobApplicationFairKey(activity.Job)), activity.DispatchedAt)
 		updateAIJobLastDispatch(fairStats(principalStats, aiJobPrincipalFairKey(activity.Job)), activity.DispatchedAt)
 	}
 
@@ -62,14 +58,13 @@ func rankAIJobFairCandidates(candidates, jobs []AIJob, activities []aiJobDispatc
 	for len(remaining) > 0 && len(out) < limit {
 		best := 0
 		for index := 1; index < len(remaining); index++ {
-			if aiJobFairCandidateLess(remaining[index], remaining[best], profileStats, tenantStats, principalStats) {
+			if aiJobFairCandidateLess(remaining[index], remaining[best], applicationStats, principalStats) {
 				best = index
 			}
 		}
 		selected := remaining[best]
 		out = append(out, *selected.Job)
-		fairStats(profileStats, selected.ProfileKey).Selected++
-		fairStats(tenantStats, selected.TenantKey).Selected++
+		fairStats(applicationStats, selected.ApplicationKey).Selected++
 		fairStats(principalStats, selected.PrincipalKey).Selected++
 		remaining[best] = remaining[len(remaining)-1]
 		remaining = remaining[:len(remaining)-1]
@@ -79,24 +74,19 @@ func rankAIJobFairCandidates(candidates, jobs []AIJob, activities []aiJobDispatc
 
 func newAIJobFairCandidate(job *AIJob, now time.Time) aiJobFairCandidate {
 	return aiJobFairCandidate{
-		Job: job, ProfileKey: aiJobProfileFairKey(*job), TenantKey: aiJobTenantFairKey(*job),
+		Job: job, ApplicationKey: aiJobApplicationFairKey(*job),
 		PrincipalKey: aiJobPrincipalFairKey(*job), EffectivePriority: effectiveAIJobPriority(*job, now),
 	}
 }
 
-func aiJobFairCandidateLess(left, right aiJobFairCandidate, profileStats, tenantStats, principalStats map[string]*aiJobFairLevelStats) bool {
+func aiJobFairCandidateLess(left, right aiJobFairCandidate, applicationStats, principalStats map[string]*aiJobFairLevelStats) bool {
 	leftReclaim := left.Job.Status == AIJobStatusDispatching
 	rightReclaim := right.Job.Status == AIJobStatusDispatching
 	if leftReclaim != rightReclaim {
 		return leftReclaim
 	}
 	if comparison := compareAIJobFairLevel(
-		fairStats(profileStats, left.ProfileKey), fairStats(profileStats, right.ProfileKey), left.ProfileKey, right.ProfileKey,
-	); comparison != 0 {
-		return comparison < 0
-	}
-	if comparison := compareAIJobFairLevel(
-		fairStats(tenantStats, left.TenantKey), fairStats(tenantStats, right.TenantKey), left.TenantKey, right.TenantKey,
+		fairStats(applicationStats, left.ApplicationKey), fairStats(applicationStats, right.ApplicationKey), left.ApplicationKey, right.ApplicationKey,
 	); comparison != 0 {
 		return comparison < 0
 	}
@@ -187,17 +177,13 @@ func updateAIJobLastDispatch(stats *aiJobFairLevelStats, dispatchedAt time.Time)
 	}
 }
 
-func aiJobProfileFairKey(job AIJob) string {
-	return strings.TrimSpace(job.ProfileScope)
-}
-
-func aiJobTenantFairKey(job AIJob) string {
-	return strings.Join([]string{aiJobProfileFairKey(job), strings.TrimSpace(job.TenantID)}, "\x00")
+func aiJobApplicationFairKey(job AIJob) string {
+	return strings.TrimSpace(job.ApplicationID)
 }
 
 func aiJobPrincipalFairKey(job AIJob) string {
 	return strings.Join([]string{
-		aiJobTenantFairKey(job), strings.TrimSpace(job.CredentialSource), strings.TrimSpace(job.IntegrationID),
+		aiJobApplicationFairKey(job), strings.TrimSpace(job.CredentialSource), strings.TrimSpace(job.IntegrationID),
 		strings.TrimSpace(job.PrincipalType), strings.TrimSpace(job.PrincipalID), strings.TrimSpace(job.ExternalSubjectReference),
 	}, "\x00")
 }

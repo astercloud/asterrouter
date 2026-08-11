@@ -134,12 +134,9 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 			source = gatewaycore.CredentialSourceJWTJWKS
 		}
 	}
-	tenantID := strings.TrimSpace(auth.APIKey.TenantID)
-	if tenantID == "" {
-		tenantID = gatewayDefaultTenantID
-	}
-	if auth.APIKey.CustomerID != "" && auth.APIKey.TenantID == "" {
-		tenantID = auth.APIKey.CustomerID
+	applicationID := strings.TrimSpace(auth.APIKey.ApplicationID)
+	if applicationID == "" {
+		applicationID = gatewayDefaultApplicationID
 	}
 	principalType := strings.TrimSpace(auth.APIKey.PrincipalType)
 	if principalType == "" {
@@ -152,11 +149,8 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 	if auth.APIKey.OwnerUserID != "" {
 		principalID = auth.APIKey.OwnerUserID
 	}
-	if auth.APIKey.CustomerID != "" {
-		principalID = auth.APIKey.CustomerID
-	}
-	if auth.PlatformTenant != nil {
-		tenantID = auth.PlatformTenant.ID
+	if auth.Application != nil {
+		applicationID = auth.Application.ID
 	}
 	if auth.GatewayPrincipal != nil {
 		principalType = auth.GatewayPrincipal.PrincipalType
@@ -180,8 +174,7 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 		CredentialID:             credentialID,
 		CredentialFingerprint:    auth.APIKey.Fingerprint,
 		IntegrationID:            integrationID,
-		ProfileScope:             auth.APIKey.ProfileScope,
-		TenantID:                 tenantID,
+		ApplicationID:            applicationID,
 		PrincipalType:            principalType,
 		PrincipalID:              principalID,
 		ExternalSubjectReference: auth.ExternalSubjectReference,
@@ -193,16 +186,16 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 		AllowedOperations:        append([]string(nil), keyPolicy.allowedOperations...),
 		AllowedCIDRs:             append([]string(nil), keyPolicy.allowedCIDRs...),
 		Limits: gatewaycore.CanonicalLimits{
-			QPSLimit:                 auth.effectiveQPSLimit(),
-			RPMLimit:                 auth.APIKey.RPMLimit,
-			TPMLimit:                 auth.APIKey.TPMLimit,
-			ConcurrencyLimit:         auth.APIKey.ConcurrencyLimit,
-			TenantConcurrencyLimit:   platformTenantConcurrencyLimit(auth.PlatformTenant),
-			MonthlyTokenLimit:        auth.effectiveMonthlyTokenLimit(),
-			MonthlyBudgetMicros:      auth.effectiveMonthlyBudgetMicros(),
-			MonthlyImageLimit:        auth.APIKey.MonthlyImageLimit,
-			MonthlyVideoSecondsLimit: auth.APIKey.MonthlyVideoSecondsLimit,
-			MonthlyAudioSecondsLimit: auth.APIKey.MonthlyAudioSecondsLimit,
+			QPSLimit:                    auth.effectiveQPSLimit(),
+			RPMLimit:                    auth.APIKey.RPMLimit,
+			TPMLimit:                    auth.APIKey.TPMLimit,
+			ConcurrencyLimit:            auth.APIKey.ConcurrencyLimit,
+			ApplicationConcurrencyLimit: applicationConcurrencyLimit(auth.Application),
+			MonthlyTokenLimit:           auth.effectiveMonthlyTokenLimit(),
+			MonthlyBudgetMicros:         auth.effectiveMonthlyBudgetMicros(),
+			MonthlyImageLimit:           auth.APIKey.MonthlyImageLimit,
+			MonthlyVideoSecondsLimit:    auth.APIKey.MonthlyVideoSecondsLimit,
+			MonthlyAudioSecondsLimit:    auth.APIKey.MonthlyAudioSecondsLimit,
 		},
 		LanePolicy:     keyPolicy.lanePolicy,
 		ArtifactPolicy: keyPolicy.artifactPolicy,
@@ -210,11 +203,11 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 	}
 }
 
-func platformTenantConcurrencyLimit(tenant *PlatformTenant) int {
-	if tenant == nil || tenant.ConcurrencyLimit <= 0 {
+func applicationConcurrencyLimit(application *Application) int {
+	if application == nil || application.ConcurrencyLimit <= 0 {
 		return 0
 	}
-	return tenant.ConcurrencyLimit
+	return application.ConcurrencyLimit
 }
 
 func gatewayModelSupportsCanonicalRequest(model GatewayModel, request gatewaycore.CanonicalRequest) bool {

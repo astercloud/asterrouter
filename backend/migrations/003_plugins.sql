@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS plugins (
   vendor TEXT NOT NULL,
   status TEXT NOT NULL,
   entitlement_status TEXT NOT NULL,
-  surfaces TEXT NOT NULL DEFAULT '[]',
   entry_point TEXT NOT NULL DEFAULT '',
   configurable BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL,

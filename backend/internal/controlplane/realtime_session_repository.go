@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const realtimeSessionSelectColumns = `id, operation_id, attempt_id, profile_scope, tenant_id, credential_id, principal_type, principal_id,
+const realtimeSessionSelectColumns = `id, operation_id, attempt_id, application_id, credential_id, principal_type, principal_id,
 model, provider_id, provider_account_id, upstream_model, status, version, input_audio_bytes, output_audio_bytes,
 client_message_count, provider_message_count, transfer_bytes, usage_version, session_duration_ms, error_type,
 connected_at, closed_at, created_at, updated_at`
@@ -19,7 +19,7 @@ type realtimeSessionScanner interface {
 func scanRealtimeSession(scanner realtimeSessionScanner) (RealtimeSession, error) {
 	var session RealtimeSession
 	err := scanner.Scan(
-		&session.ID, &session.OperationID, &session.AttemptID, &session.ProfileScope, &session.TenantID, &session.CredentialID,
+		&session.ID, &session.OperationID, &session.AttemptID, &session.ApplicationID, &session.CredentialID,
 		&session.PrincipalType, &session.PrincipalID, &session.Model, &session.ProviderID, &session.ProviderAccountID, &session.UpstreamModel,
 		&session.Status, &session.Version, &session.InputAudioBytes, &session.OutputAudioBytes, &session.ClientMessageCount,
 		&session.ProviderMessageCount, &session.TransferBytes, &session.UsageVersion, &session.SessionDurationMS, &session.ErrorType,
@@ -79,12 +79,12 @@ func (r *PostgresRepository) CreateOrGetRealtimeSession(ctx context.Context, ses
 		return RealtimeSession{}, false, err
 	}
 	result, err := r.db.ExecContext(ctx, `
-INSERT INTO realtime_sessions(id,operation_id,attempt_id,profile_scope,tenant_id,credential_id,principal_type,principal_id,
-model,provider_id,provider_account_id,upstream_model,status,version,input_audio_bytes,output_audio_bytes,client_message_count,
-provider_message_count,transfer_bytes,usage_version,session_duration_ms,error_type,connected_at,closed_at,created_at,updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0,0,0,0,0,0,0,'',NULL,NULL,$15,$16)
-ON CONFLICT(operation_id) DO NOTHING
-`, session.ID, session.OperationID, session.AttemptID, session.ProfileScope, session.TenantID, session.CredentialID,
+	INSERT INTO realtime_sessions(id,operation_id,attempt_id,application_id,credential_id,principal_type,principal_id,
+	model,provider_id,provider_account_id,upstream_model,status,version,input_audio_bytes,output_audio_bytes,client_message_count,
+	provider_message_count,transfer_bytes,usage_version,session_duration_ms,error_type,connected_at,closed_at,created_at,updated_at)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,0,0,0,0,0,0,0,'',NULL,NULL,$14,$15)
+	ON CONFLICT(operation_id) DO NOTHING
+	`, session.ID, session.OperationID, session.AttemptID, session.ApplicationID, session.CredentialID,
 		session.PrincipalType, session.PrincipalID, session.Model, session.ProviderID, session.ProviderAccountID, session.UpstreamModel,
 		session.Status, session.Version, session.CreatedAt, session.UpdatedAt)
 	if err != nil {

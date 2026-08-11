@@ -36,8 +36,7 @@ const (
 type BillingHold struct {
 	ID                       string          `json:"id"`
 	OperationID              string          `json:"operation_id"`
-	ProfileScope             string          `json:"profile_scope"`
-	TenantID                 string          `json:"tenant_id"`
+	ApplicationID            string          `json:"application_id"`
 	CredentialID             string          `json:"credential_id"`
 	CredentialSource         string          `json:"credential_source"`
 	IntegrationID            string          `json:"integration_id"`
@@ -109,7 +108,7 @@ func (s *Service) newBillingHoldAdmission(ctx context.Context, operation AIOpera
 	now := operation.CreatedAt.UTC()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	hold := BillingHold{
-		ID: "hold_" + randomID(12), OperationID: operation.ID, ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
+		ID: "hold_" + randomID(12), OperationID: operation.ID, ApplicationID: operation.ApplicationID,
 		CredentialID: operation.CredentialID, CredentialSource: operation.CredentialSource, IntegrationID: operation.IntegrationID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, ExternalSubjectReference: operation.ExternalSubjectReference,
 		RequestFingerprint: operation.RequestFingerprint, Status: BillingHoldStatusReserved, Version: 1,
@@ -181,7 +180,7 @@ func (s *Service) estimateBillingHold(ctx context.Context, operation AIOperation
 	}
 	estimate := billingHoldEstimate{ReservedAmountMicros: limits.MaxCostMicros, Currency: pricing.CurrencyUSD, Source: "unpriced"}
 	facts := estimatePricingFacts(operation, request, limits.MaxTokens, limits.MaxCompletionTokens)
-	selection, found, err := s.SelectPricingRule(ctx, PricingPurposeUsageCost, "", request.Model)
+	selection, found, err := s.SelectPricingRule(ctx, request.Model)
 	if err != nil {
 		return billingHoldEstimate{}, err
 	}
@@ -198,29 +197,6 @@ func (s *Service) estimateBillingHold(ctx context.Context, operation AIOperation
 		estimate.PricingVersions = append(estimate.PricingVersions, BillingHoldPricingVersion{Purpose: PricingPurposeUsageCost, PricingRuleVersionID: selection.Version.ID, EstimateEvaluationID: evaluation.ID})
 	} else if estimate.ReservedAmountMicros > 0 {
 		estimate.Source = "request_max_cost"
-	}
-	if auth.PrincipalType == APIKeyTypeCustomer {
-		if s.customerPricingResolver == nil {
-			return billingHoldEstimate{}, errors.New("customer pricing context resolver is unavailable")
-		}
-		context, resolveErr := s.customerPricingResolver.ResolveCustomerPricingContext(ctx, auth.PrincipalID)
-		if resolveErr != nil || context.Status != PricingRuleStatusActive || context.Currency != pricing.CurrencyUSD {
-			return billingHoldEstimate{}, errors.New("customer pricing context is unavailable")
-		}
-		chargeSelection, chargeFound, selectErr := s.SelectPricingRule(ctx, PricingPurposeCustomerCharge, context.PlanID, request.Model)
-		if selectErr != nil {
-			return billingHoldEstimate{}, selectErr
-		}
-		if !chargeFound {
-			return billingHoldEstimate{}, &pricing.Error{Code: pricing.ErrorRuleUnavailable, Message: "customer charge pricing rule is unavailable"}
-		}
-		result, evaluateErr := s.pricingEngine.Evaluate(chargeSelection.Compiled, facts)
-		if evaluateErr != nil {
-			return billingHoldEstimate{}, evaluateErr
-		}
-		evaluation := successfulPricingEvaluation(operation, PricingPurposeCustomerCharge, pricing.PhaseEstimate, chargeSelection, facts, result)
-		estimate.PricingEvaluations = append(estimate.PricingEvaluations, evaluation)
-		estimate.PricingVersions = append(estimate.PricingVersions, BillingHoldPricingVersion{Purpose: PricingPurposeCustomerCharge, PricingRuleVersionID: chargeSelection.Version.ID, EstimateEvaluationID: evaluation.ID})
 	}
 	return estimate, nil
 }
@@ -262,7 +238,7 @@ func validateBillingHoldAdmission(operation AIOperation, admission BillingHoldAd
 		return err
 	}
 	if strings.TrimSpace(hold.ID) == "" || hold.OperationID != operation.ID || hold.CredentialID != operation.CredentialID ||
-		hold.ProfileScope != operation.ProfileScope || hold.TenantID != operation.TenantID || hold.CredentialSource != operation.CredentialSource ||
+		hold.ApplicationID != operation.ApplicationID || hold.CredentialSource != operation.CredentialSource ||
 		hold.IntegrationID != operation.IntegrationID || hold.PrincipalType != operation.PrincipalType || hold.PrincipalID != operation.PrincipalID ||
 		hold.ExternalSubjectReference != operation.ExternalSubjectReference ||
 		hold.RequestFingerprint == "" || hold.RequestFingerprint != operation.RequestFingerprint || hold.Status != BillingHoldStatusReserved ||

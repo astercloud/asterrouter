@@ -9,8 +9,6 @@ const (
 	KeyPublicBaseURL            = "public_base_url"
 	KeyDefaultLocale            = "default_locale"
 	KeyEnabledLocales           = "enabled_locales"
-	KeyDefaultProfile           = "default_profile"
-	KeyEnabledProfiles          = "enabled_profiles"
 	KeySetupCompleted           = "setup_completed"
 	KeyGatewayBasePath          = "gateway_base_path"
 	KeyOIDCEnabled              = "oidc_enabled"
@@ -44,7 +42,6 @@ const (
 	KeyTurnstileEnabled         = "turnstile_enabled"
 	KeyTurnstileSiteKey         = "turnstile_site_key"
 	KeyTurnstileSecretKey       = "turnstile_secret_key"
-	KeyDefaultBalanceMicros     = "default_balance_micros"
 	KeyDefaultConcurrency       = "default_concurrency"
 	KeyDefaultRPM               = "default_rpm"
 	KeyAuthSourceDefaults       = "auth_source_defaults"
@@ -108,8 +105,6 @@ type PublicSettings struct {
 	PublicBaseURL            string           `json:"public_base_url"`
 	APIBaseURL               string           `json:"api_base_url"`
 	GatewayBasePath          string           `json:"gateway_base_path"`
-	DefaultProfile           string           `json:"default_profile"`
-	EnabledProfiles          []string         `json:"enabled_profiles"`
 	SetupCompleted           bool             `json:"setup_completed"`
 	DefaultLocale            string           `json:"default_locale"`
 	EnabledLocales           []string         `json:"enabled_locales"`
@@ -176,7 +171,6 @@ type AdminSettings struct {
 	TrustedProxyCIDRs             []string                     `json:"trusted_proxy_cidrs"`
 	TurnstileSecretKey            string                       `json:"turnstile_secret_key,omitempty"`
 	TurnstileConfigured           bool                         `json:"turnstile_configured"`
-	DefaultBalanceMicros          int64                        `json:"default_balance_micros"`
 	DefaultConcurrency            int                          `json:"default_concurrency"`
 	DefaultRPM                    int                          `json:"default_rpm"`
 	AuthSourceDefaults            map[string]AuthSourceDefault `json:"auth_source_defaults"`
@@ -266,10 +260,9 @@ type CustomMenuItem struct {
 }
 
 type AuthSourceDefault struct {
-	Enabled       bool  `json:"enabled"`
-	BalanceMicros int64 `json:"balance_micros"`
-	Concurrency   int   `json:"concurrency"`
-	RPM           int   `json:"rpm"`
+	Enabled     bool `json:"enabled"`
+	Concurrency int  `json:"concurrency"`
+	RPM         int  `json:"rpm"`
 }
 
 type LocaleInfo struct {

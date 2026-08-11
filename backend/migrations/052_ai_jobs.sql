@@ -1,5 +1,5 @@
 CREATE UNIQUE INDEX IF NOT EXISTS ai_operations_idempotency_scope_idx
-  ON ai_operations(profile_scope, tenant_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
+  ON ai_operations(application_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
   WHERE idempotency_key <> '';
 
 DROP INDEX IF EXISTS ai_operations_idempotency_idx;
@@ -7,8 +7,7 @@ DROP INDEX IF EXISTS ai_operations_idempotency_idx;
 CREATE TABLE IF NOT EXISTS ai_jobs (
   id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL UNIQUE REFERENCES ai_operations(id) ON DELETE RESTRICT,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL,
+  application_id TEXT NOT NULL,
   credential_id TEXT NOT NULL,
   credential_source TEXT NOT NULL,
   integration_id TEXT NOT NULL DEFAULT '',
@@ -39,11 +38,11 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ai_jobs_idempotency_idx
-  ON ai_jobs(profile_scope, tenant_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
+  ON ai_jobs(application_id, credential_source, credential_id, integration_id, principal_type, principal_id, external_subject_reference, operation, idempotency_key)
   WHERE idempotency_key <> '';
 
 CREATE INDEX IF NOT EXISTS ai_jobs_owner_created_idx
-  ON ai_jobs(profile_scope, tenant_id, integration_id, principal_type, principal_id, external_subject_reference, created_at DESC);
+  ON ai_jobs(application_id, integration_id, principal_type, principal_id, external_subject_reference, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS ai_jobs_ready_idx
   ON ai_jobs(status, next_eligible_at, priority DESC, created_at);

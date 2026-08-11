@@ -45,8 +45,7 @@ const (
 type AIJob struct {
 	ID                       string     `json:"id"`
 	OperationID              string     `json:"operation_id"`
-	ProfileScope             string     `json:"-"`
-	TenantID                 string     `json:"-"`
+	ApplicationID            string     `json:"-"`
 	CredentialID             string     `json:"-"`
 	CredentialSource         string     `json:"-"`
 	IntegrationID            string     `json:"-"`
@@ -93,8 +92,7 @@ type AIJobEvent struct {
 // credential ID is intentionally absent so a rotated key for the same
 // principal can continue to access work created before rotation.
 type AIJobOwner struct {
-	ProfileScope             string
-	TenantID                 string
+	ApplicationID            string
 	IntegrationID            string
 	PrincipalType            string
 	PrincipalID              string
@@ -102,8 +100,7 @@ type AIJobOwner struct {
 }
 
 func aiJobOwnerMatches(job AIJob, owner AIJobOwner) bool {
-	return job.ProfileScope == owner.ProfileScope &&
-		job.TenantID == owner.TenantID &&
+	return job.ApplicationID == owner.ApplicationID &&
 		job.IntegrationID == owner.IntegrationID &&
 		job.PrincipalType == owner.PrincipalType &&
 		job.PrincipalID == owner.PrincipalID &&

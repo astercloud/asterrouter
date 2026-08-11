@@ -36,20 +36,18 @@ const (
 
 	BillingLedgerStatusApplied = "applied"
 
-	OutboxStatusPending             = "pending"
-	OutboxStatusPublishing          = "publishing"
-	OutboxStatusPublished           = "published"
-	OutboxStatusDeadLetter          = "dead_letter"
-	OutboxEventUsageRecorded        = "usage.recorded.v1"
-	OutboxEventCustomerChargePosted = "customer_charge.posted.v1"
+	OutboxStatusPending      = "pending"
+	OutboxStatusPublishing   = "publishing"
+	OutboxStatusPublished    = "published"
+	OutboxStatusDeadLetter   = "dead_letter"
+	OutboxEventUsageRecorded = "usage.recorded.v1"
 
 	OutboxDefaultMaxAttempts = 20
 )
 
 type AIOperation struct {
 	ID                       string     `json:"id"`
-	ProfileScope             string     `json:"profile_scope"`
-	TenantID                 string     `json:"tenant_id"`
+	ApplicationID            string     `json:"application_id"`
 	CredentialID             string     `json:"credential_id"`
 	CredentialSource         string     `json:"credential_source"`
 	IntegrationID            string     `json:"integration_id"`
@@ -139,11 +137,10 @@ type BillingLedgerEntry struct {
 }
 
 type UsageSettlement struct {
-	Record         UsageRecord
-	Evaluations    []PricingEvaluation
-	Ledgers        []BillingLedgerEntry
-	OutboxEvents   []TransactionalOutboxEvent
-	PlatformEvents []PlatformUsageDeliveryEvent
+	Record       UsageRecord
+	Evaluations  []PricingEvaluation
+	Ledgers      []BillingLedgerEntry
+	OutboxEvents []TransactionalOutboxEvent
 }
 
 type UsageRecordedEvent struct {
@@ -152,21 +149,12 @@ type UsageRecordedEvent struct {
 	AttemptID       string          `json:"attempt_id"`
 	UsageVersion    int             `json:"usage_version"`
 	APIKeyID        string          `json:"api_key_id"`
-	CustomerID      string          `json:"customer_id"`
 	InputTokens     int             `json:"input_tokens"`
 	OutputTokens    int             `json:"output_tokens"`
 	UsageDimensions UsageDimensions `json:"usage_dimensions"`
 	UsageCostMicros *int64          `json:"usage_cost_micros,omitempty"`
 	PricingStatus   string          `json:"pricing_status"`
 	Status          string          `json:"status"`
-}
-
-type CustomerChargePostedEvent struct {
-	BillingLedgerID string `json:"billing_ledger_id"`
-	CustomerID      string `json:"customer_id"`
-	AmountMicros    int64  `json:"amount_micros"`
-	Currency        string `json:"currency"`
-	IdempotencyKey  string `json:"idempotency_key"`
 }
 
 type TransactionalOutboxEvent struct {

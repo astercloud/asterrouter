@@ -382,7 +382,6 @@ func (r *MemoryRepository) Close() error {
 func clonePluginAPITokenRecord(record pluginAPITokenRecord) pluginAPITokenRecord {
 	clone := record
 	clone.Scopes = append([]string(nil), record.Scopes...)
-	clone.Surfaces = append([]string(nil), record.Surfaces...)
 	if record.ExpiresAt != nil {
 		value := *record.ExpiresAt
 		clone.ExpiresAt = &value

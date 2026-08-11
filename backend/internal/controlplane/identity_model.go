@@ -12,35 +12,29 @@ const (
 	RoleReadOnlyAuditor = "read_only_auditor"
 	RoleDeveloper       = "developer"
 
-	RoleScopeGlobal     = "global"
-	RoleScopeResource   = "resource"
-	RoleScopeSurface    = "surface"
-	RoleScopeDepartment = "department"
+	RoleScopeOrganization = "organization"
+	RoleScopeDepartment   = "department"
+	RoleScopeGroup        = "group"
+	RoleScopeApplication  = "application"
+	RoleScopeResource     = "resource"
 
-	RBACResourceDashboard       = "dashboard"
-	RBACResourceRouting         = "routing"
-	RBACResourceProviders       = "providers"
-	RBACResourceAPIKeys         = "api_keys"
-	RBACResourceUsage           = "usage"
-	RBACResourceTraces          = "traces"
-	RBACResourceAIJobs          = "ai_jobs"
-	RBACResourceArtifacts       = "artifacts"
-	RBACResourceAlerts          = "alerts"
-	RBACResourceIdentity        = "identity"
-	RBACResourcePlatformTenants = "platform_tenants"
-	RBACResourcePolicies        = "policies"
-	RBACResourceAudit           = "audit"
-	RBACResourceExports         = "exports"
-	RBACResourcePlugins         = "plugins"
-	RBACResourceSettings        = "settings"
-	RBACResourceSystem          = "system"
-
-	SurfacePersonal      = "personal"
-	SurfaceRelayOperator = "relay_operator"
-	SurfaceEnterprise    = "enterprise"
-	SurfacePlatform      = "platform"
-	SurfacePortal        = "portal"
-	SurfaceCustomer      = "customer"
+	RBACResourceDashboard    = "dashboard"
+	RBACResourceRouting      = "routing"
+	RBACResourceProviders    = "providers"
+	RBACResourceAPIKeys      = "api_keys"
+	RBACResourceUsage        = "usage"
+	RBACResourceTraces       = "traces"
+	RBACResourceAIJobs       = "ai_jobs"
+	RBACResourceArtifacts    = "artifacts"
+	RBACResourceAlerts       = "alerts"
+	RBACResourceIdentity     = "identity"
+	RBACResourceApplications = "applications"
+	RBACResourcePolicies     = "policies"
+	RBACResourceAudit        = "audit"
+	RBACResourceExports      = "exports"
+	RBACResourcePlugins      = "plugins"
+	RBACResourceSettings     = "settings"
+	RBACResourceSystem       = "system"
 )
 
 type WorkspaceUser struct {
@@ -54,7 +48,6 @@ type WorkspaceUser struct {
 	AvatarDataURL        string     `json:"avatar_data_url,omitempty"`
 	Status               string     `json:"status"`
 	Role                 string     `json:"role"`
-	BalanceMicros        int64      `json:"balance_micros"`
 	ConcurrencyLimit     int        `json:"concurrency_limit"`
 	RPMLimit             int        `json:"rpm_limit"`
 	ExternalIssuer       string     `json:"external_issuer,omitempty"`
@@ -95,7 +88,6 @@ type AccountProfile struct {
 	AvatarDataURL    string         `json:"avatar_data_url,omitempty"`
 	Status           string         `json:"status"`
 	Role             string         `json:"role"`
-	BalanceMicros    int64          `json:"balance_micros"`
 	ConcurrencyLimit int            `json:"concurrency_limit"`
 	RPMLimit         int            `json:"rpm_limit"`
 	ExternalIssuer   string         `json:"external_issuer,omitempty"`
@@ -119,7 +111,6 @@ type AccountPasswordUpdateRequest struct {
 }
 
 type WorkspaceUserDefaults struct {
-	BalanceMicros    int64
 	ConcurrencyLimit int
 	RPMLimit         int
 }

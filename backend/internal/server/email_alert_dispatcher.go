@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/astercloud/asterrouter/backend/internal/auth"
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
@@ -51,7 +50,7 @@ func (d emailAlertDispatcher) DispatchAlert(ctx context.Context, event controlpl
 	}
 	for _, user := range users {
 		if user.ID == ownerID && user.Email != "" {
-			return sendConfiguredEmailData(ctx, d.settings, "quota_limit", user.Email, auth.EmailTemplateData{UserName: user.DisplayName, Limit: event.Metadata["monthly_token_limit"], Amount: event.Metadata["current_month_tokens"], Period: "monthly", Message: fmt.Sprintf("%s (%s%%)", event.Summary, event.Metadata["quota_used_percent"])})
+			return sendConfiguredEmailData(ctx, d.settings, "quota_limit", user.Email, auth.EmailTemplateData{UserName: user.DisplayName, Limit: event.Metadata["monthly_token_limit"], Period: "monthly"})
 		}
 	}
 	return nil

@@ -47,7 +47,6 @@ CREATE TABLE IF NOT EXISTS plugins (
   vendor TEXT NOT NULL,
   status TEXT NOT NULL,
   entitlement_status TEXT NOT NULL,
-  surfaces TEXT NOT NULL DEFAULT '[]',
   entry_point TEXT NOT NULL DEFAULT '',
   configurable BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL,
@@ -230,7 +229,6 @@ CREATE TABLE IF NOT EXISTS plugin_api_tokens (
   token_prefix TEXT NOT NULL,
   token_hash TEXT NOT NULL UNIQUE,
   scopes_json TEXT NOT NULL DEFAULT '[]',
-  surfaces_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL,
   expires_at TIMESTAMPTZ,
   last_used_at TIMESTAMPTZ,
@@ -288,7 +286,7 @@ CREATE INDEX IF NOT EXISTS official_feed_sync_runs_service_idx
 
 func (r *PostgresRepository) ListPlugins(ctx context.Context) ([]Plugin, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, plugin_id, name, description, category, type, tier, version, vendor, status, entitlement_status, surfaces, entry_point, configurable, created_at, updated_at
+SELECT id, plugin_id, name, description, category, type, tier, version, vendor, status, entitlement_status, entry_point, configurable, created_at, updated_at
 FROM plugins
 ORDER BY category ASC, tier ASC, name ASC
 `)
@@ -309,25 +307,24 @@ ORDER BY category ASC, tier ASC, name ASC
 }
 
 func (r *PostgresRepository) SavePlugin(ctx context.Context, plugin Plugin) error {
-	surfaces := marshalStringList(plugin.Surfaces)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO plugins(id, plugin_id, name, description, category, type, tier, version, vendor, status, entitlement_status, surfaces, entry_point, configurable, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+INSERT INTO plugins(id, plugin_id, name, description, category, type, tier, version, vendor, status, entitlement_status, entry_point, configurable, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 ON CONFLICT DO NOTHING
-`, plugin.ID, plugin.PluginID, plugin.Name, plugin.Description, plugin.Category, plugin.Type, plugin.Tier, plugin.Version, plugin.Vendor, plugin.Status, plugin.EntitlementStatus, surfaces, plugin.EntryPoint, plugin.Configurable, plugin.CreatedAt, plugin.UpdatedAt); err != nil {
+`, plugin.ID, plugin.PluginID, plugin.Name, plugin.Description, plugin.Category, plugin.Type, plugin.Tier, plugin.Version, plugin.Vendor, plugin.Status, plugin.EntitlementStatus, plugin.EntryPoint, plugin.Configurable, plugin.CreatedAt, plugin.UpdatedAt); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE plugins SET
   plugin_id=$2, name=$3, description=$4, category=$5, type=$6, tier=$7, version=$8, vendor=$9,
-  entitlement_status=$10, surfaces=$11, entry_point=$12, configurable=$13, updated_at=$14
+	  entitlement_status=$10, entry_point=$11, configurable=$12, updated_at=$13
 WHERE id=$1 OR plugin_id=$2
-`, plugin.ID, plugin.PluginID, plugin.Name, plugin.Description, plugin.Category, plugin.Type, plugin.Tier, plugin.Version, plugin.Vendor, plugin.EntitlementStatus, surfaces, plugin.EntryPoint, plugin.Configurable, plugin.UpdatedAt); err != nil {
+`, plugin.ID, plugin.PluginID, plugin.Name, plugin.Description, plugin.Category, plugin.Type, plugin.Tier, plugin.Version, plugin.Vendor, plugin.EntitlementStatus, plugin.EntryPoint, plugin.Configurable, plugin.UpdatedAt); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -335,7 +332,7 @@ WHERE id=$1 OR plugin_id=$2
 
 func (r *PostgresRepository) FindPlugin(ctx context.Context, id string) (Plugin, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
-SELECT id, plugin_id, name, description, category, type, tier, version, vendor, status, entitlement_status, surfaces, entry_point, configurable, created_at, updated_at
+SELECT id, plugin_id, name, description, category, type, tier, version, vendor, status, entitlement_status, entry_point, configurable, created_at, updated_at
 FROM plugins
 WHERE id = $1 OR plugin_id = $1
 `, id)
@@ -701,17 +698,17 @@ LIMIT 1
 func (r *PostgresRepository) SavePluginAPIToken(ctx context.Context, record pluginAPITokenRecord) error {
 	_, err := r.db.ExecContext(ctx, `
 INSERT INTO plugin_api_tokens(
-  id, name, plugin_id, token_prefix, token_hash, scopes_json, surfaces_json,
+  id, name, plugin_id, token_prefix, token_hash, scopes_json,
   status, expires_at, last_used_at, created_at, updated_at
 )
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-`, record.ID, record.Name, record.PluginID, record.TokenPrefix, record.TokenHash, marshalStringList(record.Scopes), marshalStringList(record.Surfaces), record.Status, record.ExpiresAt, record.LastUsedAt, record.CreatedAt, record.UpdatedAt)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+`, record.ID, record.Name, record.PluginID, record.TokenPrefix, record.TokenHash, marshalStringList(record.Scopes), record.Status, record.ExpiresAt, record.LastUsedAt, record.CreatedAt, record.UpdatedAt)
 	return err
 }
 
 func (r *PostgresRepository) ListPluginAPITokens(ctx context.Context, pluginID string) ([]pluginAPITokenRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, plugin_id, token_prefix, token_hash, scopes_json, surfaces_json,
+SELECT id, name, plugin_id, token_prefix, token_hash, scopes_json,
        status, expires_at, last_used_at, created_at, updated_at
 FROM plugin_api_tokens
 WHERE ($1 = '' OR plugin_id = $1)
@@ -734,7 +731,7 @@ ORDER BY created_at DESC
 
 func (r *PostgresRepository) FindPluginAPIToken(ctx context.Context, tokenHash string) (pluginAPITokenRecord, bool, error) {
 	row := r.db.QueryRowContext(ctx, `
-SELECT id, name, plugin_id, token_prefix, token_hash, scopes_json, surfaces_json,
+SELECT id, name, plugin_id, token_prefix, token_hash, scopes_json,
        status, expires_at, last_used_at, created_at, updated_at
 FROM plugin_api_tokens
 WHERE token_hash = $1

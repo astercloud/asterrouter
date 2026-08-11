@@ -19,7 +19,7 @@ import (
 func TestAdminDashboardEndpoint(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/dashboard", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/console/dashboard", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -40,13 +40,13 @@ func TestAdminDashboardEndpoint(t *testing.T) {
 
 func TestAdminPricingRuleEndpoints(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
-	legacyReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/model-pricings", nil)
+	legacyReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/model-pricings", nil)
 	legacyRec := httptest.NewRecorder()
 	handler.ServeHTTP(legacyRec, legacyReq)
 	if legacyRec.Code != http.StatusNotFound {
 		t.Fatalf("legacy pricing status = %d body=%s", legacyRec.Code, legacyRec.Body.String())
 	}
-	invalidReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/pricing-rules", bytes.NewBufferString(`{"name":"invalid","amount_cents":1}`))
+	invalidReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/pricing-rules", bytes.NewBufferString(`{"name":"invalid","amount_cents":1}`))
 	invalidReq.Header.Set("Content-Type", "application/json")
 	invalidRec := httptest.NewRecorder()
 	handler.ServeHTTP(invalidRec, invalidReq)
@@ -55,7 +55,7 @@ func TestAdminPricingRuleEndpoints(t *testing.T) {
 	}
 
 	createBody := bytes.NewBufferString(`{"name":"Global usage","purpose":"usage_cost","scope_type":"global","scope_id":"","model":"*","currency":"USD","authoring_mode":"raw","expression":"v1: fixed_line(\"base\", \"request\", 120)","test_cases":[]}`)
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/pricing-rules", createBody)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/pricing-rules", createBody)
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
@@ -71,15 +71,15 @@ func TestAdminPricingRuleEndpoints(t *testing.T) {
 	if createResp.Data.Rule.ID == "" || createResp.Data.Draft == nil || createResp.Data.Rule.Model != "*" {
 		t.Fatalf("created pricing mismatch: %+v", createResp.Data)
 	}
-	publishBody := fmt.Sprintf(`{"draft_version_id":%q,"expected_lock_version":%d,"expected_active_version_id":"","expression_hash":%q,"acknowledge_customer_impact":true}`, createResp.Data.Draft.ID, createResp.Data.Rule.LockVersion, createResp.Data.Draft.ExpressionHash)
-	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/pricing-rules/"+createResp.Data.Rule.ID+"/publish", strings.NewReader(publishBody))
+	publishBody := fmt.Sprintf(`{"draft_version_id":%q,"expected_lock_version":%d,"expected_active_version_id":"","expression_hash":%q}`, createResp.Data.Draft.ID, createResp.Data.Rule.LockVersion, createResp.Data.Draft.ExpressionHash)
+	publishReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/pricing-rules/"+createResp.Data.Rule.ID+"/publish", strings.NewReader(publishBody))
 	publishReq.Header.Set("Content-Type", "application/json")
 	publishRec := httptest.NewRecorder()
 	handler.ServeHTTP(publishRec, publishReq)
 	if publishRec.Code != http.StatusOK {
 		t.Fatalf("publish pricing status = %d body=%s", publishRec.Code, publishRec.Body.String())
 	}
-	staleReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/pricing-rules/"+createResp.Data.Rule.ID+"/publish", strings.NewReader(publishBody))
+	staleReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/pricing-rules/"+createResp.Data.Rule.ID+"/publish", strings.NewReader(publishBody))
 	staleReq.Header.Set("Content-Type", "application/json")
 	staleRec := httptest.NewRecorder()
 	handler.ServeHTTP(staleRec, staleReq)
@@ -87,7 +87,7 @@ func TestAdminPricingRuleEndpoints(t *testing.T) {
 		t.Fatalf("stale publish status = %d body=%s", staleRec.Code, staleRec.Body.String())
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/pricing-rules", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/pricing-rules", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -115,7 +115,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 	}
 	account := createGatewayTestAccount(t, control, provider, "upstream-chat", "account-secret", 10, 3)
 
-	modelCreate := httptest.NewRequest(http.MethodPost, "/api/v1/admin/gateway-models", bytes.NewBufferString(`{"model_id":"public-chat","name":"Public Chat","modality":"chat","default_route_group":"stable","status":"active"}`))
+	modelCreate := httptest.NewRequest(http.MethodPost, "/api/v1/console/gateway-models", bytes.NewBufferString(`{"model_id":"public-chat","name":"Public Chat","modality":"chat","default_route_group":"stable","status":"active"}`))
 	modelCreate.Header.Set("Content-Type", "application/json")
 	modelCreateRec := httptest.NewRecorder()
 	handler.ServeHTTP(modelCreateRec, modelCreate)
@@ -130,7 +130,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 	}
 
 	missingFormatBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","priority":10,"weight":100,"status":"active"}`, modelResp.Data.ID, account.ID)
-	missingFormat := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes", bytes.NewBufferString(missingFormatBody))
+	missingFormat := httptest.NewRequest(http.MethodPost, "/api/v1/console/model-routes", bytes.NewBufferString(missingFormatBody))
 	missingFormat.Header.Set("Content-Type", "application/json")
 	missingFormatRec := httptest.NewRecorder()
 	handler.ServeHTTP(missingFormatRec, missingFormat)
@@ -139,7 +139,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 	}
 
 	incompatibleFormatBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","upstream_format":"anthropic_messages","priority":10,"weight":100,"status":"active"}`, modelResp.Data.ID, account.ID)
-	incompatibleFormat := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes", bytes.NewBufferString(incompatibleFormatBody))
+	incompatibleFormat := httptest.NewRequest(http.MethodPost, "/api/v1/console/model-routes", bytes.NewBufferString(incompatibleFormatBody))
 	incompatibleFormat.Header.Set("Content-Type", "application/json")
 	incompatibleFormatRec := httptest.NewRecorder()
 	handler.ServeHTTP(incompatibleFormatRec, incompatibleFormat)
@@ -148,7 +148,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 	}
 
 	routeBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","upstream_format":"openai_chat","priority":10,"weight":100,"status":"active"}`, modelResp.Data.ID, account.ID)
-	routeCreate := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes", bytes.NewBufferString(routeBody))
+	routeCreate := httptest.NewRequest(http.MethodPost, "/api/v1/console/model-routes", bytes.NewBufferString(routeBody))
 	routeCreate.Header.Set("Content-Type", "application/json")
 	routeCreateRec := httptest.NewRecorder()
 	handler.ServeHTTP(routeCreateRec, routeCreate)
@@ -169,7 +169,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	bulkBody := fmt.Sprintf(`{"routes":[{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","upstream_format":"openai_chat","priority":30,"weight":100,"status":"active"}]}`, bulkModel.ID, account.ID)
-	bulkCreate := httptest.NewRequest(http.MethodPost, "/api/v1/admin/model-routes/bulk", bytes.NewBufferString(bulkBody))
+	bulkCreate := httptest.NewRequest(http.MethodPost, "/api/v1/console/model-routes/bulk", bytes.NewBufferString(bulkBody))
 	bulkCreate.Header.Set("Content-Type", "application/json")
 	bulkCreateRec := httptest.NewRecorder()
 	handler.ServeHTTP(bulkCreateRec, bulkCreate)
@@ -177,7 +177,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 		t.Fatalf("bulk model route status = %d body=%s", bulkCreateRec.Code, bulkCreateRec.Body.String())
 	}
 
-	modelList := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-models", nil)
+	modelList := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-models", nil)
 	modelListRec := httptest.NewRecorder()
 	handler.ServeHTTP(modelListRec, modelList)
 	if modelListRec.Code != http.StatusOK || !strings.Contains(modelListRec.Body.String(), `"route_count":1`) {
@@ -185,7 +185,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 	}
 
 	routeUpdateBody := fmt.Sprintf(`{"gateway_model_id":%q,"route_group":"stable","provider_account_id":%q,"upstream_model":"upstream-chat","upstream_format":"openai_chat","priority":20,"weight":250,"status":"disabled"}`, modelResp.Data.ID, account.ID)
-	routeUpdate := httptest.NewRequest(http.MethodPut, "/api/v1/admin/model-routes/"+routeResp.Data.ID, bytes.NewBufferString(routeUpdateBody))
+	routeUpdate := httptest.NewRequest(http.MethodPut, "/api/v1/console/model-routes/"+routeResp.Data.ID, bytes.NewBufferString(routeUpdateBody))
 	routeUpdate.Header.Set("Content-Type", "application/json")
 	routeUpdateRec := httptest.NewRecorder()
 	handler.ServeHTTP(routeUpdateRec, routeUpdate)
@@ -193,7 +193,7 @@ func TestAdminGatewayModelAndRouteEndpoints(t *testing.T) {
 		t.Fatalf("update model route status = %d body=%s", routeUpdateRec.Code, routeUpdateRec.Body.String())
 	}
 
-	modelDelete := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/gateway-models/"+modelResp.Data.ID, nil)
+	modelDelete := httptest.NewRequest(http.MethodDelete, "/api/v1/console/gateway-models/"+modelResp.Data.ID, nil)
 	modelDeleteRec := httptest.NewRecorder()
 	handler.ServeHTTP(modelDeleteRec, modelDelete)
 	if modelDeleteRec.Code != http.StatusOK {
@@ -218,21 +218,21 @@ func TestAdminProviderAccountModelEndpoints(t *testing.T) {
 	}
 	account := createGatewayTestAccount(t, control, provider, "existing", "account-secret", 10, 3)
 
-	list := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-accounts/"+account.ID+"/models", nil)
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-accounts/"+account.ID+"/models", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, list)
 	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), `"model_id":"existing"`) {
 		t.Fatalf("model inventory status = %d body=%s", listRec.Code, listRec.Body.String())
 	}
 
-	discover := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-accounts/"+account.ID+"/models/discover", nil)
+	discover := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-accounts/"+account.ID+"/models/discover", nil)
 	discoverRec := httptest.NewRecorder()
 	handler.ServeHTTP(discoverRec, discover)
 	if discoverRec.Code != http.StatusOK || !strings.Contains(discoverRec.Body.String(), `"new-model"`) {
 		t.Fatalf("model discovery status = %d body=%s", discoverRec.Code, discoverRec.Body.String())
 	}
 
-	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-accounts/"+account.ID+"/models/sync", bytes.NewBufferString(`{"enabled_models":["existing","new-model"],"auto_enable_new_models":true}`))
+	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-accounts/"+account.ID+"/models/sync", bytes.NewBufferString(`{"enabled_models":["existing","new-model"],"auto_enable_new_models":true}`))
 	syncReq.Header.Set("Content-Type", "application/json")
 	syncRec := httptest.NewRecorder()
 	handler.ServeHTTP(syncRec, syncReq)
@@ -245,7 +245,7 @@ func TestAdminGovernancePolicyEndpoints(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
 	createBody := bytes.NewBufferString(`{"name":"Platform policy","scope_type":"global","model_allowlist":["gpt-4o-mini"],"model_denylist":[],"qps_limit":10,"monthly_token_limit":1000000,"monthly_budget_micros":50000,"overage_action":"block","prompt_logging_mode":"metadata_only","retention_days":30,"tool_call_allowed":true,"image_input_allowed":true,"web_access_allowed":false,"status":"active"}`)
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/policies", createBody)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/policies", createBody)
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
@@ -263,7 +263,7 @@ func TestAdminGovernancePolicyEndpoints(t *testing.T) {
 	}
 
 	updateBody := bytes.NewBufferString(`{"name":"Platform policy updated","scope_type":"global","model_allowlist":[],"model_denylist":["legacy-model"],"qps_limit":0,"monthly_token_limit":0,"monthly_budget_micros":0,"overage_action":"warn","prompt_logging_mode":"disabled","retention_days":0,"tool_call_allowed":false,"image_input_allowed":true,"web_access_allowed":false,"status":"disabled"}`)
-	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/policies/"+createResp.Data.ID, updateBody)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/policies/"+createResp.Data.ID, updateBody)
 	updateReq.Header.Set("Content-Type", "application/json")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
@@ -280,7 +280,7 @@ func TestAdminGovernancePolicyEndpoints(t *testing.T) {
 		t.Fatalf("updated policy mismatch: %+v", updateResp.Data)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/policies", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/policies", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -347,7 +347,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("RecordGatewayCall(): %v", err)
 	}
 
-	usageReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage?model=model-b&status=error&limit=1", nil)
+	usageReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/usage?model=model-b&status=error&limit=1", nil)
 	usageRec := httptest.NewRecorder()
 	handler.ServeHTTP(usageRec, usageReq)
 	if usageRec.Code != http.StatusOK {
@@ -363,7 +363,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("usage query not applied: %+v", usageResp.Data.Recent)
 	}
 
-	usageKeyReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage?api_key_id="+url.QueryEscape(created.Record.ID)+"&limit=10", nil)
+	usageKeyReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/usage?api_key_id="+url.QueryEscape(created.Record.ID)+"&limit=10", nil)
 	usageKeyRec := httptest.NewRecorder()
 	handler.ServeHTTP(usageKeyRec, usageKeyReq)
 	if usageKeyRec.Code != http.StatusOK {
@@ -384,7 +384,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		}
 	}
 
-	costReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/cost-allocation?dimension=api_key&api_key_id="+url.QueryEscape(created.Record.ID), nil)
+	costReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/cost-allocation?dimension=api_key&api_key_id="+url.QueryEscape(created.Record.ID), nil)
 	costRec := httptest.NewRecorder()
 	handler.ServeHTTP(costRec, costReq)
 	if costRec.Code != http.StatusOK {
@@ -403,14 +403,14 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("cost allocation row mismatch: %+v", costResp.Data.Rows)
 	}
 
-	costBadReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/cost-allocation?dimension=project", nil)
+	costBadReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/cost-allocation?dimension=project", nil)
 	costBadRec := httptest.NewRecorder()
 	handler.ServeHTTP(costBadRec, costBadReq)
 	if costBadRec.Code != http.StatusBadRequest {
 		t.Fatalf("cost allocation invalid dimension status = %d body=%s", costBadRec.Code, costBadRec.Body.String())
 	}
 
-	traceReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces?status=error&q=provider-b", nil)
+	traceReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces?status=error&q=provider-b", nil)
 	traceRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceRec, traceReq)
 	if traceRec.Code != http.StatusOK {
@@ -426,7 +426,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("trace query not applied: %+v", traceResp.Data)
 	}
 
-	traceKeyReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces?api_key_id="+url.QueryEscape(created.Record.ID)+"&limit=10", nil)
+	traceKeyReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces?api_key_id="+url.QueryEscape(created.Record.ID)+"&limit=10", nil)
 	traceKeyRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceKeyRec, traceKeyReq)
 	if traceKeyRec.Code != http.StatusOK {
@@ -447,7 +447,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		}
 	}
 
-	traceSummaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces/summary?limit=1", nil)
+	traceSummaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces/summary?limit=1", nil)
 	traceSummaryRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceSummaryRec, traceSummaryReq)
 	if traceSummaryRec.Code != http.StatusOK {
@@ -463,7 +463,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("trace summary should ignore pagination and include matching records: %+v", traceSummaryResp.Data)
 	}
 
-	traceKeySummaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces/summary?api_key_id="+url.QueryEscape(created.Record.ID)+"&limit=1", nil)
+	traceKeySummaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces/summary?api_key_id="+url.QueryEscape(created.Record.ID)+"&limit=1", nil)
 	traceKeySummaryRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceKeySummaryRec, traceKeySummaryReq)
 	if traceKeySummaryRec.Code != http.StatusOK {
@@ -479,7 +479,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("trace key summary mismatch: %+v", traceKeySummaryResp.Data)
 	}
 
-	auditReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-logs?action=invoke&q=Pagination", nil)
+	auditReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/audit-logs?action=invoke&q=Pagination", nil)
 	auditRec := httptest.NewRecorder()
 	handler.ServeHTTP(auditRec, auditReq)
 	if auditRec.Code != http.StatusOK {
@@ -495,7 +495,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("audit query not applied: %+v", auditResp.Data)
 	}
 
-	auditSummaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-logs/summary?action=invoke&limit=1", nil)
+	auditSummaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/audit-logs/summary?action=invoke&limit=1", nil)
 	auditSummaryRec := httptest.NewRecorder()
 	handler.ServeHTTP(auditSummaryRec, auditSummaryReq)
 	if auditSummaryRec.Code != http.StatusOK {
@@ -512,7 +512,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 	}
 
 	future := url.QueryEscape(time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano))
-	usageTimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage?from="+future, nil)
+	usageTimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/usage?from="+future, nil)
 	usageTimeRec := httptest.NewRecorder()
 	handler.ServeHTTP(usageTimeRec, usageTimeReq)
 	if usageTimeRec.Code != http.StatusOK {
@@ -528,7 +528,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("usage time range not applied: %+v", usageTimeResp.Data.Recent)
 	}
 
-	traceTimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces?from="+future, nil)
+	traceTimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces?from="+future, nil)
 	traceTimeRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceTimeRec, traceTimeReq)
 	if traceTimeRec.Code != http.StatusOK {
@@ -544,7 +544,7 @@ func TestAdminRecordEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("trace time range not applied: %+v", traceTimeResp.Data)
 	}
 
-	auditTimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-logs?from="+future, nil)
+	auditTimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/audit-logs?from="+future, nil)
 	auditTimeRec := httptest.NewRecorder()
 	handler.ServeHTTP(auditTimeRec, auditTimeReq)
 	if auditTimeRec.Code != http.StatusOK {
@@ -565,7 +565,7 @@ func TestCreateAPIKeyEndpoint(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
 	body := bytes.NewBufferString(`{"name":"demo","model_allowlist":["gpt-4o-mini"],"qps_limit":2,"monthly_token_limit":1000}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/api-keys", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -589,7 +589,7 @@ func TestAPIKeyPolicyExplanationEndpoint(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
 	policyBody := bytes.NewBufferString(`{"name":"Platform policy","scope_type":"global","model_allowlist":["gpt-4o-mini"],"qps_limit":5,"monthly_token_limit":1000,"overage_action":"block","prompt_logging_mode":"metadata_only","retention_days":30,"tool_call_allowed":true,"image_input_allowed":true,"web_access_allowed":false,"status":"active"}`)
-	policyReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/policies", policyBody)
+	policyReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/policies", policyBody)
 	policyReq.Header.Set("Content-Type", "application/json")
 	policyRec := httptest.NewRecorder()
 	handler.ServeHTTP(policyRec, policyReq)
@@ -604,7 +604,7 @@ func TestAPIKeyPolicyExplanationEndpoint(t *testing.T) {
 	}
 
 	keyBody := bytes.NewBufferString(`{"name":"demo","policy_id":"` + policyResp.Data.ID + `","model_allowlist":["gpt-4o-mini"],"qps_limit":2,"monthly_token_limit":1000}`)
-	keyReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys", keyBody)
+	keyReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/api-keys", keyBody)
 	keyReq.Header.Set("Content-Type", "application/json")
 	keyRec := httptest.NewRecorder()
 	handler.ServeHTTP(keyRec, keyReq)
@@ -618,7 +618,7 @@ func TestAPIKeyPolicyExplanationEndpoint(t *testing.T) {
 		t.Fatalf("decode key: %v", err)
 	}
 
-	explainReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/api-keys/"+keyResp.Data.Record.ID+"/policy-explanation", nil)
+	explainReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/api-keys/"+keyResp.Data.Record.ID+"/policy-explanation", nil)
 	explainRec := httptest.NewRecorder()
 	handler.ServeHTTP(explainRec, explainReq)
 	if explainRec.Code != http.StatusOK {
@@ -642,7 +642,7 @@ func TestProviderEndpointRejectsLegacyCredentialAndModelFields(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
 	createBody := bytes.NewBufferString(`{"name":"Vendor A","type":"openai_compatible","base_url":"https://example.com/v1","status":"active","models":["gpt-4o-mini"],"priority":10,"api_key":"sk-test-123456"}`)
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/providers", createBody)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/providers", createBody)
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
@@ -651,7 +651,7 @@ func TestProviderEndpointRejectsLegacyCredentialAndModelFields(t *testing.T) {
 	}
 
 	validBody := bytes.NewBufferString(`{"name":"Vendor A","type":"openai_compatible","base_url":"https://example.com/v1","status":"active","priority":10}`)
-	validReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/providers", validBody)
+	validReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/providers", validBody)
 	validReq.Header.Set("Content-Type", "application/json")
 	validRec := httptest.NewRecorder()
 	handler.ServeHTTP(validRec, validReq)
@@ -666,7 +666,7 @@ func TestProviderEndpointRejectsLegacyCredentialAndModelFields(t *testing.T) {
 	}
 
 	updateBody := bytes.NewBufferString(`{"name":"Vendor A Updated","type":"openai_compatible","base_url":"https://example.com/v1","status":"active","models":["gpt-4o-mini"],"priority":20}`)
-	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/providers/"+createResp.Data.ID, updateBody)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/providers/"+createResp.Data.ID, updateBody)
 	updateReq.Header.Set("Content-Type", "application/json")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
@@ -678,7 +678,7 @@ func TestProviderEndpointRejectsLegacyCredentialAndModelFields(t *testing.T) {
 func TestCheckProviderEndpoint(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/providers/prov_openai_compatible/check", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/providers/prov_openai_compatible/check", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -694,7 +694,7 @@ func TestCheckProviderEndpoint(t *testing.T) {
 		t.Fatalf("incomplete check response: %+v", resp.Data)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-health-checks", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-health-checks", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -726,7 +726,7 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 	defer upstream.Close()
 
 	groupBody := bytes.NewBufferString(`{"name":"OpenAI default","platform":"openai_compatible","rate_multiplier":1,"status":"active","sort_order":10}`)
-	groupReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/routing-groups", groupBody)
+	groupReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/routing-groups", groupBody)
 	groupReq.Header.Set("Content-Type", "application/json")
 	groupRec := httptest.NewRecorder()
 	handler.ServeHTTP(groupRec, groupReq)
@@ -744,7 +744,7 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 	}
 
 	providerPayload := `{"name":"Account Provider","type":"openai_compatible","base_url":"` + upstream.URL + `/v1","status":"active","priority":10}`
-	providerReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/providers", bytes.NewBufferString(providerPayload))
+	providerReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/providers", bytes.NewBufferString(providerPayload))
 	providerReq.Header.Set("Content-Type", "application/json")
 	providerRec := httptest.NewRecorder()
 	handler.ServeHTTP(providerRec, providerReq)
@@ -759,7 +759,7 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 	}
 
 	accountPayload := `{"provider_id":"` + providerResp.Data.ID + `","name":"Account A","platform":"openai_compatible","auth_type":"api_key","status":"active","schedulable":true,"priority":10,"concurrency":3,"rate_multiplier":1,"models":["gpt-4o-mini"],"group_ids":["` + groupResp.Data.ID + `"],"secret":"account-secret"}`
-	accountReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-accounts", bytes.NewBufferString(accountPayload))
+	accountReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-accounts", bytes.NewBufferString(accountPayload))
 	accountReq.Header.Set("Content-Type", "application/json")
 	accountRec := httptest.NewRecorder()
 	handler.ServeHTTP(accountRec, accountReq)
@@ -779,7 +779,7 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 		t.Fatalf("account provider binding missing: %+v", accountResp.Data)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-accounts", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-accounts", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -795,7 +795,7 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 		t.Fatalf("unexpected account list: %+v", listResp.Data)
 	}
 
-	checkReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-accounts/"+accountResp.Data.ID+"/check", nil)
+	checkReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-accounts/"+accountResp.Data.ID+"/check", nil)
 	checkRec := httptest.NewRecorder()
 	handler.ServeHTTP(checkRec, checkReq)
 	if checkRec.Code != http.StatusOK {
@@ -811,7 +811,7 @@ func TestAdminRoutingGroupsAndProviderAccountsEndpoints(t *testing.T) {
 		t.Fatalf("unexpected account check: %+v", checkResp.Data)
 	}
 
-	healthReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/provider-account-health-checks", nil)
+	healthReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-account-health-checks", nil)
 	healthRec := httptest.NewRecorder()
 	handler.ServeHTTP(healthRec, healthReq)
 	if healthRec.Code != http.StatusOK {
@@ -860,7 +860,7 @@ func TestAdminProviderAccountClearCooldownEndpoint(t *testing.T) {
 		t.Fatalf("RecordProviderAccountFailure(): %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/provider-accounts/"+account.ID+"/clear-cooldown", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/provider-accounts/"+account.ID+"/clear-cooldown", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -923,7 +923,7 @@ func TestAdminProviderAccountDeleteProtectsModelRoutes(t *testing.T) {
 		t.Fatalf("CreateModelRoute(): %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/provider-accounts/"+account.ID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/console/provider-accounts/"+account.ID, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -944,7 +944,7 @@ func TestAdminProviderAccountDeleteProtectsModelRoutes(t *testing.T) {
 func TestAdminSystemCheckUpdatesEndpoint(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/system/check-updates?force=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/console/system/check-updates?force=true", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -976,7 +976,7 @@ func TestAdminSystemCheckUpdatesEndpoint(t *testing.T) {
 func TestAdminSystemUpdateWithoutManifestRequiresManualConfiguration(t *testing.T) {
 	handler, _ := newTestRuntime(t, RuntimeConfig{})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/system/update", nil)
 	req.Header.Set("Idempotency-Key", "test-update")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -992,7 +992,7 @@ func TestAdminSystemUpdateWithoutManifestRequiresManualConfiguration(t *testing.
 func TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup(t *testing.T) {
 	handler, _ := newTestRuntime(t, RuntimeConfig{})
 
-	for _, path := range []string{"/api/v1/admin/system/backups", "/api/v1/console/system/backups", "/api/v1/operator/system/backups"} {
+	for _, path := range []string{"/api/v1/console/system/backups"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -1001,14 +1001,14 @@ func TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup(t *testing.T)
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/backups", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/system/backups", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "PostgreSQL") {
 		t.Fatalf("POST backup status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/backups/restore", bytes.NewBufferString(`{"backup_id":"missing","confirm":false}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/console/system/backups/restore", bytes.NewBufferString(`{"backup_id":"missing","confirm":false}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

@@ -20,7 +20,7 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 	}
 
 	createBody := bytes.NewBufferString(`{"email":"dev@example.com","display_name":"Dev User","status":"active","role":"developer","department_id":"` + department.ID + `"}`)
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", createBody)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/users", createBody)
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
@@ -38,7 +38,7 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 	}
 
 	updateBody := bytes.NewBufferString(`{"email":"dev@example.com","display_name":"Developer User","status":"active","role":"key_manager"}`)
-	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/users/"+createResp.Data.ID, updateBody)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/users/"+createResp.Data.ID, updateBody)
 	updateReq.Header.Set("Content-Type", "application/json")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
@@ -55,8 +55,8 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 		t.Fatalf("update user mismatch: %+v", updateResp.Data)
 	}
 
-	bindingBody := bytes.NewBufferString(`{"user_id":"` + createResp.Data.ID + `","role":"key_manager","scope_type":"global"}`)
-	bindingReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/role-bindings", bindingBody)
+	bindingBody := bytes.NewBufferString(`{"user_id":"` + createResp.Data.ID + `","role":"key_manager","scope_type":"organization"}`)
+	bindingReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/role-bindings", bindingBody)
 	bindingReq.Header.Set("Content-Type", "application/json")
 	bindingRec := httptest.NewRecorder()
 	handler.ServeHTTP(bindingRec, bindingReq)
@@ -69,11 +69,11 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 	if err := json.Unmarshal(bindingRec.Body.Bytes(), &bindingResp); err != nil {
 		t.Fatalf("decode role binding: %v", err)
 	}
-	if bindingResp.Data.UserID != createResp.Data.ID || bindingResp.Data.ScopeType != controlplane.RoleScopeGlobal || bindingResp.Data.ScopeID != "" {
+	if bindingResp.Data.UserID != createResp.Data.ID || bindingResp.Data.ScopeType != controlplane.RoleScopeOrganization || bindingResp.Data.ScopeID != "" {
 		t.Fatalf("role binding mismatch: %+v", bindingResp.Data)
 	}
 
-	usersReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	usersReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/users", nil)
 	usersRec := httptest.NewRecorder()
 	handler.ServeHTTP(usersRec, usersReq)
 	if usersRec.Code != http.StatusOK {
@@ -96,7 +96,7 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 		t.Fatalf("users list mismatch: %+v", usersResp.Data)
 	}
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/role-bindings/"+bindingResp.Data.ID, nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/console/role-bindings/"+bindingResp.Data.ID, nil)
 	deleteRec := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
@@ -117,12 +117,25 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 		t.Fatalf("identity audit events missing create=%v grant=%v revoke=%v audit=%+v", seenCreateUser, seenGrant, seenRevoke, audit)
 	}
 
-	duplicateReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", bytes.NewBufferString(`{"email":"dev@example.com","display_name":"Duplicate","status":"active","role":"developer"}`))
+	duplicateReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/users", bytes.NewBufferString(`{"email":"dev@example.com","display_name":"Duplicate","status":"active","role":"developer"}`))
 	duplicateReq.Header.Set("Content-Type", "application/json")
 	duplicateRec := httptest.NewRecorder()
 	handler.ServeHTTP(duplicateRec, duplicateReq)
 	if duplicateRec.Code != http.StatusBadRequest || !strings.Contains(duplicateRec.Body.String(), "already exists") {
 		t.Fatalf("duplicate user should be rejected status=%d body=%s", duplicateRec.Code, duplicateRec.Body.String())
+	}
+
+	for _, legacyScope := range []string{"global", "surface"} {
+		t.Run("reject legacy role scope "+legacyScope, func(t *testing.T) {
+			body := bytes.NewBufferString(`{"user_id":"` + createResp.Data.ID + `","role":"key_manager","scope_type":"` + legacyScope + `"}`)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/console/role-bindings", body)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid role scope") {
+				t.Fatalf("legacy scope should be rejected status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -143,7 +156,7 @@ func TestAdminUserDepartmentAssignmentValidationAndSessionRevocation(t *testing.
 
 	create := func(email, departmentID string) *httptest.ResponseRecorder {
 		body := bytes.NewBufferString(`{"email":"` + email + `","status":"active","role":"developer","department_id":"` + departmentID + `"}`)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", body)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/console/users", body)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -169,7 +182,7 @@ func TestAdminUserDepartmentAssignmentValidationAndSessionRevocation(t *testing.
 	}
 
 	updateBody := bytes.NewBufferString(`{"email":"assigned@example.test","status":"active","role":"developer","department_id":"` + finance.ID + `"}`)
-	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/users/"+createResponse.Data.ID, updateBody)
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/users/"+createResponse.Data.ID, updateBody)
 	updateReq.Header.Set("Content-Type", "application/json")
 	updateRec := httptest.NewRecorder()
 	handler.ServeHTTP(updateRec, updateReq)
@@ -210,7 +223,7 @@ func TestDepartmentAdministratorCanOnlyAssignAuthorizedDepartment(t *testing.T) 
 	}
 
 	request := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", bytes.NewBufferString(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/console/users", bytes.NewBufferString(body))
 		req.Header.Set("Authorization", "Bearer secret")
 		req.Header.Set("X-Actor", manager.Email)
 		req.Header.Set("Content-Type", "application/json")
@@ -240,7 +253,7 @@ func TestAdminOrganizationGroupLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/organization-groups", bytes.NewBufferString(`{"name":"AI Platform","status":"active","member_ids":["`+user.ID+`"]}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/organization-groups", bytes.NewBufferString(`{"name":"AI Platform","status":"active","member_ids":["`+user.ID+`"]}`))
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
@@ -250,13 +263,13 @@ func TestAdminOrganizationGroupLifecycle(t *testing.T) {
 	if err := json.Unmarshal(createRec.Body.Bytes(), &createResponse); err != nil || createRec.Code != http.StatusOK || len(createResponse.Data.MemberIDs) != 1 {
 		t.Fatalf("create status=%d body=%s err=%v", createRec.Code, createRec.Body.String(), err)
 	}
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/organization-groups", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/organization-groups", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), createResponse.Data.ID) {
 		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
 	}
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/organization-groups/"+createResponse.Data.ID, nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/console/organization-groups/"+createResponse.Data.ID, nil)
 	deleteRec := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {

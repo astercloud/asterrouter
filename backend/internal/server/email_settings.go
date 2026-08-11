@@ -157,7 +157,7 @@ func writeEmailTemplateResult(c *gin.Context, template settings.EmailTemplateDet
 func renderEmailTemplatePreview(subject, htmlBody string) (string, string, error) {
 	return auth.RenderEmailTemplate(subject, htmlBody, auth.EmailTemplateData{
 		SiteName: "AsterRouter", UserName: "Enterprise User", ActionURL: "https://example.test/action",
-		Title: "Service notification", Amount: "100.00", Limit: "100000", Period: "monthly", Message: "Access expires in 7 days.",
+		Limit: "100000", Period: "monthly",
 	})
 }
 

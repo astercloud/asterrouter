@@ -26,12 +26,12 @@ func TestAdminRBACAllowsGlobalAuditorReadAndBlocksWrites(t *testing.T) {
 	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
 		UserID:    user.ID,
 		Role:      controlplane.RoleReadOnlyAuditor,
-		ScopeType: controlplane.RoleScopeGlobal,
+		ScopeType: controlplane.RoleScopeOrganization,
 	}); err != nil {
 		t.Fatalf("CreateRoleBinding(): %v", err)
 	}
 
-	readReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-logs", nil)
+	readReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/audit-logs", nil)
 	readReq.Header.Set("Authorization", "Bearer secret")
 	readReq.Header.Set("X-Actor", "auditor@example.com")
 	readRec := httptest.NewRecorder()
@@ -40,7 +40,7 @@ func TestAdminRBACAllowsGlobalAuditorReadAndBlocksWrites(t *testing.T) {
 		t.Fatalf("auditor read status=%d body=%s", readRec.Code, readRec.Body.String())
 	}
 
-	writeReq := httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", bytes.NewBufferString(`{"site_name":"Blocked"}`))
+	writeReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/settings", bytes.NewBufferString(`{"site_name":"Blocked"}`))
 	writeReq.Header.Set("Authorization", "Bearer secret")
 	writeReq.Header.Set("X-Actor", "auditor@example.com")
 	writeReq.Header.Set("Content-Type", "application/json")
@@ -64,12 +64,12 @@ func TestAdminRBACBlocksDeveloperButPortalStillWorks(t *testing.T) {
 	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
 		UserID:    user.ID,
 		Role:      controlplane.RoleDeveloper,
-		ScopeType: controlplane.RoleScopeGlobal,
+		ScopeType: controlplane.RoleScopeOrganization,
 	}); err != nil {
 		t.Fatalf("CreateRoleBinding(): %v", err)
 	}
 
-	adminReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/dashboard", nil)
+	adminReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/dashboard", nil)
 	adminReq.Header.Set("Authorization", "Bearer secret")
 	adminReq.Header.Set("X-Actor", "dev@example.com")
 	adminRec := httptest.NewRecorder()
@@ -87,7 +87,7 @@ func TestAdminRBACBlocksDeveloperButPortalStillWorks(t *testing.T) {
 		t.Fatalf("developer portal should work status=%d body=%s", portalRec.Code, portalRec.Body.String())
 	}
 
-	for _, target := range []string{"/api/v1/operator/dashboard", "/api/v1/console/dashboard"} {
+	for _, target := range []string{"/api/v1/console/dashboard"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		req.Header.Set("Authorization", "Bearer secret")
 		req.Header.Set("X-Actor", user.Email)
@@ -96,6 +96,13 @@ func TestAdminRBACBlocksDeveloperButPortalStillWorks(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("developer must not cross surface via %s status=%d body=%s", target, rec.Code, rec.Body.String())
 		}
+	}
+	removedReq := httptest.NewRequest(http.MethodGet, "/api/v1/operator/dashboard", nil)
+	removedReq.Header.Set("Authorization", "Bearer secret")
+	removedRec := httptest.NewRecorder()
+	handler.ServeHTTP(removedRec, removedReq)
+	if removedRec.Code != http.StatusNotFound {
+		t.Fatalf("removed operator route status=%d body=%s", removedRec.Code, removedRec.Body.String())
 	}
 }
 
@@ -113,18 +120,18 @@ func TestAdminRBACResourceBindingOnlyGrantsMatchingResource(t *testing.T) {
 		t.Fatalf("CreateRoleBinding(): %v", err)
 	}
 	allowed, access, err := control.ActorCanResource(context.Background(), user.Email, controlplane.PermissionAdminRead, controlplane.RBACResourceAPIKeys)
-	if err != nil || !allowed || access.Global || access.Resource != controlplane.RBACResourceAPIKeys {
+	if err != nil || !allowed || access.OrganizationWide || access.Resource != controlplane.RBACResourceAPIKeys {
 		t.Fatalf("scoped access=%+v allowed=%v err=%v", access, allowed, err)
 	}
 
-	for _, target := range []string{"/api/v1/admin/api-keys", "/api/v1/admin/providers"} {
+	for _, target := range []string{"/api/v1/console/api-keys", "/api/v1/console/providers"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		req.Header.Set("Authorization", "Bearer secret")
 		req.Header.Set("X-Actor", user.Email)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		want := http.StatusOK
-		if target == "/api/v1/admin/providers" {
+		if target == "/api/v1/console/providers" {
 			want = http.StatusForbidden
 		}
 		if rec.Code != want {
@@ -132,7 +139,7 @@ func TestAdminRBACResourceBindingOnlyGrantsMatchingResource(t *testing.T) {
 		}
 	}
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys", bytes.NewBufferString(`{"name":"Scoped key","model_allowlist":["gpt-4o-mini"]}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/api-keys", bytes.NewBufferString(`{"name":"Scoped key","model_allowlist":["gpt-4o-mini"]}`))
 	createReq.Header.Set("Authorization", "Bearer secret")
 	createReq.Header.Set("X-Actor", user.Email)
 	createReq.Header.Set("Content-Type", "application/json")
@@ -196,7 +203,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 		}
 	}
 
-	usersReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
+	usersReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/users", nil)
 	usersReq.Header.Set("Authorization", "Bearer secret")
 	usersReq.Header.Set("X-Actor", manager.Email)
 	usersRec := httptest.NewRecorder()
@@ -211,7 +218,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 		t.Fatalf("department users leaked: %+v", usersResponse.Data)
 	}
 
-	keysReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/api-keys", nil)
+	keysReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/api-keys", nil)
 	keysReq.Header.Set("Authorization", "Bearer secret")
 	keysReq.Header.Set("X-Actor", manager.Email)
 	keysRec := httptest.NewRecorder()
@@ -225,7 +232,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if len(keysResponse.Data) != 1 || keysResponse.Data[0].ID != engKey.Record.ID {
 		t.Fatalf("department keys leaked: %+v", keysResponse.Data)
 	}
-	usageReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage", nil)
+	usageReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/usage", nil)
 	usageReq.Header.Set("Authorization", "Bearer secret")
 	usageReq.Header.Set("X-Actor", manager.Email)
 	usageRec := httptest.NewRecorder()
@@ -236,7 +243,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if err := json.Unmarshal(usageRec.Body.Bytes(), &usageResponse); err != nil || usageRec.Code != http.StatusOK || usageResponse.Data.TotalRequests != 1 || usageResponse.Data.TotalTokens != 10 {
 		t.Fatalf("department usage leaked status=%d body=%s err=%v", usageRec.Code, usageRec.Body.String(), err)
 	}
-	bypassReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage?api_key_id="+finKey.Record.ID, nil)
+	bypassReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/usage?api_key_id="+finKey.Record.ID, nil)
 	bypassReq.Header.Set("Authorization", "Bearer secret")
 	bypassReq.Header.Set("X-Actor", manager.Email)
 	bypassRec := httptest.NewRecorder()
@@ -248,7 +255,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if bypassRec.Code != http.StatusOK || bypassResponse.Data.TotalRequests != 0 {
 		t.Fatalf("api_key_id bypass status=%d body=%s", bypassRec.Code, bypassRec.Body.String())
 	}
-	tracesReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces", nil)
+	tracesReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces", nil)
 	tracesReq.Header.Set("Authorization", "Bearer secret")
 	tracesReq.Header.Set("X-Actor", manager.Email)
 	tracesRec := httptest.NewRecorder()
@@ -260,7 +267,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if tracesRec.Code != http.StatusOK || len(tracesResponse.Data) != 1 || tracesResponse.Data[0].APIKeyID != engKey.Record.ID {
 		t.Fatalf("department traces leaked status=%d body=%s", tracesRec.Code, tracesRec.Body.String())
 	}
-	alertsReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/alerts", nil)
+	alertsReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/alerts", nil)
 	alertsReq.Header.Set("Authorization", "Bearer secret")
 	alertsReq.Header.Set("X-Actor", manager.Email)
 	alertsRec := httptest.NewRecorder()
@@ -272,7 +279,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if alertsRec.Code != http.StatusOK || len(alertsResponse.Data) != 1 || alertsResponse.Data[0].ResourceID != engKey.Record.ID {
 		t.Fatalf("department alerts leaked status=%d body=%s", alertsRec.Code, alertsRec.Body.String())
 	}
-	exportReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces/export", nil)
+	exportReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces/export", nil)
 	exportReq.Header.Set("Authorization", "Bearer secret")
 	exportReq.Header.Set("X-Actor", manager.Email)
 	exportRec := httptest.NewRecorder()
@@ -280,15 +287,15 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if exportRec.Code != http.StatusOK || !strings.Contains(exportRec.Body.String(), engKey.Record.ID) || strings.Contains(exportRec.Body.String(), finKey.Record.ID) {
 		t.Fatalf("department trace export leaked status=%d body=%s", exportRec.Code, exportRec.Body.String())
 	}
-	auditReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-logs", nil)
+	auditReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/audit-logs", nil)
 	auditReq.Header.Set("Authorization", "Bearer secret")
 	auditReq.Header.Set("X-Actor", manager.Email)
 	auditRec := httptest.NewRecorder()
 	handler.ServeHTTP(auditRec, auditReq)
 	if auditRec.Code != http.StatusForbidden {
-		t.Fatalf("global audit status=%d body=%s", auditRec.Code, auditRec.Body.String())
+		t.Fatalf("organization-wide audit status=%d body=%s", auditRec.Code, auditRec.Body.String())
 	}
-	exportJobReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/export-jobs?kind=usage&limit=10", nil)
+	exportJobReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/export-jobs?kind=usage&limit=10", nil)
 	exportJobReq.Header.Set("Authorization", "Bearer secret")
 	exportJobReq.Header.Set("X-Actor", manager.Email)
 	exportJobRec := httptest.NewRecorder()
@@ -306,7 +313,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if _, err := control.CreateRoleBinding(ctx, "tester", controlplane.RoleBindingRequest{UserID: otherManager.ID, Role: controlplane.RolePlatformAdmin, ScopeType: controlplane.RoleScopeDepartment, ScopeID: finance.ID}); err != nil {
 		t.Fatal(err)
 	}
-	foreignJobReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/export-jobs/"+exportJobResponse.Data.ID, nil)
+	foreignJobReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/export-jobs/"+exportJobResponse.Data.ID, nil)
 	foreignJobReq.Header.Set("Authorization", "Bearer secret")
 	foreignJobReq.Header.Set("X-Actor", otherManager.Email)
 	foreignJobRec := httptest.NewRecorder()
@@ -314,7 +321,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	if foreignJobRec.Code != http.StatusNotFound {
 		t.Fatalf("foreign export job status=%d body=%s", foreignJobRec.Code, foreignJobRec.Body.String())
 	}
-	for _, target := range []string{"/api/v1/admin/api-keys/" + finKey.Record.ID + "/rotate", "/api/v1/admin/api-keys/" + finKey.Record.ID + "/disable"} {
+	for _, target := range []string{"/api/v1/console/api-keys/" + finKey.Record.ID + "/rotate", "/api/v1/console/api-keys/" + finKey.Record.ID + "/disable"} {
 		req := httptest.NewRequest(http.MethodPost, target, nil)
 		req.Header.Set("Authorization", "Bearer secret")
 		req.Header.Set("X-Actor", manager.Email)
@@ -324,7 +331,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 			t.Fatalf("cross-department mutation %s status=%d body=%s", target, rec.Code, rec.Body.String())
 		}
 	}
-	sharedReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/api-keys", bytes.NewBufferString(`{"name":"Shared","model_allowlist":["model"]}`))
+	sharedReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/api-keys", bytes.NewBufferString(`{"name":"Shared","model_allowlist":["model"]}`))
 	sharedReq.Header.Set("Authorization", "Bearer secret")
 	sharedReq.Header.Set("X-Actor", manager.Email)
 	sharedReq.Header.Set("Content-Type", "application/json")
@@ -357,7 +364,7 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 		{key: engKey.Record, want: http.StatusOK},
 		{key: finKey.Record, want: http.StatusNotFound},
 	} {
-		configReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/api-keys/"+item.key.ID+"/client-config?client=openai_sdk&model=model", nil)
+		configReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/api-keys/"+item.key.ID+"/client-config?client=openai_sdk&model=model", nil)
 		configReq.Header.Set("Authorization", "Bearer secret")
 		configReq.Header.Set("X-Actor", manager.Email)
 		configRec := httptest.NewRecorder()
@@ -368,49 +375,26 @@ func TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys(t *testing.
 	}
 }
 
-func TestSurfaceBindingExplicitlyGrantsOperatorAccess(t *testing.T) {
-	handler, control := newTestRuntime(t, RuntimeConfig{AdminToken: "secret"})
-	user, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{
-		Email: "operator@example.com", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleDeveloper,
-	})
-	if err != nil {
-		t.Fatalf("CreateWorkspaceUser(): %v", err)
-	}
-	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
-		UserID: user.ID, Role: controlplane.RolePlatformAdmin, ScopeType: controlplane.RoleScopeSurface, ScopeID: controlplane.SurfaceRelayOperator,
-	}); err != nil {
-		t.Fatalf("CreateRoleBinding(): %v", err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/operator/dashboard", nil)
-	req.Header.Set("Authorization", "Bearer secret")
-	req.Header.Set("X-Actor", user.Email)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("operator surface binding status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestAdminRoutesResolveResourceDomains(t *testing.T) {
 	tests := map[string]string{
-		"/api/v1/admin/dashboard":                  controlplane.RBACResourceDashboard,
-		"/api/v1/admin/model-routes":               controlplane.RBACResourceRouting,
-		"/api/v1/admin/provider-accounts":          controlplane.RBACResourceProviders,
-		"/api/v1/admin/api-keys":                   controlplane.RBACResourceAPIKeys,
-		"/api/v1/onboarding/sessions":              controlplane.RBACResourceProviders,
-		"/api/v1/onboarding/compatibility-records": controlplane.RBACResourceProviders,
-		"/api/v1/admin/api-keys/key/client-config": controlplane.RBACResourceAPIKeys,
-		"/api/v1/admin/pricing-rules":              controlplane.RBACResourceUsage,
-		"/api/v1/admin/gateway-traces":             controlplane.RBACResourceTraces,
-		"/api/v1/admin/alerts":                     controlplane.RBACResourceAlerts,
-		"/api/v1/admin/role-bindings":              controlplane.RBACResourceIdentity,
-		"/api/v1/admin/organization-groups":        controlplane.RBACResourceIdentity,
-		"/api/v1/admin/policies":                   controlplane.RBACResourcePolicies,
-		"/api/v1/admin/audit-logs":                 controlplane.RBACResourceAudit,
-		"/api/v1/admin/export-jobs":                controlplane.RBACResourceExports,
-		"/api/v1/admin/plugins":                    controlplane.RBACResourcePlugins,
-		"/api/v1/admin/settings/smtp/test":         controlplane.RBACResourceSettings,
-		"/api/v1/admin/system/update":              controlplane.RBACResourceSystem,
+		"/api/v1/console/dashboard":                  controlplane.RBACResourceDashboard,
+		"/api/v1/console/model-routes":               controlplane.RBACResourceRouting,
+		"/api/v1/console/provider-accounts":          controlplane.RBACResourceProviders,
+		"/api/v1/console/api-keys":                   controlplane.RBACResourceAPIKeys,
+		"/api/v1/onboarding/sessions":                controlplane.RBACResourceProviders,
+		"/api/v1/onboarding/compatibility-records":   controlplane.RBACResourceProviders,
+		"/api/v1/console/api-keys/key/client-config": controlplane.RBACResourceAPIKeys,
+		"/api/v1/console/pricing-rules":              controlplane.RBACResourceUsage,
+		"/api/v1/console/gateway-traces":             controlplane.RBACResourceTraces,
+		"/api/v1/console/alerts":                     controlplane.RBACResourceAlerts,
+		"/api/v1/console/role-bindings":              controlplane.RBACResourceIdentity,
+		"/api/v1/console/organization-groups":        controlplane.RBACResourceIdentity,
+		"/api/v1/console/policies":                   controlplane.RBACResourcePolicies,
+		"/api/v1/console/audit-logs":                 controlplane.RBACResourceAudit,
+		"/api/v1/console/export-jobs":                controlplane.RBACResourceExports,
+		"/api/v1/console/plugins":                    controlplane.RBACResourcePlugins,
+		"/api/v1/console/settings/smtp/test":         controlplane.RBACResourceSettings,
+		"/api/v1/console/system/update":              controlplane.RBACResourceSystem,
 	}
 	for path, want := range tests {
 		context, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -434,12 +418,12 @@ func TestAdminRBACProtectsPluginAndSystemWrites(t *testing.T) {
 	if _, err := control.CreateRoleBinding(context.Background(), "tester", controlplane.RoleBindingRequest{
 		UserID:    user.ID,
 		Role:      controlplane.RoleReadOnlyAuditor,
-		ScopeType: controlplane.RoleScopeGlobal,
+		ScopeType: controlplane.RoleScopeOrganization,
 	}); err != nil {
 		t.Fatalf("CreateRoleBinding(): %v", err)
 	}
 
-	for _, target := range []string{"/api/v1/admin/plugins/catalog-sync", "/api/v1/admin/system/update"} {
+	for _, target := range []string{"/api/v1/console/plugins/catalog-sync", "/api/v1/console/system/update"} {
 		req := httptest.NewRequest(http.MethodPost, target, nil)
 		req.Header.Set("Authorization", "Bearer secret")
 		req.Header.Set("X-Actor", "auditor@example.com")

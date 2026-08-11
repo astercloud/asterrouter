@@ -56,7 +56,7 @@ func handleGatewayCountTokensRequest(c *gin.Context, control *controlplane.Servi
 		return
 	}
 	affinity := controlplane.GatewayAffinityInput{
-		TenantID: canonicalAuth.TenantID, PrincipalID: canonicalAuth.PrincipalID, CredentialID: canonicalAuth.CredentialID,
+		ApplicationID: canonicalAuth.ApplicationID, PrincipalID: canonicalAuth.PrincipalID, CredentialID: canonicalAuth.CredentialID,
 		Model: request.Model, Protocol: string(request.Protocol), RouteGroup: plan.RouteGroup, StickyKey: request.StickyKey, PolicyVersion: canonicalAuth.PolicyVersion,
 	}
 	cohortKey := control.GatewayEffectivePricingCohortKey(affinity)

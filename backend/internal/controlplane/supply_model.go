@@ -47,10 +47,9 @@ const (
 var ErrSupplyWindowInvalid = errors.New("supply utilization window is invalid")
 
 type SupplyUtilizationQuery struct {
-	From         time.Time
-	To           time.Time
-	ProfileScope string
-	APIKeyIDs    []string
+	From      time.Time
+	To        time.Time
+	APIKeyIDs []string
 }
 
 type SupplyWindow struct {

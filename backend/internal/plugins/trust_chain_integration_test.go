@@ -207,16 +207,13 @@ func TestPluginTrustChainCatalogToSidecarFeed(t *testing.T) {
 	}
 	apiToken, err := svc.CreatePluginAPIToken(ctx, PluginAPITokenCreateRequest{
 		Name: "Trust chain action token", PluginID: pluginID,
-		Scopes: []string{PluginAPIScopeAction, PluginAPIScopePluginRead}, Surfaces: []string{"enterprise"},
+		Scopes: []string{PluginAPIScopeAction, PluginAPIScopePluginRead},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.AuthorizePluginAPIToken(ctx, apiToken.Secret, PluginAPIScopeAction, pluginID, "enterprise"); err != nil {
+	if _, err := svc.AuthorizePluginAPIToken(ctx, apiToken.Secret, PluginAPIScopeAction, pluginID); err != nil {
 		t.Fatalf("authorize action token: %v", err)
-	}
-	if _, err := svc.AuthorizePluginAPIToken(ctx, apiToken.Secret, PluginAPIScopeAction, pluginID, "personal"); !errors.Is(err, ErrPluginAPITokenScope) {
-		t.Fatalf("wrong surface error=%v", err)
 	}
 
 	source := httptest.NewRequest(http.MethodGet, "http://router.local/actions/feed", nil)
@@ -250,7 +247,7 @@ func TestPluginTrustChainCatalogToSidecarFeed(t *testing.T) {
 	if _, err := svc.RevokePluginAPIToken(ctx, apiToken.Token.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.AuthorizePluginAPIToken(ctx, apiToken.Secret, PluginAPIScopeAction, pluginID, "enterprise"); !errors.Is(err, ErrPluginAPITokenInvalid) {
+	if _, err := svc.AuthorizePluginAPIToken(ctx, apiToken.Secret, PluginAPIScopeAction, pluginID); !errors.Is(err, ErrPluginAPITokenInvalid) {
 		t.Fatalf("revoked API token error=%v", err)
 	}
 	if _, err := svc.Disable(ctx, pluginID); err != nil {

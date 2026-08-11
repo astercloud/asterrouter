@@ -1,7 +1,6 @@
 package controlplane
 
 import (
-	"context"
 	"time"
 
 	"github.com/astercloud/asterrouter/backend/internal/pricing"
@@ -9,9 +8,7 @@ import (
 
 const (
 	PricingPurposeUsageCost         = "usage_cost"
-	PricingPurposeCustomerCharge    = "customer_charge"
 	PricingScopeGlobal              = "global"
-	PricingScopeOperatorPlan        = "operator_plan"
 	PricingRuleStatusActive         = "active"
 	PricingRuleStatusDisabled       = "disabled"
 	PricingVersionStateDraft        = "draft"
@@ -124,7 +121,6 @@ type PricingPublishRequest struct {
 	ExpectedLockVersion   int64  `json:"expected_lock_version"`
 	ExpectedActiveVersion string `json:"expected_active_version_id"`
 	ExpressionHash        string `json:"expression_hash"`
-	AcknowledgeImpact     bool   `json:"acknowledge_customer_impact"`
 }
 
 type PricingActivateRequest struct {
@@ -160,16 +156,4 @@ type PricingSimulationRequest struct {
 	Expression    string        `json:"expression"`
 	Currency      string        `json:"currency"`
 	Facts         pricing.Facts `json:"facts"`
-}
-
-type CustomerPricingContext struct {
-	CustomerID string `json:"customer_id"`
-	PlanID     string `json:"plan_id"`
-	Status     string `json:"status"`
-	Currency   string `json:"currency"`
-}
-
-type CustomerPricingContextResolver interface {
-	ResolveCustomerPricingContext(ctx context.Context, customerID string) (CustomerPricingContext, error)
-	ValidatePricingPlan(ctx context.Context, planID string) error
 }

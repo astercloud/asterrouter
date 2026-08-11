@@ -20,8 +20,7 @@ func (s *Service) BeginCanonicalOperation(ctx context.Context, auth gatewaycore.
 	now := s.nowUTC()
 	operation := AIOperation{
 		ID:                       "aio_" + randomID(12),
-		ProfileScope:             strings.TrimSpace(auth.ProfileScope),
-		TenantID:                 strings.TrimSpace(auth.TenantID),
+		ApplicationID:            strings.TrimSpace(auth.ApplicationID),
 		CredentialID:             strings.TrimSpace(auth.CredentialID),
 		CredentialSource:         string(auth.CredentialSource),
 		IntegrationID:            strings.TrimSpace(auth.IntegrationID),
@@ -488,12 +487,6 @@ func (s *Service) buildUsageSettlement(ctx context.Context, record UsageRecord) 
 			} else {
 				settlement.Record.PricingStatus = "priced"
 			}
-		} else if snapshot.Purpose == PricingPurposeCustomerCharge && record.CustomerID != "" {
-			outbox, outboxErr := customerChargeOutbox(record, ledger)
-			if outboxErr != nil {
-				return UsageSettlement{}, outboxErr
-			}
-			settlement.OutboxEvents = append(settlement.OutboxEvents, outbox)
 		}
 	}
 	riskOutbox, err := usageRecordedOutbox(settlement.Record)
@@ -557,7 +550,7 @@ func pricingFailureCode(err error) string {
 func usageRecordedOutbox(record UsageRecord) (TransactionalOutboxEvent, error) {
 	payload, err := json.Marshal(UsageRecordedEvent{
 		UsageRecordID: record.ID, OperationID: record.OperationID, AttemptID: record.AttemptID, UsageVersion: record.UsageVersion,
-		APIKeyID: record.APIKeyID, CustomerID: record.CustomerID, InputTokens: record.InputTokens, OutputTokens: record.OutputTokens,
+		APIKeyID: record.APIKeyID, InputTokens: record.InputTokens, OutputTokens: record.OutputTokens,
 		UsageDimensions: record.UsageDimensions, UsageCostMicros: record.UsageCostMicros, PricingStatus: record.PricingStatus, Status: record.Status,
 	})
 	if err != nil {
@@ -567,19 +560,6 @@ func usageRecordedOutbox(record UsageRecord) (TransactionalOutboxEvent, error) {
 	return TransactionalOutboxEvent{
 		ID: "outbox_" + prefix(hashAPIKey(digest+"\x00"+OutboxEventUsageRecorded), 24), AggregateType: "usage", AggregateID: record.OperationID + ":" + record.AttemptID,
 		EventType: OutboxEventUsageRecorded, EventVersion: record.UsageVersion, PayloadJSON: string(payload), Status: OutboxStatusPending,
-		AvailableAt: record.CreatedAt, MaxAttempts: OutboxDefaultMaxAttempts, CreatedAt: record.CreatedAt, UpdatedAt: record.CreatedAt,
-	}, nil
-}
-
-func customerChargeOutbox(record UsageRecord, ledger BillingLedgerEntry) (TransactionalOutboxEvent, error) {
-	idempotencyKey := "customer_charge:" + ledger.ID
-	payload, err := json.Marshal(CustomerChargePostedEvent{BillingLedgerID: ledger.ID, CustomerID: record.CustomerID, AmountMicros: ledger.AmountMicros, Currency: ledger.Currency, IdempotencyKey: idempotencyKey})
-	if err != nil {
-		return TransactionalOutboxEvent{}, fmt.Errorf("marshal customer charge event: %w", err)
-	}
-	return TransactionalOutboxEvent{
-		ID: "outbox_" + prefix(hashAPIKey(ledger.ID+"\x00"+OutboxEventCustomerChargePosted), 24), AggregateType: "customer_charge", AggregateID: record.OperationID + ":" + record.AttemptID,
-		EventType: OutboxEventCustomerChargePosted, EventVersion: record.UsageVersion, PayloadJSON: string(payload), Status: OutboxStatusPending,
 		AvailableAt: record.CreatedAt, MaxAttempts: OutboxDefaultMaxAttempts, CreatedAt: record.CreatedAt, UpdatedAt: record.CreatedAt,
 	}, nil
 }

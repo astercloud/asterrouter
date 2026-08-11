@@ -166,7 +166,7 @@ func gatewaySoakRuntimes(t *testing.T, upstream *testutil.FakeOpenAI, keyRequest
 		}
 		handlers = append(handlers, New(Options{
 			SettingsService: settings.NewService(settingsRepository, settings.ServiceOptions{
-				Version: "test", StorageMode: "postgres", EnabledProfiles: []string{"enterprise"},
+				Version: "test", StorageMode: "postgres",
 			}),
 			ControlService: control,
 			SystemService:  system.NewService(system.Config{Version: "test", BuildType: "source"}),

@@ -38,20 +38,20 @@ func TestCapacityMetricsObserveAdmissionsAndSnapshotProviderState(t *testing.T) 
 	svc.SetCapacityAdmissionObserver(recorder)
 
 	first, reason, acquired, err := svc.TryAcquireGatewayCredentialPermit(ctx, gatewaycore.CanonicalAuthContext{
-		ProfileScope: ProfileScopePlatform, TenantID: "tenant-1", CredentialID: "application-a",
-		Limits: gatewaycore.CanonicalLimits{ConcurrencyLimit: 2, TenantConcurrencyLimit: 1},
+		ApplicationID: "application-1", CredentialID: "application-a",
+		Limits: gatewaycore.CanonicalLimits{ConcurrencyLimit: 2, ApplicationConcurrencyLimit: 1},
 	}, 0)
 	if err != nil || !acquired || reason != "" {
 		t.Fatalf("first credential admission reason=%q acquired=%t err=%v", reason, acquired, err)
 	}
 	defer first.Release()
 	if _, reason, acquired, err := svc.TryAcquireGatewayCredentialPermit(ctx, gatewaycore.CanonicalAuthContext{
-		ProfileScope: ProfileScopePlatform, TenantID: "tenant-1", CredentialID: "application-b",
-		Limits: gatewaycore.CanonicalLimits{ConcurrencyLimit: 2, TenantConcurrencyLimit: 1},
-	}, 0); err != nil || acquired || reason != "tenant_concurrency_exhausted" {
+		ApplicationID: "application-1", CredentialID: "application-b",
+		Limits: gatewaycore.CanonicalLimits{ConcurrencyLimit: 2, ApplicationConcurrencyLimit: 1},
+	}, 0); err != nil || acquired || reason != "application_concurrency_exhausted" {
 		t.Fatalf("second credential admission reason=%q acquired=%t err=%v", reason, acquired, err)
 	}
-	if !recorder.contains("application", "acquired", "") || !recorder.contains("tenant", "acquired", "") || !recorder.contains("tenant", "rejected", "tenant_concurrency_exhausted") {
+	if !recorder.contains("credential", "acquired", "") || !recorder.contains("application", "acquired", "") || !recorder.contains("application", "rejected", "application_concurrency_exhausted") {
 		t.Fatalf("credential capacity events=%+v", recorder.events)
 	}
 

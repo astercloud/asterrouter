@@ -33,50 +33,23 @@ func requireRBAC(control *controlplane.Service) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if !access.Global && len(access.DepartmentIDs) > 0 && resourceForRequest(c) == controlplane.RBACResourceAudit {
-			httpx.Error(c, http.StatusForbidden, 1451, "department-scoped access does not include global audit logs")
+		if !access.OrganizationWide && len(access.DepartmentIDs) > 0 && resourceForRequest(c) == controlplane.RBACResourceAudit {
+			httpx.Error(c, http.StatusForbidden, 1451, "department-scoped access does not include organization-wide audit logs")
 			c.Abort()
 			return
 		}
-		if !access.Global && len(access.DepartmentIDs) > 0 && resourceForRequest(c) == controlplane.RBACResourceArtifacts {
-			httpx.Error(c, http.StatusForbidden, 1451, "artifact administration requires global access")
+		if !access.OrganizationWide && len(access.DepartmentIDs) > 0 && resourceForRequest(c) == controlplane.RBACResourceArtifacts {
+			httpx.Error(c, http.StatusForbidden, 1451, "artifact administration requires organization-wide access")
 			c.Abort()
 			return
 		}
-		if !access.Global && len(access.DepartmentIDs) > 0 && resourceForRequest(c) == controlplane.RBACResourceAIJobs {
-			httpx.Error(c, http.StatusForbidden, 1451, "AI job administration requires global access")
+		if !access.OrganizationWide && len(access.DepartmentIDs) > 0 && resourceForRequest(c) == controlplane.RBACResourceAIJobs {
+			httpx.Error(c, http.StatusForbidden, 1451, "AI job administration requires organization-wide access")
 			c.Abort()
 			return
 		}
-		if !access.Global && len(access.DepartmentIDs) > 0 && strings.HasPrefix(strings.TrimPrefix(c.FullPath(), "/api/v1/admin"), "/organization-groups") {
-			httpx.Error(c, http.StatusForbidden, 1451, "organization group management requires global identity access")
-			c.Abort()
-			return
-		}
-		c.Set("principal_access", access)
-		c.Next()
-	}
-}
-
-func requireSurfaceRBAC(control *controlplane.Service, surface string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if control == nil {
-			c.Next()
-			return
-		}
-		permission := permissionForRequest(c)
-		if permission == "" {
-			c.Next()
-			return
-		}
-		allowed, access, err := control.ActorCanSurfaceResource(c.Request.Context(), actor(c), surface, permission, resourceForRequest(c))
-		if err != nil {
-			httpx.Error(c, http.StatusInternalServerError, 1450, err.Error())
-			c.Abort()
-			return
-		}
-		if !allowed {
-			httpx.Error(c, http.StatusForbidden, 1451, "permission denied")
+		if !access.OrganizationWide && len(access.DepartmentIDs) > 0 && strings.HasPrefix(strings.TrimPrefix(c.FullPath(), "/api/v1/console"), "/organization-groups") {
+			httpx.Error(c, http.StatusForbidden, 1451, "organization group management requires organization-wide identity access")
 			c.Abort()
 			return
 		}
@@ -86,7 +59,7 @@ func requireSurfaceRBAC(control *controlplane.Service, surface string) gin.Handl
 }
 
 func requireUserInAccess(ctx context.Context, control *controlplane.Service, userID string, access controlplane.PrincipalAccess) error {
-	if access.Global || len(access.DepartmentIDs) == 0 {
+	if access.OrganizationWide || len(access.DepartmentIDs) == 0 {
 		return nil
 	}
 	users, err := control.ListWorkspaceUsers(ctx)
@@ -102,7 +75,7 @@ func requireUserInAccess(ctx context.Context, control *controlplane.Service, use
 }
 
 func requireDepartmentAssignmentInAccess(departmentID *string, access controlplane.PrincipalAccess, allowOmitted bool) error {
-	if access.Global || len(access.DepartmentIDs) == 0 {
+	if access.OrganizationWide || len(access.DepartmentIDs) == 0 {
 		return nil
 	}
 	if departmentID == nil {
@@ -121,7 +94,7 @@ func requireDepartmentAssignmentInAccess(departmentID *string, access controlpla
 }
 
 func requireAPIKeyInAccess(ctx context.Context, control *controlplane.Service, keyID string, access controlplane.PrincipalAccess) error {
-	if access.Global || len(access.DepartmentIDs) == 0 {
+	if access.OrganizationWide || len(access.DepartmentIDs) == 0 {
 		return nil
 	}
 	keys, err := control.ListAPIKeys(ctx)
@@ -141,7 +114,7 @@ func requireAPIKeyInAccess(ctx context.Context, control *controlplane.Service, k
 }
 
 func departmentAPIKeyIDs(ctx context.Context, control *controlplane.Service, access controlplane.PrincipalAccess) ([]string, error) {
-	if access.Global || len(access.DepartmentIDs) == 0 {
+	if access.OrganizationWide || len(access.DepartmentIDs) == 0 {
 		return nil, nil
 	}
 	keys, err := control.ListAPIKeys(ctx)
@@ -198,7 +171,7 @@ func scopeAlertQuery(ctx context.Context, control *controlplane.Service, access 
 }
 
 func requireAlertInAccess(ctx context.Context, control *controlplane.Service, alertID string, access controlplane.PrincipalAccess) error {
-	if access.Global || len(access.DepartmentIDs) == 0 {
+	if access.OrganizationWide || len(access.DepartmentIDs) == 0 {
 		return nil
 	}
 	alert, err := control.AlertEventByID(ctx, alertID)
@@ -247,8 +220,8 @@ func resourceForRequest(c *gin.Context) string {
 		return controlplane.RBACResourceAlerts
 	case strings.HasPrefix(path, "/users"), strings.HasPrefix(path, "/role-bindings"), strings.HasPrefix(path, "/departments"), strings.HasPrefix(path, "/organization-groups"):
 		return controlplane.RBACResourceIdentity
-	case strings.HasPrefix(path, "/tenants"), strings.HasPrefix(path, "/gateway-principals"):
-		return controlplane.RBACResourcePlatformTenants
+	case strings.HasPrefix(path, "/applications"):
+		return controlplane.RBACResourceApplications
 	case strings.HasPrefix(path, "/policies"):
 		return controlplane.RBACResourcePolicies
 	case strings.HasPrefix(path, "/audit-logs"):
@@ -304,13 +277,16 @@ func permissionForRequest(c *gin.Context) string {
 
 func controlPath(c *gin.Context) string {
 	for _, value := range []string{c.FullPath(), c.Request.URL.Path} {
-		for _, prefix := range []string{"/api/v1/admin", "/api/v1/platform", "/api/v1/supply", "/api/v1/onboarding"} {
+		for _, prefix := range []string{"/api/v1/console", "/api/v1/applications", "/api/v1/supply", "/api/v1/onboarding"} {
 			if strings.HasPrefix(value, prefix) {
 				if prefix == "/api/v1/supply" {
 					return "/supply" + strings.TrimPrefix(value, prefix)
 				}
 				if prefix == "/api/v1/onboarding" {
 					return "/onboarding" + strings.TrimPrefix(value, prefix)
+				}
+				if prefix == "/api/v1/applications" {
+					return "/applications" + strings.TrimPrefix(value, prefix)
 				}
 				return strings.TrimPrefix(value, prefix)
 			}
@@ -325,11 +301,11 @@ func principalAccess(c *gin.Context) controlplane.PrincipalAccess {
 			return access
 		}
 	}
-	return controlplane.PrincipalAccess{Global: true}
+	return controlplane.PrincipalAccess{OrganizationWide: true}
 }
 
 func filterUsersForAccess(users []controlplane.WorkspaceUser, access controlplane.PrincipalAccess) []controlplane.WorkspaceUser {
-	if access.Global || len(access.DepartmentIDs) == 0 {
+	if access.OrganizationWide || len(access.DepartmentIDs) == 0 {
 		return users
 	}
 	allowed := make(map[string]struct{}, len(access.DepartmentIDs))
@@ -346,7 +322,7 @@ func filterUsersForAccess(users []controlplane.WorkspaceUser, access controlplan
 }
 
 func filterAPIKeysForAccess(keys []controlplane.APIKeyRecord, users []controlplane.WorkspaceUser, access controlplane.PrincipalAccess) []controlplane.APIKeyRecord {
-	if access.Global || len(access.DepartmentIDs) == 0 {
+	if access.OrganizationWide || len(access.DepartmentIDs) == 0 {
 		return keys
 	}
 	visibleUsers := filterUsersForAccess(users, access)

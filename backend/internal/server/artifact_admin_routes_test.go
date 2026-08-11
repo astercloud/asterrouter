@@ -27,7 +27,7 @@ func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts?status=ready&policy=managed&limit=10", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts?status=ready&policy=managed&limit=10", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -45,7 +45,7 @@ func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 		t.Fatalf("list=%+v err=%v", listResponse.Data, err)
 	}
 
-	summaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/summary?limit=1&offset=100", nil)
+	summaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts/summary?limit=1&offset=100", nil)
 	summaryRec := httptest.NewRecorder()
 	handler.ServeHTTP(summaryRec, summaryReq)
 	var summaryResponse struct {
@@ -55,7 +55,7 @@ func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 		t.Fatalf("summary status=%d body=%s err=%v", summaryRec.Code, summaryRec.Body.String(), err)
 	}
 
-	detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID, nil)
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts/"+artifact.ID, nil)
 	detailRec := httptest.NewRecorder()
 	handler.ServeHTTP(detailRec, detailReq)
 	var detailResponse struct {
@@ -65,14 +65,14 @@ func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 		t.Fatalf("detail status=%d body=%s err=%v", detailRec.Code, detailRec.Body.String(), err)
 	}
 
-	contentReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID+"/content", nil)
+	contentReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts/"+artifact.ID+"/content", nil)
 	contentRec := httptest.NewRecorder()
 	handler.ServeHTTP(contentRec, contentReq)
 	if contentRec.Code != http.StatusOK || contentRec.Header().Get("Content-Type") != "image/png" || contentRec.Body.String() != adminRouteArtifactPayload {
 		t.Fatalf("content status=%d type=%q body=%q", contentRec.Code, contentRec.Header().Get("Content-Type"), contentRec.Body.String())
 	}
 
-	rangeReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID+"/content", nil)
+	rangeReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts/"+artifact.ID+"/content", nil)
 	rangeReq.Header.Set("Range", "bytes=2-7")
 	rangeRec := httptest.NewRecorder()
 	handler.ServeHTTP(rangeRec, rangeReq)
@@ -80,7 +80,7 @@ func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 		t.Fatalf("range status=%d range=%q body=%q", rangeRec.Code, rangeRec.Header().Get("Content-Range"), rangeRec.Body.String())
 	}
 
-	runtimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifact-runtimes", nil)
+	runtimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifact-runtimes", nil)
 	runtimeRec := httptest.NewRecorder()
 	handler.ServeHTTP(runtimeRec, runtimeReq)
 	var runtimeResponse struct {
@@ -90,7 +90,7 @@ func TestAdminArtifactEndpointsReturnFilteredRedactedRecords(t *testing.T) {
 		t.Fatalf("runtimes status=%d body=%s err=%v", runtimeRec.Code, runtimeRec.Body.String(), err)
 	}
 
-	invalidReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts?status=invalid", nil)
+	invalidReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts?status=invalid", nil)
 	invalidRec := httptest.NewRecorder()
 	handler.ServeHTTP(invalidRec, invalidReq)
 	if invalidRec.Code != http.StatusBadRequest {
@@ -109,12 +109,12 @@ func TestAdminArtifactRBACSeparatesReadAndRetryAndRequiresGlobalScope(t *testing
 		t.Fatal(err)
 	}
 	if _, err := control.CreateRoleBinding(ctx, "tester", controlplane.RoleBindingRequest{
-		UserID: auditor.ID, Role: controlplane.RoleReadOnlyAuditor, ScopeType: controlplane.RoleScopeGlobal,
+		UserID: auditor.ID, Role: controlplane.RoleReadOnlyAuditor, ScopeType: controlplane.RoleScopeOrganization,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	readReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts", nil)
+	readReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts", nil)
 	readReq.Header.Set("Authorization", "Bearer secret")
 	readReq.Header.Set("X-Actor", auditor.Email)
 	readRec := httptest.NewRecorder()
@@ -122,7 +122,7 @@ func TestAdminArtifactRBACSeparatesReadAndRetryAndRequiresGlobalScope(t *testing
 	if readRec.Code != http.StatusOK {
 		t.Fatalf("auditor read status=%d body=%s", readRec.Code, readRec.Body.String())
 	}
-	contentReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID+"/content", nil)
+	contentReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts/"+artifact.ID+"/content", nil)
 	contentReq.Header.Set("Authorization", "Bearer secret")
 	contentReq.Header.Set("X-Actor", auditor.Email)
 	contentRec := httptest.NewRecorder()
@@ -131,7 +131,7 @@ func TestAdminArtifactRBACSeparatesReadAndRetryAndRequiresGlobalScope(t *testing
 		t.Fatalf("auditor content status=%d body=%q", contentRec.Code, contentRec.Body.String())
 	}
 
-	retryReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/artifacts/artifact_missing/retry-delivery", nil)
+	retryReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/artifacts/artifact_missing/retry-delivery", nil)
 	retryReq.Header.Set("Authorization", "Bearer secret")
 	retryReq.Header.Set("X-Actor", auditor.Email)
 	retryRec := httptest.NewRecorder()
@@ -155,7 +155,7 @@ func TestAdminArtifactRBACSeparatesReadAndRetryAndRequiresGlobalScope(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	scopedReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts", nil)
+	scopedReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts", nil)
 	scopedReq.Header.Set("Authorization", "Bearer secret")
 	scopedReq.Header.Set("X-Actor", manager.Email)
 	scopedRec := httptest.NewRecorder()
@@ -163,7 +163,7 @@ func TestAdminArtifactRBACSeparatesReadAndRetryAndRequiresGlobalScope(t *testing
 	if scopedRec.Code != http.StatusForbidden || strings.Contains(scopedRec.Body.String(), "artifact_") {
 		t.Fatalf("department artifact read status=%d body=%s", scopedRec.Code, scopedRec.Body.String())
 	}
-	scopedContentReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/artifacts/"+artifact.ID+"/content", nil)
+	scopedContentReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/artifacts/"+artifact.ID+"/content", nil)
 	scopedContentReq.Header.Set("Authorization", "Bearer secret")
 	scopedContentReq.Header.Set("X-Actor", manager.Email)
 	scopedContentRec := httptest.NewRecorder()
@@ -186,8 +186,8 @@ func createAdminRouteArtifact(t *testing.T, control *controlplane.Service) contr
 		t.Fatal(err)
 	}
 	job, _, err := control.BeginDurableAIJob(ctx, gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "admin-artifact-key", ProfileScope: controlplane.ProfileScopePlatform,
-		TenantID: "admin-artifact-tenant", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "admin-artifact-principal",
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "admin-artifact-key",
+		ApplicationID: "admin-artifact-application", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "admin-artifact-principal",
 		ArtifactPolicy: controlplane.GatewayArtifactPolicyManaged,
 	}, gatewaycore.CanonicalRequest{
 		ID: "admin-artifact-request", Fingerprint: "admin-artifact-fingerprint", IdempotencyKey: "admin-artifact-idempotency",

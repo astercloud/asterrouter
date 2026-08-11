@@ -11,9 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.Service, profileScope string) {
+func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.Service) {
 	group.GET("/artifacts", func(c *gin.Context) {
-		data, err := control.ListArtifactsAdmin(c.Request.Context(), artifactAdminQuery(c, profileScope))
+		data, err := control.ListArtifactsAdmin(c.Request.Context(), artifactAdminQuery(c))
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
@@ -21,7 +21,7 @@ func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.S
 		httpx.OK(c, data)
 	})
 	group.GET("/artifacts/summary", func(c *gin.Context) {
-		data, err := control.ArtifactSummaryAdmin(c.Request.Context(), artifactAdminQuery(c, profileScope))
+		data, err := control.ArtifactSummaryAdmin(c.Request.Context(), artifactAdminQuery(c))
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
@@ -30,9 +30,6 @@ func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.S
 	})
 	group.GET("/artifacts/:id", func(c *gin.Context) {
 		data, err := control.ArtifactAdmin(c.Request.Context(), c.Param("id"))
-		if err == nil && !artifactAdminScopeMatches(data.Artifact, profileScope) {
-			err = controlplane.ErrArtifactNotFound
-		}
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
@@ -41,9 +38,6 @@ func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.S
 	})
 	group.GET("/artifacts/:id/content", func(c *gin.Context) {
 		data, err := control.ArtifactAdmin(c.Request.Context(), c.Param("id"))
-		if err == nil && !artifactAdminScopeMatches(data.Artifact, profileScope) {
-			err = controlplane.ErrArtifactNotFound
-		}
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
@@ -54,7 +48,7 @@ func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.S
 			httpx.Error(c, http.StatusRequestedRangeNotSatisfiable, 1568, "artifact byte range is not satisfiable")
 			return
 		}
-		artifact, opened, found, err := control.OpenArtifactAdmin(c.Request.Context(), data.Artifact.ID, profileScope, byteRange)
+		artifact, opened, found, err := control.OpenArtifactAdmin(c.Request.Context(), data.Artifact.ID, byteRange)
 		if err == nil && !found {
 			err = controlplane.ErrArtifactNotFound
 		}
@@ -67,9 +61,6 @@ func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.S
 	})
 	group.POST("/artifacts/:id/retry-delivery", func(c *gin.Context) {
 		data, err := control.ArtifactAdmin(c.Request.Context(), c.Param("id"))
-		if err == nil && !artifactAdminScopeMatches(data.Artifact, profileScope) {
-			err = controlplane.ErrArtifactNotFound
-		}
 		if err != nil {
 			writeArtifactAdminError(c, err)
 			return
@@ -86,28 +77,19 @@ func registerArtifactAdminRoutes(group *gin.RouterGroup, control *controlplane.S
 	})
 }
 
-func artifactAdminQuery(c *gin.Context, profileScope string) controlplane.ArtifactQuery {
-	if strings.TrimSpace(profileScope) == "" {
-		profileScope = strings.TrimSpace(c.Query("profile_scope"))
-	}
+func artifactAdminQuery(c *gin.Context) controlplane.ArtifactQuery {
 	return controlplane.ArtifactQuery{
-		ProfileScope: strings.TrimSpace(profileScope),
-		TenantID:     strings.TrimSpace(c.Query("tenant_id")),
-		Search:       strings.TrimSpace(c.Query("q")),
-		OperationID:  strings.TrimSpace(c.Query("operation_id")),
-		JobID:        strings.TrimSpace(c.Query("job_id")),
-		AttemptID:    strings.TrimSpace(c.Query("attempt_id")),
-		Role:         strings.TrimSpace(c.Query("role")),
-		Policy:       strings.TrimSpace(c.Query("policy")),
-		Status:       strings.TrimSpace(c.Query("status")),
-		Limit:        intQuery(c, "limit", 50),
-		Offset:       intQuery(c, "offset", 0),
+		ApplicationID: strings.TrimSpace(c.Query("application_id")),
+		Search:        strings.TrimSpace(c.Query("q")),
+		OperationID:   strings.TrimSpace(c.Query("operation_id")),
+		JobID:         strings.TrimSpace(c.Query("job_id")),
+		AttemptID:     strings.TrimSpace(c.Query("attempt_id")),
+		Role:          strings.TrimSpace(c.Query("role")),
+		Policy:        strings.TrimSpace(c.Query("policy")),
+		Status:        strings.TrimSpace(c.Query("status")),
+		Limit:         intQuery(c, "limit", 50),
+		Offset:        intQuery(c, "offset", 0),
 	}
-}
-
-func artifactAdminScopeMatches(artifact controlplane.ArtifactAdminRecord, profileScope string) bool {
-	profileScope = strings.TrimSpace(profileScope)
-	return profileScope == "" || artifact.ProfileScope == profileScope
 }
 
 func writeArtifactAdminError(c *gin.Context, err error) {

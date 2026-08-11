@@ -192,7 +192,7 @@ func registerAPIKeyClientRoutes(group *gin.RouterGroup, control *controlplane.Se
 func requireGlobalOnboardingAccess() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		access := principalAccess(c)
-		if !access.Global {
+		if !access.OrganizationWide {
 			httpx.Error(c, http.StatusForbidden, 1451, "onboarding requires global administration access")
 			c.Abort()
 			return

@@ -10,21 +10,21 @@ import (
 	"github.com/lib/pq"
 )
 
-const aiJobFairSelectColumns = `id, profile_scope, tenant_id, credential_source, integration_id,
+const aiJobFairSelectColumns = `id, application_id, credential_source, integration_id,
 principal_type, principal_id, external_subject_reference, status, priority, next_eligible_at, queue_lease_until, created_at`
 
-const aiJobFairQualifiedSelectColumns = `job.id, job.profile_scope, job.tenant_id, job.credential_source, job.integration_id,
+const aiJobFairQualifiedSelectColumns = `job.id, job.application_id, job.credential_source, job.integration_id,
 job.principal_type, job.principal_id, job.external_subject_reference, job.status, job.priority,
 job.next_eligible_at, job.queue_lease_until, job.created_at`
 
 func listPostgresAIJobFairCandidates(ctx context.Context, tx *sql.Tx, now time.Time, perPrincipalLimit int) ([]AIJob, error) {
 	rows, err := tx.QueryContext(ctx, `
 WITH ranked AS (
-  SELECT job.id, job.profile_scope, job.tenant_id, job.credential_source, job.integration_id,
+  SELECT job.id, job.application_id, job.credential_source, job.integration_id,
          job.principal_type, job.principal_id, job.external_subject_reference, job.status, job.priority,
          job.next_eligible_at, job.queue_lease_until, job.created_at,
          ROW_NUMBER() OVER (
-           PARTITION BY profile_scope, tenant_id, credential_source, integration_id, principal_type, principal_id, external_subject_reference
+           PARTITION BY application_id, credential_source, integration_id, principal_type, principal_id, external_subject_reference
            ORDER BY
              CASE WHEN status = $3 THEN 0 ELSE 1 END,
              LEAST($5, GREATEST(0, priority) + GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ($2::timestamptz - next_eligible_at)) / 60)::INTEGER)) DESC,
@@ -75,12 +75,12 @@ func listPostgresAIJobInFlight(ctx context.Context, tx *sql.Tx) ([]AIJob, error)
 
 func listPostgresAIJobDispatchActivity(ctx context.Context, tx *sql.Tx) ([]aiJobDispatchActivity, error) {
 	rows, err := tx.QueryContext(ctx, `
-SELECT job.profile_scope, job.tenant_id, job.credential_source, job.integration_id,
+SELECT job.application_id, job.credential_source, job.integration_id,
        job.principal_type, job.principal_id, job.external_subject_reference, MAX(event.created_at)
 FROM ai_job_events event
 JOIN ai_jobs job ON job.id = event.job_id
 WHERE event.event_type = $1
-GROUP BY job.profile_scope, job.tenant_id, job.credential_source, job.integration_id,
+GROUP BY job.application_id, job.credential_source, job.integration_id,
          job.principal_type, job.principal_id, job.external_subject_reference`, AIJobEventScheduled)
 	if err != nil {
 		return nil, err
@@ -90,7 +90,7 @@ GROUP BY job.profile_scope, job.tenant_id, job.credential_source, job.integratio
 	for rows.Next() {
 		var activity aiJobDispatchActivity
 		if err := rows.Scan(
-			&activity.Job.ProfileScope, &activity.Job.TenantID, &activity.Job.CredentialSource, &activity.Job.IntegrationID,
+			&activity.Job.ApplicationID, &activity.Job.CredentialSource, &activity.Job.IntegrationID,
 			&activity.Job.PrincipalType, &activity.Job.PrincipalID, &activity.Job.ExternalSubjectReference, &activity.DispatchedAt,
 		); err != nil {
 			return nil, err
@@ -156,11 +156,11 @@ FOR UPDATE SKIP LOCKED`, id, expectedVersion, AIJobStatusQueued, now, AIJobStatu
 
 func lockPostgresAIJobAdmissionScopes(ctx context.Context, tx *sql.Tx, job AIJob, limits AIJobAdmissionLimits) error {
 	keys := make([]string, 0, 3)
-	if limits.Profile > 0 {
-		keys = append(keys, "ai-job-admission:profile:"+aiJobProfileFairKey(job))
+	if limits.Organization > 0 {
+		keys = append(keys, "ai-job-admission:organization")
 	}
-	if limits.Tenant > 0 {
-		keys = append(keys, "ai-job-admission:tenant:"+aiJobTenantFairKey(job))
+	if limits.Application > 0 {
+		keys = append(keys, "ai-job-admission:application:"+aiJobApplicationFairKey(job))
 	}
 	if limits.Principal > 0 {
 		keys = append(keys, "ai-job-admission:principal:"+aiJobPrincipalFairKey(job))
@@ -178,16 +178,16 @@ func countPostgresAIJobAdmissionScopes(ctx context.Context, tx *sql.Tx, job AIJo
 	var counts aiJobAdmissionCounts
 	err := tx.QueryRowContext(ctx, `
 SELECT
-  COUNT(*) FILTER (WHERE profile_scope=$1),
-  COUNT(*) FILTER (WHERE profile_scope=$1 AND tenant_id=$2),
-  COUNT(*) FILTER (WHERE profile_scope=$1 AND tenant_id=$2 AND credential_source=$3 AND integration_id=$4
-    AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7)
+  COUNT(*),
+  COUNT(*) FILTER (WHERE application_id=$1),
+  COUNT(*) FILTER (WHERE application_id=$1 AND credential_source=$2 AND integration_id=$3
+    AND principal_type=$4 AND principal_id=$5 AND external_subject_reference=$6)
 FROM ai_jobs
-WHERE status IN ($8,$9)`,
-		strings.TrimSpace(job.ProfileScope), strings.TrimSpace(job.TenantID), strings.TrimSpace(job.CredentialSource),
+WHERE status IN ($7,$8)`,
+		strings.TrimSpace(job.ApplicationID), strings.TrimSpace(job.CredentialSource),
 		strings.TrimSpace(job.IntegrationID), strings.TrimSpace(job.PrincipalType), strings.TrimSpace(job.PrincipalID),
 		strings.TrimSpace(job.ExternalSubjectReference), AIJobStatusQueued, AIJobStatusDispatching,
-	).Scan(&counts.Profile, &counts.Tenant, &counts.Principal)
+	).Scan(&counts.Organization, &counts.Application, &counts.Principal)
 	return counts, err
 }
 
@@ -195,7 +195,7 @@ func scanAIJobFairFields(scanner apiKeyScanner) (AIJob, error) {
 	var job AIJob
 	var leaseUntil sql.NullTime
 	if err := scanner.Scan(
-		&job.ID, &job.ProfileScope, &job.TenantID, &job.CredentialSource, &job.IntegrationID,
+		&job.ID, &job.ApplicationID, &job.CredentialSource, &job.IntegrationID,
 		&job.PrincipalType, &job.PrincipalID, &job.ExternalSubjectReference, &job.Status, &job.Priority,
 		&job.NextEligibleAt, &leaseUntil, &job.CreatedAt,
 	); err != nil {

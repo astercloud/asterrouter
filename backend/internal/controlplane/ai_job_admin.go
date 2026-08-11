@@ -15,8 +15,7 @@ var (
 
 type AIJobQuery struct {
 	Search         string
-	ProfileScope   string
-	TenantID       string
+	ApplicationID  string
 	Model          string
 	Modality       string
 	Operation      string
@@ -34,8 +33,7 @@ type AIJobSummary struct {
 type AIJobAdminRecord struct {
 	ID             string     `json:"id"`
 	OperationID    string     `json:"operation_id"`
-	ProfileScope   string     `json:"profile_scope"`
-	TenantID       string     `json:"tenant_id,omitempty"`
+	ApplicationID  string     `json:"application_id,omitempty"`
 	Protocol       string     `json:"protocol"`
 	Operation      string     `json:"operation"`
 	Modality       string     `json:"modality"`
@@ -177,8 +175,8 @@ func (s *Service) CancelAIJobAdmin(ctx context.Context, actor, id string) (AIJob
 	if !found {
 		return AIJobAdminActionResult{}, ErrAIJobNotFound
 	}
-	audit := scopeAuditLog(s.newAuditLog(actor, "cancel", "ai_job", id, "Requested AI job cancellation"),
-		existing.ProfileScope, existing.TenantID, existing.PrincipalID, existing.IntegrationID, existing.ExternalSubjectReference)
+	audit := applicationAuditLog(s.newAuditLog(actor, "cancel", "ai_job", id, "Requested AI job cancellation"),
+		existing.ApplicationID, existing.PrincipalID, existing.IntegrationID, existing.ExternalSubjectReference)
 	job, changed, found, err := s.repo.RequestAIJobAdminCancellation(ctx, id, now, audit)
 	if err != nil {
 		return AIJobAdminActionResult{}, err
@@ -205,8 +203,8 @@ func (s *Service) ScheduleAIAttemptReconciliationAdmin(ctx context.Context, acto
 		return AIAttemptReconcileScheduleResult{}, ErrAIAttemptNotFound
 	}
 	now := s.nowUTC()
-	audit := scopeAuditLog(s.newAuditLog(actor, "schedule_reconciliation", "ai_attempt", attempt.ID, "Scheduled AI attempt for immediate reconciliation"),
-		job.ProfileScope, job.TenantID, job.PrincipalID, job.IntegrationID, job.ExternalSubjectReference)
+	audit := applicationAuditLog(s.newAuditLog(actor, "schedule_reconciliation", "ai_attempt", attempt.ID, "Scheduled AI attempt for immediate reconciliation"),
+		job.ApplicationID, job.PrincipalID, job.IntegrationID, job.ExternalSubjectReference)
 	updated, changed, err := s.repo.ScheduleAIAttemptReconciliation(ctx, attempt.ID, attempt.DispatchVersion, now, audit)
 	if err != nil {
 		return AIAttemptReconcileScheduleResult{}, err
@@ -237,7 +235,7 @@ func validAIJobStatus(status string) bool {
 
 func aiJobAdminRecord(job AIJob) AIJobAdminRecord {
 	return AIJobAdminRecord{
-		ID: job.ID, OperationID: job.OperationID, ProfileScope: job.ProfileScope, TenantID: job.TenantID,
+		ID: job.ID, OperationID: job.OperationID, ApplicationID: job.ApplicationID,
 		Protocol: job.Protocol, Operation: job.Operation, Modality: job.Modality, Model: job.Model,
 		ArtifactPolicy: job.ArtifactPolicy, ArtifactSinkID: job.ArtifactSinkID, Status: job.Status,
 		StatusVersion: job.StatusVersion, Priority: job.Priority, NextEligibleAt: job.NextEligibleAt,

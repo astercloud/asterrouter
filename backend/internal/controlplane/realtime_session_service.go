@@ -17,7 +17,7 @@ func (s *Service) BeginRealtimeSession(ctx context.Context, operation AIOperatio
 	now := s.nowUTC()
 	session := RealtimeSession{
 		ID: "rts_" + randomID(12), OperationID: operation.ID, AttemptID: attempt.ID,
-		ProfileScope: operation.ProfileScope, TenantID: operation.TenantID, CredentialID: operation.CredentialID,
+		ApplicationID: operation.ApplicationID, CredentialID: operation.CredentialID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, Model: operation.Model,
 		ProviderID: provider.ID, ProviderAccountID: provider.AccountID, UpstreamModel: provider.UpstreamModel,
 		Status: RealtimeSessionStatusConnecting, Version: 1, CreatedAt: now, UpdatedAt: now,

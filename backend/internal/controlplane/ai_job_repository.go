@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const aiJobSelectColumns = `id, operation_id, profile_scope, tenant_id, credential_id, credential_source,
+const aiJobSelectColumns = `id, operation_id, application_id, credential_id, credential_source,
 integration_id, principal_type, principal_id, external_subject_reference, request_fingerprint, idempotency_key,
 protocol, operation, modality, model, artifact_policy, artifact_sink_id, request_payload_ciphertext, status, status_version, priority,
 next_eligible_at, queue_lease_until, queue_lease_token, queue_worker_id, fence_token, error_type,
@@ -593,8 +593,8 @@ func (r *PostgresRepository) FindAIJobByOperationID(ctx context.Context, operati
 
 func (r *PostgresRepository) FindOwnedAIJob(ctx context.Context, id string, owner AIJobOwner) (AIJob, bool, error) {
 	job, err := scanAIJob(r.db.QueryRowContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs
-WHERE id=$1 AND profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7`,
-		id, owner.ProfileScope, owner.TenantID, owner.IntegrationID, owner.PrincipalType, owner.PrincipalID, owner.ExternalSubjectReference))
+WHERE id=$1 AND application_id=$2 AND integration_id=$3 AND principal_type=$4 AND principal_id=$5 AND external_subject_reference=$6`,
+		id, owner.ApplicationID, owner.IntegrationID, owner.PrincipalType, owner.PrincipalID, owner.ExternalSubjectReference))
 	if errors.Is(err, sql.ErrNoRows) {
 		return AIJob{}, false, nil
 	}
@@ -603,11 +603,11 @@ WHERE id=$1 AND profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND prin
 
 func (r *PostgresRepository) QueryAIJobs(ctx context.Context, query AIJobQuery) ([]AIJob, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs
-WHERE ($1='' OR profile_scope=$1) AND ($2='' OR tenant_id=$2)
-  AND ($3='' OR id ILIKE '%'||$3||'%' OR operation_id ILIKE '%'||$3||'%' OR tenant_id ILIKE '%'||$3||'%' OR model ILIKE '%'||$3||'%')
-  AND ($4='' OR model=$4) AND ($5='' OR modality=$5) AND ($6='' OR operation=$6)
-  AND ($7='' OR status=$7) AND ($8='' OR artifact_policy=$8)
-ORDER BY created_at DESC, id DESC LIMIT $9 OFFSET $10`, strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID),
+WHERE ($1='' OR application_id=$1)
+	  AND ($2='' OR id ILIKE '%'||$2||'%' OR operation_id ILIKE '%'||$2||'%' OR application_id ILIKE '%'||$2||'%' OR model ILIKE '%'||$2||'%')
+	  AND ($3='' OR model=$3) AND ($4='' OR modality=$4) AND ($5='' OR operation=$5)
+	  AND ($6='' OR status=$6) AND ($7='' OR artifact_policy=$7)
+ORDER BY created_at DESC, id DESC LIMIT $8 OFFSET $9`, strings.TrimSpace(query.ApplicationID),
 		strings.TrimSpace(query.Search), strings.TrimSpace(query.Model), strings.TrimSpace(query.Modality), strings.TrimSpace(query.Operation),
 		strings.TrimSpace(query.Status), strings.TrimSpace(query.ArtifactPolicy), aiJobAdminQueryLimit(query.Limit), nonNegative(query.Offset))
 	if err != nil {
@@ -627,11 +627,11 @@ ORDER BY created_at DESC, id DESC LIMIT $9 OFFSET $10`, strings.TrimSpace(query.
 
 func (r *PostgresRepository) SummarizeAIJobs(ctx context.Context, query AIJobQuery) (AIJobSummary, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM ai_jobs
-WHERE ($1='' OR profile_scope=$1) AND ($2='' OR tenant_id=$2)
-  AND ($3='' OR id ILIKE '%'||$3||'%' OR operation_id ILIKE '%'||$3||'%' OR tenant_id ILIKE '%'||$3||'%' OR model ILIKE '%'||$3||'%')
-  AND ($4='' OR model=$4) AND ($5='' OR modality=$5) AND ($6='' OR operation=$6)
-  AND ($7='' OR status=$7) AND ($8='' OR artifact_policy=$8)
-GROUP BY status`, strings.TrimSpace(query.ProfileScope), strings.TrimSpace(query.TenantID), strings.TrimSpace(query.Search),
+WHERE ($1='' OR application_id=$1)
+	  AND ($2='' OR id ILIKE '%'||$2||'%' OR operation_id ILIKE '%'||$2||'%' OR application_id ILIKE '%'||$2||'%' OR model ILIKE '%'||$2||'%')
+	  AND ($3='' OR model=$3) AND ($4='' OR modality=$4) AND ($5='' OR operation=$5)
+	  AND ($6='' OR status=$6) AND ($7='' OR artifact_policy=$7)
+GROUP BY status`, strings.TrimSpace(query.ApplicationID), strings.TrimSpace(query.Search),
 		strings.TrimSpace(query.Model), strings.TrimSpace(query.Modality), strings.TrimSpace(query.Operation),
 		strings.TrimSpace(query.Status), strings.TrimSpace(query.ArtifactPolicy))
 	if err != nil {
@@ -658,8 +658,8 @@ func (r *PostgresRepository) RequestAIJobCancellation(ctx context.Context, id st
 	}
 	defer func() { _ = tx.Rollback() }()
 	job, err := scanAIJob(tx.QueryRowContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs
-WHERE id=$1 AND profile_scope=$2 AND tenant_id=$3 AND integration_id=$4 AND principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7 FOR UPDATE`,
-		id, owner.ProfileScope, owner.TenantID, owner.IntegrationID, owner.PrincipalType, owner.PrincipalID, owner.ExternalSubjectReference))
+WHERE id=$1 AND application_id=$2 AND integration_id=$3 AND principal_type=$4 AND principal_id=$5 AND external_subject_reference=$6 FOR UPDATE`,
+		id, owner.ApplicationID, owner.IntegrationID, owner.PrincipalType, owner.PrincipalID, owner.ExternalSubjectReference))
 	if errors.Is(err, sql.ErrNoRows) {
 		return AIJob{}, false, false, nil
 	}
@@ -1004,12 +1004,11 @@ func aiJobMatchesQuery(job AIJob, query AIJobQuery) bool {
 	search := strings.ToLower(strings.TrimSpace(query.Search))
 	if search != "" && !strings.Contains(strings.ToLower(job.ID), search) &&
 		!strings.Contains(strings.ToLower(job.OperationID), search) &&
-		!strings.Contains(strings.ToLower(job.TenantID), search) &&
+		!strings.Contains(strings.ToLower(job.ApplicationID), search) &&
 		!strings.Contains(strings.ToLower(job.Model), search) {
 		return false
 	}
-	return (strings.TrimSpace(query.ProfileScope) == "" || job.ProfileScope == strings.TrimSpace(query.ProfileScope)) &&
-		(strings.TrimSpace(query.TenantID) == "" || job.TenantID == strings.TrimSpace(query.TenantID)) &&
+	return (strings.TrimSpace(query.ApplicationID) == "" || job.ApplicationID == strings.TrimSpace(query.ApplicationID)) &&
 		(strings.TrimSpace(query.Model) == "" || job.Model == strings.TrimSpace(query.Model)) &&
 		(strings.TrimSpace(query.Modality) == "" || job.Modality == strings.TrimSpace(query.Modality)) &&
 		(strings.TrimSpace(query.Operation) == "" || job.Operation == strings.TrimSpace(query.Operation)) &&
@@ -1058,7 +1057,7 @@ func validateDurableAIJobAdmission(operation AIOperation, job AIJob, event AIJob
 }
 
 func sameAIJobIdempotencyScope(left, right AIJob) bool {
-	return left.IdempotencyKey != "" && left.ProfileScope == right.ProfileScope && left.TenantID == right.TenantID &&
+	return left.IdempotencyKey != "" && left.ApplicationID == right.ApplicationID &&
 		left.CredentialSource == right.CredentialSource && left.CredentialID == right.CredentialID && left.IntegrationID == right.IntegrationID &&
 		left.PrincipalType == right.PrincipalType && left.PrincipalID == right.PrincipalID &&
 		left.ExternalSubjectReference == right.ExternalSubjectReference && left.Operation == right.Operation && left.IdempotencyKey == right.IdempotencyKey
@@ -1190,7 +1189,7 @@ func scanAIJob(scanner apiKeyScanner) (AIJob, error) {
 	var job AIJob
 	var leaseUntil, completedAt sql.NullTime
 	if err := scanner.Scan(
-		&job.ID, &job.OperationID, &job.ProfileScope, &job.TenantID, &job.CredentialID, &job.CredentialSource,
+		&job.ID, &job.OperationID, &job.ApplicationID, &job.CredentialID, &job.CredentialSource,
 		&job.IntegrationID, &job.PrincipalType, &job.PrincipalID, &job.ExternalSubjectReference, &job.RequestFingerprint, &job.IdempotencyKey,
 		&job.Protocol, &job.Operation, &job.Modality, &job.Model, &job.ArtifactPolicy, &job.ArtifactSinkID, &job.RequestPayloadCiphertext, &job.Status, &job.StatusVersion,
 		&job.Priority, &job.NextEligibleAt, &leaseUntil, &job.QueueLeaseToken, &job.QueueWorkerID, &job.FenceToken, &job.ErrorType,
@@ -1209,12 +1208,12 @@ func scanAIJob(scanner apiKeyScanner) (AIJob, error) {
 
 func insertAIJob(ctx context.Context, executor usageRecordExecutor, job AIJob) error {
 	_, err := executor.ExecContext(ctx, `INSERT INTO ai_jobs(
-id, operation_id, profile_scope, tenant_id, credential_id, credential_source, integration_id, principal_type, principal_id,
+id, operation_id, application_id, credential_id, credential_source, integration_id, principal_type, principal_id,
 external_subject_reference, request_fingerprint, idempotency_key, protocol, operation, modality, model, artifact_policy, artifact_sink_id,
 request_payload_ciphertext, status, status_version, priority, next_eligible_at, queue_lease_until, queue_lease_token, queue_worker_id,
 fence_token, error_type, created_at, updated_at, completed_at, expires_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NULL,'','',$24,$25,$26,$27,NULL,$28)`,
-		job.ID, job.OperationID, job.ProfileScope, job.TenantID, job.CredentialID, job.CredentialSource, job.IntegrationID,
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,NULL,'','',$23,$24,$25,$26,NULL,$27)`,
+		job.ID, job.OperationID, job.ApplicationID, job.CredentialID, job.CredentialSource, job.IntegrationID,
 		job.PrincipalType, job.PrincipalID, job.ExternalSubjectReference, job.RequestFingerprint, job.IdempotencyKey,
 		job.Protocol, job.Operation, job.Modality, job.Model, job.ArtifactPolicy, job.ArtifactSinkID, job.RequestPayloadCiphertext, job.Status, job.StatusVersion,
 		job.Priority, job.NextEligibleAt, job.FenceToken, job.ErrorType, job.CreatedAt, job.UpdatedAt, job.ExpiresAt)
@@ -1240,9 +1239,9 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,'','',NULL,$11,$12)`,
 
 func findAIJobByIdempotencyScope(ctx context.Context, executor aiJobExecutor, job AIJob) (AIJob, bool, error) {
 	row := executor.QueryRowContext(ctx, `SELECT `+aiJobSelectColumns+` FROM ai_jobs WHERE
-profile_scope=$1 AND tenant_id=$2 AND credential_source=$3 AND credential_id=$4 AND integration_id=$5 AND
-principal_type=$6 AND principal_id=$7 AND external_subject_reference=$8 AND operation=$9 AND idempotency_key=$10`,
-		job.ProfileScope, job.TenantID, job.CredentialSource, job.CredentialID, job.IntegrationID,
+application_id=$1 AND credential_source=$2 AND credential_id=$3 AND integration_id=$4 AND
+principal_type=$5 AND principal_id=$6 AND external_subject_reference=$7 AND operation=$8 AND idempotency_key=$9`,
+		job.ApplicationID, job.CredentialSource, job.CredentialID, job.IntegrationID,
 		job.PrincipalType, job.PrincipalID, job.ExternalSubjectReference, job.Operation, job.IdempotencyKey)
 	found, err := scanAIJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1289,4 +1288,8 @@ WHERE id=$4 AND status IN ($5,$6)`, mapAIJobToOperationStatus(jobStatus), errorT
 		}
 	}
 	return nil
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
 }

@@ -44,7 +44,7 @@ func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("RecordGatewayCall(): %v", err)
 	}
 
-	usageReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage/export?model=model-b&status=error&limit=10", nil)
+	usageReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/usage/export?model=model-b&status=error&limit=10", nil)
 	usageRec := httptest.NewRecorder()
 	handler.ServeHTTP(usageRec, usageReq)
 	usageRows := readCSVRows(t, usageRec)
@@ -55,7 +55,7 @@ func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("usage export leaked filtered record: %s", usageRec.Body.String())
 	}
 
-	traceReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/gateway-traces/export?status=error&q=blocked&limit=10", nil)
+	traceReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/gateway-traces/export?status=error&q=blocked&limit=10", nil)
 	traceRec := httptest.NewRecorder()
 	handler.ServeHTTP(traceRec, traceReq)
 	traceRows := readCSVRows(t, traceRec)
@@ -66,7 +66,7 @@ func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 		t.Fatalf("trace export leaked filtered record: %s", traceRec.Body.String())
 	}
 
-	auditReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-logs/export?action=invoke&resource_type=gateway_call&q=Export&limit=10", nil)
+	auditReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/audit-logs/export?action=invoke&resource_type=gateway_call&q=Export&limit=10", nil)
 	auditRec := httptest.NewRecorder()
 	handler.ServeHTTP(auditRec, auditReq)
 	auditRows := readCSVRows(t, auditRec)
@@ -94,7 +94,7 @@ func TestAdminAsyncExportJobLifecycle(t *testing.T) {
 		t.Fatalf("RecordGatewayCall(): %v", err)
 	}
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/export-jobs?kind=audit_logs&action=invoke&q=AsyncExport&limit=10", nil)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/export-jobs?kind=audit_logs&action=invoke&q=AsyncExport&limit=10", nil)
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusOK {
@@ -115,7 +115,7 @@ func TestAdminAsyncExportJobLifecycle(t *testing.T) {
 		t.Fatalf("job did not succeed with expected metadata: %+v", job)
 	}
 
-	downloadReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/export-jobs/"+job.ID+"/download", nil)
+	downloadReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/export-jobs/"+job.ID+"/download", nil)
 	downloadRec := httptest.NewRecorder()
 	handler.ServeHTTP(downloadRec, downloadReq)
 	rows := readCSVRows(t, downloadRec)
@@ -123,14 +123,14 @@ func TestAdminAsyncExportJobLifecycle(t *testing.T) {
 		t.Fatalf("async export CSV mismatch: %+v", rows)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/admin/export-jobs?limit=5", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/export-jobs?limit=5", nil)
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), job.ID) {
 		t.Fatalf("list missing job status=%d body=%s", listRec.Code, listRec.Body.String())
 	}
 
-	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/admin/export-jobs?kind=unknown", nil)
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/export-jobs?kind=unknown", nil)
 	badRec := httptest.NewRecorder()
 	handler.ServeHTTP(badRec, badReq)
 	if badRec.Code != http.StatusBadRequest {
@@ -143,7 +143,7 @@ func waitExportJob(t *testing.T, handler http.Handler, id string) csvExportJob {
 	deadline := time.Now().Add(2 * time.Second)
 	var last csvExportJob
 	for time.Now().Before(deadline) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/export-jobs/"+id, nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/console/export-jobs/"+id, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {

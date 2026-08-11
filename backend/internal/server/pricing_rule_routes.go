@@ -11,27 +11,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type pricingSurface string
-
-const (
-	PricingSurfaceAdmin    pricingSurface = "admin"
-	PricingSurfacePlatform pricingSurface = "platform"
-	PricingSurfaceOperator pricingSurface = "operator"
-)
-
-func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Service, surface pricingSurface) {
+func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Service) {
 	if control == nil {
 		return
 	}
 	group.GET("/pricing-rules", func(c *gin.Context) {
 		query := controlplane.PricingRuleQuery{Purpose: c.Query("purpose"), ScopeType: c.Query("scope_type"), ScopeID: c.Query("scope_id"), Model: c.Query("model"), Status: c.Query("status")}
-		if surface == PricingSurfaceOperator {
-			query.Purpose = controlplane.PricingPurposeCustomerCharge
-		} else if surface == PricingSurfacePlatform {
-			query.Purpose = controlplane.PricingPurposeUsageCost
-			query.ScopeType = controlplane.PricingScopeGlobal
-			query.ScopeID = ""
-		}
 		data, err := control.ListPricingRules(c.Request.Context(), query)
 		pricingResponse(c, data, err)
 	})
@@ -41,30 +26,15 @@ func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Ser
 			pricingResponseError(c, http.StatusBadRequest, err)
 			return
 		}
-		if surface == PricingSurfaceOperator {
-			if request.Purpose != "" && request.Purpose != controlplane.PricingPurposeCustomerCharge {
-				pricingResponseError(c, http.StatusBadRequest, errors.New("operator can only create customer_charge rules"))
-				return
-			}
-			request.Purpose = controlplane.PricingPurposeCustomerCharge
-		}
-		if surface == PricingSurfacePlatform {
-			request.Purpose = controlplane.PricingPurposeUsageCost
-			request.ScopeType = controlplane.PricingScopeGlobal
-			request.ScopeID = ""
-		}
 		data, err := control.CreatePricingRule(c.Request.Context(), actor(c), request)
 		pricingResponse(c, data, err)
 	})
 	group.GET("/pricing-rules/:id", func(c *gin.Context) {
 		data, err := control.PricingRuleDetail(c.Request.Context(), c.Param("id"))
-		if err == nil && !pricingRuleVisibleOnSurface(data.Rule, surface) {
-			err = controlplane.ErrPricingRuleNotFound
-		}
 		pricingResponse(c, data, err)
 	})
 	group.PUT("/pricing-rules/:id/draft", func(c *gin.Context) {
-		if !authorizePricingRuleMutation(c, control, surface) {
+		if !authorizePricingRuleMutation(c, control) {
 			return
 		}
 		var request controlplane.PricingDraftUpdateRequest
@@ -98,8 +68,8 @@ func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Ser
 			return
 		}
 		if request.RuleVersionID != "" {
-			rule, _, err := control.PricingRuleVersionDetail(c.Request.Context(), request.RuleVersionID)
-			if err != nil || !pricingRuleVisibleOnSurface(rule, surface) {
+			_, _, err := control.PricingRuleVersionDetail(c.Request.Context(), request.RuleVersionID)
+			if err != nil {
 				pricingResponse(c, nil, controlplane.ErrPricingVersionNotFound)
 				return
 			}
@@ -108,7 +78,7 @@ func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Ser
 		pricingResponse(c, data, err)
 	})
 	group.POST("/pricing-rules/:id/publish", func(c *gin.Context) {
-		if !authorizePricingRuleMutation(c, control, surface) {
+		if !authorizePricingRuleMutation(c, control) {
 			return
 		}
 		var request controlplane.PricingPublishRequest
@@ -120,7 +90,7 @@ func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Ser
 		pricingResponse(c, data, err)
 	})
 	group.POST("/pricing-rules/:id/activate/:version_id", func(c *gin.Context) {
-		if !authorizePricingRuleMutation(c, control, surface) {
+		if !authorizePricingRuleMutation(c, control) {
 			return
 		}
 		var request controlplane.PricingActivateRequest
@@ -132,7 +102,7 @@ func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Ser
 		pricingResponse(c, gin.H{"status": "active"}, err)
 	})
 	group.POST("/pricing-rules/:id/disable", func(c *gin.Context) {
-		if !authorizePricingRuleMutation(c, control, surface) {
+		if !authorizePricingRuleMutation(c, control) {
 			return
 		}
 		var request PricingDisableRequest
@@ -145,9 +115,6 @@ func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Ser
 	})
 	group.GET("/pricing-rules/:id/versions", func(c *gin.Context) {
 		data, err := control.PricingRuleDetail(c.Request.Context(), c.Param("id"))
-		if err == nil && !pricingRuleVisibleOnSurface(data.Rule, surface) {
-			err = controlplane.ErrPricingRuleNotFound
-		}
 		if err == nil {
 			pricingResponse(c, data.Versions, nil)
 			return
@@ -157,8 +124,8 @@ func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Ser
 	group.GET("/pricing-evaluations/:id", func(c *gin.Context) {
 		data, found, err := control.PricingEvaluation(c.Request.Context(), c.Param("id"))
 		if err == nil && found {
-			rule, _, findErr := control.PricingRuleVersionDetail(c.Request.Context(), data.PricingRuleVersionID)
-			if findErr != nil || !pricingRuleVisibleOnSurface(rule, surface) {
+			_, _, findErr := control.PricingRuleVersionDetail(c.Request.Context(), data.PricingRuleVersionID)
+			if findErr != nil {
 				found = false
 			}
 		}
@@ -169,27 +136,13 @@ func registerPricingRuleRoutes(group *gin.RouterGroup, control *controlplane.Ser
 	})
 }
 
-func authorizePricingRuleMutation(c *gin.Context, control *controlplane.Service, surface pricingSurface) bool {
-	detail, err := control.PricingRuleDetail(c.Request.Context(), c.Param("id"))
-	if err == nil && !pricingRuleVisibleOnSurface(detail.Rule, surface) {
-		err = controlplane.ErrPricingRuleNotFound
-	}
+func authorizePricingRuleMutation(c *gin.Context, control *controlplane.Service) bool {
+	_, err := control.PricingRuleDetail(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		pricingResponse(c, nil, err)
 		return false
 	}
 	return true
-}
-
-func pricingRuleVisibleOnSurface(rule controlplane.PricingRule, surface pricingSurface) bool {
-	switch surface {
-	case PricingSurfacePlatform:
-		return rule.Purpose == controlplane.PricingPurposeUsageCost && rule.ScopeType == controlplane.PricingScopeGlobal
-	case PricingSurfaceOperator:
-		return rule.Purpose == controlplane.PricingPurposeCustomerCharge
-	default:
-		return true
-	}
 }
 
 type PricingDisableRequest struct {

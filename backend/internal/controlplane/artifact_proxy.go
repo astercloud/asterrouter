@@ -124,7 +124,7 @@ func (s *Service) openProxiedArtifact(ctx context.Context, artifact Artifact, by
 
 func artifactOwnerFromOperationLikeArtifact(artifact Artifact) AIJobOwner {
 	return AIJobOwner{
-		ProfileScope: artifact.ProfileScope, TenantID: artifact.TenantID, IntegrationID: artifact.IntegrationID,
+		ApplicationID: artifact.ApplicationID, IntegrationID: artifact.IntegrationID,
 		PrincipalType: artifact.PrincipalType, PrincipalID: artifact.PrincipalID, ExternalSubjectReference: artifact.ExternalSubjectReference,
 	}
 }

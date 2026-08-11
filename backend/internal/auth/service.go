@@ -77,9 +77,8 @@ type LoginResult struct {
 }
 
 type User struct {
-	Username        string   `json:"username"`
-	Role            string   `json:"role"`
-	AllowedSurfaces []string `json:"allowed_surfaces,omitempty"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
 }
 
 func NewService(cfg Config) *Service {

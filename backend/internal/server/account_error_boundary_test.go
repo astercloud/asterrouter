@@ -160,7 +160,7 @@ func TestLocalLoginFailsClosedWhenTOTPStateCannotBeLoaded(t *testing.T) {
 
 	repository := &failNthAccountLookupRepository{Repository: baseRepository, failAt: 2, err: errors.New(sensitiveMarker)}
 	service := controlplane.NewService(repository, "/v1", "test-secret")
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
 	handler := New(Options{
 		AuthService:     auth.NewService(auth.Config{Username: "admin", Password: "secret", PasswordHash: localAdmin.PasswordHash, SecretKey: "test-secret"}),
 		SettingsService: settingsService,
@@ -187,7 +187,7 @@ func newAccountFailureTestRuntime(t *testing.T, operation string, failure error)
 	if err != nil {
 		t.Fatalf("EnsureLocalAdmin(): %v", err)
 	}
-	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true, EnabledProfiles: []string{"personal", "relay_operator", "enterprise"}})
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory", DemoMode: true})
 	adminSettings, err := settingsService.Admin(t.Context())
 	if err != nil {
 		t.Fatalf("load settings: %v", err)

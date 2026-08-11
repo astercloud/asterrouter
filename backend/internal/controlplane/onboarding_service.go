@@ -412,7 +412,7 @@ func (s *Service) APIKeyClientConfig(ctx context.Context, apiKeyID, client, mode
 	config := APIKeyClientConfig{
 		APIKeyID: key.ID, Client: client, Model: model, GatewayURL: gatewayURL,
 		CredentialEnv: "ASTERROUTER_API_KEY", Environment: map[string]string{}, ContainsSecret: false,
-		VerificationPath:     "/api/v1/admin/api-keys/" + key.ID + "/client-verifications",
+		VerificationPath:     "/api/v1/console/api-keys/" + key.ID + "/client-verifications",
 		RecoveryInstructions: []string{"restore_previous_configuration", "unset_asterrouter_environment_variables"},
 	}
 	shellGateway, shellModel := shellQuote(gatewayURL), shellQuote(model)

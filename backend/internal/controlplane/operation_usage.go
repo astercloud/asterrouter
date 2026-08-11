@@ -156,8 +156,8 @@ func normalizeProviderTerminalBilling(billing ProviderBillingObservation, dimens
 func (s *Service) gatewayAuthForOperationUsage(ctx context.Context, operation AIOperation) (GatewayAuthContext, error) {
 	key := APIKeyRecord{
 		ID: operation.CredentialID, Name: "Operation credential",
-		Fingerprint:  prefix(hashAPIKey(operation.CredentialID), 12),
-		ProfileScope: operation.ProfileScope, TenantID: operation.TenantID,
+		Fingerprint:   prefix(hashAPIKey(operation.CredentialID), 12),
+		ApplicationID: operation.ApplicationID,
 		PrincipalType: operation.PrincipalType, PrincipalReference: operation.PrincipalID,
 	}
 	if operation.CredentialSource == string(gatewaycore.CredentialSourceAPIKey) {
@@ -176,22 +176,21 @@ func (s *Service) gatewayAuthForOperationUsage(ctx context.Context, operation AI
 	}
 
 	key.ID = operation.CredentialID
-	key.ProfileScope = operation.ProfileScope
-	key.TenantID = operation.TenantID
+	key.ApplicationID = operation.ApplicationID
 	key.PrincipalType = operation.PrincipalType
 	key.PrincipalReference = operation.PrincipalID
 	if key.Fingerprint == "" {
 		key.Fingerprint = prefix(hashAPIKey(operation.CredentialID), 12)
 	}
 	auth := GatewayAuthContext{APIKey: key, ExternalSubjectReference: operation.ExternalSubjectReference}
-	if operation.ProfileScope == ProfileScopePlatform {
-		tenant, principal, err := s.operationPlatformIdentity(ctx, operation)
+	if key.ApplicationID != "" && key.GatewayPrincipalID != "" {
+		application, principal, err := s.operationApplicationIdentity(ctx, operation)
 		if err != nil {
 			return GatewayAuthContext{}, err
 		}
-		auth.PlatformTenant = &tenant
+		auth.Application = &application
 		auth.GatewayPrincipal = &principal
-		auth.APIKey.PlatformTenantID = tenant.ID
+		auth.APIKey.ApplicationID = application.ID
 		auth.APIKey.GatewayPrincipalID = principal.ID
 	}
 	if strings.TrimSpace(operation.IntegrationID) != "" {
@@ -204,30 +203,30 @@ func (s *Service) gatewayAuthForOperationUsage(ctx context.Context, operation AI
 	return auth, nil
 }
 
-func (s *Service) operationPlatformIdentity(ctx context.Context, operation AIOperation) (PlatformTenant, GatewayPrincipal, error) {
-	tenant := PlatformTenant{ID: operation.TenantID, Name: operation.TenantID}
-	principal := GatewayPrincipal{ID: operation.PrincipalID, TenantID: operation.TenantID, Name: operation.PrincipalID, PrincipalType: operation.PrincipalType}
-	tenants, err := s.repo.ListPlatformTenants(ctx)
+func (s *Service) operationApplicationIdentity(ctx context.Context, operation AIOperation) (Application, GatewayPrincipal, error) {
+	application := Application{ID: operation.ApplicationID, Name: operation.ApplicationID}
+	principal := GatewayPrincipal{ID: operation.PrincipalID, ApplicationID: operation.ApplicationID, Name: operation.PrincipalID, PrincipalType: operation.PrincipalType}
+	applications, err := s.repo.ListApplications(ctx)
 	if err != nil {
-		return PlatformTenant{}, GatewayPrincipal{}, err
+		return Application{}, GatewayPrincipal{}, err
 	}
-	for _, candidate := range tenants {
-		if candidate.ID == operation.TenantID {
-			tenant = candidate
+	for _, candidate := range applications {
+		if candidate.ID == operation.ApplicationID {
+			application = candidate
 			break
 		}
 	}
 	principals, err := s.repo.ListGatewayPrincipals(ctx)
 	if err != nil {
-		return PlatformTenant{}, GatewayPrincipal{}, err
+		return Application{}, GatewayPrincipal{}, err
 	}
 	for _, candidate := range principals {
-		if candidate.ID == operation.PrincipalID && candidate.TenantID == operation.TenantID {
+		if candidate.ID == operation.PrincipalID && candidate.ApplicationID == operation.ApplicationID {
 			principal = candidate
 			break
 		}
 	}
-	return tenant, principal, nil
+	return application, principal, nil
 }
 
 func (s *Service) operationExternalAuthIntegration(ctx context.Context, id string) (ExternalAuthIntegration, error) {

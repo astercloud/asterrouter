@@ -84,7 +84,7 @@ func (s *Service) CreateArtifactFromReader(ctx context.Context, input ArtifactCr
 	artifact := Artifact{
 		ID: artifactID, OperationID: operation.ID, JobID: strings.TrimSpace(input.JobID),
 		AttemptID: strings.TrimSpace(input.AttemptID), SourceArtifactID: strings.TrimSpace(input.SourceArtifactID),
-		ProfileScope: operation.ProfileScope, TenantID: operation.TenantID, IntegrationID: operation.IntegrationID,
+		ApplicationID: operation.ApplicationID, IntegrationID: operation.IntegrationID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, ExternalSubjectReference: operation.ExternalSubjectReference,
 		Role: strings.TrimSpace(input.Role), Policy: policy, Status: ArtifactStatusPending, StatusVersion: 1,
 		MediaType: strings.TrimSpace(input.MediaType), StoreDriver: ArtifactStoreDriverNone,
@@ -148,7 +148,7 @@ func (s *Service) CreatePendingArtifact(ctx context.Context, input ArtifactCreat
 		SourceArtifactID: strings.TrimSpace(input.SourceArtifactID), Role: strings.TrimSpace(input.Role), Policy: policy,
 		Status: ArtifactStatusPending, StatusVersion: 1, MediaType: strings.TrimSpace(input.MediaType), StoreDriver: ArtifactStoreDriverNone,
 		ExternalReference: strings.TrimSpace(input.ExternalReference), RetainUntil: retainUntil, CreatedAt: now, UpdatedAt: now,
-		ProfileScope: operation.ProfileScope, TenantID: operation.TenantID, IntegrationID: operation.IntegrationID,
+		ApplicationID: operation.ApplicationID, IntegrationID: operation.IntegrationID,
 		PrincipalType: operation.PrincipalType, PrincipalID: operation.PrincipalID, ExternalSubjectReference: operation.ExternalSubjectReference,
 	}
 	event, outbox, err := newArtifactEventRecords(artifact, "", "", now)
@@ -561,16 +561,11 @@ func (s *Service) OpenArtifactForAuth(ctx context.Context, auth gatewaycore.Cano
 	return artifact, opened, true, err
 }
 
-// OpenArtifactAdmin opens artifact content inside the authenticated admin or
-// platform surface while preserving the surface's profile boundary.
-func (s *Service) OpenArtifactAdmin(ctx context.Context, id, profileScope string, byteRange *ArtifactByteRange) (Artifact, ArtifactRead, bool, error) {
+// OpenArtifactAdmin opens artifact content for an authenticated administrator.
+func (s *Service) OpenArtifactAdmin(ctx context.Context, id string, byteRange *ArtifactByteRange) (Artifact, ArtifactRead, bool, error) {
 	artifact, found, err := s.repo.FindArtifact(ctx, strings.TrimSpace(id))
 	if err != nil || !found {
 		return Artifact{}, ArtifactRead{}, found, err
-	}
-	profileScope = strings.TrimSpace(profileScope)
-	if profileScope != "" && artifact.ProfileScope != profileScope {
-		return Artifact{}, ArtifactRead{}, false, nil
 	}
 	opened, err := s.openArtifactContent(ctx, artifact, byteRange)
 	return artifact, opened, true, err

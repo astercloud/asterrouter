@@ -4,8 +4,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
   job_id TEXT REFERENCES ai_jobs(id) ON DELETE RESTRICT,
   attempt_id TEXT REFERENCES ai_attempts(id) ON DELETE RESTRICT,
   source_artifact_id TEXT REFERENCES artifacts(id) ON DELETE RESTRICT,
-  profile_scope TEXT NOT NULL DEFAULT '',
-  tenant_id TEXT NOT NULL DEFAULT '',
+  application_id TEXT NOT NULL DEFAULT '',
   integration_id TEXT NOT NULL DEFAULT '',
   principal_type TEXT NOT NULL DEFAULT '',
   principal_id TEXT NOT NULL DEFAULT '',
@@ -32,7 +31,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 
 CREATE INDEX IF NOT EXISTS artifacts_owner_created_idx
-  ON artifacts(profile_scope, tenant_id, integration_id, principal_type, principal_id, external_subject_reference, created_at DESC);
+  ON artifacts(application_id, integration_id, principal_type, principal_id, external_subject_reference, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS artifacts_job_created_idx
   ON artifacts(job_id, created_at);

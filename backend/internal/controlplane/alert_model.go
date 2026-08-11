@@ -28,9 +28,8 @@ type AlertEvent struct {
 	Summary                   string            `json:"summary"`
 	ResourceType              string            `json:"resource_type"`
 	ResourceID                string            `json:"resource_id"`
-	ProfileScope              string            `json:"profile_scope"`
-	PlatformTenantID          string            `json:"platform_tenant_id"`
-	PlatformTenantName        string            `json:"platform_tenant_name"`
+	ApplicationID             string            `json:"application_id"`
+	ApplicationName           string            `json:"application_name"`
 	GatewayPrincipalID        string            `json:"gateway_principal_id"`
 	GatewayPrincipalName      string            `json:"gateway_principal_name"`
 	ExternalAuthIntegrationID string            `json:"external_auth_integration_id"`
@@ -54,8 +53,7 @@ type AlertQuery struct {
 	Status                    string
 	ResourceType              string
 	ResourceIDs               []string
-	ProfileScope              string
-	PlatformTenantID          string
+	ApplicationID             string
 	GatewayPrincipalID        string
 	ExternalAuthIntegrationID string
 	CreatedFrom               time.Time

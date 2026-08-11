@@ -11,7 +11,6 @@ server:
 
   # First-run bootstrap configuration
   bootstrap:
-    deployment-role: "" # Optional unattended deployment role: personal, relay_operator, enterprise, or platform
     demo-mode: false # Enable the isolated demonstration login flow
 
   # Authentication and encryption configuration
@@ -75,8 +74,8 @@ server:
 
       # Concurrent queued job admission limits; zero disables a limit
       limits:
-        profile: 0 # Maximum queued jobs per profile
-        tenant: 0 # Maximum queued jobs per tenant
+        organization: 0 # Maximum queued jobs for the organization
+        application: 0 # Maximum queued jobs per application
         principal: 0 # Maximum queued jobs per principal
     routing-affinity-driver: "repository" # Routing affinity driver: repository or redis
 

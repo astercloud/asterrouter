@@ -167,7 +167,7 @@ func TestProxyOnlyProviderOutputUsesAuthorizedPluginReader(t *testing.T) {
 		t.Fatalf("provider body opened during proxy registration=%d", fixture.adapter.OpenCalls())
 	}
 	auth := gatewaycore.CanonicalAuthContext{
-		ProfileScope: ProfileScopePlatform, TenantID: "output-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "output-principal",
+		ApplicationID: "output-application", PrincipalType: APIKeyTypeService, PrincipalID: "output-principal",
 	}
 	artifact, opened, found, err := fixture.service.OpenArtifactForAuth(context.Background(), auth, artifacts[0].ID, nil)
 	if err != nil || !found || artifact.ID != artifacts[0].ID {
@@ -209,7 +209,7 @@ func TestProxyOnlyFailsClosedWithoutPluginOrValidRange(t *testing.T) {
 	}
 	invalid.proxy.invalidRange = true
 	artifacts, _ := invalid.service.repo.QueryArtifacts(context.Background(), ArtifactQuery{JobID: invalid.job.ID, Limit: 1})
-	auth := gatewaycore.CanonicalAuthContext{ProfileScope: ProfileScopePlatform, TenantID: "output-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "output-principal"}
+	auth := gatewaycore.CanonicalAuthContext{ApplicationID: "output-application", PrincipalType: APIKeyTypeService, PrincipalID: "output-principal"}
 	if _, _, _, err := invalid.service.OpenArtifactForAuth(context.Background(), auth, artifacts[0].ID, nil); !errors.Is(err, ErrArtifactIntegrity) {
 		t.Fatalf("invalid proxy range error=%v", err)
 	}
@@ -462,8 +462,8 @@ func newProviderOutputFixture(t *testing.T, modality, policy string, payload []b
 		fixture.adapter.result.Outputs[0].ProviderReference = "provider-reference-" + modality
 	}
 	fixture.job, _, err = fixture.service.BeginDurableAIJob(ctx, gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "output-key", ProfileScope: ProfileScopePlatform,
-		TenantID: "output-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "output-principal", ArtifactPolicy: policy, ArtifactSinkID: artifactSinkID,
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "output-key",
+		ApplicationID: "output-application", PrincipalType: APIKeyTypeService, PrincipalID: "output-principal", ArtifactPolicy: policy, ArtifactSinkID: artifactSinkID,
 	}, gatewaycore.CanonicalRequest{
 		ID: "request-output-" + modality + "-" + policy, ClientRequestID: "client-output", Fingerprint: "fingerprint-output-" + modality + "-" + policy,
 		IdempotencyKey: "idem-output-" + modality + "-" + policy, Protocol: gatewaycore.ProtocolAsterJobs,

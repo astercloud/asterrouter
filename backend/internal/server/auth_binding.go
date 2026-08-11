@@ -52,10 +52,10 @@ func (s *authBindingStore) Save(state, userID, provider, returnPath string, now 
 
 func safeAccountReturnPath(value string) string {
 	switch strings.TrimSpace(value) {
-	case "/admin/account", "/console/account", "/operator/account", "/platform/account", "/portal/account", "/customer/account":
+	case "/console/account", "/portal/account":
 		return strings.TrimSpace(value)
 	default:
-		return "/admin/account"
+		return "/console/account"
 	}
 }
 

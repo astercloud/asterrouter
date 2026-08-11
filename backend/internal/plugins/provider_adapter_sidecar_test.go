@@ -348,7 +348,7 @@ func TestProviderAdapterSidecarDurableVideoWorkerContract(t *testing.T) {
 	if _, err := control.CreateModelRoute(ctx, "test", controlplane.ModelRouteRequest{GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: account.ID, UpstreamModel: "video-upstream", Priority: 1, Weight: 100, Status: controlplane.ModelRouteStatusActive, UpstreamFormat: controlplane.UpstreamFormatNativeMedia}); err != nil {
 		t.Fatal(err)
 	}
-	auth := gatewaycore.CanonicalAuthContext{CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "video-key", ProfileScope: controlplane.ProfileScopePlatform, TenantID: "video-tenant", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "video-principal", ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary}
+	auth := gatewaycore.CanonicalAuthContext{CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "video-key", ApplicationID: "video-application", PrincipalType: controlplane.APIKeyTypeService, PrincipalID: "video-principal", ArtifactPolicy: controlplane.GatewayArtifactPolicyTemporary}
 	request := gatewaycore.CanonicalRequest{ID: "video-request", ClientRequestID: "video-client", Fingerprint: "video-fingerprint", IdempotencyKey: "video-idempotency", Protocol: gatewaycore.ProtocolAsterJobs, Lane: gatewaycore.LaneDurable, Model: "public-video", Modality: controlplane.GatewayModalityVideo, Operation: controlplane.GatewayOperationVideoGeneration, VideoDurationMS: 1500, Payload: []byte(`{"model":"public-video","operation":"video_generation","modality":"video","input":{"prompt":"synthetic"}}`)}
 	job, created, err := control.BeginDurableAIJob(ctx, auth, request)
 	if err != nil || !created {

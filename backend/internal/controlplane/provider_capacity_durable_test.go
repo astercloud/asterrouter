@@ -96,8 +96,8 @@ func setupSingleDurableCapacityRoute(t *testing.T, svc *Service) string {
 func beginDurableCapacityJob(t *testing.T, svc *Service, marker string) AIJob {
 	t.Helper()
 	job, created, err := svc.BeginDurableAIJob(context.Background(), gatewaycore.CanonicalAuthContext{
-		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "capacity-key", ProfileScope: ProfileScopePlatform,
-		TenantID: "capacity-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "capacity-principal", ArtifactPolicy: GatewayArtifactPolicyTemporary,
+		CredentialSource: gatewaycore.CredentialSourceAPIKey, CredentialID: "capacity-key",
+		ApplicationID: "capacity-application", PrincipalType: APIKeyTypeService, PrincipalID: "capacity-principal", ArtifactPolicy: GatewayArtifactPolicyTemporary,
 	}, gatewaycore.CanonicalRequest{
 		ID: "request-" + marker, ClientRequestID: "client-" + marker, Fingerprint: "fingerprint-" + marker, IdempotencyKey: marker,
 		Protocol: gatewaycore.ProtocolAsterJobs, Operation: "image_generation", Modality: "image", Lane: gatewaycore.LaneDurable,

@@ -25,8 +25,7 @@ type HTTP struct {
 }
 
 type Bootstrap struct {
-	DeploymentRole string `json:"deployment-role" desc:"Optional unattended deployment role: personal, relay_operator, enterprise, or platform"`
-	DemoMode       bool   `json:"demo-mode"       desc:"Enable the isolated demonstration login flow"`
+	DemoMode bool `json:"demo-mode" desc:"Enable the isolated demonstration login flow"`
 }
 
 type Security struct {
@@ -97,9 +96,9 @@ type JobQueue struct {
 }
 
 type JobLimits struct {
-	Profile   int `json:"profile"   desc:"Maximum queued jobs per profile"`
-	Tenant    int `json:"tenant"    desc:"Maximum queued jobs per tenant"`
-	Principal int `json:"principal" desc:"Maximum queued jobs per principal"`
+	Organization int `json:"organization" desc:"Maximum queued jobs for the organization"`
+	Application       int `json:"application"    desc:"Maximum queued jobs per application"`
+	Principal    int `json:"principal" desc:"Maximum queued jobs per principal"`
 }
 
 type Artifacts struct {

@@ -93,7 +93,7 @@ func TestAIJobProgressRepositoryContract(t *testing.T) {
 				t.Fatalf("admin detail=%+v err=%v", detail, err)
 			}
 			owner := gatewaycore.CanonicalAuthContext{
-				ProfileScope: ProfileScopePlatform, TenantID: "worker-tenant", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal",
+				ApplicationID: "worker-application", PrincipalType: APIKeyTypeService, PrincipalID: "worker-principal",
 			}
 			owned, found, err := svc.AIJobProgressEventsForAuth(ctx, owner, job.ID)
 			if err != nil || !found || len(owned) != 2 {

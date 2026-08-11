@@ -39,7 +39,7 @@ func TestInstallPackageRollsBackActiveDirectoryWhenRepositoryWriteFails(t *testi
 	memory := NewMemoryRepository()
 	repo := &failingInstallationRepository{MemoryRepository: memory}
 	now := time.Now().UTC()
-	if err := repo.SavePlugin(ctx, Plugin{ID: pluginID, PluginID: pluginID, Name: "Test plugin", Status: StatusEnabled, Tier: TierFreeCore, EntitlementStatus: EntitlementFree, Surfaces: []string{"personal"}, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := repo.SavePlugin(ctx, Plugin{ID: pluginID, PluginID: pluginID, Name: "Test plugin", Status: StatusEnabled, Tier: TierFreeCore, EntitlementStatus: EntitlementFree, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	compatibility := fmt.Sprintf(`[{"core_version_range":">=0.1.0","os":%q,"arch":%q,"result":"compatible"}]`, runtime.GOOS, runtime.GOARCH)

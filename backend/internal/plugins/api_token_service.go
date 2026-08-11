@@ -30,35 +30,24 @@ func (s *Service) CreatePluginAPIToken(ctx context.Context, request PluginAPITok
 	name := trimForStorage(request.Name, 120)
 	pluginID := strings.TrimSpace(request.PluginID)
 	scopes := cleanStringList(request.Scopes)
-	surfaces := cleanStringList(request.Surfaces)
-	if name == "" || len(scopes) == 0 || len(surfaces) == 0 {
-		return PluginAPITokenCreateResult{}, fmt.Errorf("%w: name, scopes, and surfaces are required", ErrPluginAPITokenInvalid)
+	if name == "" || len(scopes) == 0 {
+		return PluginAPITokenCreateResult{}, fmt.Errorf("%w: name and scopes are required", ErrPluginAPITokenInvalid)
 	}
 	for _, scope := range scopes {
 		if !validPluginAPIScope(scope) {
 			return PluginAPITokenCreateResult{}, fmt.Errorf("%w: unsupported scope %q", ErrPluginAPITokenInvalid, scope)
 		}
 	}
-	for _, surface := range surfaces {
-		if !validPluginAPISurface(surface) {
-			return PluginAPITokenCreateResult{}, fmt.Errorf("%w: unsupported surface %q", ErrPluginAPITokenInvalid, surface)
-		}
-	}
 	if containsString(scopes, PluginAPIScopeAction) && pluginID == "" {
 		return PluginAPITokenCreateResult{}, fmt.Errorf("%w: plugin:action requires plugin_id", ErrPluginAPITokenInvalid)
 	}
 	if pluginID != "" {
-		plugin, ok, err := s.repo.FindPlugin(ctx, pluginID)
+		_, ok, err := s.repo.FindPlugin(ctx, pluginID)
 		if err != nil {
 			return PluginAPITokenCreateResult{}, err
 		}
 		if !ok {
 			return PluginAPITokenCreateResult{}, ErrPluginNotFound
-		}
-		for _, surface := range surfaces {
-			if !pluginSurfaceAllowed(plugin, surface) {
-				return PluginAPITokenCreateResult{}, ErrPluginSurface
-			}
 		}
 	}
 	now := s.now().UTC()
@@ -74,7 +63,6 @@ func (s *Service) CreatePluginAPIToken(ctx context.Context, request PluginAPITok
 			PluginID:    pluginID,
 			TokenPrefix: secret[:13],
 			Scopes:      scopes,
-			Surfaces:    surfaces,
 			Status:      PluginAPITokenActive,
 			ExpiresAt:   cloneTimePointer(request.ExpiresAt),
 			CreatedAt:   now,
@@ -121,7 +109,7 @@ func (s *Service) RevokePluginAPIToken(ctx context.Context, id string) (PluginAP
 	return PluginAPIToken{}, ErrPluginAPITokenNotFound
 }
 
-func (s *Service) AuthorizePluginAPIToken(ctx context.Context, secret string, requiredScope string, pluginID string, surface string) (PluginAPIToken, error) {
+func (s *Service) AuthorizePluginAPIToken(ctx context.Context, secret string, requiredScope string, pluginID string) (PluginAPIToken, error) {
 	secret = strings.TrimSpace(secret)
 	if !strings.HasPrefix(secret, "arpt_") || len(secret) < 24 {
 		return PluginAPIToken{}, ErrPluginAPITokenInvalid
@@ -144,10 +132,6 @@ func (s *Service) AuthorizePluginAPIToken(ctx context.Context, secret string, re
 	if pluginID != "" && record.PluginID != pluginID {
 		return PluginAPIToken{}, ErrPluginAPITokenScope
 	}
-	surface = strings.TrimSpace(surface)
-	if surface != "" && !containsString(record.Surfaces, surface) {
-		return PluginAPIToken{}, ErrPluginAPITokenScope
-	}
 	if err := s.repo.TouchPluginAPIToken(ctx, record.ID, now); err != nil {
 		return PluginAPIToken{}, err
 	}
@@ -163,15 +147,6 @@ func pluginAPITokenHash(secret string) string {
 func validPluginAPIScope(scope string) bool {
 	switch scope {
 	case PluginAPIScopeCatalogRead, PluginAPIScopePluginRead, PluginAPIScopeAction, PluginAPIScopeArtifact, PluginAPIScopeJob, PluginAPIScopeEvent:
-		return true
-	default:
-		return false
-	}
-}
-
-func validPluginAPISurface(surface string) bool {
-	switch surface {
-	case "personal", "relay_operator", "enterprise", "platform":
 		return true
 	default:
 		return false
