@@ -1,57 +1,58 @@
 name: Docker Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Existing release tag to publish, for example v1.2.3'
-        required: true
-        type: string
-      publish_latest:
-        description: 'Also update the latest image tag'
-        required: true
-        default: false
-        type: boolean
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: read
   packages: write
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 concurrency:
-  group: docker-release-${{ inputs.tag }}
+  group: docker-release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release_meta.outputs.tag }}
+      version: ${{ steps.release_meta.outputs.version }}
+      commit: ${{ steps.source_meta.outputs.commit }}
+      date: ${{ steps.source_meta.outputs.date }}
     steps:
       - name: Resolve tag
-        id: meta
+        id: release_meta
         env:
-          DISPATCH_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${DISPATCH_TAG}"
-          if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-            echo "invalid release tag: ${TAG}" >&2
-            exit 1
-          fi
-          TAG="v${TAG#v}"
-          VERSION="${TAG#v}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+          __main() {
+            local _tag
+            local _version
+
+            _tag="$REF_NAME"
+            if [[ ! "$_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+              echo "invalid release tag: ${_tag}" >&2
+              exit 1
+            fi
+            _version="${_tag#v}"
+            echo "tag=${_tag}" >> "$GITHUB_OUTPUT"
+            echo "version=${_version}" >> "$GITHUB_OUTPUT"
+          }
+
+          __main "$@"
 
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ steps.meta.outputs.tag }}
-
-      - name: Verify GitHub Release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
-        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,url
+          ref: ${{ steps.release_meta.outputs.tag }}
 
       - uses: actions/setup-node@v6
         with:
@@ -59,72 +60,215 @@ jobs:
 
       - name: Validate release version sources
         env:
-          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+          EXPECTED_VERSION: ${{ steps.release_meta.outputs.version }}
         run: |
           set -euo pipefail
-          BACKEND_VERSION="$(tr -d '\r\n' < backend/cmd/asterrouter/VERSION)"
-          FRONTEND_VERSION="$(node -p "require('./frontend/package.json').version")"
-          test "$BACKEND_VERSION" = "$EXPECTED_VERSION"
-          test "$FRONTEND_VERSION" = "$EXPECTED_VERSION"
+
+          __main() {
+            local _backend_version
+            local _frontend_version
+
+            _backend_version="$(tr -d '\r\n' < backend/cmd/asterrouter/VERSION)"
+            _frontend_version="$(node -p "require('./frontend/package.json').version")"
+            test "$_backend_version" = "$EXPECTED_VERSION"
+            test "$_frontend_version" = "$EXPECTED_VERSION"
+          }
+
+          __main "$@"
 
       - name: Resolve checkout metadata
         id: source_meta
-        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+
+          __main() {
+            local _commit
+            local _date
+
+            _commit="$(git rev-parse HEAD)"
+            _date="$(git show -s --format=%cI HEAD)"
+            echo "commit=${_commit}" >> "$GITHUB_OUTPUT"
+            echo "date=${_date}" >> "$GITHUB_OUTPUT"
+          }
+
+          __main "$@"
 
       - name: Validate release container
         env:
           ASTER_TEST_ARTIFACT_DIR: ${{ runner.temp }}/asterrouter-container-evidence
-          ASTER_CONTAINER_TEST_VERSION: ${{ steps.meta.outputs.version }}
-        run: bash scripts/test-container.sh
+          ASTER_CONTAINER_TEST_VERSION: ${{ steps.release_meta.outputs.version }}
+        run: |
+          set -euo pipefail
 
-      - uses: docker/setup-qemu-action@v3
+          __main() {
+            bash scripts/test-container.sh
+          }
+
+          __main "$@"
+
+      - name: Upload container evidence
+        if: always()
+        uses: actions/upload-artifact@v5
         with:
-          platforms: arm64
+          name: asterrouter-container-${{ steps.release_meta.outputs.version }}
+          path: ${{ runner.temp }}/asterrouter-container-evidence
+          if-no-files-found: ignore
+          retention-days: 7
 
-      - uses: docker/setup-buildx-action@v3
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            artifact: digest-linux-amd64
+            cache: buildcache-amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            artifact: digest-linux-arm64
+            cache: buildcache-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve Docker image metadata
         id: docker_meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ steps.meta.outputs.version }}
-            type=raw,value=latest,enable=${{ inputs.publish_latest }}
+            type=raw,value=${{ needs.prepare.outputs.tag }}
+            type=raw,value=latest
 
-      - name: Build and publish multi-architecture image
-        uses: docker/build-push-action@v6
+      - name: Build and publish image digest
+        id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.docker_meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.docker_meta.outputs.labels }}
           build-args: |
-            ASTER_VERSION=${{ steps.meta.outputs.version }}
-            ASTER_COMMIT=${{ steps.source_meta.outputs.commit }}
-            ASTER_DATE=${{ steps.meta.outputs.date }}
+            ASTER_VERSION=${{ needs.prepare.outputs.version }}
+            ASTER_COMMIT=${{ needs.prepare.outputs.commit }}
+            ASTER_DATE=${{ needs.prepare.outputs.date }}
             ASTER_BUILD_TYPE=release
-          cache-from: type=gha,scope=asterrouter-docker-release
-          cache-to: type=gha,mode=max,scope=asterrouter-docker-release
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.cache }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.cache }},mode=max
+          provenance: false
+
+      - name: Export digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          __main() {
+            local _digest
+
+            _digest="${IMAGE_DIGEST#sha256:}"
+            mkdir -p /tmp/digests
+            touch "/tmp/digests/${_digest}"
+          }
+
+          __main "$@"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Docker image metadata
+        id: docker_meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.tag }}
+            type=raw,value=latest
+
+      - name: Download digests
+        uses: actions/download-artifact@v6
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Create multi-platform manifest
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.docker_meta.outputs.json }}
+        run: |
+          set -euo pipefail
+
+          __main() {
+            local -a _tag_args=()
+            local -a _source_args=()
+            local _tag
+            local _digest_path
+
+            while IFS= read -r _tag; do
+              _tag_args+=("-t" "$_tag")
+            done < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+
+            for _digest_path in /tmp/digests/*; do
+              _source_args+=("${REGISTRY}/${IMAGE_NAME}@sha256:$(basename "$_digest_path")")
+            done
+
+            test "${#_tag_args[@]}" -gt 0
+            test "${#_source_args[@]}" -eq 2
+            docker buildx imagetools create "${_tag_args[@]}" "${_source_args[@]}"
+          }
+
+          __main "$@"
 
       - name: Verify published manifest
         env:
-          IMAGE: ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
-        run: docker buildx imagetools inspect "$IMAGE"
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
 
-      - name: Upload container evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: asterrouter-container-${{ steps.meta.outputs.version }}
-          path: ${{ runner.temp }}/asterrouter-container-evidence
-          if-no-files-found: ignore
+          __main() {
+            docker buildx imagetools inspect "$IMAGE"
+            docker buildx imagetools inspect "$IMAGE" --raw | jq -e '
+              [.manifests[] | select(.platform.os == "linux") | .platform.architecture] as $architectures
+              | ($architectures | index("amd64") != null)
+                and ($architectures | index("arm64") != null)
+            '
+          }
+
+          __main "$@"
