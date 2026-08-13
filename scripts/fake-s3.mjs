@@ -57,6 +57,15 @@ function requestHeader(headers, name) {
   return String(headers?.[name.toLowerCase()] || headers?.[name] || '')
 }
 
+export function escapeXMLText(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
+}
+
 function allowedAccessKey(value) {
   const configured = String(process.env.ASTER_E2E_S3_ALLOWED_ACCESS_KEYS || '')
     .split(',')
@@ -99,7 +108,7 @@ function json(response, status, body) {
 
 function s3Error(response, status, code, message) {
   response.writeHead(status, { 'Content-Type': 'application/xml', 'x-amz-request-id': `fake-s3-${Date.now()}` })
-  response.end(`<Error><Code>${code}</Code><Message>${message}</Message></Error>`)
+  response.end(`<Error><Code>${escapeXMLText(code)}</Code><Message>${escapeXMLText(message)}</Message></Error>`)
 }
 
 function start() {
@@ -161,11 +170,11 @@ function start() {
         .filter(([path]) => path.startsWith(`${bucketPath}/${prefix}`))
         .map(([path, value]) => {
           const key = path.slice(bucketPath.length + 1)
-          return `<Contents><Key>${key}</Key><LastModified>${new Date().toISOString()}</LastModified><ETag>&quot;synthetic-etag&quot;</ETag><Size>${value.body.length}</Size><StorageClass>STANDARD</StorageClass></Contents>`
+          return `<Contents><Key>${escapeXMLText(key)}</Key><LastModified>${new Date().toISOString()}</LastModified><ETag>&quot;synthetic-etag&quot;</ETag><Size>${value.body.length}</Size><StorageClass>STANDARD</StorageClass></Contents>`
         }).join('')
       record.outcome = 'listed'
       response.writeHead(200, { 'Content-Type': 'application/xml', 'x-amz-request-id': `fake-s3-${record.id}` })
-      response.end(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${bucketPath.slice(1)}</Name><Prefix>${prefix}</Prefix><KeyCount>${objects.size}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`)
+      response.end(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${escapeXMLText(bucketPath.slice(1))}</Name><Prefix>${escapeXMLText(prefix)}</Prefix><KeyCount>${objects.size}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`)
       return
     }
     if (request.method === 'GET') {

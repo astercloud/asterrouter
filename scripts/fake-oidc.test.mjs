@@ -24,7 +24,6 @@ function request(port, agent) {
       hostname: '127.0.0.1',
       port,
       path: '/reload-probe',
-      rejectUnauthorized: false,
       agent
     }, (res) => {
       const chunks = []
@@ -85,7 +84,8 @@ test('fake OIDC proxy keeps downstream TLS reusable when upstream closes connect
   const readyPath = join(root, 'ready')
   const certificate = spawnSync('openssl', [
     'req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-nodes', '-days', '1',
-    '-subj', '/CN=localhost', '-keyout', keyPath, '-out', certPath
+    '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1',
+    '-keyout', keyPath, '-out', certPath
   ], { stdio: 'ignore' })
   assert.equal(certificate.status, 0)
 
@@ -101,7 +101,7 @@ test('fake OIDC proxy keeps downstream TLS reusable when upstream closes connect
     },
     stdio: 'ignore'
   })
-  const agent = new https.Agent({ keepAlive: true, maxSockets: 2 })
+  const agent = new https.Agent({ keepAlive: true, maxSockets: 2, ca: readFileSync(certPath) })
 
   try {
     await waitForReadyFile(readyPath, child)

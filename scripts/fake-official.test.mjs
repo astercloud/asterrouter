@@ -84,6 +84,14 @@ test('fake official service publishes isolated trust and package contracts', asy
     })
     assert.equal(deniedRedeem.status, 400)
 
+    const malformedActivation = await fetch(`${baseURL}/official/v1/licenses/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{invalid'
+    })
+    assert.equal(malformedActivation.status, 500)
+    assert.deepEqual(await malformedActivation.json(), { message: 'synthetic official service error' })
+
     const packageID = catalog.data.payload.plugins[0].versions[0].packages[0].public_id
     const deniedPackage = await fetch(`${baseURL}/official/v1/packages/${packageID}/download`)
     assert.equal(deniedPackage.status, 401)

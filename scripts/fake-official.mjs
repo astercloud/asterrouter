@@ -405,8 +405,8 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/e2e/requests') return json(response, { requests: officialRequests })
     if (url.pathname === '/health') return json(response, { ok: true, package_id: packageID })
     response.writeHead(404).end()
-  } catch (error) {
-    json(response, { message: error instanceof Error ? error.message : String(error) }, 500)
+  } catch {
+    json(response, { message: 'synthetic official service error' }, 500)
   }
 })
 

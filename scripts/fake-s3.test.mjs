@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { decodeS3Payload, s3ObjectPath, validateS3Authorization } from './fake-s3.mjs'
+import { decodeS3Payload, escapeXMLText, s3ObjectPath, validateS3Authorization } from './fake-s3.mjs'
 
 test('decodeS3Payload preserves ordinary request bodies', () => {
   const payload = Buffer.from('synthetic-object')
@@ -25,6 +25,13 @@ test('s3ObjectPath excludes AWS operation query parameters from object keys', ()
   assert.equal(
     s3ObjectPath('/bucket/prefix/archive.tar.gz?x-id=PutObject'),
     '/bucket/prefix/archive.tar.gz'
+  )
+})
+
+test('escapeXMLText encodes request-derived S3 listing values', () => {
+  assert.equal(
+    escapeXMLText(`prefix/<archive>&"'`),
+    'prefix/&lt;archive&gt;&amp;&quot;&apos;'
   )
 })
 

@@ -131,7 +131,7 @@ function proxyToFrontend(req, res) {
     res.writeHead(upstream.statusCode || 502, proxyHeaders(upstream.headers))
     upstream.pipe(res)
   })
-  proxy.on('error', (error) => { if (!res.headersSent) res.writeHead(502); res.end(String(error)) })
+  proxy.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end('frontend unavailable') })
   req.pipe(proxy)
 }
 
