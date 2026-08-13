@@ -68,9 +68,9 @@ export function escapeXMLText(value) {
 
 export function s3ListObjectsXML(bucketName, prefix, objects, modifiedAt = new Date()) {
   const contents = objects.map(({ key, size }) => (
-    `<Contents><Key>${encodeURIComponent(String(key))}</Key><LastModified>${modifiedAt.toISOString()}</LastModified><ETag>&quot;synthetic-etag&quot;</ETag><Size>${Number(size)}</Size><StorageClass>STANDARD</StorageClass></Contents>`
+    `<Contents><Key>${encodeURIComponent(String(key)).replaceAll('%2F', '/')}</Key><LastModified>${modifiedAt.toISOString()}</LastModified><ETag>&quot;synthetic-etag&quot;</ETag><Size>${Number(size)}</Size><StorageClass>STANDARD</StorageClass></Contents>`
   )).join('')
-  return `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${encodeURIComponent(String(bucketName))}</Name><Prefix>${encodeURIComponent(String(prefix))}</Prefix><EncodingType>url</EncodingType><KeyCount>${objects.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`
+  return `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${encodeURIComponent(String(bucketName))}</Name><Prefix>${encodeURIComponent(String(prefix)).replaceAll('%2F', '/')}</Prefix><EncodingType>url</EncodingType><KeyCount>${objects.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`
 }
 
 function allowedAccessKey(value) {

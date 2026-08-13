@@ -45,8 +45,8 @@ test('s3ListObjectsXML URL-encodes request-derived listing fields', () => {
 
   assert.match(result, /<EncodingType>url<\/EncodingType>/)
   assert.match(result, /<Name>bucket%3C%26<\/Name>/)
-  assert.match(result, /<Prefix>prefix%2F%3Carchive%3E%26%22<\/Prefix>/)
-  assert.match(result, /<Key>prefix%2F%3Carchive%3E%26%22\.tar\.gz<\/Key>/)
+  assert.match(result, /<Prefix>prefix\/%3Carchive%3E%26%22<\/Prefix>/)
+  assert.match(result, /<Key>prefix\/%3Carchive%3E%26%22\.tar\.gz<\/Key>/)
   assert.doesNotMatch(result, /<archive>/)
 })
 
