@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_PORT="${ASTER_SYSTEM_UPDATE_E2E_PORT:-48180}"
 OFFICIAL_PORT="${ASTER_SYSTEM_UPDATE_E2E_OFFICIAL_PORT:-49180}"
 POSTGRES_PORT="${ASTER_SYSTEM_UPDATE_E2E_POSTGRES_PORT:-55445}"
+POSTGRES_SOCKET_DIR="${ASTER_SYSTEM_UPDATE_E2E_POSTGRES_SOCKET_DIR:-/tmp}"
 DATABASE_NAME="asterrouter_e2e_system_update"
 OLD_VERSION="${ASTER_SYSTEM_UPDATE_E2E_OLD_VERSION:-$(tr -d '\r\n' < "${ROOT_DIR}/backend/cmd/asterrouter/VERSION")}"
 DEFAULT_NEW_VERSION="$(python3 - "${OLD_VERSION}" <<'PY'
@@ -53,7 +54,11 @@ if [ -d "${RUN_DIR}" ] && [ "${RUN_DIR_OWNED}" != "1" ] && find "${RUN_DIR}" -mi
   echo "Refusing to overwrite non-empty lifecycle directory: ${RUN_DIR}" >&2
   exit 1
 fi
-mkdir -p "${RUNTIME_DIR}" "${RUN_DIR}/candidate" "${RUN_DIR}/data" "${RUN_DIR}/playwright"
+mkdir -p \
+  "${RUNTIME_DIR}" \
+  "${RUN_DIR}/candidate" \
+  "${RUN_DIR}/data" \
+  "${RUN_DIR}/playwright"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -93,6 +98,10 @@ for command in initdb pg_ctl createdb; do
     exit 1
   fi
 done
+if [ ! -d "${POSTGRES_SOCKET_DIR}" ] || [ ! -w "${POSTGRES_SOCKET_DIR}" ]; then
+  echo "PostgreSQL socket directory must be writable: ${POSTGRES_SOCKET_DIR}" >&2
+  exit 1
+fi
 require_free_port "Backend" "${BACKEND_PORT}"
 require_free_port "Fake official" "${OFFICIAL_PORT}"
 require_free_port "PostgreSQL" "${POSTGRES_PORT}"
@@ -121,7 +130,8 @@ echo "Building frontend assets..."
 )
 
 "${PG_BINDIR}/initdb" -D "${POSTGRES_DIR}" --auth=trust --username="${USER}" >/dev/null
-"${PG_BINDIR}/pg_ctl" -D "${POSTGRES_DIR}" -l "${RUN_DIR}/postgres.log" -o "-h 127.0.0.1 -p ${POSTGRES_PORT}" start >/dev/null
+"${PG_BINDIR}/pg_ctl" -D "${POSTGRES_DIR}" -l "${RUN_DIR}/postgres.log" \
+  -o "-h 127.0.0.1 -p ${POSTGRES_PORT} -k ${POSTGRES_SOCKET_DIR}" start >/dev/null
 POSTGRES_STARTED=1
 "${PG_BINDIR}/createdb" -h 127.0.0.1 -p "${POSTGRES_PORT}" -U "${USER}" "${DATABASE_NAME}"
 DATABASE_URL="postgresql://${USER}@127.0.0.1:${POSTGRES_PORT}/${DATABASE_NAME}?sslmode=disable"
