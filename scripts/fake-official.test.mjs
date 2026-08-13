@@ -28,6 +28,7 @@ test('fake official service publishes isolated trust and package contracts', asy
   const root = mkdtempSync(join(tmpdir(), 'asterrouter-fake-official-'))
   const keyFile = join(root, 'public-key')
   const releaseVersion = '1.2.3'
+  const platformArch = process.arch === 'x64' ? 'amd64' : process.arch
   const child = spawn(process.execPath, ['scripts/fake-official.mjs'], {
     cwd: new URL('..', import.meta.url),
     env: {
@@ -109,7 +110,7 @@ test('fake official service publishes isolated trust and package contracts', asy
       headers: {
         'X-Aster-Core-Version': '0.23.1',
         'X-Aster-OS': process.platform,
-        'X-Aster-Arch': process.arch,
+        'X-Aster-Arch': platformArch,
         'X-Aster-License-ID': 'lic_e2e_browser',
         'X-Aster-Activation-Secret': 'e2e-activation-secret',
         'X-Aster-Instance-ID': 'inst_e2e_browser'

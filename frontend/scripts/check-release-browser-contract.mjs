@@ -43,11 +43,16 @@ for (const expected of [
   'ASTER_E2E_PASSWORD="${ADMIN_PASSWORD}"',
   'ASTER_E2E_SMTP_PORT="${SMTP_PORT}"',
   'ASTER_E2E_MAIL_API_URL="http://127.0.0.1:${MAIL_API_PORT}"',
+  'ASTER_E2E_OFFICIAL_URL="http://127.0.0.1:${OFFICIAL_PORT}"',
+  'ASTER_E2E_DATABASE_NAME="$(python3 - "${ENTERPRISE_DATABASE_URL}"',
   'node "scripts/fake-smtp.mjs"',
+  'node "scripts/fake-official.mjs"',
+  'ASTER_E2E_PLATFORM_ARCH=amd64',
+  'ASTERROUTER_SERVER_OFFICIAL_CATALOG_PUBLIC_KEY=${OFFICIAL_PUBLIC_KEY}',
   '"SSL_CERT_FILE=${SMTP_CERT}"',
   'check-e2e-coverage.mjs',
-  'run-e2e-gate.mjs" release --exclude-kind setup --exclude-id @e2e-system-update-lifecycle-001 --print-pattern',
-  'run-e2e-gate.mjs" release --exclude-kind setup --exclude-id @e2e-system-update-lifecycle-001 --print-ids',
+  'run-e2e-gate.mjs" release --exclude-kind setup --exclude-id @e2e-system-update-001 --exclude-id @e2e-system-update-lifecycle-001 --print-pattern',
+  'run-e2e-gate.mjs" release --exclude-kind setup --exclude-id @e2e-system-update-001 --exclude-id @e2e-system-update-lifecycle-001 --print-ids',
   'run_enterprise_journey "${RELEASE_GREP_PATTERN}"',
   '"setup_completed":true',
   'echo "commit=${COMMIT}"',
@@ -64,6 +69,9 @@ for (const workflowPath of ['.github/workflows/build.yml', '.github/workflows/re
   const workflow = read(workflowPath)
   for (const expected of [
     '--command="CREATE DATABASE asterrouter_release_test_journey_enterprise"',
+    'asterrouter-release-journeys/fake-official.log',
+    'asterrouter-release-journeys/fake-smtp.log',
+    'asterrouter-release-journeys/fake-s3.log',
     'asterrouter-release-journeys/enterprise/runtime.log',
     'asterrouter-release-journeys/enterprise/playwright'
   ]) {

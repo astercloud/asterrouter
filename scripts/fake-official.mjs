@@ -5,11 +5,13 @@ import { gzipSync } from 'node:zlib'
 
 const port = Number(process.env.ASTER_E2E_OFFICIAL_PORT || '29006')
 const keyFile = process.env.ASTER_E2E_OFFICIAL_KEY_FILE
+const platformOS = process.env.ASTER_E2E_PLATFORM_OS || process.platform
+const platformArch = process.env.ASTER_E2E_PLATFORM_ARCH || (process.arch === 'x64' ? 'amd64' : process.arch)
 const keyID = 'aster-e2e-key-v1'
 const pluginID = 'com.astercloud.catalog.router-sync'
 const pluginSlug = 'router-sync'
-const packageID = `pkg_router_sync_${process.platform}_${process.arch}`
-const importPackageID = `pkg_router_sync_import_${process.platform}_${process.arch}`
+const packageID = `pkg_router_sync_${platformOS}_${platformArch}`
+const importPackageID = `pkg_router_sync_import_${platformOS}_${platformArch}`
 const instanceID = 'inst_e2e_browser'
 const fingerprint = 'sha256:e2e-browser-fingerprint'
 const licenseID = 'lic_e2e_browser'
@@ -91,8 +93,8 @@ const packageSignature = signedEnvelope('plugin_package', {
   schema_version: 'astercloud.plugin-package.v1',
   plugin: pluginSlug,
   version: '1.0.0',
-  os: process.platform,
-  arch: process.arch,
+  os: platformOS,
+  arch: platformArch,
   sha256: packageSHA,
   size_bytes: pluginPackage.length,
   uri: 'object://router-sync/1.0.0/package.tar.gz'
@@ -222,11 +224,11 @@ function catalogEnvelope() {
         status: 'published',
         min_core_version: '0.1.0',
         required_entitlement: true,
-        compatibility: [{ core_version_range: '>=0.1.0 <1.0.0', os: process.platform, arch: process.arch, result: 'compatible' }],
+        compatibility: [{ core_version_range: '>=0.1.0 <1.0.0', os: platformOS, arch: platformArch, result: 'compatible' }],
         packages: [packageID, importPackageID].map((publicID) => ({
           public_id: publicID,
-          os: process.platform,
-          arch: process.arch,
+          os: platformOS,
+          arch: platformArch,
           sha256: packageSHA,
           size_bytes: pluginPackage.length,
           signature: packageSignature,
@@ -303,8 +305,8 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === `/official/v1/packages/${packageID}/download` || url.pathname === `/official/v1/packages/${importPackageID}/download`) {
       const errors = validateHeaders(request, {
-        'x-aster-os': process.platform,
-        'x-aster-arch': process.arch,
+        'x-aster-os': platformOS,
+        'x-aster-arch': platformArch,
         'x-aster-license-id': licenseID,
         'x-aster-activation-secret': 'e2e-activation-secret',
         'x-aster-instance-id': instanceID

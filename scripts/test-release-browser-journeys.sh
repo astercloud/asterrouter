@@ -12,6 +12,7 @@ SMTP_PORT="${ASTER_RELEASE_JOURNEY_SMTP_PORT:-19088}"
 MAIL_API_PORT="${ASTER_RELEASE_JOURNEY_MAIL_API_PORT:-19089}"
 S3_PORT="${ASTER_RELEASE_JOURNEY_S3_PORT:-19090}"
 S3_API_PORT="${ASTER_RELEASE_JOURNEY_S3_API_PORT:-19091}"
+OFFICIAL_PORT="${ASTER_RELEASE_JOURNEY_OFFICIAL_PORT:-19092}"
 DATABASE_URL="${ASTER_RELEASE_TEST_DATABASE_URL:-}"
 ADMIN_PASSWORD="release-browser-test-password"
 COMMIT="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || true)}"
@@ -22,6 +23,7 @@ PACKAGE_DIR="${RUN_DIR}/${PACKAGE_NAME}"
 SMTP_DIR="${RUN_DIR}/fake-smtp"
 SMTP_KEY="${SMTP_DIR}/server.key"
 SMTP_CERT="${SMTP_DIR}/server.crt"
+OFFICIAL_KEY_FILE="${RUN_DIR}/fake-official-public-key"
 PIDS=()
 RUNTIME_PID=""
 
@@ -102,6 +104,18 @@ start_runtime() {
       "ASTERROUTER_SERVER_MAINTENANCE_BACKUP_DIR=${journey_dir}/data/backups" \
       "ASTERROUTER_SERVER_MAINTENANCE_DIAGNOSTIC_DIR=${journey_dir}/data/diagnostics" \
       "ASTERROUTER_SERVER_STORAGE_DATABASE_URL=${database_url}" \
+      "ASTERROUTER_SERVER_OFFICIAL_CATALOG_MODE=online" \
+      "ASTERROUTER_SERVER_OFFICIAL_CATALOG_URL=http://127.0.0.1:${OFFICIAL_PORT}/official/v1/catalog/index" \
+      "ASTERROUTER_SERVER_OFFICIAL_CATALOG_SERVICES_URL=http://127.0.0.1:${OFFICIAL_PORT}/official/v1/services" \
+      "ASTERROUTER_SERVER_OFFICIAL_CATALOG_KEY_ID=aster-e2e-key-v1" \
+      "ASTERROUTER_SERVER_OFFICIAL_CATALOG_PUBLIC_KEY=${OFFICIAL_PUBLIC_KEY}" \
+      "ASTERROUTER_SERVER_OFFICIAL_LICENSE_URL=http://127.0.0.1:${OFFICIAL_PORT}/official/v1" \
+      "ASTERROUTER_SERVER_OFFICIAL_LICENSE_REDEEM_URL=http://127.0.0.1:${OFFICIAL_PORT}/official/v1" \
+      "ASTERROUTER_SERVER_OFFICIAL_LICENSE_KEY_ID=aster-e2e-key-v1" \
+      "ASTERROUTER_SERVER_OFFICIAL_LICENSE_PUBLIC_KEY=${OFFICIAL_PUBLIC_KEY}" \
+      "ASTERROUTER_SERVER_OFFICIAL_INSTANCE_ID=inst_e2e_browser" \
+      "ASTERROUTER_SERVER_OFFICIAL_INSTANCE_FINGERPRINT=sha256:e2e-browser-fingerprint" \
+      "ASTERROUTER_SERVER_OFFICIAL_INSTANCE_DISPLAY_NAME=E2E Browser Router" \
       "SSL_CERT_FILE=${SMTP_CERT}" \
       "AWS_CA_BUNDLE=${SMTP_CERT}" \
       ./asterrouter server
@@ -163,13 +177,14 @@ run_enterprise_journey() {
       ASTER_E2E_MAIL_API_URL="http://127.0.0.1:${MAIL_API_PORT}" \
       ASTER_E2E_S3_PORT="${S3_PORT}" \
       ASTER_E2E_S3_API_URL="http://127.0.0.1:${S3_API_PORT}" \
+      ASTER_E2E_OFFICIAL_URL="http://127.0.0.1:${OFFICIAL_PORT}" \
       ASTER_E2E_ARTIFACT_DIR="${journey_dir}/playwright" \
       ASTER_E2E_USERNAME=admin \
       ASTER_E2E_PASSWORD="${ADMIN_PASSWORD}" \
       ASTER_E2E_EXPECT_DEMO_MODE=false \
       ASTER_E2E_POSTGRES_AVAILABLE=1 \
       ASTER_E2E_ALLOW_DESTRUCTIVE_RESTORE=1 \
-      ASTER_E2E_DATABASE_NAME="$(python3 - "${database_url}" <<'PY'
+      ASTER_E2E_DATABASE_NAME="$(python3 - "${ENTERPRISE_DATABASE_URL}" <<'PY'
 import sys
 from urllib.parse import urlparse
 print(urlparse(sys.argv[1]).path.lstrip('/'))
@@ -186,6 +201,7 @@ require_free_port "${SMTP_PORT}"
 require_free_port "${MAIL_API_PORT}"
 require_free_port "${S3_PORT}"
 require_free_port "${S3_API_PORT}"
+require_free_port "${OFFICIAL_PORT}"
 trap cleanup EXIT INT TERM
 
 mkdir -p "${RUN_DIR}"
@@ -203,6 +219,28 @@ openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
   ASTER_E2E_UPSTREAM_PORT="${UPSTREAM_PORT}" node "scripts/fake-openai.mjs"
 ) >"${RUN_DIR}/fake-upstream.log" 2>&1 &
 PIDS+=("$!")
+
+(
+  cd "${ROOT_DIR}"
+  ASTER_E2E_OFFICIAL_PORT="${OFFICIAL_PORT}" \
+    ASTER_E2E_OFFICIAL_KEY_FILE="${OFFICIAL_KEY_FILE}" \
+    ASTER_E2E_PLATFORM_OS=linux \
+    ASTER_E2E_PLATFORM_ARCH=amd64 \
+    node "scripts/fake-official.mjs"
+) >"${RUN_DIR}/fake-official.log" 2>&1 &
+PIDS+=("$!")
+
+for _ in $(seq 1 100); do
+  if [ -s "${OFFICIAL_KEY_FILE}" ]; then
+    break
+  fi
+  sleep 0.1
+done
+if [ ! -s "${OFFICIAL_KEY_FILE}" ]; then
+  echo "Fake official services did not publish signing trust material." >&2
+  exit 1
+fi
+OFFICIAL_PUBLIC_KEY="$(tr -d '\r\n' < "${OFFICIAL_KEY_FILE}")"
 
 (
   cd "${ROOT_DIR}"
@@ -232,8 +270,8 @@ ASTER_SETUP_JOURNEY_DATABASE_URL="${ENTERPRISE_DATABASE_URL}" \
   ASTER_SETUP_JOURNEY_ADMIN_PASSWORD="${ADMIN_PASSWORD}" \
   bash "${ROOT_DIR}/scripts/test-setup-browser-journey.sh"
 
-RELEASE_GREP_PATTERN="$(node "${ROOT_DIR}/frontend/scripts/run-e2e-gate.mjs" release --exclude-kind setup --exclude-id @e2e-system-update-lifecycle-001 --print-pattern)"
-RELEASE_SCENARIO_IDS="$(node "${ROOT_DIR}/frontend/scripts/run-e2e-gate.mjs" release --exclude-kind setup --exclude-id @e2e-system-update-lifecycle-001 --print-ids)"
+RELEASE_GREP_PATTERN="$(node "${ROOT_DIR}/frontend/scripts/run-e2e-gate.mjs" release --exclude-kind setup --exclude-id @e2e-system-update-001 --exclude-id @e2e-system-update-lifecycle-001 --print-pattern)"
+RELEASE_SCENARIO_IDS="$(node "${ROOT_DIR}/frontend/scripts/run-e2e-gate.mjs" release --exclude-kind setup --exclude-id @e2e-system-update-001 --exclude-id @e2e-system-update-lifecycle-001 --print-ids)"
 run_enterprise_journey "${RELEASE_GREP_PATTERN}" "$((BACKEND_PORT + 1))"
 
 {

@@ -158,8 +158,9 @@ test('@e2e-plugin-trust-chain-001 signed official plugin trust chain crosses the
 
   const officialURL = process.env.ASTER_E2E_OFFICIAL_URL || 'http://127.0.0.1:29006'
   const pluginID = 'com.astercloud.catalog.router-sync'
-  const packageID = `pkg_router_sync_${process.platform}_${process.arch}`
-  const importPackageID = `pkg_router_sync_import_${process.platform}_${process.arch}`
+  const platformArch = process.arch === 'x64' ? 'amd64' : process.arch
+  const packageID = `pkg_router_sync_${process.platform}_${platformArch}`
+  const importPackageID = `pkg_router_sync_import_${process.platform}_${platformArch}`
   const errors = captureBrowserErrors(page)
 
   await loginDemo(page)
@@ -328,7 +329,7 @@ test('@e2e-plugin-trust-chain-001 signed official plugin trust chain crosses the
   const packageAuthorization = officialRequests.find((request) => request.kind === 'package_authorization' && request.valid)
   expect(packageAuthorization?.headers).toEqual(expect.objectContaining({
     'x-aster-os': process.platform,
-    'x-aster-arch': process.arch,
+    'x-aster-arch': platformArch,
     'x-aster-license-id': 'lic_e2e_browser',
     'x-aster-activation-secret': '[REDACTED]',
     'x-aster-instance-id': 'inst_e2e_browser'

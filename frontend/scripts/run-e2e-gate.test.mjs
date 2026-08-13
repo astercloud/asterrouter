@@ -12,15 +12,15 @@ function runGate(...args) {
 }
 
 test('exclude-id removes a dedicated scenario from both release outputs', () => {
-  const options = ['release', '--exclude-kind', 'setup', '--exclude-id', '@e2e-system-update-lifecycle-001']
+  const options = ['release', '--exclude-kind', 'setup', '--exclude-id', '@e2e-system-update-001', '--exclude-id', '@e2e-system-update-lifecycle-001']
   const ids = runGate(...options, '--print-ids')
   const pattern = runGate(...options, '--print-pattern')
 
   assert.equal(ids.status, 0, ids.stderr)
   assert.equal(pattern.status, 0, pattern.stderr)
-  assert.match(ids.stdout, /@e2e-system-update-001/)
+  assert.doesNotMatch(ids.stdout, /@e2e-system-update-001/)
   assert.doesNotMatch(ids.stdout, /@e2e-system-update-lifecycle-001/)
-  assert.match(pattern.stdout, /@e2e-system-update-001/)
+  assert.doesNotMatch(pattern.stdout, /@e2e-system-update-001/)
   assert.doesNotMatch(pattern.stdout, /@e2e-system-update-lifecycle-001/)
 })
 

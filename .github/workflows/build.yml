@@ -154,6 +154,9 @@ jobs:
           path: |
             ${{ runner.temp }}/asterrouter-release-journeys/report.txt
             ${{ runner.temp }}/asterrouter-release-journeys/fake-upstream.log
+            ${{ runner.temp }}/asterrouter-release-journeys/fake-official.log
+            ${{ runner.temp }}/asterrouter-release-journeys/fake-smtp.log
+            ${{ runner.temp }}/asterrouter-release-journeys/fake-s3.log
             ${{ runner.temp }}/asterrouter-release-journeys/setup/report.txt
             ${{ runner.temp }}/asterrouter-release-journeys/setup/runtime.log
             ${{ runner.temp }}/asterrouter-release-journeys/setup/playwright
