@@ -66,6 +66,13 @@ export function escapeXMLText(value) {
     .replaceAll("'", '&apos;')
 }
 
+export function s3ListObjectsXML(bucketName, prefix, objects, modifiedAt = new Date()) {
+  const contents = objects.map(({ key, size }) => (
+    `<Contents><Key>${encodeURIComponent(String(key))}</Key><LastModified>${modifiedAt.toISOString()}</LastModified><ETag>&quot;synthetic-etag&quot;</ETag><Size>${Number(size)}</Size><StorageClass>STANDARD</StorageClass></Contents>`
+  )).join('')
+  return `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${encodeURIComponent(String(bucketName))}</Name><Prefix>${encodeURIComponent(String(prefix))}</Prefix><EncodingType>url</EncodingType><KeyCount>${objects.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`
+}
+
 function allowedAccessKey(value) {
   const configured = String(process.env.ASTER_E2E_S3_ALLOWED_ACCESS_KEYS || '')
     .split(',')
@@ -166,15 +173,15 @@ function start() {
       const url = new URL(request.url || '/', 'https://127.0.0.1')
       const bucketPath = url.pathname.replace(/\/$/, '')
       const prefix = url.searchParams.get('prefix') || ''
-      const contents = [...objects]
+      const listedObjects = [...objects]
         .filter(([path]) => path.startsWith(`${bucketPath}/${prefix}`))
-        .map(([path, value]) => {
-          const key = path.slice(bucketPath.length + 1)
-          return `<Contents><Key>${escapeXMLText(key)}</Key><LastModified>${new Date().toISOString()}</LastModified><ETag>&quot;synthetic-etag&quot;</ETag><Size>${value.body.length}</Size><StorageClass>STANDARD</StorageClass></Contents>`
-        }).join('')
+        .map(([path, value]) => ({
+          key: path.slice(bucketPath.length + 1),
+          size: value.body.length
+        }))
       record.outcome = 'listed'
       response.writeHead(200, { 'Content-Type': 'application/xml', 'x-amz-request-id': `fake-s3-${record.id}` })
-      response.end(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${escapeXMLText(bucketPath.slice(1))}</Name><Prefix>${escapeXMLText(prefix)}</Prefix><KeyCount>${objects.size}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`)
+      response.end(s3ListObjectsXML(bucketPath.slice(1), prefix, listedObjects))
       return
     }
     if (request.method === 'GET') {

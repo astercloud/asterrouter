@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { decodeS3Payload, escapeXMLText, s3ObjectPath, validateS3Authorization } from './fake-s3.mjs'
+import { decodeS3Payload, escapeXMLText, s3ListObjectsXML, s3ObjectPath, validateS3Authorization } from './fake-s3.mjs'
 
 test('decodeS3Payload preserves ordinary request bodies', () => {
   const payload = Buffer.from('synthetic-object')
@@ -33,6 +33,21 @@ test('escapeXMLText encodes request-derived S3 listing values', () => {
     escapeXMLText(`prefix/<archive>&"'`),
     'prefix/&lt;archive&gt;&amp;&quot;&apos;'
   )
+})
+
+test('s3ListObjectsXML URL-encodes request-derived listing fields', () => {
+  const result = s3ListObjectsXML(
+    'bucket<&',
+    'prefix/<archive>&"',
+    [{ key: 'prefix/<archive>&".tar.gz', size: 42 }],
+    new Date('2026-08-13T01:02:03Z')
+  )
+
+  assert.match(result, /<EncodingType>url<\/EncodingType>/)
+  assert.match(result, /<Name>bucket%3C%26<\/Name>/)
+  assert.match(result, /<Prefix>prefix%2F%3Carchive%3E%26%22<\/Prefix>/)
+  assert.match(result, /<Key>prefix%2F%3Carchive%3E%26%22\.tar\.gz<\/Key>/)
+  assert.doesNotMatch(result, /<archive>/)
 })
 
 test('validateS3Authorization accepts the synthetic SigV4 contract', () => {

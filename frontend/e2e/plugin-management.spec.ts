@@ -257,11 +257,11 @@ test('@e2e-plugin-trust-chain-001 signed official plugin trust chain crosses the
   await expect(page.locator('.inline-code-row code')).toHaveText(feedPublicKey)
 
   await page.getByRole('button', { name: 'Plugin registry', exact: true }).click()
-  await page.getByPlaceholder('Search plugins, vendors, or categories').fill('Signed Router Sync')
   const runtimeResponse = page.waitForResponse((response) =>
     response.request().method() === 'GET'
     && response.url().endsWith(`/api/v1/console/plugins/${encodeURIComponent(pluginID)}/runtime/status`)
   )
+  await page.getByPlaceholder('Search plugins, vendors, or categories').fill('Signed Router Sync')
   await page.getByRole('button', { name: /Signed Router Sync/ }).click()
   const loadedRuntime = await runtimeResponse
   expect(loadedRuntime.status()).toBe(200)
