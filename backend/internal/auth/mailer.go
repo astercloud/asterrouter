@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"os"
 	"strings"
 	"time"
 )
@@ -123,8 +125,12 @@ func (m SMTPMailer) openClient(ctx context.Context) (*smtp.Client, error) {
 	if err := conn.SetDeadline(deadline); err != nil {
 		return nil, err
 	}
+	tlsConfig, err := smtpTLSConfig(cfg.Host)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.UseTLS {
-		tlsConn := tls.Client(conn, &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12})
+		tlsConn := tls.Client(conn, tlsConfig)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			return nil, err
 		}
@@ -140,7 +146,7 @@ func (m SMTPMailer) openClient(ctx context.Context) (*smtp.Client, error) {
 			_ = client.Close()
 			return nil, errors.New("SMTP server does not support STARTTLS")
 		}
-		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
+		if err := client.StartTLS(tlsConfig); err != nil {
 			_ = client.Close()
 			return nil, err
 		}
@@ -153,6 +159,25 @@ func (m SMTPMailer) openClient(ctx context.Context) (*smtp.Client, error) {
 	}
 	closeOnError = false
 	return client, nil
+}
+
+func smtpTLSConfig(host string) (*tls.Config, error) {
+	roots, systemErr := x509.SystemCertPool()
+	if roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if caFile := strings.TrimSpace(os.Getenv("SSL_CERT_FILE")); caFile != "" {
+		pemData, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read SMTP CA file: %w", err)
+		}
+		if !roots.AppendCertsFromPEM(pemData) {
+			return nil, errors.New("SMTP CA file does not contain a valid certificate")
+		}
+	} else if systemErr != nil {
+		return nil, fmt.Errorf("load system CA certificates: %w", systemErr)
+	}
+	return &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12, RootCAs: roots}, nil
 }
 
 func parseSMTPAddress(value string) (*mail.Address, error) {

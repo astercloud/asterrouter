@@ -119,6 +119,19 @@ function routableModelsForAccount(account?: ProviderAccount): GatewayModel[] {
   return account ? activeModels.value.filter((model) => routeFormats(account, model).length > 0) : []
 }
 
+function modelRouteRequest(route: ModelRouteRequest): ModelRouteRequest {
+  return {
+    gateway_model_id: route.gateway_model_id,
+    route_group: route.route_group,
+    provider_account_id: route.provider_account_id,
+    upstream_model: route.upstream_model,
+    upstream_format: route.upstream_format,
+    priority: route.priority,
+    weight: route.weight,
+    status: route.status
+  }
+}
+
 function routeCapabilitySupported(route: ModelRoute): boolean {
   return routeFormats(accountById.value[route.provider_account_id], modelById.value[route.gateway_model_id]).includes(route.upstream_format)
 }
@@ -140,7 +153,7 @@ function resetForm() {
 }
 
 function openCreate() { editing.value = null; resetForm(); modalOpen.value = true }
-function openEdit(route: ModelRoute) { editing.value = route; Object.assign(form, route); modalOpen.value = true }
+function openEdit(route: ModelRoute) { editing.value = route; Object.assign(form, modelRouteRequest(route)); modalOpen.value = true }
 function closeModal() { modalOpen.value = false; editing.value = null }
 
 function resetBulkRows() {
@@ -199,8 +212,9 @@ async function load() {
 async function save() {
   saving.value = true; error.value = ''; message.value = ''
   try {
-    if (editing.value) { await updateModelRoute(editing.value.id, { ...form }); message.value = t('modelRoutes.updated') }
-    else { await createModelRoute({ ...form }); message.value = t('modelRoutes.created') }
+    const payload = modelRouteRequest(form)
+    if (editing.value) { await updateModelRoute(editing.value.id, payload); message.value = t('modelRoutes.updated') }
+    else { await createModelRoute(payload); message.value = t('modelRoutes.created') }
     closeModal(); await load()
   } catch (err) { error.value = err instanceof Error ? err.message : t('common.failed') } finally { saving.value = false }
 }

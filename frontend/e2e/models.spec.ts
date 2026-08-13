@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 import { adminPost, captureBrowserErrors, controlAPI, envelope, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
 
 const modelPaths = {
@@ -7,7 +7,11 @@ const modelPaths = {
   routes: '/console/model-services/routes'
 }
 
-test('new provider account persists empty before automatic discovery and explicit apply', async ({ page }, testInfo) => {
+function fieldControl(container: Locator, label: string, control = 'input'): Locator {
+  return container.locator('.field').filter({ hasText: label }).locator(control).first()
+}
+
+test('@e2e-model-account-001 new provider account persists empty before automatic discovery and explicit apply', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'Lifecycle is covered once; the responsive inventory flow is covered separately.')
 
   const browserErrors = captureBrowserErrors(page)
@@ -55,7 +59,186 @@ test('new provider account persists empty before automatic discovery and explici
   expect(browserErrors).toEqual([])
 })
 
-test('model inventory and bulk routes stay auditable across responsive layouts', async ({ page }, testInfo) => {
+test('@e2e-model-supply-lifecycle-001 provider supply updates, rejects unsafe deletion, and tears down cleanly', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'The stateful supply lifecycle runs once; surface tests cover responsive projections.')
+  test.setTimeout(120_000)
+
+  const browserErrors = captureBrowserErrors(page)
+  const runID = `${testInfo.project.name}-${Date.now()}`
+  const upstreamPort = process.env.ASTER_E2E_UPSTREAM_PORT || '19000'
+  const providerName = `Browser supply provider ${runID}`
+  const updatedProviderName = `${providerName} updated`
+  const accountName = `Browser supply account ${runID}`
+  const updatedAccountName = `${accountName} updated`
+  const publicModel = `browser-supply-${runID}`
+  const updatedModelName = `Browser supply model ${runID} updated`
+
+  await loginDemo(page)
+  const token = await loginTestPrincipal(page)
+
+  await page.goto(modelPaths.providers)
+  await page.getByRole('button', { name: 'New provider' }).click()
+  let modal = page.getByRole('dialog', { name: 'New provider connection' })
+  await modal.getByLabel('Connection name').fill(providerName)
+  await modal.getByLabel('Base URL').fill(`http://127.0.0.1:${upstreamPort}/v1`)
+  await modal.getByLabel('Priority').fill('15')
+  await modal.getByRole('button', { name: 'Create connection' }).click()
+  await expect(page.getByText('Provider created')).toBeVisible()
+
+  let providerRow = page.getByRole('row').filter({ hasText: providerName })
+  await providerRow.getByRole('button', { name: 'Edit' }).click()
+  modal = page.getByRole('dialog', { name: 'Edit provider connection' })
+  await modal.getByLabel('Connection name').fill(updatedProviderName)
+  await modal.getByLabel('Priority').fill('12')
+  await modal.getByRole('button', { name: 'Update connection' }).click()
+  await expect(page.getByText('Provider updated')).toBeVisible()
+  await page.reload()
+  providerRow = page.getByRole('row').filter({ hasText: updatedProviderName })
+  await expect(providerRow).toContainText('12')
+  await providerRow.getByRole('button', { name: 'Check' }).click()
+  await expect(providerRow).toContainText('Provider endpoint configuration is ready; credentials are validated on provider accounts')
+  await expect(providerRow).toContainText('ok')
+
+  await page.goto(modelPaths.accounts)
+  await page.getByRole('button', { name: 'New route resource' }).click()
+  modal = page.getByRole('dialog', { name: 'New route resource' })
+  await modal.getByLabel('Provider').selectOption({ label: `${updatedProviderName} · openai_compatible` })
+  await modal.getByLabel('Resource name').fill(accountName)
+  await modal.getByLabel('API key', { exact: true }).fill('synthetic-account-secret')
+  await modal.getByPlaceholder('Enter an upstream model ID').fill('upstream-model')
+  await modal.getByRole('button', { name: 'Add custom model' }).click()
+  await modal.getByRole('button', { name: 'Save', exact: true }).click()
+  modal = page.getByRole('dialog', { name: 'Edit route resource' })
+  await expect(modal).toBeVisible()
+  await expect(page.getByText('Route resource created')).toBeVisible()
+  await modal.getByLabel('Resource name').fill(updatedAccountName)
+  await fieldControl(modal, 'Concurrency').fill('4')
+  await modal.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Route resource updated')).toBeVisible()
+  await modal.getByRole('button', { name: 'Close' }).click()
+  await page.reload()
+
+  let accountRow = page.getByRole('row').filter({ hasText: updatedAccountName })
+  await expect(accountRow).toContainText('4')
+  await accountRow.getByRole('switch', { name: `Toggle scheduling for ${updatedAccountName}` }).click()
+  await expect(accountRow).toContainText('not schedulable')
+  accountRow = page.getByRole('row').filter({ hasText: updatedAccountName })
+  await accountRow.getByRole('switch', { name: `Toggle scheduling for ${updatedAccountName}` }).click()
+  await expect(accountRow).toContainText('schedulable')
+  await accountRow.getByRole('button', { name: 'More actions' }).click()
+  await accountRow.getByRole('button', { name: 'Check' }).click()
+  await expect(page.getByText('Provider account is reachable; discovered 1 models')).toBeVisible()
+  const accountID = await accountRow.getAttribute('data-account-id')
+  expect(accountID).toBeTruthy()
+  const accountHealth = await envelope<Array<{ account_id: string; status: string }>>(
+    await page.request.get(controlAPI('/provider-account-health-checks'), { headers: { Authorization: `Bearer ${token}` } })
+  )
+  expect(accountHealth).toContainEqual(expect.objectContaining({ account_id: accountID, status: 'ok' }))
+
+  await page.goto('/console/model-services')
+  await page.getByRole('button', { name: 'New gateway model' }).click()
+  modal = page.locator('.modal-card')
+  await fieldControl(modal, 'External model ID').fill(publicModel)
+  await fieldControl(modal, 'Display name').fill(`Browser supply model ${runID}`)
+  await fieldControl(modal, 'Description', 'textarea').fill('Browser-created supply lifecycle model')
+  await modal.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Gateway model created')).toBeVisible()
+  let modelRow = page.getByRole('row').filter({ hasText: publicModel })
+  await modelRow.getByTitle('Edit').click()
+  modal = page.locator('.modal-card')
+  await fieldControl(modal, 'Display name').fill(updatedModelName)
+  await modal.getByLabel('Enable sticky routing for stable session identifiers').check()
+  await fieldControl(modal, 'Sticky TTL (seconds)').fill('900')
+  await modal.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Gateway model updated')).toBeVisible()
+  await page.reload()
+  modelRow = page.getByRole('row').filter({ hasText: publicModel })
+  await expect(modelRow).toContainText(updatedModelName)
+
+  await page.goto(modelPaths.routes)
+  await page.getByRole('button', { name: 'New model route' }).click()
+  modal = page.locator('.modal-card')
+  await fieldControl(modal, 'Gateway model', 'select').selectOption({ label: publicModel })
+  await fieldControl(modal, 'Provider account', 'select').selectOption({ label: updatedAccountName })
+  await fieldControl(modal, 'Upstream model', 'select').selectOption('upstream-model')
+  await fieldControl(modal, 'Priority').fill('10')
+  await fieldControl(modal, 'Weight').fill('100')
+  await modal.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Model route created')).toBeVisible()
+  let routeRow = page.getByRole('row').filter({ hasText: publicModel }).filter({ hasText: updatedAccountName })
+  await routeRow.getByTitle('Edit').click()
+  modal = page.locator('.modal-card')
+  await fieldControl(modal, 'Priority').fill('20')
+  await fieldControl(modal, 'Weight').fill('250')
+  await fieldControl(modal, 'Status', 'select').selectOption('disabled')
+  await modal.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Model route updated')).toBeVisible()
+  await page.reload()
+  routeRow = page.getByRole('row').filter({ hasText: publicModel }).filter({ hasText: updatedAccountName })
+  await expect(routeRow).toContainText('P20')
+  await expect(routeRow).toContainText('W250')
+  await expect(routeRow).toContainText('disabled')
+
+  await page.goto(modelPaths.accounts)
+  accountRow = page.getByRole('row').filter({ hasText: updatedAccountName })
+  const expectedErrorCount = browserErrors.length
+  const protectedDeleteResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`/api/v1/console/provider-accounts/${accountID}`) &&
+    response.request().method() === 'DELETE'
+  )
+  page.once('dialog', (dialog) => dialog.accept())
+  await accountRow.getByRole('button', { name: 'Delete account' }).click()
+  const protectedDelete = await protectedDeleteResponse
+  expect(protectedDelete.status()).toBe(400)
+  expect(await protectedDelete.json()).toEqual(expect.objectContaining({
+    code: 1554,
+    message: expect.stringContaining('referenced by model route')
+  }))
+  await expect(page.locator('.notice').filter({ hasText: 'referenced by model route' })).toBeVisible()
+  await expect(accountRow).toBeVisible()
+  expect(browserErrors.splice(expectedErrorCount)).toEqual([
+    'console: Failed to load resource: the server responded with a status of 400 (Bad Request)'
+  ])
+
+  await page.goto(modelPaths.routes)
+  routeRow = page.getByRole('row').filter({ hasText: publicModel }).filter({ hasText: updatedAccountName })
+  page.once('dialog', (dialog) => dialog.accept())
+  await routeRow.getByTitle('Delete model route').click()
+  await expect(page.getByText('Model route deleted')).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('row').filter({ hasText: publicModel }).filter({ hasText: updatedAccountName })).toHaveCount(0)
+
+  await page.goto('/console/model-services')
+  modelRow = page.getByRole('row').filter({ hasText: publicModel })
+  page.once('dialog', (dialog) => dialog.accept())
+  await modelRow.getByTitle('Delete gateway model').click()
+  await expect(page.getByText('Gateway model deleted')).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('row').filter({ hasText: publicModel })).toHaveCount(0)
+
+  await page.goto(modelPaths.accounts)
+  accountRow = page.getByRole('row').filter({ hasText: updatedAccountName })
+  page.once('dialog', (dialog) => dialog.accept())
+  await accountRow.getByRole('button', { name: 'Delete account' }).click()
+  await expect(page.getByText('Route resource deleted')).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('row').filter({ hasText: updatedAccountName })).toHaveCount(0)
+
+  const audit = await envelope<Array<Record<string, unknown>>>(await page.request.get(controlAPI('/audit-logs?limit=200'), {
+    headers: { Authorization: `Bearer ${token}` }
+  }))
+  for (const [action, resourceType] of [
+    ['create', 'provider'], ['update', 'provider'], ['check', 'provider'],
+    ['create', 'provider_account'], ['update', 'provider_account'], ['check', 'provider_account'], ['delete', 'provider_account'],
+    ['create', 'gateway_model'], ['update', 'gateway_model'], ['delete', 'gateway_model'],
+    ['create', 'model_route'], ['update', 'model_route'], ['delete', 'model_route']
+  ]) {
+    expect(audit).toContainEqual(expect.objectContaining({ action, resource_type: resourceType }))
+  }
+  expect(browserErrors).toEqual([])
+})
+
+test('@e2e-model-inventory-001 model inventory and bulk routes stay auditable across responsive layouts', async ({ page }, testInfo) => {
   const browserErrors = captureBrowserErrors(page)
   await loginDemo(page)
   await page.goto(modelPaths.providers)

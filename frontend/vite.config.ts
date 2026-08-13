@@ -21,6 +21,9 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       port: Number(env.VITE_DEV_PORT || 5173),
+      watch: {
+        ignored: ['**/playwright-report/**', '**/test-results/**', '**/unit-test-results/**']
+      },
       proxy: {
         '/api': {
           target: backendUrl,

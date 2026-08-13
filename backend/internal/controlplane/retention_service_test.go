@@ -46,3 +46,18 @@ func TestCleanupRetainedDataDeletesExpiredRecordsButPreservesActiveAlertsAndAudi
 		t.Fatalf("cleanup audit evidence missing: %+v", logs)
 	}
 }
+
+func TestCleanupRetainedDataRejectsInvalidCutoffWithoutMutation(t *testing.T) {
+	repo := NewMemoryRepository()
+	repo.usageRecords["old_usage"] = UsageRecord{ID: "old_usage", CreatedAt: time.Now().UTC().Add(-60 * 24 * time.Hour)}
+	svc := NewService(repo, "/v1", "secret")
+
+	for _, cutoff := range []time.Time{{}, time.Now().UTC().Add(time.Hour)} {
+		if _, err := svc.CleanupRetainedData(t.Context(), "admin", cutoff); err == nil {
+			t.Fatalf("CleanupRetainedData(%s) error = nil", cutoff)
+		}
+		if _, ok := repo.usageRecords["old_usage"]; !ok {
+			t.Fatalf("CleanupRetainedData(%s) mutated retained records", cutoff)
+		}
+	}
+}

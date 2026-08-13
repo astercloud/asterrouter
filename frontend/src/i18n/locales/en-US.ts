@@ -486,7 +486,8 @@ export default {
   gatewaySimulator: {
     subtitle: 'Resolve and inspect the current scheduling plan without calling an upstream provider or consuming limits.',
     model: 'Requested model', clientProtocol: 'Client protocol', requiredFeatures: 'Required features', estimatedTokens: 'Estimated tokens', run: 'Run simulation', status: 'status', resolvedModel: 'resolved model', routeGroup: 'route group', candidates: 'candidates',
-    route: 'Route', account: 'Provider / account', adapter: 'Adapter', headroom: 'Headroom', limits: 'Limits / circuit', decision: 'Decision', eligible: 'eligible', eligibleCount: '{count} eligible', concurrent: '{count} concurrent'
+    route: 'Route', account: 'Provider / account', adapter: 'Adapter', headroom: 'Headroom', limits: 'Limits / circuit', decision: 'Decision', eligible: 'eligible', eligibleCount: '{count} eligible', concurrent: '{count} concurrent',
+    reasons: { routing_policy_native_protocol_required: 'Native protocol required', routing_policy_price_fact_missing: 'Comparable price fact missing', routing_policy_input_price_exceeded: 'Input price cap exceeded', routing_policy_output_price_exceeded: 'Output price cap exceeded', routing_policy_relative_price_exceeded: 'Cheapest-price multiple exceeded', routing_policy_low_price_pool_excluded: 'Outside the low-price pool', routing_policy_failover_disabled: 'Excluded because failover is disabled', routing_policy_model_blocked: 'Model blocked by policy', routing_policy_protocol_blocked: 'Protocol blocked by policy', client_protocol_unsupported: 'Unsupported client protocol', route_disabled: 'Route disabled', account_disabled: 'Account disabled', account_not_schedulable: 'Account not schedulable', account_expired: 'Account expired', account_cooling_down: 'Account cooling down', secret_missing: 'Account secret missing', upstream_model_not_exposed: 'Upstream model not exposed', provider_not_found: 'Provider not found', provider_disabled: 'Provider disabled', provider_url_invalid: 'Provider URL invalid', circuit_open: 'Circuit open', at_capacity: 'Concurrency exhausted', rpm_exhausted: 'RPM exhausted', tpm_exhausted: 'TPM exhausted', not_schedulable: 'Not schedulable', protocol_incompatible_openai_embeddings: 'Embedding protocol incompatible', protocol_incompatible_native_media: 'Native media protocol incompatible', protocol_incompatible_response_format: 'Response format unsupported', protocol_incompatible_top_k: 'top_k unsupported' }
   },
   routingGroups: {
     subtitle: 'Advanced routing boundaries for fallback, ordering, capacity, and route governance.',
@@ -1266,7 +1267,7 @@ export default {
     offlinePackageFile: 'Offline plugin package file JSON',
     installPackage: 'Install',
     uninstallPackage: 'Uninstall',
-    noPackages: '',
+    noPackages: 'No packages are available for this plugin.',
     status: 'Status',
     actions: 'Actions',
     enable: 'Enable',
@@ -1437,7 +1438,7 @@ export default {
     allDeliveryStatuses: 'All delivery statuses',
     target: 'Target',
     error: 'Error',
-    noDeliveries: '',
+    noDeliveries: 'No delivery attempts match the current filter.',
     deliveryStatuses: {
       succeeded: 'Succeeded',
       failed: 'Failed',
@@ -1458,7 +1459,7 @@ export default {
     searchPlaceholder: 'Search plugins, vendors, or categories',
     allCategories: 'All categories',
     allTiers: 'All tiers',
-    empty: ''
+    empty: 'No plugins match the current filters.'
   },
   console: {
     title: 'Management Console',

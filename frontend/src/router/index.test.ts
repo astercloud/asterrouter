@@ -52,13 +52,22 @@ describe('enterprise router guards', () => {
     expect(router.currentRoute.value.fullPath).toBe('/portal/overview')
   })
 
+  it('redirects the legacy plugin center path to its canonical system path', async () => {
+    localStorage.setItem('asterrouter_admin_token', 'token')
+    localStorage.setItem('asterrouter_admin_user', JSON.stringify(makeAuthUser({ role: 'super_admin' })))
+    await router.push('/console/plugins')
+    expect(router.currentRoute.value.fullPath).toBe('/console/system/plugins')
+    await router.push('/console/plugins/com.asterrouter.example/workbench')
+    expect(router.currentRoute.value.fullPath).toBe('/console/system/plugins/com.asterrouter.example/workbench')
+  })
+
   it('registers only the two product entry trees', () => {
     const paths = router.getRoutes().map((route) => route.path)
     for (const legacy of ['/admin', '/operator', '/customer', '/platform']) expect(paths).not.toContain(legacy)
     for (const current of [
       '/console/workbench', '/console/applications', '/console/model-services',
       '/console/policies/access', '/console/policies/routing', '/console/usage',
-      '/console/organization', '/console/system', '/portal/overview',
+      '/console/organization', '/console/system', '/console/system/plugins', '/portal/overview',
       '/portal/applications', '/portal/access', '/portal/usage', '/portal/account'
     ]) expect(paths).toContain(current)
   })

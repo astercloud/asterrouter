@@ -22,6 +22,7 @@ const fromTime = ref('')
 const toTime = ref('')
 const pageSize = ref(25)
 const offset = ref(0)
+let loadGeneration = 0
 
 const visibleAlerts = computed(() => alerts.value)
 const pageNumber = computed(() => Math.floor(offset.value / pageSize.value) + 1)
@@ -34,6 +35,7 @@ const statuses = ['active', 'acknowledged', 'resolved']
 const resourceTypes = ['api_key', 'provider', 'provider_account']
 
 async function load() {
+  const generation = ++loadGeneration
   loading.value = true
   error.value = ''
   try {
@@ -42,9 +44,11 @@ async function load() {
       getAlerts(currentQuery),
       getAlertSummary(currentQuery)
     ])
+    if (generation !== loadGeneration) return
     alerts.value = alertData
     summary.value = summaryData
   } catch (err) {
+    if (generation !== loadGeneration) return
     if (isNotFoundError(err)) {
       alerts.value = []
       summary.value = { total: 0, active: 0, acknowledged: 0, resolved: 0, warning: 0, critical: 0 }
@@ -52,7 +56,7 @@ async function load() {
     }
     error.value = err instanceof Error ? err.message : t('common.failed')
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 

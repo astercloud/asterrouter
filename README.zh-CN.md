@@ -92,6 +92,21 @@ cd frontend
 npm run build
 ```
 
+## 测试
+
+浏览器覆盖的机器事实源为 [docs/test/v1/scenario-registry.json](./docs/test/v1/scenario-registry.json)。证明层级、测试夹具、交付门禁和证据规则见 [docs/test/v1/README.md](./docs/test/v1/README.md)。
+
+```bash
+# 静态覆盖合同与 PR 浏览器门禁
+cd frontend
+npm run check:e2e-coverage
+npm run test:e2e:pr
+
+# 本地后端、前端与浏览器完整测试
+cd ..
+bash scripts/test.sh all
+```
+
 ## 许可证
 
 AsterRouter 使用 [Apache License 2.0](./LICENSE) 授权。

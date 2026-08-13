@@ -274,7 +274,7 @@ function openPlugin(plugin: Plugin) {
 }
 
 function openPluginWorkbench(plugin: Plugin) {
-  void router.push(`${window.location.pathname.split('/').slice(0, 2).join('/')}/plugins/${encodeURIComponent(plugin.id)}/workbench`)
+  void router.push(`/console/system/plugins/${encodeURIComponent(plugin.id)}/workbench`)
 }
 
 function hasFrontendWorkbench(plugin: Plugin) {
@@ -1584,6 +1584,7 @@ onMounted(load)
             <article v-for="pkg in pluginPackages(activePlugin)" :key="pkg.package_id" class="package-row">
               <div class="package-main">
                 <strong>{{ pkg.version }}</strong>
+                <small>{{ pkg.package_id }}</small>
                 <span>{{ pkg.os }}/{{ pkg.arch }} · {{ pkg.channel || '-' }} · {{ formatSize(pkg.size_bytes) }}</span>
                 <small>{{ shortHash(pkg.sha256) }}</small>
               </div>

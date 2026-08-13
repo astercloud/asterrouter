@@ -199,6 +199,7 @@ jobs:
           --health-retries 20
     env:
       ASTERROUTER_SERVER_STORAGE_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_e2e_test?sslmode=disable
+      ASTER_E2E_ALLOW_DESTRUCTIVE_RESTORE: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -216,9 +217,12 @@ jobs:
       - name: Install Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: Browser smoke tests
+      - name: Check E2E coverage contract
         working-directory: frontend
-        run: npm run test:e2e:smoke
+        run: npm run check:e2e-coverage
+      - name: Pull request browser gate
+        working-directory: frontend
+        run: npm run test:e2e:pr
       - name: Create isolated first-install database
         env:
           PGPASSWORD: asterrouter

@@ -40,6 +40,12 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 	if createRecorder.Code != http.StatusOK {
 		t.Fatalf("create price status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
 	}
+	priceList := httptest.NewRequest(http.MethodGet, "/api/v1/console/procurement-prices", nil)
+	priceListRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(priceListRecorder, priceList)
+	if priceListRecorder.Code != http.StatusOK || !bytes.Contains(priceListRecorder.Body.Bytes(), []byte(`"upstream_model":"upstream-model"`)) {
+		t.Fatalf("price list status=%d body=%s", priceListRecorder.Code, priceListRecorder.Body.String())
+	}
 
 	capabilityBody := fmt.Sprintf(`{"provider_account_id":%q,"upstream_model":"upstream-model","protocol":"openai_chat_completions","support_status":"claimed","pool_affinity_grade":"unknown","affinity_transport":"header","affinity_field":"X-Session-ID","cache_control_mode":"prompt_cache_key","usage_schema":"openai"}`, account.ID)
 	capability := httptest.NewRequest(http.MethodPut, "/api/v1/console/provider-cache-capabilities", bytes.NewBufferString(capabilityBody))
@@ -48,6 +54,12 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 	handler.ServeHTTP(capabilityRecorder, capability)
 	if capabilityRecorder.Code != http.StatusOK || !bytes.Contains(capabilityRecorder.Body.Bytes(), []byte(`"affinity_field":"X-Session-ID"`)) {
 		t.Fatalf("capability status=%d body=%s", capabilityRecorder.Code, capabilityRecorder.Body.String())
+	}
+	capabilityList := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-cache-capabilities", nil)
+	capabilityListRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(capabilityListRecorder, capabilityList)
+	if capabilityListRecorder.Code != http.StatusOK || !bytes.Contains(capabilityListRecorder.Body.Bytes(), []byte(`"affinity_field":"X-Session-ID"`)) {
+		t.Fatalf("capability list status=%d body=%s", capabilityListRecorder.Code, capabilityListRecorder.Body.String())
 	}
 
 	if err := control.RecordGatewayUsage(context.Background(), controlplane.GatewayAuthContext{APIKey: controlplane.APIKeyRecord{ID: "billing-key"}}, controlplane.GatewayUsageInput{
@@ -74,6 +86,12 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 	if billingResponse.Data.ReconciliationStatus != controlplane.BillingReconciliationMatched || billingResponse.Data.UsageRecordID == "" {
 		t.Fatalf("billing response=%+v", billingResponse.Data)
 	}
+	billingList := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-billing-lines", nil)
+	billingListRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(billingListRecorder, billingList)
+	if billingListRecorder.Code != http.StatusOK || !bytes.Contains(billingListRecorder.Body.Bytes(), []byte(billingResponse.Data.ID)) {
+		t.Fatalf("billing list status=%d body=%s", billingListRecorder.Code, billingListRecorder.Body.String())
+	}
 
 	report := httptest.NewRequest(http.MethodGet, "/api/v1/console/effective-pricing/report?model=upstream-model&protocol=openai_chat_completions&window_hours=24", nil)
 	reportRecorder := httptest.NewRecorder()
@@ -85,6 +103,19 @@ func TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling(t *testing
 
 func TestEffectivePricingPolicyEndpointRejectsUnsafeValues(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/console/effective-pricing/policy", nil)
+	getRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK || !bytes.Contains(getRecorder.Body.Bytes(), []byte(`"mode":"observe_only"`)) {
+		t.Fatalf("get policy status=%d body=%s", getRecorder.Code, getRecorder.Body.String())
+	}
+	valid := httptest.NewRequest(http.MethodPut, "/api/v1/console/effective-pricing/policy", bytes.NewBufferString(`{"mode":"recommend","window_hours":48,"min_sample_count":10,"min_metrics_coverage":0.8,"min_billing_consistency":0.95,"min_cost_improvement":0.08,"min_cache_hit_rate_improvement":0.1,"min_affinity_improvement":0.1,"max_cache_tiebreak_cost_regression":0.02,"max_error_rate_regression":0.005,"max_p95_latency_regression":0.2,"canary_percent":5,"supplier_affinity_ttl_seconds":86400,"account_affinity_ttl_seconds":1800,"automatic_actions_enabled":false,"evaluation_interval_minutes":60,"promotion_window_count":3,"degradation_window_count":2,"probe_enabled":true,"probe_daily_token_budget":100000,"probe_daily_cost_budget_micros":100000,"probe_cooldown_seconds":3600}`))
+	valid.Header.Set("Content-Type", "application/json")
+	validRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(validRecorder, valid)
+	if validRecorder.Code != http.StatusOK || !bytes.Contains(validRecorder.Body.Bytes(), []byte(`"mode":"recommend"`)) || !bytes.Contains(validRecorder.Body.Bytes(), []byte(`"window_hours":48`)) {
+		t.Fatalf("update policy status=%d body=%s", validRecorder.Code, validRecorder.Body.String())
+	}
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/console/effective-pricing/policy", bytes.NewBufferString(`{"mode":"canary","window_hours":24,"min_sample_count":0,"min_metrics_coverage":0.8,"min_billing_consistency":0.95,"min_cost_improvement":0.08,"max_error_rate_regression":0.005,"max_p95_latency_regression":0.2,"canary_percent":5,"supplier_affinity_ttl_seconds":86400,"account_affinity_ttl_seconds":1800}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -259,6 +290,12 @@ func TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfir
 	}
 	if response.Data.Status != controlplane.CacheProbeStatusSucceeded || response.Data.ReuseCacheReadTokens != 240 || response.Data.ReuseUpstreamRequestID != "route-probe-2" || calls.Load() != 3 {
 		t.Fatalf("response=%+v calls=%d", response.Data, calls.Load())
+	}
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/console/provider-cache-probes?limit=20", nil)
+	listRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(listRecorder, list)
+	if listRecorder.Code != http.StatusOK || !bytes.Contains(listRecorder.Body.Bytes(), []byte(response.Data.ID)) {
+		t.Fatalf("probe list status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
 	}
 }
 

@@ -1,4 +1,5 @@
 import { expect, type APIResponse, type Page } from '@playwright/test'
+import { isNavigationCancellationError } from '../src/testing/browser-errors'
 
 export type Envelope<T> = { code: number; message: string; data: T }
 
@@ -159,6 +160,53 @@ export async function createGatewayFixture(page: Page, token: string, runID: str
   return account
 }
 
+export async function createDurableImageGatewayFixture(page: Page, token: string, runID: string, publicModel: string) {
+  const upstreamPort = process.env.ASTER_E2E_UPSTREAM_PORT || '19000'
+  const provider = await adminPost<{ id: string }>(page, token, '/providers', {
+    name: `E2E Image Provider ${runID}`,
+    type: 'openai_compatible',
+    base_url: `http://127.0.0.1:${upstreamPort}/v1`,
+    status: 'active',
+    priority: 10
+  })
+  const account = await adminPost<{ id: string; provider_id: string; name: string; secret_configured: boolean }>(page, token, '/provider-accounts', {
+    provider_id: provider.id,
+    name: `E2E Image Account ${runID}`,
+    platform: 'openai_compatible',
+    auth_type: 'api_key',
+    status: 'active',
+    schedulable: true,
+    priority: 10,
+    concurrency: 1,
+    rpm_limit: 1,
+    rate_multiplier: 1,
+    models: ['upstream-image-model'],
+    group_ids: [],
+    secret: 'synthetic-image-account-secret'
+  })
+  expect(account.secret_configured).toBe(true)
+
+  const model = await adminPost<{ id: string }>(page, token, '/gateway-models', {
+    model_id: publicModel,
+    name: `E2E Image Model ${runID}`,
+    description: 'Synthetic Playwright durable image contract',
+    modality: 'image',
+    default_route_group: 'default',
+    status: 'active'
+  })
+  const route = await adminPost<{ id: string }>(page, token, '/model-routes', {
+    gateway_model_id: model.id,
+    route_group: 'default',
+    provider_account_id: account.id,
+    upstream_model: 'upstream-image-model',
+    upstream_format: 'native_media',
+    priority: 10,
+    weight: 100,
+    status: 'active'
+  })
+  return { account, model, route }
+}
+
 export function captureBrowserErrors(page: Page): string[] {
   const errors: string[] = []
   page.on('console', (message) => {
@@ -167,7 +215,7 @@ export function captureBrowserErrors(page: Page): string[] {
   page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`))
   page.on('requestfailed', (request) => {
     const failure = request.failure()
-    if (failure?.errorText === 'net::ERR_ABORTED') return
+    if (isNavigationCancellationError(failure?.errorText)) return
     errors.push(`requestfailed: ${request.method()} ${request.url()} ${failure?.errorText || ''}`.trim())
   })
   return errors

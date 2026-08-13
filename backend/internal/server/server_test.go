@@ -543,6 +543,44 @@ func TestLoginAgreementIsEnforcedAfterPayloadBinding(t *testing.T) {
 	}
 }
 
+func TestLegalDocumentEndpointReturnsPublishedDocumentAndRejectsUnknownSlug(t *testing.T) {
+	settingsService := settings.NewService(settings.NewMemoryRepository(), settings.ServiceOptions{Version: "test", StorageMode: "memory"})
+	current, err := settingsService.Admin(t.Context())
+	if err != nil {
+		t.Fatalf("Admin(): %v", err)
+	}
+	current.LegalDocuments = []settings.LegalDocument{
+		{ID: "privacy", Name: "Privacy Policy", Slug: "privacy-policy", Content: "# Privacy\n\nEnterprise data is isolated."},
+	}
+	if _, err := settingsService.Update(t.Context(), current); err != nil {
+		t.Fatalf("Update(): %v", err)
+	}
+	handler := New(Options{SettingsService: settingsService})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/legal/privacy-policy", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("published document status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data settings.LegalDocument `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode legal document: %v", err)
+	}
+	if response.Data != current.LegalDocuments[0] {
+		t.Fatalf("legal document mismatch: %+v", response.Data)
+	}
+
+	missingReq := httptest.NewRequest(http.MethodGet, "/api/v1/legal/unknown", nil)
+	missingRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound || !strings.Contains(missingRec.Body.String(), "legal document not found") {
+		t.Fatalf("unknown document status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+}
+
 func TestLegacyCaptchaEndpointDisablesCaptcha(t *testing.T) {
 	handler := newAuthTestHandler(t)
 

@@ -5,7 +5,7 @@ description: Validate AsterRouter outside its in-memory fast path using PostgreS
 
 # AsterRouter Environment Tests
 
-Read the environment matrix and release gates in `docs/test/v1/README.md` before testing. Start with an isolated local environment and move outward only when the narrower environment passes.
+Read `docs/test/v1/README.md` and `docs/test/v1/scenario-registry.json` before testing. Start with an isolated local environment and move outward only when the narrower proof level passes.
 
 ## Choose the environment
 
@@ -43,6 +43,8 @@ For containers and release artifacts, verify:
 - frontend assets and API routes share one origin;
 - checksums, `--version`, archive contents, install, upgrade, rollback, and restart;
 - backup creation, restore into an empty database, and restored critical-record counts.
+
+Gate B scenarios are selected from `gates: ["release"]` in the registry. Never restore hand-maintained `@jNN` grep lists. Candidate evidence must include the selected stable scenario IDs, version, commit, database class, candidate path, and single-origin URL.
 
 Use fake upstream model APIs and fake official services. Cover normal JSON, server-sent streaming, timeout, malformed payload, 429, 5xx, and connection interruption without contacting a live provider.
 

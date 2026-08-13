@@ -672,8 +672,8 @@ onMounted(async () => {
             <span v-if="updateInfo?.signed_metadata" class="pill">{{ t('settings.signedMetadata') }}</span>
           </div>
           <div class="field">
-            <label>{{ t('settings.latestVersion') }}</label>
-            <input :value="updateInfo?.latest_version || form.version || '-'" readonly />
+            <label for="system-update-latest-version">{{ t('settings.latestVersion') }}</label>
+            <input id="system-update-latest-version" :value="updateInfo?.latest_version || form.version || '-'" readonly />
             <span v-if="updateInfo?.warning" class="hint">{{ updateInfo.warning }}</span>
           </div>
           <div class="status-line">
@@ -681,7 +681,7 @@ onMounted(async () => {
               <RefreshCw :size="16" />
               {{ updateAction === 'check' ? t('common.loading') : t('settings.checkUpdates') }}
             </button>
-            <button class="button" type="button" :disabled="!!updateAction || !updateInfo?.has_update" @click="runUpdate">
+            <button class="button" type="button" :disabled="!!updateAction" @click="runUpdate">
               <Download :size="16" />
               {{ updateAction === 'update' ? t('common.loading') : t('settings.oneClickUpdate') }}
             </button>
@@ -691,7 +691,7 @@ onMounted(async () => {
               <RotateCcw :size="16" />
               {{ t('settings.rollback') }}
             </button>
-            <button class="button secondary" type="button" :disabled="!!updateAction || !updateInfo?.restart_supported" @click="runRestart">
+            <button class="button secondary" type="button" :disabled="!!updateAction" @click="runRestart">
               <Power :size="16" />
               {{ t('settings.restart') }}
             </button>

@@ -245,7 +245,7 @@ onMounted(load)
                 </div>
                 <div class="field">
                   <label for="application-slug">{{ t('applications.slug') }}</label>
-                  <input id="application-slug" v-model.trim="form.slug" required pattern="[a-z0-9-]+" placeholder="customer-service" autocomplete="off" />
+                  <input id="application-slug" v-model.trim="form.slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="customer-service" autocomplete="off" />
                   <small>{{ t('applications.slugHelp') }}</small>
                 </div>
                 <div class="field">

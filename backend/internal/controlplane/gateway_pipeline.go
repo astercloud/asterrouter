@@ -8,14 +8,17 @@ import (
 )
 
 type GatewayExecutionPlan struct {
-	Request         gatewaycore.CanonicalRequest     `json:"request"`
-	Auth            gatewaycore.CanonicalAuthContext `json:"auth"`
-	GatewayModelID  string                           `json:"gateway_model_id"`
-	RouteGroup      string                           `json:"route_group"`
-	Candidates      []GatewayProvider                `json:"-"`
-	Exclusions      []GatewayCandidateExclusion      `json:"exclusions"`
-	HasRoutes       bool                             `json:"has_routes"`
-	RejectionReason string                           `json:"rejection_reason,omitempty"`
+	Request              gatewaycore.CanonicalRequest     `json:"request"`
+	Auth                 gatewaycore.CanonicalAuthContext `json:"auth"`
+	GatewayModelID       string                           `json:"gateway_model_id"`
+	RouteGroup           string                           `json:"route_group"`
+	RoutingPolicyID      string                           `json:"routing_policy_id,omitempty"`
+	RoutingPolicyVersion int                              `json:"routing_policy_version,omitempty"`
+	RoutingPolicyPreset  string                           `json:"routing_policy_preset,omitempty"`
+	Candidates           []GatewayProvider                `json:"-"`
+	Exclusions           []GatewayCandidateExclusion      `json:"exclusions"`
+	HasRoutes            bool                             `json:"has_routes"`
+	RejectionReason      string                           `json:"rejection_reason,omitempty"`
 }
 
 type GatewayCandidateExclusion struct {
@@ -24,6 +27,11 @@ type GatewayCandidateExclusion struct {
 	ProviderAccountID string `json:"provider_account_id,omitempty"`
 	UpstreamModel     string `json:"upstream_model,omitempty"`
 	Reason            string `json:"reason"`
+}
+
+type routingPolicyCandidateDecision struct {
+	Candidates []GatewayProvider
+	Exclusions []GatewayCandidateExclusion
 }
 
 func (s *Service) AuthorizeCanonicalGatewayRequest(ctx context.Context, credential gatewaycore.CredentialEnvelope, request gatewaycore.CanonicalRequest) (GatewayAuthContext, gatewaycore.CanonicalAuthContext, error) {
@@ -80,9 +88,17 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 	if err != nil {
 		return GatewayExecutionPlan{}, err
 	}
+	if routingPolicy != nil && !routingPolicyAllowsModel(routingPolicy.Strategy, resolved.RequestedID) {
+		return GatewayExecutionPlan{
+			Request: request, Auth: auth, GatewayModelID: resolved.GatewayModel.ID, RouteGroup: resolved.RouteGroup,
+			RoutingPolicyID: routingPolicy.ID, RoutingPolicyVersion: routingPolicy.Version, RoutingPolicyPreset: routingPolicy.Strategy.Preset,
+			HasRoutes: true, RejectionReason: "routing_policy_model_blocked",
+		}, nil
+	}
 	if routingPolicy != nil && !routingPolicyAllowsProtocol(routingPolicy.Strategy, string(request.Protocol)) {
 		return GatewayExecutionPlan{
 			Request: request, Auth: auth, GatewayModelID: resolved.GatewayModel.ID, RouteGroup: resolved.RouteGroup,
+			RoutingPolicyID: routingPolicy.ID, RoutingPolicyVersion: routingPolicy.Version, RoutingPolicyPreset: routingPolicy.Strategy.Preset,
 			HasRoutes: true, RejectionReason: "routing_policy_protocol_blocked",
 		}, nil
 	}
@@ -90,23 +106,13 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 	if err != nil {
 		return GatewayExecutionPlan{}, err
 	}
-	if routingPolicy != nil && routingPolicy.Strategy.NativeProtocolOnly {
-		filtered := candidates[:0]
-		for _, candidate := range candidates {
-			if routingPolicyNativeProtocolMatches(string(request.Protocol), candidate.UpstreamFormat) {
-				filtered = append(filtered, candidate)
-			}
-		}
-		candidates = filtered
-	}
-	candidates, err = s.applyRoutingPolicyPriceRules(ctx, routingPolicy, string(request.Protocol), candidates)
+	consideredCandidates := append([]GatewayProvider(nil), candidates...)
+	decision, err := s.applyRoutingPolicyCandidateRules(ctx, routingPolicy, string(request.Protocol), candidates)
 	if err != nil {
 		return GatewayExecutionPlan{}, err
 	}
-	if len(candidates) > 1 && routingPolicy != nil && !routingPolicy.Strategy.FailoverBeforeFirstByte {
-		candidates = candidates[:1]
-	}
-	exclusions, err := s.gatewayCandidateExclusions(ctx, resolved, candidates)
+	candidates = decision.Candidates
+	exclusions, err := s.gatewayCandidateExclusions(ctx, resolved, consideredCandidates, decision.Exclusions)
 	if err != nil {
 		return GatewayExecutionPlan{}, err
 	}
@@ -114,7 +120,7 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 	if len(candidates) == 0 && hasRoutes {
 		rejectionReason = "all_candidates_excluded"
 	}
-	return GatewayExecutionPlan{
+	plan := GatewayExecutionPlan{
 		Request:         request,
 		Auth:            auth,
 		GatewayModelID:  resolved.GatewayModel.ID,
@@ -123,12 +129,61 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 		Exclusions:      exclusions,
 		HasRoutes:       hasRoutes,
 		RejectionReason: rejectionReason,
-	}, nil
+	}
+	if routingPolicy != nil {
+		plan.RoutingPolicyID = routingPolicy.ID
+		plan.RoutingPolicyVersion = routingPolicy.Version
+		plan.RoutingPolicyPreset = routingPolicy.Strategy.Preset
+	}
+	return plan, nil
 }
 
-func (s *Service) gatewayCandidateExclusions(ctx context.Context, resolved ResolvedGatewayModel, candidates []GatewayProvider) ([]GatewayCandidateExclusion, error) {
-	included := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
+func (s *Service) applyRoutingPolicyCandidateRules(ctx context.Context, policy *RoutingPolicy, protocol string, candidates []GatewayProvider) (routingPolicyCandidateDecision, error) {
+	decision := routingPolicyCandidateDecision{Candidates: append([]GatewayProvider(nil), candidates...), Exclusions: []GatewayCandidateExclusion{}}
+	if policy == nil || len(candidates) == 0 {
+		return decision, nil
+	}
+
+	if policy.Strategy.NativeProtocolOnly {
+		retained := make([]GatewayProvider, 0, len(decision.Candidates))
+		for _, candidate := range decision.Candidates {
+			if routingPolicyNativeProtocolMatches(protocol, candidate.UpstreamFormat) {
+				retained = append(retained, candidate)
+				continue
+			}
+			decision.Exclusions = append(decision.Exclusions, gatewayCandidatePolicyExclusion(candidate, "routing_policy_native_protocol_required"))
+		}
+		decision.Candidates = retained
+	}
+
+	priceDecision, err := s.evaluateRoutingPolicyPriceRules(ctx, policy, protocol, decision.Candidates)
+	if err != nil {
+		return routingPolicyCandidateDecision{}, err
+	}
+	for _, exclusion := range priceDecision.exclusions {
+		decision.Exclusions = append(decision.Exclusions, gatewayCandidatePolicyExclusion(exclusion.candidate, exclusion.reason))
+	}
+	decision.Candidates = priceDecision.candidates
+
+	if len(decision.Candidates) > 1 && !policy.Strategy.FailoverBeforeFirstByte {
+		for _, candidate := range decision.Candidates[1:] {
+			decision.Exclusions = append(decision.Exclusions, gatewayCandidatePolicyExclusion(candidate, "routing_policy_failover_disabled"))
+		}
+		decision.Candidates = decision.Candidates[:1]
+	}
+	return decision, nil
+}
+
+func gatewayCandidatePolicyExclusion(candidate GatewayProvider, reason string) GatewayCandidateExclusion {
+	return GatewayCandidateExclusion{
+		RouteID: candidate.RouteID, ProviderID: candidate.ID, ProviderAccountID: candidate.AccountID,
+		UpstreamModel: candidate.UpstreamModel, Reason: reason,
+	}
+}
+
+func (s *Service) gatewayCandidateExclusions(ctx context.Context, resolved ResolvedGatewayModel, considered []GatewayProvider, policyExclusions []GatewayCandidateExclusion) ([]GatewayCandidateExclusion, error) {
+	included := make(map[string]struct{}, len(considered))
+	for _, candidate := range considered {
 		if candidate.RouteID != "" {
 			included[candidate.RouteID] = struct{}{}
 		}
@@ -137,13 +192,14 @@ func (s *Service) gatewayCandidateExclusions(ctx context.Context, resolved Resol
 	if err != nil {
 		return nil, err
 	}
-	exclusions := make([]GatewayCandidateExclusion, 0, len(skipped))
+	exclusions := make([]GatewayCandidateExclusion, 0, len(skipped)+len(policyExclusions))
 	for _, candidate := range skipped {
 		exclusions = append(exclusions, GatewayCandidateExclusion{
 			RouteID: candidate.RouteID, ProviderID: candidate.ProviderID, ProviderAccountID: candidate.ProviderAccountID,
 			UpstreamModel: candidate.UpstreamModel, Reason: candidate.Reason,
 		})
 	}
+	exclusions = append(exclusions, policyExclusions...)
 	return exclusions, nil
 }
 

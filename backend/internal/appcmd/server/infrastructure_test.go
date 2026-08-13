@@ -32,7 +32,7 @@ func TestConfigureAIJobInfrastructureSupportsRedisAffinityWithMemoryQueue(t *tes
 	}
 	input := controlplane.GatewayAffinityInput{
 		ApplicationID: "application", PrincipalID: "principal", CredentialID: "credential", Model: "model",
-		Protocol: "openai_chat_completions", RouteGroup: "default", PolicyVersion: 1,
+		Protocol: "openai_chat_completions", RouteGroup: "default", RoutingPolicyVersion: 1,
 	}
 	if err = service.BindGatewayCandidateAffinity(t.Context(), input, controlplane.GatewayProvider{ID: "provider-a"}); err != nil {
 		t.Fatal(err)

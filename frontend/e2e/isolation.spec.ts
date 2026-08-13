@@ -35,7 +35,7 @@ async function expectForbiddenOrHidden(response: APIResponse): Promise<void> {
   expect([403, 404]).toContain(response.status())
 }
 
-test('@smoke @j03 department and owner isolation covers reads, writes, and exports', async ({ page }, testInfo) => {
+test('@e2e-isolation-001 department and owner isolation covers reads, writes, and exports', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The isolation workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)

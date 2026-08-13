@@ -1,0 +1,2331 @@
+{
+  "schemaVersion": 1,
+  "evidence": [
+    {
+      "reference": "backend/internal/server/oauth_state_cookie_test.go#TestExternalAccountBindingStartsBindStateToBrowserCookie",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "account:beginAccountIdentityBinding"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/auth_rate_limit_test.go#TestAccountBindingStartIsLimitedPerAccountAndClient",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "account:beginAccountIdentityBinding"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/oidc_provision_test.go#TestUnbindCurrentAuthIdentityProtectsLastLoginMethod",
+      "proofs": [
+        "success",
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "account:unbindAccountIdentity"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/oidc_provision_test.go#TestUnbindCurrentAuthIdentityWithPasswordDoesNotAffectOtherUsers",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "account:unbindAccountIdentity"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminDashboardEndpoint",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getDashboard"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminRecordEndpointsSupportQueryParameters",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getAuditLogs",
+        "control:getAuditLogSummary",
+        "control:getCostAllocationReport",
+        "control:getGatewayTraces",
+        "control:getGatewayTraceSummary",
+        "control:getUsageReport"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/supply_routes_test.go#TestSupplyRoutesRequireAuthenticationAndValidateWindow",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getCapacityRecommendations",
+        "control:getSupplyUtilization"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminSystemCheckUpdatesEndpoint",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "system:checkSystemUpdates"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestSystemBackupRoutesListAndDownloadStoredArchive",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "system:downloadSystemBackup",
+        "system:listSystemBackups"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/archive_test.go#TestBackupRestoreIncludesPluginAssetsAndRequiresConfirmation",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "system:createSystemBackup",
+        "system:listSystemBackups",
+        "system:restoreSystemBackup"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/archive_test.go#TestBackupRequiresPostgreSQL",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "system:createSystemBackup"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+		"system:downloadS3Backup",
+		"system:listS3Backups",
+		"system:restoreS3Backup",
+		"system:restoreSystemBackup",
+		"system:testBackupS3"
+      ]
+    },
+	{
+	  "reference": "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore",
+	  "proofs": [
+		"success",
+		"boundary"
+	  ],
+	  "operations": [
+		"system:downloadS3Backup",
+		"system:listS3Backups",
+		"system:restoreS3Backup",
+		"system:testBackupS3"
+	  ]
+	},
+	{
+	  "reference": "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore",
+	  "proofs": [
+		"negative"
+	  ],
+	  "operations": [
+		"system:downloadS3Backup",
+		"system:restoreS3Backup"
+	  ]
+	},
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestSystemDiagnosticRoutesCreateAndDownload",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "system:createDiagnosticBundle",
+        "system:downloadDiagnosticBundle"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestSystemDiagnosticRoutesRejectUnavailableServiceAndInvalidArchiveID",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "system:downloadDiagnosticBundle"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "system:checkSystemUpdates",
+        "system:createDiagnosticBundle",
+        "system:createSystemBackup",
+        "system:downloadDiagnosticBundle",
+		"system:downloadS3Backup",
+        "system:downloadSystemBackup",
+		"system:listS3Backups",
+        "system:listSystemBackups",
+        "system:performSystemUpdate",
+        "system:restartSystem",
+		"system:restoreS3Backup",
+        "system:restoreSystemBackup",
+		"system:rollbackSystemUpdate",
+		"system:testBackupS3"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/service_test.go#TestPerformUpdateReturnsSuccessWhenAlreadyCurrent",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "system:performSystemUpdate"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/service_test.go#TestPerformUpdateSourceBuildRequiresManualUpdate",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "system:performSystemUpdate"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/service_test.go#TestRestartExitsIsolatedProcessWhenEnabled",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "system:restartSystem"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/service_test.go#TestRestartRejectsDisabledMaintenance",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "system:restartSystem"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/service_test.go#TestRollbackReplacesIsolatedExecutableAndPreservesOperation",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "system:rollbackSystemUpdate"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/service_test.go#TestRollbackRejectsMissingBackup",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "system:rollbackSystemUpdate"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/account_service_test.go#TestCurrentAccountProfileUpdateAndPasswordChange",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "account:updateAccountProfile"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/account_service_test.go#TestRecoveryCodeCanDisableTOTP",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "account:disableTOTP"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/totp_service_test.go#TestTOTPRecoveryCodeIsConsumedAtomically",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "account:generateTOTPRecoveryCodes"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/totp_service_test.go#TestTOTPSetupExpiresAndCanBeRestarted",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "account:beginTOTPSetup",
+        "account:confirmTOTP"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_error_boundary_test.go#TestAccountRoutesDoNotExposeRepositoryErrors",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "account:getAccountProfile",
+        "account:revokeOtherAccountSessions"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_error_boundary_test.go#TestAccountRoutesPreservePublicValidationErrors",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "account:changeAccountPassword",
+        "account:updateAccountProfile"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_routes_test.go#TestLocalAdministratorAccountIsFullyMutable",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "account:getAccountProfile"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_routes_test.go#TestPasswordChangeRevokesExistingBearerToken",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "account:changeAccountPassword"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_routes_test.go#TestRevokeOtherSessionsReturnsReplacementBearerToken",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "account:revokeOtherAccountSessions"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_routes_test.go#TestTOTPChangesImmediatelyRevokeExistingBearerTokens",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "account:beginTOTPSetup",
+        "account:confirmTOTP",
+        "account:disableTOTP",
+        "account:generateTOTPRecoveryCodes"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_routes_test.go#TestTOTPChangesImmediatelyRevokeExistingBearerTokens",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "account:beginTOTPSetup",
+        "account:generateTOTPRecoveryCodes"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_routes_test.go#TestTOTPManagementAttemptsAreLimitedPerAccountAcrossRoutes",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "account:confirmTOTP"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/account_routes_test.go#TestWorkspaceAccountProfileEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "account:getAccountProfile",
+        "account:updateAccountProfile"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:acknowledgeAlert",
+        "control:getAlerts",
+        "control:getAlertSummary",
+        "control:resolveAlert"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:acknowledgeAlert",
+        "control:resolveAlert"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createExportJob",
+        "control:downloadExportJob",
+        "control:getExportJobs"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:createExportJob",
+        "control:downloadExportJob"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:exportAuditLogsCSV",
+        "control:exportCostAllocationCSV",
+        "control:exportGatewayTracesCSV",
+        "control:exportUsageCSV"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsRequireAuthentication",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:exportAuditLogsCSV",
+        "control:exportCostAllocationCSV",
+        "control:exportGatewayTracesCSV",
+        "control:exportUsageCSV"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/ai_job_admin_test.go#TestAIJobAdminQueriesRedactSecretsAndSupportsSafeActions",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:scheduleAIJobAttemptReconciliation"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/artifact_admin_test.go#TestRetryArtifactDeliverySchedulesReconciliationAndAudits",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:retryArtifactDelivery"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/ai_job_admin_routes_test.go#TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:cancelAIJob",
+        "control:getAIJob",
+        "control:getAIJobRuntime",
+        "control:getAIJobs"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminAIJobHTTPFailureAndIdempotencyContracts",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getAIJobSummary"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminAIJobHTTPFailureAndIdempotencyContracts",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:cancelAIJob",
+        "control:scheduleAIJobAttemptReconciliation"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminArtifactHTTPFailureAndRangeContracts",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:retryArtifactDelivery"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/artifact_admin_routes_test.go#TestAdminArtifactEndpointsReturnFilteredRedactedRecords",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getArtifact",
+        "control:getArtifactContent",
+        "control:getArtifactRuntimes",
+        "control:getArtifacts",
+        "control:getArtifactSummary"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/api_key_policy_test.go#TestCreateAPIKeyNormalizesPrincipalAndExtendedPolicy",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:createAPIKey",
+        "control:updateAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/api_key_policy_test.go#TestCreateAPIKeyRejectsInvalidExtendedPolicy",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:createAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/api_key_policy_test.go#TestRevalidateCanonicalGatewayRequestUsesCurrentCredentialAndPolicy",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:disableAPIKey",
+        "control:updateAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/api_key_rotation_test.go#TestAPIKeyRotationCreatesOneReplacementUnderConcurrency",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:rotateAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/application_service_test.go#TestApplicationRejectsNegativeConcurrencyLimit",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:createApplication"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/application_service_test.go#TestPlatformCredentialRequiresApplicationPrincipalAndSnapshotsGatewayEvidence",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createApplication"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/application_service_test.go#TestPlatformCredentialRequiresApplicationPrincipalAndSnapshotsGatewayEvidence",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:updateAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/application_service_test.go#TestPlatformDomainDoesNotCreateWorkspaceUsers",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createApplication"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/application_routes_test.go#TestApplicationEndpointsPersistLifecycleAndRejectInvalidUpdates",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getApplications",
+        "control:updateApplication"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/application_routes_test.go#TestApplicationEndpointsPersistLifecycleAndRejectInvalidUpdates",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:updateApplication"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/portal_isolation_test.go#TestPortalWorkspaceIsolatesKeysUsageTracesAndMutationsByOwner",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:disablePortalAPIKey",
+        "control:rotatePortalAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/portal_service_test.go#TestPortalKeyManagementRequiresKeyManagerRole",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:createPortalAPIKey",
+        "control:disablePortalAPIKey",
+        "control:rotatePortalAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/portal_service_test.go#TestPortalAPIKeyCreationRejectsReadOnlyPrincipal",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:createPortalAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/registration_test.go#TestAuthenticationTokensAreConsumedAtomically",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "auth:forgotPassword",
+        "auth:resetPassword",
+        "auth:verifyEmail"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/registration_test.go#TestConcurrentAliasRegistrationCreatesOneAccount",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "auth:register"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/registration_test.go#TestInitialEmailVerificationStartsResendCooldown",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "auth:resendVerification"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/registration_test.go#TestWorkspaceRegistrationValidatesEmailAndBcryptLimit",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "auth:register"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/service_test.go#TestCreateAPIKeyReturnsSecretOnceAndStoresHash",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:createAPIKey",
+        "control:getAPIKeys"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAPIKeyPolicyExplanationEndpoint",
+      "proofs": [
+        "success",
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:getAPIKeyPolicyExplanation"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestCreateAPIKeyEndpoint",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/api_key_rotation_routes_test.go#TestAdminAPIKeyRotationAcceptsGracePeriod",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:rotateAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/api_key_rotation_routes_test.go#TestAdminAPIKeyRotationRejectsInvalidGracePeriodWithoutMutation",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:rotateAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createDepartment",
+        "control:getDepartments",
+        "control:updateDepartment"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:createDepartment",
+        "control:updateDepartment"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createRoleBinding",
+        "control:createWorkspaceUser",
+        "control:deleteRoleBinding",
+        "control:getRoleBindings",
+        "control:getWorkspaceUsers",
+        "control:updateWorkspaceUser"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:createRoleBinding",
+        "control:createWorkspaceUser",
+        "control:deleteRoleBinding",
+        "control:getRoleBindings"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createOrganizationGroup",
+        "control:deleteOrganizationGroup",
+        "control:getOrganizationGroups",
+        "control:updateOrganizationGroup"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:createOrganizationGroup",
+        "control:deleteOrganizationGroup",
+        "control:updateOrganizationGroup"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/identity_routes_test.go#TestAdminIdentityCollectionsRequirePermission",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:getOrganizationGroups",
+        "control:getRoleBindings"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/identity_routes_test.go#TestAdminUserDepartmentAssignmentValidationAndSessionRevocation",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:createWorkspaceUser",
+        "control:updateWorkspaceUser"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/portal_routes_test.go#TestPortalForeignAPIKeyUsesNotFoundSemantics",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:disablePortalAPIKey",
+        "control:rotatePortalAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/portal_routes_test.go#TestPortalWorkspaceAndAPIKeyRoutes",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createPortalAPIKey",
+        "control:disablePortalAPIKey",
+        "control:getPortalWorkspace",
+        "control:rotatePortalAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens",
+      "proofs": [
+        "success",
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "auth:forgotPassword",
+        "auth:resendVerification",
+        "auth:resetPassword",
+        "auth:verifyEmail"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "auth:forgotPassword",
+        "auth:register",
+        "auth:resendVerification",
+        "auth:verifyEmail"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "auth:register",
+        "auth:resetPassword",
+        "auth:verifyEmail"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/public_auth_routes_test.go#TestRegistrationRepositoryFailureIsSanitizedServerError",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "auth:register"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/rbac_test.go#TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:disableAPIKey",
+        "control:getAPIKeys",
+        "control:rotateAPIKey"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/api_token_service_test.go#TestPluginAPITokenIsHashedScopedAndRevocable",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "plugins:createPluginAPIToken",
+        "plugins:getPluginAPITokens",
+        "plugins:revokePluginAPIToken"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/api_token_service_test.go#TestPluginAPITokenRequiresPluginBindingForActions",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:createPluginAPIToken"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/artifact_sink_s3_test.go#TestArtifactSinkDestinationValidation",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:upsertArtifactSinkDestination"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/artifact_sink_s3_test.go#TestArtifactSinkDestinationsSortAndProtectSecrets",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:getArtifactSinkDestinations",
+        "plugins:upsertArtifactSinkDestination"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceBootstrapOnlySyncDownloadAndActivateLicense",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:activateOfficialLicense"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageRejectsChecksumMismatch",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:downloadPluginPackage"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageVerifiesAndCaches",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:downloadPluginPackage",
+        "plugins:installPluginPackage",
+        "plugins:uninstallPluginPackage"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceImportLicenseRejectsTamperedEnvelope",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:importOfficialLicense"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceImportLicenseUnlocksPaidPackageDownload",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:importOfficialLicense"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceImportOfflinePackageRejectsChecksumMismatch",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:importPluginPackage"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceImportOfflinePackageVerifiesAndCaches",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:importPluginPackage",
+        "plugins:installPluginPackage"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceInstallPackageRequiresCachedPackage",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:installPluginPackage"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceRedeemLicenseRejectsDifferentInstance",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:redeemOfficialLicense"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceRedeemLicenseUsesStableIdempotencyAndInstanceBinding",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:redeemOfficialLicense"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogBlocksRevokedAdvisoryVersion",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "plugins:downloadPluginPackage",
+        "plugins:installPluginPackage",
+        "plugins:syncOfficialCatalog"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogRejectsTamperedPayload",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:syncOfficialCatalog"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogVerifiesCachesAndMapsPlugins",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "plugins:getOfficialCatalogStatus",
+        "plugins:syncOfficialCatalog"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportAppliesRevocationsAndFallsBackToUsableCache",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "plugins:getOfficialFeedStatuses",
+        "plugins:importOfficialFeed"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportDecryptsAndEncryptsLocalCache",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:getOfficialFeedClientInfo",
+        "plugins:importOfficialFeed"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportRejectsWrongBindingAndEntitlement",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:importOfficialFeed"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/feed_service_test.go#TestOfficialFeedSyncAppliesSignedRevocationBeforeFailedDownload",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:syncOfficialFeed"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/feed_service_test.go#TestOfficialFeedSyncUsesSignedMetadataAndShortLivedDownloadGrant",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:getOfficialFeedSyncRuns",
+        "plugins:syncOfficialFeed"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/package_installation_test.go#TestInstallPackageRollsBackActiveDirectoryWhenRepositoryWriteFails",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "plugins:installPluginPackage"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/service_test.go#TestServiceCatalogIncludesEnterprisePlugins",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "plugins:getPluginCatalog"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/service_test.go#TestServiceFreePluginEnableDisableLifecycle",
+      "proofs": [
+		"success",
+		"boundary"
+      ],
+      "operations": [
+        "plugins:disablePlugin",
+        "plugins:enablePlugin"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/service_test.go#TestServiceRejectsConfiguringLockedPaidPlugin",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:updatePluginConfig"
+      ]
+    },
+    {
+      "reference": "backend/internal/plugins/service_test.go#TestServiceRejectsDisablingCorePlugin",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:disablePlugin"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:deleteArtifactSinkDestination",
+        "plugins:getArtifactSinkDestinations",
+        "plugins:upsertArtifactSinkDestination"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationRBACAndInvalidPayloads",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:deleteArtifactSinkDestination",
+        "plugins:upsertArtifactSinkDestination"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminOfficialFeedSyncRecordsDisabledAttempt",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:syncOfficialFeed"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminOfficialFeedSyncRecordsDisabledAttempt",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+		"plugins:getOfficialFeedStatuses",
+        "plugins:getOfficialFeedSyncRuns"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginAPITokenLifecycleAuditsAndRevokesAccess",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "plugins:createPluginAPIToken",
+        "plugins:getPluginAPITokens",
+        "plugins:revokePluginAPIToken"
+      ]
+    },
+	{
+	  "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginAPITokenLifecycleAuditsAndRevokesAccess",
+	  "proofs": [
+		"negative"
+	  ],
+	  "operations": [
+		"plugins:revokePluginAPIToken"
+	  ]
+	},
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginConfigEndpointsAuditAndMaskSecrets",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:getPluginConfig",
+        "plugins:updatePluginConfig"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginDeliveriesEndpoint",
+      "proofs": [
+		"success",
+		"boundary"
+      ],
+      "operations": [
+        "plugins:getPluginDeliveries"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "plugins:getOfficialLicenseStatus",
+        "plugins:importOfficialLicense"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "plugins:downloadPluginPackage",
+		"plugins:getPluginFrontendAsset",
+		"plugins:getPluginWorkbench",
+		"plugins:getSidecarRuntimeStatus",
+        "plugins:installPluginPackage",
+        "plugins:syncOfficialCatalog",
+        "plugins:uninstallPluginPackage"
+      ]
+    },
+	{
+	  "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint",
+	  "proofs": [
+		"negative",
+		"boundary"
+	  ],
+	  "operations": [
+		"plugins:getPluginFrontendAsset",
+		"plugins:getPluginWorkbench",
+		"plugins:getSidecarRuntimeStatus",
+		"plugins:uninstallPluginPackage"
+	  ]
+	},
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginsCatalogEndpoint",
+      "proofs": [
+		"success",
+		"boundary"
+      ],
+      "operations": [
+		"plugins:getOfficialCatalogStatus",
+		"plugins:getPluginCatalog"
+      ]
+    },
+	{
+	  "reference": "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication",
+	  "proofs": [
+		"negative"
+	  ],
+	  "operations": [
+		"plugins:activateOfficialLicense",
+		"plugins:getArtifactSinkDestinations",
+		"plugins:getOfficialCatalogStatus",
+		"plugins:getOfficialFeedClientInfo",
+		"plugins:getOfficialFeedStatuses",
+		"plugins:getOfficialFeedSyncRuns",
+		"plugins:getOfficialLicenseStatus",
+		"plugins:getPluginAPITokens",
+		"plugins:getPluginCatalog",
+		"plugins:getPluginConfig",
+		"plugins:getPluginDeliveries",
+		"plugins:getPluginFrontendAsset",
+		"plugins:getPluginWorkbench",
+		"plugins:getSidecarRuntimeStatus",
+		"plugins:revokePluginAPIToken",
+		"plugins:uninstallPluginPackage"
+	  ]
+	},
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginsEnableFreePluginAudits",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "plugins:enablePlugin"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/plugin_routes_test.go#TestAdminPluginsRejectLockedPaidPlugin",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:enablePlugin"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/rbac_test.go#TestAdminRBACProtectsPluginAndSystemWrites",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "plugins:syncOfficialCatalog"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/multi_cloud_routing_test.go#TestModelRouteRequiresProviderCompatibleUpstreamFormat",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createModelRoute"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_account_model_service_test.go#TestBulkCreateModelRoutesValidatesWholeBatchBeforeWrite",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:bulkCreateModelRoutes"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_account_model_service_test.go#TestCreateProviderAccountAllowsEmptyInventoryBeforeDiscovery",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createProviderAccount",
+        "control:discoverProviderAccountModels",
+        "control:getProviderAccountModelInventory"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_account_model_service_test.go#TestProviderAccountModelSyncAllowsDisablingEveryModel",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:syncProviderAccountModels"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_account_model_service_test.go#TestProviderAccountModelSyncTracksDiffAndAffectedRoutes",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:discoverProviderAccountModels",
+        "control:syncProviderAccountModels"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_account_model_service_test.go#TestProviderModelDiscoveryRejectsRedirectsBeforeForwardingSecret",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:discoverProviderAccountModels"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_account_runtime_settings_test.go#TestDeleteProviderAccountProtectsModelRoutes",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:deleteProviderAccount"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createPricingRule",
+        "control:publishPricingRule",
+        "control:updatePricingRuleDraft",
+        "control:validatePricingRule"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:publishPricingRule",
+        "control:updatePricingRuleDraft",
+        "control:validatePricingRule"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleRejectsUnsupportedCurrencyAndLegacySlots",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:createPricingRule"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:checkProviderAccount",
+        "control:getProviderAccountHealthChecks",
+        "control:getProviderAccountModelInventory",
+        "control:getProviderAccounts"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/service_test.go#TestClearProviderAccountCooldownMakesAccountImmediatelyEligible",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:clearProviderAccountCooldown"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/service_test.go#TestCreateProviderAccountRejectsLegacyAuthTypes",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:createProviderAccount"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/service_test.go#TestCreateProviderRequiresAbsoluteURL",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:createProvider"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/service_test.go#TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:createProviderAccount",
+        "control:getProviderAccounts",
+        "control:updateProviderAccount"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/service_test.go#TestProviderConnectionOwnsEndpointStateOnly",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:checkProvider",
+        "control:createProvider",
+        "control:getProviderHealthChecks"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:bulkCreateModelRoutes",
+        "control:createGatewayModel",
+        "control:createModelRoute",
+        "control:deleteGatewayModel",
+        "control:deleteModelRoute",
+        "control:getGatewayModels",
+        "control:getModelRoutes",
+        "control:updateGatewayModel",
+        "control:updateModelRoute"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createModelRoute",
+        "control:deleteGatewayModel",
+        "control:getGatewayModels",
+        "control:getModelRoutes"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminSupplyCollectionsExposeEmptyArraysAndFirstModelDefaults",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createGatewayModel",
+        "control:getGatewayModels",
+        "control:getProviderBillingSources",
+        "control:getProviderCacheCapabilities",
+        "control:getProviders"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteMissingResourceContracts",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:deleteGatewayModel",
+        "control:deleteModelRoute",
+        "control:updateGatewayModel",
+        "control:updateModelRoute"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountDeleteProtectsModelRoutes",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:deleteProviderAccount"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountMissingResourceContracts",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:checkProviderAccount",
+        "control:clearProviderAccountCooldown",
+        "control:deleteProviderAccount",
+        "control:updateProviderAccount"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountModelEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:discoverProviderAccountModels",
+        "control:getProviderAccountModelInventory",
+        "control:syncProviderAccountModels"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountModelEndpointsRejectMissingAccount",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:discoverProviderAccountModels",
+        "control:getProviderAccountModelInventory",
+        "control:syncProviderAccountModels"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:checkProviderAccount",
+        "control:createProvider",
+        "control:createProviderAccount",
+        "control:createRoutingGroup",
+        "control:deleteProviderAccount",
+        "control:getProviderAccountHealthChecks",
+        "control:getProviderAccounts",
+        "control:getRoutingGroups",
+        "control:updateProviderAccount",
+        "control:updateRoutingGroup"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupBoundaryContracts",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createRoutingGroup",
+        "control:updateRoutingGroup"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createRoutingPolicy",
+        "control:getRoutingPolicies",
+        "control:updateRoutingPolicy"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createRoutingPolicy",
+        "control:updateRoutingPolicy"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminGatewaySimulatorContracts",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:simulateGatewayRouting"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createGovernancePolicy",
+        "control:getGovernancePolicies",
+        "control:updateGovernancePolicy"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:createGovernancePolicy",
+        "control:updateGovernancePolicy"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestCheckProviderEndpoint",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:checkProvider",
+        "control:getProviderHealthChecks"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestCheckProviderEndpoint",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:checkProvider"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestProviderEndpointRejectsLegacyCredentialAndModelFields",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createProvider",
+        "control:getProviders",
+        "control:updateProvider"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/admin_routes_test.go#TestProviderEndpointRejectsLegacyCredentialAndModelFields",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createProvider",
+        "control:updateProvider"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:activatePricingRuleVersion",
+        "control:createPricingRule",
+        "control:disablePricingRule",
+        "control:getPricingEvaluation",
+        "control:getPricingRule",
+        "control:getPricingRules",
+        "control:publishPricingRule",
+        "control:simulatePricingRule",
+        "control:updatePricingRuleDraft",
+        "control:validatePricingRule"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:activatePricingRuleVersion",
+        "control:disablePricingRule",
+        "control:getPricingEvaluation",
+        "control:getPricingRule",
+        "control:getPricingRules",
+        "control:publishPricingRule",
+        "control:simulatePricingRule",
+        "control:updatePricingRuleDraft",
+        "control:validatePricingRule"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleRoutesOnlyAcceptEnterpriseUsageCostRules",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:createPricingRule"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_monitor_test.go#TestEffectivePricingDecisionMonitorPromotesAfterConsecutiveHealthyWindows",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:getEffectivePricingDecisionEvaluations"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_probe_test.go#TestRunProviderCacheProbeObservesReuseAndCapturesEvidence",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:runProviderCacheProbe"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_probe_test.go#TestRunProviderCacheProbeSkipsWithoutSpendingWhenDisabledOrBudgetExhausted",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:runProviderCacheProbe"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestCreateProcurementPriceRequiresExplicitCacheComponents",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:createProcurementPrice"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt",
+      "proofs": [
+        "success",
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:actOnEffectivePricingDecision"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionKeepsGatewayAndUpstreamModelEvidenceSeparate",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:evaluateEffectivePricingDecision",
+        "control:getEffectivePricingDecisions",
+        "control:getEffectivePricingReport"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingReportDistinguishesZeroCostFromMissingEvidence",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:getEffectivePricingReport"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingReportRanksRealCostInsteadOfQuotedMultiplier",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getEffectivePricingReport"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestEvaluateEffectivePricingDecisionRequiresUpstreamModel",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:evaluateEffectivePricingDecision"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestImportProviderBillingLineReconcilesUsageByUpstreamRequestID",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createProviderBillingLine"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestUpsertProviderCacheCapabilityProtectsObservedEvidence",
+      "proofs": [
+        "success",
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:updateProviderCacheCapability"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/effective_pricing_service_test.go#TestUpsertProviderCacheCapabilityRejectsReservedAffinityField",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:updateProviderCacheCapability"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_billing_adapter_test.go#TestInspectProviderBillingSourceUsesProcurementAccountSecretAndAudits",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:inspectProviderBillingSource"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServiceCASAndDisabledManualSync",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:syncProviderBillingSource",
+        "control:updateProviderBillingSource"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsAggregateEvidenceWithoutBalance",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getProviderBillingSourceEvidence",
+        "control:syncProviderBillingSource",
+        "control:updateProviderBillingSource"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsStableFailureCodeWithoutUpstreamBody",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:getProviderBillingSourceEvidence",
+        "control:syncProviderBillingSource"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:createProcurementPrice",
+        "control:createProviderBillingLine",
+        "control:getEffectivePricingReport",
+        "control:getProcurementPrices",
+        "control:getProviderCacheCapabilities",
+        "control:updateProviderCacheCapability"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:createProcurementPrice",
+        "control:createProviderBillingLine",
+        "control:getEffectivePricingReport"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingDecisionEvaluationsEndpointReturnsEmptyHistory",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:getEffectivePricingDecisionEvaluations"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingPolicyEndpointRejectsUnsafeValues",
+      "proofs": [
+        "success",
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "control:updateEffectivePricingPolicy"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "control:getProviderBillingSourceEvidence",
+        "control:getProviderBillingSources",
+        "control:inspectProviderBillingSource",
+        "control:syncProviderBillingSource",
+        "control:updateProviderBillingSource"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "control:getProviderBillingSourceEvidence",
+        "control:inspectProviderBillingSource",
+        "control:updateProviderBillingSource"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/effective_pricing_routes_test.go#TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfirmation",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "control:getProviderCacheProbeRuns",
+        "control:runProviderCacheProbe"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "control:activatePricingRuleVersion",
+        "control:actOnEffectivePricingDecision",
+        "control:bulkCreateModelRoutes",
+        "control:checkProvider",
+        "control:checkProviderAccount",
+        "control:clearProviderAccountCooldown",
+        "control:createGatewayModel",
+        "control:createModelRoute",
+        "control:createPricingRule",
+        "control:createProcurementPrice",
+        "control:createProvider",
+        "control:createProviderAccount",
+        "control:createProviderBillingLine",
+        "control:createRoutingGroup",
+        "control:createRoutingPolicy",
+        "control:deleteGatewayModel",
+        "control:deleteModelRoute",
+        "control:deleteProviderAccount",
+        "control:disablePricingRule",
+        "control:discoverProviderAccountModels",
+        "control:evaluateEffectivePricingDecision",
+        "control:getEffectivePricingDecisionEvaluations",
+        "control:getEffectivePricingDecisions",
+        "control:getEffectivePricingReport",
+        "control:getGatewayModels",
+        "control:getModelRoutes",
+        "control:getPricingEvaluation",
+        "control:getPricingRule",
+        "control:getPricingRules",
+        "control:getProcurementPrices",
+        "control:getProviderAccountHealthChecks",
+        "control:getProviderAccountModelInventory",
+        "control:getProviderAccounts",
+        "control:getProviderHealthChecks",
+        "control:getProviderBillingSourceEvidence",
+        "control:getProviderBillingSources",
+        "control:getProviderCacheCapabilities",
+        "control:getProviderCacheProbeRuns",
+        "control:getProviders",
+        "control:getRoutingGroups",
+        "control:getRoutingPolicies",
+        "control:inspectProviderBillingSource",
+        "control:publishPricingRule",
+        "control:runProviderCacheProbe",
+        "control:simulateGatewayRouting",
+        "control:simulatePricingRule",
+        "control:syncProviderAccountModels",
+        "control:syncProviderBillingSource",
+        "control:updateEffectivePricingPolicy",
+        "control:updateGatewayModel",
+        "control:updateModelRoute",
+        "control:updatePricingRuleDraft",
+        "control:updateProvider",
+        "control:updateProviderAccount",
+        "control:updateProviderBillingSource",
+        "control:updateProviderCacheCapability",
+        "control:updateRoutingGroup",
+        "control:updateRoutingPolicy",
+        "control:validatePricingRule"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/server_test.go#TestLoginAllowsConsoleSettingsAccess",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "settings:getAdminSettings"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/server_test.go#TestConsoleSettingsRequiresToken",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "settings:getAdminSettings"
+      ]
+    },
+	{
+	  "reference": "backend/internal/server/server_test.go#TestSetupEndpointCompletesEnterpriseInitialization",
+	  "proofs": [
+		"success"
+	  ],
+	  "operations": [
+		"settings:completeEnterpriseSetup"
+	  ]
+	},
+	{
+	  "reference": "backend/internal/server/server_test.go#TestSetupEndpointSerializesConcurrentRequests",
+	  "proofs": [
+		"boundary"
+	  ],
+	  "operations": [
+		"settings:completeEnterpriseSetup"
+	  ]
+	},
+	{
+	  "reference": "backend/internal/server/server_test.go#TestSetupEndpointReturnsSanitizedServerErrorWhenPersistenceFails",
+	  "proofs": [
+		"negative"
+	  ],
+	  "operations": [
+		"settings:completeEnterpriseSetup"
+	  ]
+	},
+	{
+	  "reference": "backend/internal/server/server_test.go#TestSetupEndpointRejectsInvalidOrganization",
+	  "proofs": [
+		"negative",
+		"boundary"
+	  ],
+	  "operations": [
+		"settings:completeEnterpriseSetup"
+	  ]
+	},
+	{
+	  "reference": "backend/internal/server/server_test.go#TestLegalDocumentEndpointReturnsPublishedDocumentAndRejectsUnknownSlug",
+	  "proofs": [
+		"success",
+		"boundary"
+	  ],
+	  "operations": [
+		"settings:getLegalDocument"
+	  ]
+	},
+    {
+      "reference": "backend/internal/settings/service_test.go#TestAuthenticationSettingsRoundTrip",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "settings:getAdminSettings",
+        "settings:updateAdminSettings"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/rbac_test.go#TestAdminRBACAllowsGlobalAuditorReadAndBlocksWrites",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "settings:updateAdminSettings"
+      ]
+    },
+    {
+      "reference": "backend/internal/controlplane/retention_service_test.go#TestCleanupRetainedDataDeletesExpiredRecordsButPreservesActiveAlertsAndAuditEvidence",
+      "proofs": [
+        "success",
+        "boundary"
+      ],
+      "operations": [
+        "settings:runRetentionCleanup"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/rbac_test.go#TestAdminRBACProtectsPluginAndSystemWrites",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "settings:runRetentionCleanup"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "settings:getEmailTemplate",
+        "settings:getEmailTemplateCatalog",
+        "settings:previewEmailTemplate",
+        "settings:restoreEmailTemplate",
+        "settings:updateEmailTemplate"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "settings:previewEmailTemplate",
+        "settings:updateEmailTemplate"
+      ]
+    },
+    {
+      "reference": "backend/internal/settings/service_test.go#TestEmailTemplateRestoreDoesNotOverwriteConcurrentSettings",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "settings:restoreEmailTemplate"
+      ]
+    },
+    {
+      "reference": "backend/internal/settings/service_test.go#TestEmailTemplateUpdateDoesNotOverwriteConcurrentSettings",
+      "proofs": [
+        "negative",
+        "boundary"
+      ],
+      "operations": [
+        "settings:updateEmailTemplate"
+      ]
+    },
+    {
+      "reference": "backend/internal/settings/service_test.go#TestEmailTemplatesListUpdateAndRestore",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "settings:getEmailTemplate",
+        "settings:getEmailTemplateCatalog",
+        "settings:restoreEmailTemplate"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/email_settings_test.go#TestSMTPRoutesDeliverPlainAndRenderedMessagesOverSTARTTLS",
+      "proofs": [
+        "success"
+      ],
+      "operations": [
+        "settings:testEmailTemplate",
+        "settings:testSMTP",
+        "settings:testSMTPConnection"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/email_settings_test.go#TestSMTPRoutesRejectInvalidRecipientsAndTemplates",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "settings:testEmailTemplate",
+        "settings:testSMTP"
+      ]
+    },
+    {
+      "reference": "backend/internal/server/email_settings_test.go#TestSMTPConnectionRouteUsesRequestConfiguration",
+      "proofs": [
+        "negative"
+      ],
+      "operations": [
+        "settings:testSMTPConnection"
+      ]
+    },
+    {
+      "reference": "backend/internal/auth/mailer_test.go#TestSMTPConnectionTestRequiresSTARTTLS",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "settings:testSMTPConnection"
+      ]
+    },
+    {
+      "reference": "backend/internal/auth/mailer_test.go#TestSMTPTLSConfigAppendsSSL_CERTFile",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "settings:testEmailTemplate",
+        "settings:testSMTP",
+        "settings:testSMTPConnection"
+      ]
+    },
+    {
+      "reference": "backend/internal/auth/mailer_test.go#TestSMTPMailerRejectsInjectedHeadersBeforeDial",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "settings:testEmailTemplate",
+        "settings:testSMTP"
+      ]
+    },
+    {
+      "reference": "backend/internal/system/archive_test.go#TestDiagnosticBundleIsRedacted",
+      "proofs": [
+        "boundary"
+      ],
+      "operations": [
+        "system:createDiagnosticBundle"
+      ]
+    }
+  ]
+}

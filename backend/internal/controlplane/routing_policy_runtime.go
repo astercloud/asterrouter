@@ -17,37 +17,66 @@ type routingPolicyCandidatePrice struct {
 	order     int
 }
 
+type routingPolicyPriceExclusion struct {
+	candidate GatewayProvider
+	reason    string
+}
+
+type routingPolicyPriceDecision struct {
+	candidates []GatewayProvider
+	exclusions []routingPolicyPriceExclusion
+}
+
 func (s *Service) applyRoutingPolicyPriceRules(ctx context.Context, policy *RoutingPolicy, protocol string, candidates []GatewayProvider) ([]GatewayProvider, error) {
+	decision, err := s.evaluateRoutingPolicyPriceRules(ctx, policy, protocol, candidates)
+	return decision.candidates, err
+}
+
+func (s *Service) evaluateRoutingPolicyPriceRules(ctx context.Context, policy *RoutingPolicy, protocol string, candidates []GatewayProvider) (routingPolicyPriceDecision, error) {
+	decision := routingPolicyPriceDecision{candidates: candidates, exclusions: []routingPolicyPriceExclusion{}}
 	if policy == nil || len(candidates) == 0 {
-		return candidates, nil
+		return decision, nil
 	}
 	strategy := policy.Strategy
 	priceRulesConfigured := strategy.AbsoluteMaxInputPer1M > 0 || strategy.AbsoluteMaxOutputPer1M > 0 || strategy.MaxPriceMultipleOfCheapest > 0 || oneOf(strategy.LowPricePoolMode, RoutingPolicyLowPriceAuto, RoutingPolicyLowPriceStrict, RoutingPolicyLowPricePercent)
 	if !priceRulesConfigured && strategy.Preset != RoutingPolicyPresetCost {
-		return candidates, nil
+		return decision, nil
 	}
 	prices, err := s.repo.ListProcurementPrices(ctx)
 	if err != nil {
-		return nil, err
+		return routingPolicyPriceDecision{}, err
 	}
 	now := s.nowUTC()
 	activePrices := activeRoutingPrices(prices, protocol, now)
 	if len(activePrices) == 0 {
-		return candidates, nil
+		return decision, nil
+	}
+	comparablePriceByBatch := make(map[int]bool)
+	for _, candidate := range candidates {
+		if _, found := activePrices[routingPriceKey(candidate.AccountID, candidate.UpstreamModel)]; found {
+			comparablePriceByBatch[candidate.PolicyBatchOrder] = true
+		}
+	}
+	if len(comparablePriceByBatch) == 0 {
+		return decision, nil
 	}
 	priced := make([]routingPolicyCandidatePrice, 0, len(candidates))
 	for index, candidate := range candidates {
 		price, found := activePrices[routingPriceKey(candidate.AccountID, candidate.UpstreamModel)]
 		if !found {
-			if !priceRulesConfigured {
+			if !priceRulesConfigured || !comparablePriceByBatch[candidate.PolicyBatchOrder] {
 				priced = append(priced, routingPolicyCandidatePrice{candidate: candidate, order: index})
+			} else {
+				decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate, reason: "routing_policy_price_fact_missing"})
 			}
 			continue
 		}
 		if strategy.AbsoluteMaxInputPer1M > 0 && price.UncachedInputMicrosPer1MTokens > dollarsToMicros(strategy.AbsoluteMaxInputPer1M) {
+			decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate, reason: "routing_policy_input_price_exceeded"})
 			continue
 		}
 		if strategy.AbsoluteMaxOutputPer1M > 0 && price.OutputMicrosPer1MTokens > dollarsToMicros(strategy.AbsoluteMaxOutputPer1M) {
+			decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate, reason: "routing_policy_output_price_exceeded"})
 			continue
 		}
 		priced = append(priced, routingPolicyCandidatePrice{
@@ -58,26 +87,37 @@ func (s *Service) applyRoutingPolicyPriceRules(ctx context.Context, policy *Rout
 		})
 	}
 	if len(priced) == 0 {
-		return nil, nil
+		decision.candidates = nil
+		return decision, nil
 	}
-	cheapest := int64(0)
+	cheapestByBatch := make(map[int]int64)
 	for _, candidate := range priced {
-		if candidate.priced && (cheapest == 0 || candidate.price < cheapest) {
-			cheapest = candidate.price
+		batch := candidate.candidate.PolicyBatchOrder
+		current, found := cheapestByBatch[batch]
+		if candidate.priced && (!found || candidate.price < current) {
+			cheapestByBatch[batch] = candidate.price
 		}
 	}
-	if strategy.MaxPriceMultipleOfCheapest > 0 && cheapest > 0 {
+	if strategy.MaxPriceMultipleOfCheapest > 0 {
 		filtered := priced[:0]
-		limit := float64(cheapest) * strategy.MaxPriceMultipleOfCheapest
 		for _, candidate := range priced {
-			if candidate.priced && float64(candidate.price) <= limit {
+			if !candidate.priced {
 				filtered = append(filtered, candidate)
+				continue
+			}
+			cheapest, found := cheapestByBatch[candidate.candidate.PolicyBatchOrder]
+			limit := float64(cheapest) * strategy.MaxPriceMultipleOfCheapest
+			if candidate.priced && found && float64(candidate.price) <= limit {
+				filtered = append(filtered, candidate)
+			} else {
+				decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate.candidate, reason: "routing_policy_relative_price_exceeded"})
 			}
 		}
 		priced = filtered
 	}
 	if len(priced) == 0 {
-		return nil, nil
+		decision.candidates = nil
+		return decision, nil
 	}
 	sort.SliceStable(priced, func(i, j int) bool {
 		if priced[i].candidate.PolicyBatchOrder != priced[j].candidate.PolicyBatchOrder {
@@ -92,18 +132,35 @@ func (s *Service) applyRoutingPolicyPriceRules(ctx context.Context, policy *Rout
 		return false
 	})
 	if oneOf(strategy.LowPricePoolMode, RoutingPolicyLowPriceAuto, RoutingPolicyLowPriceStrict, RoutingPolicyLowPricePercent) {
+		beforePool := append([]routingPolicyCandidatePrice(nil), priced...)
 		priced = lowPriceCandidatePool(priced, strategy)
+		retained := make(map[string]struct{}, len(priced))
+		for _, candidate := range priced {
+			retained[routingPolicyPriceCandidateKey(candidate.candidate)] = struct{}{}
+		}
+		for _, candidate := range beforePool {
+			if _, found := retained[routingPolicyPriceCandidateKey(candidate.candidate)]; !found {
+				decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate.candidate, reason: "routing_policy_low_price_pool_excluded"})
+			}
+		}
 	}
 	if strategy.Preset != RoutingPolicyPresetCost {
 		sort.SliceStable(priced, func(i, j int) bool {
 			return priced[i].order < priced[j].order
 		})
 	}
-	out := make([]GatewayProvider, 0, len(priced))
+	decision.candidates = make([]GatewayProvider, 0, len(priced))
 	for _, candidate := range priced {
-		out = append(out, candidate.candidate)
+		decision.candidates = append(decision.candidates, candidate.candidate)
 	}
-	return out, nil
+	return decision, nil
+}
+
+func routingPolicyPriceCandidateKey(candidate GatewayProvider) string {
+	if candidate.RouteID != "" {
+		return candidate.RouteID
+	}
+	return routingPriceKey(candidate.AccountID, candidate.UpstreamModel)
 }
 
 func activeRoutingPrices(prices []ProcurementPrice, protocol string, now time.Time) map[string]ProcurementPrice {
@@ -150,6 +207,17 @@ func lowPriceCandidatePool(candidates []routingPolicyCandidatePrice, strategy Ro
 	out := make([]routingPolicyCandidatePrice, 0, len(candidates))
 	for _, batch := range batchOrder {
 		items := byBatch[batch]
+		hasPrice := false
+		for _, item := range items {
+			if item.priced {
+				hasPrice = true
+				break
+			}
+		}
+		if !hasPrice {
+			out = append(out, items...)
+			continue
+		}
 		keep := 1
 		if oneOf(strategy.LowPricePoolMode, RoutingPolicyLowPriceAuto, RoutingPolicyLowPricePercent) {
 			keep = int(math.Ceil(float64(len(items)) * float64(strategy.LowPricePoolPercent) / 100))

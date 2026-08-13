@@ -77,6 +77,7 @@ jobs:
           --health-retries 20
     env:
       ASTERROUTER_SERVER_STORAGE_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_nightly_e2e?sslmode=disable
+      ASTER_E2E_ALLOW_DESTRUCTIVE_RESTORE: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -96,13 +97,34 @@ jobs:
         run: npx playwright install --with-deps chromium firefox webkit
       - name: Frontend unit and component tests
         working-directory: frontend
-        run: npx vitest run --reporter=default --reporter=junit --outputFile.junit=test-results/vitest-junit.xml
-      - name: Full browser suite
+        run: npx vitest run --reporter=default --reporter=junit --outputFile.junit=unit-test-results/vitest-junit.xml
+      - name: Check E2E coverage contract
+        working-directory: frontend
+        run: npm run check:e2e-coverage
+      - name: Create isolated nightly first-install database
+        env:
+          PGPASSWORD: asterrouter
+        run: >-
+          psql --host=127.0.0.1 --username=asterrouter --dbname=postgres
+          --command='CREATE DATABASE asterrouter_nightly_e2e_setup_test'
+      - name: Nightly first-install setup browser journey
+        env:
+          ASTER_SETUP_JOURNEY_DIR: ${{ runner.temp }}/asterrouter-nightly-setup-journey
+          ASTER_SETUP_JOURNEY_DATABASE_URL: postgres://asterrouter:asterrouter@127.0.0.1:5432/asterrouter_nightly_e2e_setup_test?sslmode=disable
+        run: bash scripts/test-setup-browser-journey.sh
+      - name: Nightly browser gate
         working-directory: frontend
         env:
           ASTER_E2E_ALL_BROWSERS: '1'
           ASTER_E2E_RETRIES: '0'
-        run: npm run test:e2e
+          ASTER_E2E_OIDC_ENABLED: '1'
+        run: npm run test:e2e:nightly
+      - name: System update lifecycle browser journey
+        env:
+          ASTER_SYSTEM_UPDATE_E2E_DIR: ${{ runner.temp }}/asterrouter-system-update-lifecycle
+        run: |
+          bash scripts/test-system-update-lifecycle.sh
+          grep -Fxq 'system_update_lifecycle=passed' "${{ runner.temp }}/asterrouter-system-update-lifecycle/report.txt"
       - name: Upload browser evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -111,6 +133,22 @@ jobs:
           path: |
             frontend/playwright-report
             frontend/test-results
+            ${{ runner.temp }}/asterrouter-nightly-setup-journey
+          if-no-files-found: ignore
+
+      - name: Upload system update lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-system-update-lifecycle
+          path: |
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/report.txt
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/generations.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/supervisor.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/runtime.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/postgres.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/official.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/playwright
           if-no-files-found: ignore
 
       - name: Upload frontend test results
@@ -118,7 +156,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nightly-frontend-test-results
-          path: frontend/test-results
+          path: |
+            frontend/test-results
+            frontend/unit-test-results
           if-no-files-found: ignore
 
   test-health:

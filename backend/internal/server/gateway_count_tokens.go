@@ -55,10 +55,7 @@ func handleGatewayCountTokensRequest(c *gin.Context, control *controlplane.Servi
 		writeGatewayProtocolError(c, request.Protocol, http.StatusBadRequest, "unsupported_feature", err.Error())
 		return
 	}
-	affinity := controlplane.GatewayAffinityInput{
-		ApplicationID: canonicalAuth.ApplicationID, PrincipalID: canonicalAuth.PrincipalID, CredentialID: canonicalAuth.CredentialID,
-		Model: request.Model, Protocol: string(request.Protocol), RouteGroup: plan.RouteGroup, StickyKey: request.StickyKey, PolicyVersion: canonicalAuth.PolicyVersion,
-	}
+	affinity := gatewayAffinityInput(canonicalAuth, request, plan)
 	cohortKey := control.GatewayEffectivePricingCohortKey(affinity)
 	candidates := control.PreferGatewayCandidatesWithAffinity(c.Request.Context(), affinity, control.OrderGatewayCandidatesByEffectivePricing(c.Request.Context(), request.Model, string(request.Protocol), cohortKey, plan.Candidates))
 	response, provider, release, attempts, err := attemptGatewayCountTokensCandidates(c, control, candidates, request)

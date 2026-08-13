@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(tr -d '\r\n' < "${ROOT_DIR}/backend/cmd/asterrouter/VERSION")"
 
-if [ -f "${ROOT_DIR}/.env" ]; then
+if [ "${ASTER_DEV_SKIP_ENV_FILE:-0}" != "1" ] && [ -f "${ROOT_DIR}/.env" ]; then
   set -a
   # shellcheck disable=SC1091
   . "${ROOT_DIR}/.env"
@@ -162,6 +162,10 @@ fi
 
 (
   cd "${ROOT_DIR}/backend"
+  if [ -n "${ASTER_DEV_BACKEND_SSL_CERT_FILE:-}" ]; then
+    export SSL_CERT_FILE="${ASTER_DEV_BACKEND_SSL_CERT_FILE}"
+    export AWS_CA_BUNDLE="${ASTER_DEV_BACKEND_SSL_CERT_FILE}"
+  fi
   ASTERROUTER_SERVER_HTTP_LISTEN="${ASTERROUTER_SERVER_HTTP_LISTEN:-${BACKEND_HOST}:${BACKEND_PORT}}" \
     ASTERROUTER_SERVER_HTTP_FRONTEND_DIR="${ASTERROUTER_SERVER_HTTP_FRONTEND_DIR:-../frontend/dist}" \
     ASTERROUTER_SERVER_BOOTSTRAP_DEMO_MODE="${DEMO_MODE}" \

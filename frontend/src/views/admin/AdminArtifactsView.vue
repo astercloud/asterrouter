@@ -175,6 +175,10 @@ function resetPreview() {
 }
 
 async function loadArtifactPreview(artifact: ArtifactAdminRecord, requestVersion: number) {
+  if (artifact.policy === 'customer_sink' && artifact.store_driver === 'none') {
+    previewError.value = t('artifactOps.previewUnavailable')
+    return
+  }
   if (!['ready', 'delivered'].includes(artifact.status) || artifact.size_bytes <= 0) {
     previewError.value = artifact.size_bytes <= 0
       ? t('artifactOps.previewEmpty')

@@ -1,7 +1,7 @@
 {
   "name": "asterrouter-frontend",
   "private": true,
-  "version": "0.23.1",
+  "version": "0.24.0",
   "type": "module",
   "overrides": {
     "nanoid": "^3.3.17"
@@ -11,13 +11,20 @@
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc --noEmit",
     "check:enterprise-surface": "node scripts/check-enterprise-surface.mjs",
+    "generate:e2e-capabilities": "node scripts/generate-e2e-capability-registry.mjs",
+    "check:e2e-coverage": "node --test ../scripts/dev-env.test.mjs ../scripts/fake-official.test.mjs ../scripts/fake-oidc.test.mjs ../scripts/fake-smtp.test.mjs ../scripts/fake-s3.test.mjs scripts/e2e-registry.test.mjs scripts/run-e2e-gate.test.mjs && vitest run src/testing/browser-errors.test.ts && node scripts/check-e2e-coverage.mjs && node scripts/check-e2e-completeness.mjs && node scripts/check-e2e-lifecycle-contract.mjs",
+    "check:e2e-completeness": "node scripts/check-e2e-completeness.mjs --strict",
     "check:public-doc-links": "node scripts/check-public-doc-links.mjs",
     "check:release-browser-contract": "node scripts/check-release-browser-contract.mjs",
     "check:workflow-pipefail": "node scripts/check-workflow-pipefail.mjs",
     "test:unit": "vitest run",
     "test:unit:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "test:e2e:smoke": "playwright test --grep @smoke",
+    "test:e2e:pr": "node scripts/run-e2e-gate.mjs pr --exclude-kind setup",
+    "test:e2e:full": "playwright test",
+    "test:e2e:nightly": "node scripts/run-e2e-gate.mjs nightly --exclude-kind setup --exclude-id @e2e-system-update-lifecycle-001",
+    "test:e2e:release": "node scripts/run-e2e-gate.mjs release --exclude-kind setup --exclude-id @e2e-system-update-lifecycle-001",
+    "test:e2e:smoke": "node scripts/run-e2e-gate.mjs pr --exclude-kind setup",
     "preview": "vite preview"
   },
   "dependencies": {

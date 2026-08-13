@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { captureBrowserErrors, envelope, expectNoHorizontalOverflow, loginDemo, loginTestPrincipal } from './fixtures'
 
-test('@artifact-sink manages customer-owned object storage without exposing credentials', async ({ page }, testInfo) => {
+test('@e2e-artifact-sink-001 manages customer-owned object storage without exposing credentials', async ({ page }, testInfo) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
   const pluginID = 'com.asterrouter.artifact.s3-compatible-sink'
@@ -15,7 +15,8 @@ test('@artifact-sink manages customer-owned object storage without exposing cred
       headers: { Authorization: `Bearer ${token}` }
     }))
   }
-  await page.goto('/console/plugins')
+  await page.goto('/console/system/plugins')
+  await expect(page).toHaveURL(/\/console\/system\/plugins$/)
   const mobileViewport = (page.viewportSize()?.width || 0) <= 640
   await page.getByRole('button', { name: 'Plugin registry', exact: true }).click()
   await page.getByRole('button', { name: /S3-compatible Artifact Delivery/ }).click()

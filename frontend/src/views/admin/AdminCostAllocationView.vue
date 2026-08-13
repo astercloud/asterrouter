@@ -184,18 +184,20 @@ onMounted(load)
       </article>
     </section>
 
-    <section class="settings-tabs" :aria-label="t('costAllocation.dimension')">
-      <button
-        v-for="item in dimensions"
-        :key="item"
-        type="button"
-        :class="{ active: dimension === item }"
-        @click="selectDimension(item)"
-      >
-        <PieChart :size="16" />
-        {{ dimensionLabel(item) }}
-      </button>
-    </section>
+    <div class="settings-tabs-scroll">
+      <section class="settings-tabs" :aria-label="t('costAllocation.dimension')">
+        <button
+          v-for="item in dimensions"
+          :key="item"
+          type="button"
+          :class="{ active: dimension === item }"
+          @click="selectDimension(item)"
+        >
+          <PieChart :size="16" />
+          {{ dimensionLabel(item) }}
+        </button>
+      </section>
+    </div>
 
     <section class="table-toolbar">
       <label class="search-box">

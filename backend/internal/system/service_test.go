@@ -11,6 +11,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -280,6 +283,110 @@ func TestPerformUpdateSourceBuildRequiresManualUpdate(t *testing.T) {
 	}
 	if result.ManualAction == "" || result.OperationID != "op1" {
 		t.Fatalf("manual result incomplete: %+v", result)
+	}
+}
+
+func TestPerformUpdateReturnsSuccessWhenAlreadyCurrent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(manifestFile{
+			Version: "0.1.0",
+			Assets: []Asset{{
+				OS: runtime.GOOS, Arch: runtime.GOARCH, URL: "https://example.test/asterrouter", SHA256: strings.Repeat("a", 64),
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	svc := NewService(Config{Version: "0.1.0", BuildType: "release", ManifestURL: srv.URL})
+	result, err := svc.PerformUpdate(context.Background(), "stable", "update-current")
+	if err != nil {
+		t.Fatalf("PerformUpdate(): %v", err)
+	}
+	if !result.AlreadyUpToDate || result.NeedRestart || result.OperationID != "update-current" || result.CurrentVersion != "0.1.0" || result.LatestVersion != "0.1.0" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestRestartExitsIsolatedProcessWhenEnabled(t *testing.T) {
+	if os.Getenv("ASTERROUTER_TEST_RESTART_CHILD") == "1" {
+		svc := NewService(Config{AllowRestart: true})
+		result, err := svc.Restart("restart-child", time.Millisecond)
+		if err != nil || result.OperationID != "restart-child" || result.Message == "" {
+			os.Exit(41)
+		}
+		time.Sleep(time.Second)
+		os.Exit(42)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRestartExitsIsolatedProcessWhenEnabled$")
+	cmd.Env = append(os.Environ(), "ASTERROUTER_TEST_RESTART_CHILD=1", "GORACE=atexit_sleep_ms=0")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("restart child failed: %v output=%s", err, output)
+	}
+}
+
+func TestRestartRejectsDisabledMaintenance(t *testing.T) {
+	result, err := NewService(Config{}).Restart("restart-disabled", time.Millisecond)
+	if !errors.Is(err, ErrRestartUnsupported) || result.OperationID != "restart-disabled" || result.ManualAction == "" {
+		t.Fatalf("Restart() result=%+v err=%v", result, err)
+	}
+}
+
+func TestRollbackReplacesIsolatedExecutableAndPreservesOperation(t *testing.T) {
+	if os.Getenv("ASTERROUTER_TEST_ROLLBACK_CHILD") == "1" {
+		result, err := NewService(Config{}).Rollback("rollback-child")
+		if err != nil || !result.NeedRestart || result.OperationID != "rollback-child" {
+			os.Exit(51)
+		}
+		return
+	}
+
+	tempDir := t.TempDir()
+	executable := filepath.Join(tempDir, "asterrouter-system-test")
+	raw, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, raw, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable+".backup", raw, 0750); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^TestRollbackReplacesIsolatedExecutableAndPreservesOperation$")
+	cmd.Env = append(os.Environ(), "ASTERROUTER_TEST_ROLLBACK_CHILD=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rollback child failed: %v output=%s", err, output)
+	}
+	if _, err := os.Stat(executable + ".backup"); !os.IsNotExist(err) {
+		t.Fatalf("rollback backup should be consumed, stat err=%v", err)
+	}
+	if _, err := os.Stat(executable); err != nil {
+		t.Fatalf("restored executable missing: %v", err)
+	}
+}
+
+func TestRollbackRejectsMissingBackup(t *testing.T) {
+	if os.Getenv("ASTERROUTER_TEST_ROLLBACK_MISSING_CHILD") != "1" {
+		tempDir := t.TempDir()
+		executable := filepath.Join(tempDir, "asterrouter-system-test")
+		raw, err := os.ReadFile(os.Args[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(executable, raw, 0750); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(executable, "-test.run=^TestRollbackRejectsMissingBackup$")
+		cmd.Env = append(os.Environ(), "ASTERROUTER_TEST_ROLLBACK_MISSING_CHILD=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("missing rollback child failed: %v output=%s", err, output)
+		}
+		return
+	}
+
+	if _, err := NewService(Config{}).Rollback("rollback-missing"); err == nil || !strings.Contains(err.Error(), "no rollback backup") {
+		os.Exit(61)
 	}
 }
 

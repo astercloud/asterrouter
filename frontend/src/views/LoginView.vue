@@ -255,7 +255,7 @@ function changeLocale(event: Event) {
 
         <div v-if="demoMode && authMode === 'login' && !mfaRequired" class="auth-divider"><span>{{ t('auth.accountSignIn') }}</span></div>
         <div v-if="actionMessage" class="notice success">{{ actionMessage }}</div>
-        <div v-if="auth.error" class="notice">{{ auth.error }}</div>
+        <div v-if="auth.error" class="notice" role="alert">{{ auth.error }}</div>
 
         <div v-if="authMode === 'verify'" class="auth-form">
           <button class="button secondary auth-submit" type="button" @click="goTo('/login')">{{ t('auth.backToLogin') }}</button>

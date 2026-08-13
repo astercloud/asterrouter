@@ -118,6 +118,14 @@ jobs:
           bash scripts/test-release-browser-journeys.sh "${{ steps.meta.outputs.version }}"
           grep -Fxq 'release_browser_journeys=passed' "${{ runner.temp }}/asterrouter-release-journeys/report.txt"
 
+      - name: Validate system update lifecycle
+        env:
+          ASTER_SYSTEM_UPDATE_E2E_DIR: ${{ runner.temp }}/asterrouter-system-update-lifecycle
+          ASTER_SYSTEM_UPDATE_E2E_OLD_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          bash scripts/test-system-update-lifecycle.sh
+          grep -Fxq 'system_update_lifecycle=passed' "${{ runner.temp }}/asterrouter-system-update-lifecycle/report.txt"
+
       - name: Validate Linux install, upgrade, and rollback
         env:
           ASTER_INSTALLER_TEST_DIR: ${{ runner.temp }}/asterrouter-installer-test
@@ -150,11 +158,29 @@ jobs:
           path: |
             ${{ runner.temp }}/asterrouter-release-journeys/report.txt
             ${{ runner.temp }}/asterrouter-release-journeys/fake-upstream.log
+            ${{ runner.temp }}/asterrouter-release-journeys/fake-official.log
+            ${{ runner.temp }}/asterrouter-release-journeys/fake-smtp.log
+            ${{ runner.temp }}/asterrouter-release-journeys/fake-s3.log
             ${{ runner.temp }}/asterrouter-release-journeys/setup/report.txt
             ${{ runner.temp }}/asterrouter-release-journeys/setup/runtime.log
             ${{ runner.temp }}/asterrouter-release-journeys/setup/playwright
             ${{ runner.temp }}/asterrouter-release-journeys/enterprise/runtime.log
             ${{ runner.temp }}/asterrouter-release-journeys/enterprise/playwright
+          if-no-files-found: ignore
+
+      - name: Upload system update lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: asterrouter-system-update-lifecycle
+          path: |
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/report.txt
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/generations.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/supervisor.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/runtime.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/postgres.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/official.log
+            ${{ runner.temp }}/asterrouter-system-update-lifecycle/playwright
           if-no-files-found: ignore
 
       - name: Write release notes

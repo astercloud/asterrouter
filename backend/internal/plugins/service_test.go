@@ -60,7 +60,7 @@ func findPluginForCatalogTest(plugins []Plugin, id string) *Plugin {
 	return nil
 }
 
-func TestServiceEnablesFreeCorePlugin(t *testing.T) {
+func TestServiceFreePluginEnableDisableLifecycle(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	if err := svc.EnsureSeedData(context.Background()); err != nil {
 		t.Fatalf("EnsureSeedData(): %v", err)
@@ -72,6 +72,21 @@ func TestServiceEnablesFreeCorePlugin(t *testing.T) {
 	}
 	if plugin.Status != StatusEnabled {
 		t.Fatalf("status = %q", plugin.Status)
+	}
+	plugin, err = svc.Enable(context.Background(), plugin.ID)
+	if err != nil || plugin.Status != StatusEnabled {
+		t.Fatalf("repeated Enable() = %+v, %v", plugin, err)
+	}
+	disabled, err := svc.Disable(context.Background(), plugin.ID)
+	if err != nil {
+		t.Fatalf("Disable(): %v", err)
+	}
+	if disabled.Status != StatusDisabled {
+		t.Fatalf("disabled status = %q", disabled.Status)
+	}
+	disabled, err = svc.Disable(context.Background(), plugin.ID)
+	if err != nil || disabled.Status != StatusDisabled {
+		t.Fatalf("repeated Disable() = %+v, %v", disabled, err)
 	}
 }
 

@@ -9,7 +9,7 @@ const expectedDemoMode = process.env.ASTER_E2E_EXPECT_DEMO_MODE === undefined
   : process.env.ASTER_E2E_EXPECT_DEMO_MODE === 'true'
 const managementEntry = { path: '/console/workbench', heading: 'Overview' }
 
-test('@smoke @enterprise-smoke backend health and public settings are ready', async ({ request }) => {
+test('@e2e-platform-001 backend health and public settings are ready', async ({ request }) => {
   const health = await request.get(`${backendURL}/health`)
   expect(health.status()).toBe(200)
   await expect(health.json()).resolves.toMatchObject({ data: { status: 'ok' } })
@@ -24,7 +24,7 @@ test('@smoke @enterprise-smoke backend health and public settings are ready', as
   expect(settingsBody).toMatchObject({ data: { demo_mode: expectedDemoMode, setup_completed: true } })
 })
 
-test('@smoke @enterprise-smoke anonymous protected navigation redirects to login', async ({ page }) => {
+test('@e2e-authz-001 anonymous protected navigation redirects to login', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   const protectedPath = `${managementEntry.path}?status=active`
   await page.goto(protectedPath)
@@ -42,18 +42,17 @@ test('@smoke @enterprise-smoke anonymous protected navigation redirects to login
   expect(errors).toEqual([])
 })
 
-test('@smoke @enterprise-smoke login persists and opens the enterprise management console', async ({ page }) => {
+test('@e2e-login-001 login persists and opens the enterprise management console', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
 
   await page.reload()
-  await page.waitForLoadState('networkidle')
   await expect(page).toHaveURL(new RegExp(`${managementEntry.path}$`))
   await expect(page.getByRole('heading', { level: 1, name: managementEntry.heading })).toBeVisible()
   expect(errors).toEqual([])
 })
 
-test('@enterprise-smoke application credential editor exposes enterprise ownership only', async ({ page }) => {
+test('@e2e-credential-boundary-001 application credential editor exposes enterprise ownership only', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
   await page.goto('/console/applications/credentials')
@@ -65,7 +64,7 @@ test('@enterprise-smoke application credential editor exposes enterprise ownersh
   expect(errors).toEqual([])
 })
 
-test('@smoke @enterprise-smoke application and policy lists remain usable', async ({ page }) => {
+test('@e2e-list-contract-001 application and policy lists remain usable', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
 
@@ -81,7 +80,7 @@ test('@smoke @enterprise-smoke application and policy lists remain usable', asyn
   expect(errors).toEqual([])
 })
 
-test('@smoke @enterprise-smoke locale, theme, and responsive layout remain usable', async ({ page }) => {
+test('@e2e-preferences-001 locale, theme, and responsive layout remain usable', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
 
