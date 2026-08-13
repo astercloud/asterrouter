@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { captureBrowserErrors } from './fixtures'
 
-test('@setup setup initializes one enterprise instance', async ({ page }, testInfo) => {
+test('@setup @e2e-setup-001 setup initializes one enterprise instance', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The persistent setup workflow runs once against an isolated empty runtime.')
   const adminPassword = process.env.ASTER_E2E_PASSWORD || 'setup-browser-test-password'
   const errors = captureBrowserErrors(page)

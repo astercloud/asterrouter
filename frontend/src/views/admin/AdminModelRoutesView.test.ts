@@ -198,4 +198,46 @@ describe('AdminModelRoutesView', () => {
     expect(wrapper.get('.model-support-matrix').text()).toContain('Unrouted')
     wrapper.unmount()
   })
+
+  it('submits only writable fields when updating a model route', async () => {
+    vi.mocked(control.getModelRoutes).mockResolvedValue([
+      {
+        id: 'route-existing',
+        gateway_model_id: 'gateway-gpt',
+        route_group: 'default',
+        provider_account_id: 'account-1',
+        upstream_model: 'gpt-latest',
+        upstream_format: 'openai_chat',
+        priority: 100,
+        weight: 100,
+        status: 'active',
+        disabled_reason: '',
+        created_at: '2026-08-12T00:00:00Z',
+        updated_at: '2026-08-12T00:00:00Z'
+      }
+    ])
+
+    const wrapper = mount(AdminModelRoutesView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.findAll('button[title="Edit"]')[0].trigger('click')
+    const form = wrapper.get('form.modal-card')
+    const inputs = form.findAll('input[type="number"]')
+    await inputs[0].setValue(20)
+    await inputs[1].setValue(250)
+    await form.find('select').setValue('gateway-gpt')
+    await form.trigger('submit')
+    await flushPromises()
+
+    expect(control.updateModelRoute).toHaveBeenCalledWith('route-existing', {
+      gateway_model_id: 'gateway-gpt',
+      route_group: 'default',
+      provider_account_id: 'account-1',
+      upstream_model: 'gpt-latest',
+      upstream_format: 'openai_chat',
+      priority: 20,
+      weight: 250,
+      status: 'active'
+    })
+    wrapper.unmount()
+  })
 })

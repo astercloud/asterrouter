@@ -1,0 +1,5363 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": "frontend Vue @/api imports and exported apiClient call graph",
+  "coveragePolicy": {
+    "success": "Required for every product HTTP operation.",
+    "negative": "Required for every command and every P0 query.",
+    "boundary": "Required for every command and every P0 query.",
+    "browser": "Required for every command and every P0 or P1 query."
+  },
+  "proofContract": {
+    "success": "The owner or product chain returns the intended result and persists applicable state.",
+    "negative": "Invalid identity, authorization, dependency, or state is rejected with the public error contract.",
+    "boundary": "At least one material edge such as empty, limit, idempotency, concurrency, pagination, or restart is verified.",
+    "browser": "A visible product interaction or projection reaches the public HTTP operation in a registered Playwright journey."
+  },
+  "capabilities": [
+    {
+      "id": "account:beginAccountIdentityBinding",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/oauth_state_cookie_test.go#TestExternalAccountBindingStartsBindStateToBrowserCookie"
+        ],
+        "negative": [
+          "backend/internal/server/auth_rate_limit_test.go#TestAccountBindingStartIsLimitedPerAccountAndClient"
+        ],
+        "boundary": [
+          "backend/internal/server/oauth_state_cookie_test.go#TestExternalAccountBindingStartsBindStateToBrowserCookie"
+        ],
+        "browser": [
+          "@e2e-account-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:beginTOTPSetup",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/account_routes_test.go#TestTOTPChangesImmediatelyRevokeExistingBearerTokens"
+        ],
+        "negative": [
+          "backend/internal/server/account_routes_test.go#TestTOTPChangesImmediatelyRevokeExistingBearerTokens"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/totp_service_test.go#TestTOTPSetupExpiresAndCanBeRestarted"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:changeAccountPassword",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/account_routes_test.go#TestPasswordChangeRevokesExistingBearerToken"
+        ],
+        "negative": [
+          "backend/internal/server/account_error_boundary_test.go#TestAccountRoutesPreservePublicValidationErrors"
+        ],
+        "boundary": [
+          "backend/internal/server/account_routes_test.go#TestPasswordChangeRevokesExistingBearerToken"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:confirmTOTP",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/account_routes_test.go#TestTOTPChangesImmediatelyRevokeExistingBearerTokens"
+        ],
+        "negative": [
+          "backend/internal/server/account_routes_test.go#TestTOTPManagementAttemptsAreLimitedPerAccountAcrossRoutes"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/totp_service_test.go#TestTOTPSetupExpiresAndCanBeRestarted"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:disableTOTP",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/account_routes_test.go#TestTOTPChangesImmediatelyRevokeExistingBearerTokens"
+        ],
+        "negative": [
+          "backend/internal/controlplane/account_service_test.go#TestRecoveryCodeCanDisableTOTP"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/account_service_test.go#TestRecoveryCodeCanDisableTOTP"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:generateTOTPRecoveryCodes",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/account_routes_test.go#TestTOTPChangesImmediatelyRevokeExistingBearerTokens"
+        ],
+        "negative": [
+          "backend/internal/server/account_routes_test.go#TestTOTPChangesImmediatelyRevokeExistingBearerTokens"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/totp_service_test.go#TestTOTPRecoveryCodeIsConsumedAtomically"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:getAccountProfile",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/account_routes_test.go#TestWorkspaceAccountProfileEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/account_error_boundary_test.go#TestAccountRoutesDoNotExposeRepositoryErrors"
+        ],
+        "boundary": [
+          "backend/internal/server/account_routes_test.go#TestLocalAdministratorAccountIsFullyMutable"
+        ],
+        "browser": [
+          "@e2e-a11y-session-001",
+          "@e2e-auth-001",
+          "@e2e-portal-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:revokeOtherAccountSessions",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/account_routes_test.go#TestRevokeOtherSessionsReturnsReplacementBearerToken"
+        ],
+        "negative": [
+          "backend/internal/server/account_error_boundary_test.go#TestAccountRoutesDoNotExposeRepositoryErrors"
+        ],
+        "boundary": [
+          "backend/internal/server/account_routes_test.go#TestRevokeOtherSessionsReturnsReplacementBearerToken"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:unbindAccountIdentity",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/oidc_provision_test.go#TestUnbindCurrentAuthIdentityProtectsLastLoginMethod"
+        ],
+        "negative": [
+          "backend/internal/controlplane/oidc_provision_test.go#TestUnbindCurrentAuthIdentityProtectsLastLoginMethod"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/oidc_provision_test.go#TestUnbindCurrentAuthIdentityProtectsLastLoginMethod",
+          "backend/internal/controlplane/oidc_provision_test.go#TestUnbindCurrentAuthIdentityWithPasswordDoesNotAffectOtherUsers"
+        ],
+        "browser": [
+          "@e2e-account-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "account:updateAccountProfile",
+      "owner": "account",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/AccountProfileView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/account_routes_test.go#TestWorkspaceAccountProfileEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/account_error_boundary_test.go#TestAccountRoutesPreservePublicValidationErrors"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/account_service_test.go#TestCurrentAccountProfileUpdateAndPasswordChange"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "auth:forgotPassword",
+      "owner": "auth",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/LoginView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens",
+          "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract"
+        ],
+        "negative": [
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/registration_test.go#TestAuthenticationTokensAreConsumedAtomically",
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "auth:register",
+      "owner": "auth",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/LoginView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract"
+        ],
+        "negative": [
+          "backend/internal/controlplane/registration_test.go#TestWorkspaceRegistrationValidatesEmailAndBcryptLimit",
+          "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract",
+          "backend/internal/server/public_auth_routes_test.go#TestRegistrationRepositoryFailureIsSanitizedServerError"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/registration_test.go#TestConcurrentAliasRegistrationCreatesOneAccount"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "auth:resendVerification",
+      "owner": "auth",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/LoginView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens",
+          "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract"
+        ],
+        "negative": [
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/registration_test.go#TestInitialEmailVerificationStartsResendCooldown",
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "auth:resetPassword",
+      "owner": "auth",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/LoginView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens"
+        ],
+        "negative": [
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens",
+          "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/registration_test.go#TestAuthenticationTokensAreConsumedAtomically",
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens"
+        ],
+        "browser": [
+          "@e2e-auth-002"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "auth:verifyEmail",
+      "owner": "auth",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/LoginView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens",
+          "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract"
+        ],
+        "negative": [
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens",
+          "backend/internal/server/public_auth_routes_test.go#TestPublicAuthenticationWorkflowSecurityContract"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/registration_test.go#TestAuthenticationTokensAreConsumedAtomically",
+          "backend/internal/server/public_auth_routes_test.go#TestAuthenticationEmailQueueRejectionRollsBackIssuedTokens"
+        ],
+        "browser": [
+          "@e2e-auth-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:acknowledgeAlert",
+      "owner": "alerts",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAlertsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints"
+        ],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:activatePricingRuleVersion",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:actOnEffectivePricingDecision",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt"
+        ],
+        "negative": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:bulkCreateModelRoutes",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminModelRoutesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestBulkCreateModelRoutesValidatesWholeBatchBeforeWrite",
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestBulkCreateModelRoutesValidatesWholeBatchBeforeWrite"
+        ],
+        "browser": [
+          "@e2e-model-inventory-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:cancelAIJob",
+      "owner": "jobs",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAIJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/ai_job_admin_routes_test.go#TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions"
+        ],
+        "negative": [
+          "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminAIJobHTTPFailureAndIdempotencyContracts"
+        ],
+        "boundary": [
+          "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminAIJobHTTPFailureAndIdempotencyContracts"
+        ],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:checkProvider",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProvidersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestProviderConnectionOwnsEndpointStateOnly",
+          "backend/internal/server/admin_routes_test.go#TestCheckProviderEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestProviderConnectionOwnsEndpointStateOnly",
+          "backend/internal/server/admin_routes_test.go#TestCheckProviderEndpoint"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:checkProviderAccount",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProviderAccountsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth",
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountMissingResourceContracts"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:clearProviderAccountCooldown",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProviderAccountsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestClearProviderAccountCooldownMakesAccountImmediatelyEligible"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestClearProviderAccountCooldownMakesAccountImmediatelyEligible",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountMissingResourceContracts"
+        ],
+        "browser": [
+          "@e2e-provider-cooldown-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createAPIKey",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/api_key_policy_test.go#TestCreateAPIKeyNormalizesPrincipalAndExtendedPolicy",
+          "backend/internal/controlplane/service_test.go#TestCreateAPIKeyReturnsSecretOnceAndStoresHash",
+          "backend/internal/server/admin_routes_test.go#TestCreateAPIKeyEndpoint"
+        ],
+        "negative": [
+          "backend/internal/controlplane/api_key_policy_test.go#TestCreateAPIKeyRejectsInvalidExtendedPolicy"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/api_key_policy_test.go#TestCreateAPIKeyNormalizesPrincipalAndExtendedPolicy",
+          "backend/internal/controlplane/service_test.go#TestCreateAPIKeyReturnsSecretOnceAndStoresHash"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createApplication",
+      "owner": "applications/credentials",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminOnboardingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/application_service_test.go#TestPlatformCredentialRequiresApplicationPrincipalAndSnapshotsGatewayEvidence"
+        ],
+        "negative": [
+          "backend/internal/controlplane/application_service_test.go#TestApplicationRejectsNegativeConcurrencyLimit"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/application_service_test.go#TestPlatformDomainDoesNotCreateWorkspaceUsers"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createDepartment",
+      "owner": "identity/rbac",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminDepartmentsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createExportJob",
+      "owner": "exports",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminExportJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle"
+        ],
+        "negative": [
+          "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle"
+        ],
+        "boundary": [
+          "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle"
+        ],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createGatewayModel",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminGatewayModelsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminSupplyCollectionsExposeEmptyArraysAndFirstModelDefaults"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createGovernancePolicy",
+      "owner": "controlplane",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPoliciesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createModelRoute",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminModelRoutesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/multi_cloud_routing_test.go#TestModelRouteRequiresProviderCompatibleUpstreamFormat",
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createOrganizationGroup",
+      "owner": "identity/rbac",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminOrganizationGroupsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "boundary": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createPortalAPIKey",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/account/AccountAccessConfig.vue",
+        "frontend/src/views/portal/PortalHomeView.vue",
+        "frontend/src/views/portal/PortalKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/portal_service_test.go#TestPortalKeyManagementRequiresKeyManagerRole",
+          "backend/internal/server/portal_routes_test.go#TestPortalWorkspaceAndAPIKeyRoutes"
+        ],
+        "negative": [
+          "backend/internal/controlplane/portal_service_test.go#TestPortalAPIKeyCreationRejectsReadOnlyPrincipal"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/portal_service_test.go#TestPortalKeyManagementRequiresKeyManagerRole"
+        ],
+        "browser": [
+          "@e2e-portal-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createPricingRule",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleRejectsUnsupportedCurrencyAndLegacySlots",
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleRoutesOnlyAcceptEnterpriseUsageCostRules",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleRoutesOnlyAcceptEnterpriseUsageCostRules"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createProcurementPrice",
+      "owner": "billing/pricing",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestCreateProcurementPriceRequiresExplicitCacheComponents",
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestCreateProcurementPriceRequiresExplicitCacheComponents",
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createProvider",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProvidersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestProviderConnectionOwnsEndpointStateOnly",
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints",
+          "backend/internal/server/admin_routes_test.go#TestProviderEndpointRejectsLegacyCredentialAndModelFields"
+        ],
+        "negative": [
+          "backend/internal/controlplane/service_test.go#TestCreateProviderRequiresAbsoluteURL",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestCreateProviderRequiresAbsoluteURL",
+          "backend/internal/controlplane/service_test.go#TestProviderConnectionOwnsEndpointStateOnly",
+          "backend/internal/server/admin_routes_test.go#TestProviderEndpointRejectsLegacyCredentialAndModelFields"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createProviderAccount",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProviderAccountsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts",
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/controlplane/service_test.go#TestCreateProviderAccountRejectsLegacyAuthTypes",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestCreateProviderAccountAllowsEmptyInventoryBeforeDiscovery",
+          "backend/internal/controlplane/service_test.go#TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts"
+        ],
+        "browser": [
+          "@e2e-model-account-001",
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createProviderBillingLine",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestImportProviderBillingLineReconcilesUsageByUpstreamRequestID",
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createRoleBinding",
+      "owner": "identity/rbac",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createRoutingGroup",
+      "owner": "gateway/routing",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminRoutingGroupsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupBoundaryContracts"
+        ],
+        "browser": [
+          "@e2e-routing-resources-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createRoutingPolicy",
+      "owner": "gateway/routing",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints"
+        ],
+        "browser": [
+          "@e2e-routing-policy-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:createWorkspaceUser",
+      "owner": "identity/rbac",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints",
+          "backend/internal/server/identity_routes_test.go#TestAdminUserDepartmentAssignmentValidationAndSessionRevocation"
+        ],
+        "boundary": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints",
+          "backend/internal/server/identity_routes_test.go#TestAdminUserDepartmentAssignmentValidationAndSessionRevocation"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:deleteGatewayModel",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminGatewayModelsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints",
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteMissingResourceContracts"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:deleteModelRoute",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminModelRoutesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteMissingResourceContracts"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:deleteOrganizationGroup",
+      "owner": "identity/rbac",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminOrganizationGroupsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "boundary": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:deleteProviderAccount",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProviderAccountsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountDeleteProtectsModelRoutes",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_account_runtime_settings_test.go#TestDeleteProviderAccountProtectsModelRoutes",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountMissingResourceContracts"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:deleteRoleBinding",
+      "owner": "identity/rbac",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:disableAPIKey",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/api_key_policy_test.go#TestRevalidateCanonicalGatewayRequestUsesCurrentCredentialAndPolicy"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/api_key_policy_test.go#TestRevalidateCanonicalGatewayRequestUsesCurrentCredentialAndPolicy",
+          "backend/internal/server/rbac_test.go#TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:disablePortalAPIKey",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/portal/PortalHomeView.vue",
+        "frontend/src/views/portal/PortalKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/portal_service_test.go#TestPortalKeyManagementRequiresKeyManagerRole",
+          "backend/internal/server/portal_routes_test.go#TestPortalWorkspaceAndAPIKeyRoutes"
+        ],
+        "negative": [
+          "backend/internal/controlplane/portal_isolation_test.go#TestPortalWorkspaceIsolatesKeysUsageTracesAndMutationsByOwner",
+          "backend/internal/server/portal_routes_test.go#TestPortalForeignAPIKeyUsesNotFoundSemantics"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/portal_isolation_test.go#TestPortalWorkspaceIsolatesKeysUsageTracesAndMutationsByOwner",
+          "backend/internal/controlplane/portal_service_test.go#TestPortalKeyManagementRequiresKeyManagerRole"
+        ],
+        "browser": [
+          "@e2e-portal-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:disablePricingRule",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:discoverProviderAccountModels",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/provider/ProviderAccountModelEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestProviderAccountModelSyncTracksDiffAndAffectedRoutes",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountModelEndpoints"
+        ],
+        "negative": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestProviderModelDiscoveryRejectsRedirectsBeforeForwardingSecret",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestCreateProviderAccountAllowsEmptyInventoryBeforeDiscovery",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountModelEndpointsRejectMissingAccount"
+        ],
+        "browser": [
+          "@e2e-model-account-001",
+          "@e2e-model-inventory-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:downloadExportJob",
+      "owner": "exports",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminExportJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle"
+        ],
+        "negative": [
+          "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle"
+        ],
+        "boundary": [
+          "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle"
+        ],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:evaluateEffectivePricingDecision",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionKeepsGatewayAndUpstreamModelEvidenceSeparate"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionKeepsGatewayAndUpstreamModelEvidenceSeparate",
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEvaluateEffectivePricingDecisionRequiresUpstreamModel"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:exportAuditLogsCSV",
+      "owner": "exports",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAuditView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters"
+        ],
+        "negative": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters"
+        ],
+        "browser": [
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:exportCostAllocationCSV",
+      "owner": "exports",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminCostAllocationView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters"
+        ],
+        "negative": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters"
+        ],
+        "browser": [
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:exportGatewayTracesCSV",
+      "owner": "exports",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminGatewayTracesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters"
+        ],
+        "negative": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters"
+        ],
+        "browser": [
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:exportUsageCSV",
+      "owner": "exports",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminUsageView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters"
+        ],
+        "negative": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/export_routes_test.go#TestAdminRecordExportEndpointsSupportQueryParameters"
+        ],
+        "browser": [
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAIJob",
+      "owner": "jobs",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAIJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/ai_job_admin_routes_test.go#TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-ai-job-reconciliation-001",
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAIJobRuntime",
+      "owner": "jobs",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAIJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/ai_job_admin_routes_test.go#TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAIJobs",
+      "owner": "jobs",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAIJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/ai_job_admin_routes_test.go#TestAdminAIJobEndpointsProvideRuntimeDetailAndSafeActions"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-ai-job-reconciliation-001",
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAIJobSummary",
+      "owner": "jobs",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAIJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminAIJobHTTPFailureAndIdempotencyContracts"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAlerts",
+      "owner": "alerts",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAlertsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-gateway-budget-001",
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAlertSummary",
+      "owner": "alerts",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAlertsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-gateway-budget-001",
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAPIKeyPolicyExplanation",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAPIKeyPolicyExplanationEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestAPIKeyPolicyExplanationEndpoint"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAPIKeyPolicyExplanationEndpoint"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAPIKeys",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestCreateAPIKeyReturnsSecretOnceAndStoresHash"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestCreateAPIKeyReturnsSecretOnceAndStoresHash",
+          "backend/internal/server/rbac_test.go#TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys"
+        ],
+        "browser": [
+          "@e2e-application-001",
+          "@e2e-credential-boundary-001",
+          "@e2e-gateway-budget-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getApplications",
+      "owner": "applications/credentials",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminOnboardingView.vue",
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/application_routes_test.go#TestApplicationEndpointsPersistLifecycleAndRejectInvalidUpdates"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-application-001",
+          "@e2e-identity-001",
+          "@e2e-list-contract-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getArtifact",
+      "owner": "artifacts",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminArtifactsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/artifact_admin_routes_test.go#TestAdminArtifactEndpointsReturnFilteredRedactedRecords"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-artifact-delivery-retry-001",
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getArtifactContent",
+      "owner": "artifacts",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminArtifactsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/artifact_admin_routes_test.go#TestAdminArtifactEndpointsReturnFilteredRedactedRecords"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getArtifactRuntimes",
+      "owner": "artifacts",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminArtifactsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/artifact_admin_routes_test.go#TestAdminArtifactEndpointsReturnFilteredRedactedRecords"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-artifact-delivery-retry-001",
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getArtifacts",
+      "owner": "artifacts",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminArtifactsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/artifact_admin_routes_test.go#TestAdminArtifactEndpointsReturnFilteredRedactedRecords"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-artifact-delivery-retry-001",
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getArtifactSummary",
+      "owner": "artifacts",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminArtifactsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/artifact_admin_routes_test.go#TestAdminArtifactEndpointsReturnFilteredRedactedRecords"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAuditLogs",
+      "owner": "operations/observability",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAuditView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRecordEndpointsSupportQueryParameters"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-ai-job-reconciliation-001",
+          "@e2e-application-001",
+          "@e2e-artifact-delivery-retry-001",
+          "@e2e-identity-001",
+          "@e2e-operations-001",
+          "@e2e-record-csv-exports-001",
+          "@e2e-system-diagnostic-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getAuditLogSummary",
+      "owner": "operations/observability",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAuditView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRecordEndpointsSupportQueryParameters"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-application-001",
+          "@e2e-identity-001",
+          "@e2e-operations-001",
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getCapacityRecommendations",
+      "owner": "operations/observability",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSupplyView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/supply_routes_test.go#TestSupplyRoutesRequireAuthenticationAndValidateWindow"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getCostAllocationReport",
+      "owner": "controlplane",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminCostAllocationView.vue",
+        "frontend/src/views/admin/AdminUsageView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRecordEndpointsSupportQueryParameters"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-gateway-001",
+          "@e2e-gateway-protocols-001",
+          "@e2e-operations-001",
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getDashboard",
+      "owner": "controlplane",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminDashboardView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminDashboardEndpoint"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-a11y-console-001",
+          "@e2e-a11y-session-001",
+          "@e2e-login-001",
+          "@e2e-preferences-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getDepartments",
+      "owner": "identity/rbac",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminDepartmentsView.vue",
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getEffectivePricingDecisionEvaluations",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_monitor_test.go#TestEffectivePricingDecisionMonitorPromotesAfterConsecutiveHealthyWindows",
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingDecisionEvaluationsEndpointReturnsEmptyHistory"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/effective_pricing_monitor_test.go#TestEffectivePricingDecisionMonitorPromotesAfterConsecutiveHealthyWindows",
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingDecisionEvaluationsEndpointReturnsEmptyHistory"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getEffectivePricingDecisions",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionKeepsGatewayAndUpstreamModelEvidenceSeparate"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionKeepsGatewayAndUpstreamModelEvidenceSeparate"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getEffectivePricingReport",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionKeepsGatewayAndUpstreamModelEvidenceSeparate",
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingReportRanksRealCostInsteadOfQuotedMultiplier",
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingDecisionKeepsGatewayAndUpstreamModelEvidenceSeparate",
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestEffectivePricingReportDistinguishesZeroCostFromMissingEvidence",
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getExportJobs",
+      "owner": "exports",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminExportJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/export_routes_test.go#TestAdminAsyncExportJobLifecycle"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getGatewayModels",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue",
+        "frontend/src/views/admin/AdminEffectivePricingView.vue",
+        "frontend/src/views/admin/AdminGatewayModelsView.vue",
+        "frontend/src/views/admin/AdminGatewaySimulatorView.vue",
+        "frontend/src/views/admin/AdminModelRoutesView.vue",
+        "frontend/src/views/admin/AdminPoliciesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints",
+          "backend/internal/server/admin_routes_test.go#TestAdminSupplyCollectionsExposeEmptyArraysAndFirstModelDefaults"
+        ],
+        "browser": [
+          "@e2e-application-001",
+          "@e2e-credential-boundary-001",
+          "@e2e-effective-pricing-001",
+          "@e2e-gateway-budget-001",
+          "@e2e-gateway-failover-001",
+          "@e2e-list-contract-001",
+          "@e2e-model-inventory-001",
+          "@e2e-model-supply-lifecycle-001",
+          "@e2e-routing-policy-001",
+          "@e2e-routing-resources-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getGatewayTraces",
+      "owner": "operations/observability",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue",
+        "frontend/src/views/admin/AdminGatewayTracesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRecordEndpointsSupportQueryParameters"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-application-001",
+          "@e2e-credential-boundary-001",
+          "@e2e-gateway-001",
+          "@e2e-gateway-budget-001",
+          "@e2e-gateway-failover-001",
+          "@e2e-gateway-protocols-001",
+          "@e2e-operations-001",
+          "@e2e-provider-cooldown-001",
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getGatewayTraceSummary",
+      "owner": "operations/observability",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminGatewayTracesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRecordEndpointsSupportQueryParameters"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-gateway-001",
+          "@e2e-gateway-failover-001",
+          "@e2e-gateway-protocols-001",
+          "@e2e-operations-001",
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getGovernancePolicies",
+      "owner": "controlplane",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue",
+        "frontend/src/views/admin/AdminPoliciesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-application-001",
+          "@e2e-credential-boundary-001",
+          "@e2e-gateway-budget-001",
+          "@e2e-list-contract-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getModelRoutes",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminModelRoutesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "browser": [
+          "@e2e-gateway-failover-001",
+          "@e2e-model-inventory-001",
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getOrganizationGroups",
+      "owner": "identity/rbac",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminOrganizationGroupsView.vue",
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityCollectionsRequirePermission"
+        ],
+        "boundary": [],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getPortalWorkspace",
+      "owner": "controlplane",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/components/account/AccountAccessConfig.vue",
+        "frontend/src/views/portal/PortalHomeView.vue",
+        "frontend/src/views/portal/PortalKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/portal_routes_test.go#TestPortalWorkspaceAndAPIKeyRoutes"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-portal-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getPricingEvaluation",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getPricingRule",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getPricingRules",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProcurementPrices",
+      "owner": "billing/pricing",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [],
+        "browser": [
+          "@e2e-effective-pricing-001",
+          "@e2e-routing-policy-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviderAccountHealthChecks",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProviderAccountsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth",
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth"
+        ],
+        "browser": [
+          "@e2e-model-account-001",
+          "@e2e-model-inventory-001",
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviderAccountModelInventory",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/components/provider/ProviderAccountModelEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountModelEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestCreateProviderAccountAllowsEmptyInventoryBeforeDiscovery",
+          "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountModelEndpointsRejectMissingAccount"
+        ],
+        "browser": [
+          "@e2e-model-inventory-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviderAccounts",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue",
+        "frontend/src/views/admin/AdminModelRoutesView.vue",
+        "frontend/src/views/admin/AdminProviderAccountsView.vue",
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth",
+          "backend/internal/controlplane/service_test.go#TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts",
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestCheckProviderAccountProbesModelsAndPersistsHealth",
+          "backend/internal/controlplane/service_test.go#TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001",
+          "@e2e-effective-pricing-002",
+          "@e2e-gateway-failover-001",
+          "@e2e-model-account-001",
+          "@e2e-model-inventory-001",
+          "@e2e-model-supply-lifecycle-001",
+          "@e2e-provider-cooldown-001",
+          "@e2e-routing-policy-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviderBillingSourceEvidence",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsAggregateEvidenceWithoutBalance",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines"
+        ],
+        "negative": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsStableFailureCodeWithoutUpstreamBody",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsStableFailureCodeWithoutUpstreamBody",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-002"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviderBillingSources",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminSupplyCollectionsExposeEmptyArraysAndFirstModelDefaults"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001",
+          "@e2e-effective-pricing-002"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviderCacheCapabilities",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminSupplyCollectionsExposeEmptyArraysAndFirstModelDefaults"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviderCacheProbeRuns",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfirmation"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfirmation"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviderHealthChecks",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProvidersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestProviderConnectionOwnsEndpointStateOnly",
+          "backend/internal/server/admin_routes_test.go#TestCheckProviderEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestProviderConnectionOwnsEndpointStateOnly"
+        ],
+        "browser": [
+          "@e2e-model-inventory-001",
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getProviders",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProviderAccountsView.vue",
+        "frontend/src/views/admin/AdminProvidersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestProviderEndpointRejectsLegacyCredentialAndModelFields"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminSupplyCollectionsExposeEmptyArraysAndFirstModelDefaults"
+        ],
+        "browser": [
+          "@e2e-model-account-001",
+          "@e2e-model-inventory-001",
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getRoleBindings",
+      "owner": "identity/rbac",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityCollectionsRequirePermission",
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getRoutingGroups",
+      "owner": "gateway/routing",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProviderAccountsView.vue",
+        "frontend/src/views/admin/AdminRoutingGroupsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [],
+        "browser": [
+          "@e2e-routing-resources-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getRoutingPolicies",
+      "owner": "gateway/routing",
+      "risk": "P1",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [],
+        "browser": [
+          "@e2e-routing-policy-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getSupplyUtilization",
+      "owner": "operations/observability",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSupplyView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/supply_routes_test.go#TestSupplyRoutesRequireAuthenticationAndValidateWindow"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getUsageReport",
+      "owner": "operations/observability",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue",
+        "frontend/src/views/admin/AdminUsageView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRecordEndpointsSupportQueryParameters"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-gateway-001",
+          "@e2e-gateway-protocols-001",
+          "@e2e-operations-001",
+          "@e2e-record-csv-exports-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:getWorkspaceUsers",
+      "owner": "identity/rbac",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue",
+        "frontend/src/views/admin/AdminOrganizationGroupsView.vue",
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "negative": [],
+        "boundary": [],
+        "browser": [
+          "@e2e-identity-001",
+          "@e2e-session-002"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:inspectProviderBillingSource",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/provider_billing_adapter_test.go#TestInspectProviderBillingSourceUsesProcurementAccountSecretAndAudits",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_billing_adapter_test.go#TestInspectProviderBillingSourceUsesProcurementAccountSecretAndAudits",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-002"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:publishPricingRule",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:resolveAlert",
+      "owner": "alerts",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAlertsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/alert_routes_test.go#TestAdminAlertEndpoints"
+        ],
+        "browser": [
+          "@e2e-operations-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:retryArtifactDelivery",
+      "owner": "artifacts",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminArtifactsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/artifact_admin_test.go#TestRetryArtifactDeliverySchedulesReconciliationAndAudits"
+        ],
+        "negative": [
+          "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminArtifactHTTPFailureAndRangeContracts"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/artifact_admin_test.go#TestRetryArtifactDeliverySchedulesReconciliationAndAudits",
+          "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminArtifactHTTPFailureAndRangeContracts"
+        ],
+        "browser": [
+          "@e2e-artifact-delivery-retry-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:rotateAPIKey",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/api_key_rotation_routes_test.go#TestAdminAPIKeyRotationAcceptsGracePeriod"
+        ],
+        "negative": [
+          "backend/internal/server/api_key_rotation_routes_test.go#TestAdminAPIKeyRotationRejectsInvalidGracePeriodWithoutMutation",
+          "backend/internal/server/rbac_test.go#TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/api_key_rotation_test.go#TestAPIKeyRotationCreatesOneReplacementUnderConcurrency",
+          "backend/internal/server/api_key_rotation_routes_test.go#TestAdminAPIKeyRotationRejectsInvalidGracePeriodWithoutMutation",
+          "backend/internal/server/rbac_test.go#TestDepartmentScopedAdministratorOnlySeesDepartmentUsersAndKeys"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:rotatePortalAPIKey",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/account/AccountAccessConfig.vue",
+        "frontend/src/views/portal/PortalHomeView.vue",
+        "frontend/src/views/portal/PortalKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/portal_service_test.go#TestPortalKeyManagementRequiresKeyManagerRole",
+          "backend/internal/server/portal_routes_test.go#TestPortalWorkspaceAndAPIKeyRoutes"
+        ],
+        "negative": [
+          "backend/internal/controlplane/portal_isolation_test.go#TestPortalWorkspaceIsolatesKeysUsageTracesAndMutationsByOwner",
+          "backend/internal/server/portal_routes_test.go#TestPortalForeignAPIKeyUsesNotFoundSemantics"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/portal_isolation_test.go#TestPortalWorkspaceIsolatesKeysUsageTracesAndMutationsByOwner",
+          "backend/internal/controlplane/portal_service_test.go#TestPortalKeyManagementRequiresKeyManagerRole"
+        ],
+        "browser": [
+          "@e2e-portal-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:runProviderCacheProbe",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_probe_test.go#TestRunProviderCacheProbeObservesReuseAndCapturesEvidence",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfirmation"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/effective_pricing_probe_test.go#TestRunProviderCacheProbeSkipsWithoutSpendingWhenDisabledOrBudgetExhausted",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderCacheProbeEndpointRunsControlledSequenceAndRejectsMissingConfirmation"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:scheduleAIJobAttemptReconciliation",
+      "owner": "jobs",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminAIJobsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/ai_job_admin_test.go#TestAIJobAdminQueriesRedactSecretsAndSupportsSafeActions"
+        ],
+        "negative": [
+          "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminAIJobHTTPFailureAndIdempotencyContracts"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/ai_job_admin_test.go#TestAIJobAdminQueriesRedactSecretsAndSupportsSafeActions",
+          "backend/internal/server/ai_job_artifact_admin_contract_test.go#TestAdminAIJobHTTPFailureAndIdempotencyContracts"
+        ],
+        "browser": [
+          "@e2e-ai-job-reconciliation-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:simulateGatewayRouting",
+      "owner": "gateway/routing",
+      "risk": "P1",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminGatewaySimulatorView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewaySimulatorContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewaySimulatorContracts"
+        ],
+        "browser": [
+          "@e2e-routing-policy-001",
+          "@e2e-routing-resources-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:simulatePricingRule",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:syncProviderAccountModels",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/provider/ProviderAccountModelEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestProviderAccountModelSyncTracksDiffAndAffectedRoutes",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountModelEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_account_model_service_test.go#TestProviderAccountModelSyncAllowsDisablingEveryModel",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountModelEndpointsRejectMissingAccount"
+        ],
+        "browser": [
+          "@e2e-model-account-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:syncProviderBillingSource",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsAggregateEvidenceWithoutBalance",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines"
+        ],
+        "negative": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServiceCASAndDisabledManualSync",
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsStableFailureCodeWithoutUpstreamBody",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServiceCASAndDisabledManualSync",
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsStableFailureCodeWithoutUpstreamBody"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-002"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateAPIKey",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/api_key_policy_test.go#TestCreateAPIKeyNormalizesPrincipalAndExtendedPolicy",
+          "backend/internal/controlplane/api_key_policy_test.go#TestRevalidateCanonicalGatewayRequestUsesCurrentCredentialAndPolicy"
+        ],
+        "negative": [
+          "backend/internal/controlplane/application_service_test.go#TestPlatformCredentialRequiresApplicationPrincipalAndSnapshotsGatewayEvidence"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/api_key_policy_test.go#TestCreateAPIKeyNormalizesPrincipalAndExtendedPolicy",
+          "backend/internal/controlplane/api_key_policy_test.go#TestRevalidateCanonicalGatewayRequestUsesCurrentCredentialAndPolicy"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateApplication",
+      "owner": "applications/credentials",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminOnboardingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/application_routes_test.go#TestApplicationEndpointsPersistLifecycleAndRejectInvalidUpdates"
+        ],
+        "negative": [
+          "backend/internal/server/application_routes_test.go#TestApplicationEndpointsPersistLifecycleAndRejectInvalidUpdates"
+        ],
+        "boundary": [
+          "backend/internal/server/application_routes_test.go#TestApplicationEndpointsPersistLifecycleAndRejectInvalidUpdates"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateDepartment",
+      "owner": "identity/rbac",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminDepartmentsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/department_routes_test.go#TestAdminDepartmentEndpoints"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateEffectivePricingPolicy",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingPolicyEndpointRejectsUnsafeValues"
+        ],
+        "negative": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingPolicyEndpointRejectsUnsafeValues",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingPolicyEndpointRejectsUnsafeValues"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateGatewayModel",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminGatewayModelsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteMissingResourceContracts"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateGovernancePolicy",
+      "owner": "controlplane",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPoliciesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGovernancePolicyEndpoints"
+        ],
+        "browser": [
+          "@e2e-application-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateModelRoute",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminModelRoutesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminGatewayModelAndRouteMissingResourceContracts"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateOrganizationGroup",
+      "owner": "identity/rbac",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminOrganizationGroupsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "boundary": [
+          "backend/internal/server/identity_routes_test.go#TestAdminOrganizationGroupLifecycle"
+        ],
+        "browser": [
+          "@e2e-identity-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updatePricingRuleDraft",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateProvider",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProvidersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestProviderEndpointRejectsLegacyCredentialAndModelFields"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestProviderEndpointRejectsLegacyCredentialAndModelFields"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateProviderAccount",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminProviderAccountsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/service_test.go#TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts",
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/service_test.go#TestProviderAccountLifecyclePreservesEncryptedSecretAndUpdatesGroupCounts",
+          "backend/internal/server/admin_routes_test.go#TestAdminProviderAccountMissingResourceContracts"
+        ],
+        "browser": [
+          "@e2e-model-supply-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateProviderBillingSource",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServicePersistsAggregateEvidenceWithoutBalance",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines"
+        ],
+        "negative": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServiceCASAndDisabledManualSync",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/provider_billing_sync_service_test.go#TestProviderBillingSourceServiceCASAndDisabledManualSync",
+          "backend/internal/server/effective_pricing_routes_test.go#TestProviderBillingSourceInspectionEndpointDetectsSub2APIWithoutInventingLines"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-002"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateProviderCacheCapability",
+      "owner": "gateway/supply",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminEffectivePricingView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestUpsertProviderCacheCapabilityProtectsObservedEvidence",
+          "backend/internal/server/effective_pricing_routes_test.go#TestEffectivePricingAdminEndpointsCreatePriceAndReconcileBilling"
+        ],
+        "negative": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestUpsertProviderCacheCapabilityProtectsObservedEvidence",
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestUpsertProviderCacheCapabilityRejectsReservedAffinityField",
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/effective_pricing_service_test.go#TestUpsertProviderCacheCapabilityProtectsObservedEvidence"
+        ],
+        "browser": [
+          "@e2e-effective-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateRoutingGroup",
+      "owner": "gateway/routing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminRoutingGroupsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupsAndProviderAccountsEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingGroupBoundaryContracts"
+        ],
+        "browser": [
+          "@e2e-routing-resources-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateRoutingPolicy",
+      "owner": "gateway/routing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints"
+        ],
+        "browser": [
+          "@e2e-routing-policy-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:updateWorkspaceUser",
+      "owner": "identity/rbac",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminUsersView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/identity_routes_test.go#TestAdminIdentityUserAndRoleBindingEndpoints"
+        ],
+        "negative": [
+          "backend/internal/server/identity_routes_test.go#TestAdminUserDepartmentAssignmentValidationAndSessionRevocation"
+        ],
+        "boundary": [
+          "backend/internal/server/identity_routes_test.go#TestAdminUserDepartmentAssignmentValidationAndSessionRevocation"
+        ],
+        "browser": [
+          "@e2e-session-002"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "control:validatePricingRule",
+      "owner": "billing/pricing",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/components/pricing/PricingRulesView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACRejectsDeveloperSupplyAndPricingOperations"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/pricing_service_test.go#TestPricingRuleLifecycleValidationAndCAS",
+          "backend/internal/server/pricing_rule_routes_test.go#TestPricingRuleHTTPVersionLifecycleAndFailureContracts"
+        ],
+        "browser": [
+          "@e2e-pricing-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:activateOfficialLicense",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceBootstrapOnlySyncDownloadAndActivateLicense"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceBootstrapOnlySyncDownloadAndActivateLicense"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:createPluginAPIToken",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginAPITokenLifecycleAuditsAndRevokesAccess"
+        ],
+        "negative": [
+          "backend/internal/plugins/api_token_service_test.go#TestPluginAPITokenRequiresPluginBindingForActions"
+        ],
+        "boundary": [
+          "backend/internal/plugins/api_token_service_test.go#TestPluginAPITokenIsHashedScopedAndRevocable"
+        ],
+        "browser": [
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:deleteArtifactSinkDestination",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/admin/ArtifactSinkDestinationsPanel.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationRBACAndInvalidPayloads"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:disablePlugin",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/service_test.go#TestServiceFreePluginEnableDisableLifecycle"
+        ],
+        "negative": [
+          "backend/internal/plugins/service_test.go#TestServiceRejectsDisablingCorePlugin"
+        ],
+        "boundary": [
+          "backend/internal/plugins/service_test.go#TestServiceFreePluginEnableDisableLifecycle"
+        ],
+        "browser": [
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:downloadPluginPackage",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageVerifiesAndCaches",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "negative": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageRejectsChecksumMismatch"
+        ],
+        "boundary": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageVerifiesAndCaches",
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogBlocksRevokedAdvisoryVersion"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:enablePlugin",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/service_test.go#TestServiceFreePluginEnableDisableLifecycle",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginsEnableFreePluginAudits"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginsRejectLockedPaidPlugin"
+        ],
+        "boundary": [
+          "backend/internal/plugins/service_test.go#TestServiceFreePluginEnableDisableLifecycle"
+        ],
+        "browser": [
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getArtifactSinkDestinations",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/ArtifactSinkDestinationsPanel.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/artifact_sink_s3_test.go#TestArtifactSinkDestinationsSortAndProtectSecrets",
+          "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/artifact_sink_s3_test.go#TestArtifactSinkDestinationsSortAndProtectSecrets",
+          "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getOfficialCatalogStatus",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogVerifiesCachesAndMapsPlugins",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginsCatalogEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginsCatalogEndpoint"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001",
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getOfficialFeedClientInfo",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportDecryptsAndEncryptsLocalCache"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportDecryptsAndEncryptsLocalCache"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getOfficialFeedStatuses",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminOfficialFeedSyncRecordsDisabledAttempt"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportAppliesRevocationsAndFallsBackToUsableCache",
+          "backend/internal/server/plugin_routes_test.go#TestAdminOfficialFeedSyncRecordsDisabledAttempt"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001",
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getOfficialFeedSyncRuns",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedSyncUsesSignedMetadataAndShortLivedDownloadGrant",
+          "backend/internal/server/plugin_routes_test.go#TestAdminOfficialFeedSyncRecordsDisabledAttempt"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedSyncUsesSignedMetadataAndShortLivedDownloadGrant",
+          "backend/internal/server/plugin_routes_test.go#TestAdminOfficialFeedSyncRecordsDisabledAttempt"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001",
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getOfficialLicenseStatus",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001",
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getPluginAPITokens",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginAPITokenLifecycleAuditsAndRevokesAccess"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/api_token_service_test.go#TestPluginAPITokenIsHashedScopedAndRevocable"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001",
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getPluginCatalog",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/components/ProductShell.vue",
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginsCatalogEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/service_test.go#TestServiceCatalogIncludesEnterprisePlugins",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginsCatalogEndpoint"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001",
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getPluginConfig",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginConfigEndpointsAuditAndMaskSecrets"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginConfigEndpointsAuditAndMaskSecrets"
+        ],
+        "browser": [
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getPluginDeliveries",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginDeliveriesEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginDeliveriesEndpoint"
+        ],
+        "browser": [
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getPluginFrontendAsset",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/PluginFrontendView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint",
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getPluginWorkbench",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/components/ProductShell.vue",
+        "frontend/src/views/admin/PluginFrontendView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint",
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:getSidecarRuntimeStatus",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint",
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:importOfficialFeed",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportDecryptsAndEncryptsLocalCache"
+        ],
+        "negative": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportRejectsWrongBindingAndEntitlement"
+        ],
+        "boundary": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportAppliesRevocationsAndFallsBackToUsableCache",
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedImportDecryptsAndEncryptsLocalCache"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:importOfficialLicense",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceImportLicenseUnlocksPaidPackageDownload",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus"
+        ],
+        "negative": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceImportLicenseRejectsTamperedEnvelope"
+        ],
+        "boundary": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceImportLicenseUnlocksPaidPackageDownload",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginLicenseImportEndpointAuditsAndUpdatesStatus"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:importPluginPackage",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceImportOfflinePackageVerifiesAndCaches"
+        ],
+        "negative": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceImportOfflinePackageRejectsChecksumMismatch"
+        ],
+        "boundary": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceImportOfflinePackageVerifiesAndCaches"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:installPluginPackage",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageVerifiesAndCaches",
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceImportOfflinePackageVerifiesAndCaches",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "negative": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceInstallPackageRequiresCachedPackage"
+        ],
+        "boundary": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageVerifiesAndCaches",
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceImportOfflinePackageVerifiesAndCaches",
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogBlocksRevokedAdvisoryVersion",
+          "backend/internal/plugins/package_installation_test.go#TestInstallPackageRollsBackActiveDirectoryWhenRepositoryWriteFails"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:redeemOfficialLicense",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceRedeemLicenseUsesStableIdempotencyAndInstanceBinding"
+        ],
+        "negative": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceRedeemLicenseRejectsDifferentInstance"
+        ],
+        "boundary": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceRedeemLicenseUsesStableIdempotencyAndInstanceBinding"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:revokePluginAPIToken",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "delete"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginAPITokenLifecycleAuditsAndRevokesAccess"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginAPITokenLifecycleAuditsAndRevokesAccess",
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/api_token_service_test.go#TestPluginAPITokenIsHashedScopedAndRevocable"
+        ],
+        "browser": [
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:syncOfficialCatalog",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogVerifiesCachesAndMapsPlugins",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "negative": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogRejectsTamperedPayload",
+          "backend/internal/server/rbac_test.go#TestAdminRBACProtectsPluginAndSystemWrites"
+        ],
+        "boundary": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceSyncOfficialCatalogBlocksRevokedAdvisoryVersion"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:syncOfficialFeed",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedSyncUsesSignedMetadataAndShortLivedDownloadGrant"
+        ],
+        "negative": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedSyncAppliesSignedRevocationBeforeFailedDownload",
+          "backend/internal/server/plugin_routes_test.go#TestAdminOfficialFeedSyncRecordsDisabledAttempt"
+        ],
+        "boundary": [
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedSyncAppliesSignedRevocationBeforeFailedDownload",
+          "backend/internal/plugins/feed_service_test.go#TestOfficialFeedSyncUsesSignedMetadataAndShortLivedDownloadGrant"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:uninstallPluginPackage",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageVerifiesAndCaches",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint",
+          "backend/internal/server/plugin_routes_test.go#TestPluginRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/plugins/catalog_sync_test.go#TestServiceDownloadOfficialPackageVerifiesAndCaches",
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginPackageDownloadEndpoint"
+        ],
+        "browser": [
+          "@e2e-plugin-trust-chain-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:updatePluginConfig",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminPluginsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginConfigEndpointsAuditAndMaskSecrets"
+        ],
+        "negative": [
+          "backend/internal/plugins/service_test.go#TestServiceRejectsConfiguringLockedPaidPlugin"
+        ],
+        "boundary": [
+          "backend/internal/server/plugin_routes_test.go#TestAdminPluginConfigEndpointsAuditAndMaskSecrets"
+        ],
+        "browser": [
+          "@e2e-plugin-management-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "plugins:upsertArtifactSinkDestination",
+      "owner": "plugins",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/ArtifactSinkDestinationsPanel.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/plugins/artifact_sink_s3_test.go#TestArtifactSinkDestinationsSortAndProtectSecrets",
+          "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets"
+        ],
+        "negative": [
+          "backend/internal/plugins/artifact_sink_s3_test.go#TestArtifactSinkDestinationValidation",
+          "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationRBACAndInvalidPayloads"
+        ],
+        "boundary": [
+          "backend/internal/plugins/artifact_sink_s3_test.go#TestArtifactSinkDestinationsSortAndProtectSecrets",
+          "backend/internal/server/plugin_routes_test.go#TestAdminArtifactSinkDestinationEndpointsAuditAndMaskSecrets"
+        ],
+        "browser": [
+          "@e2e-artifact-sink-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:completeEnterpriseSetup",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/SetupView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/server_test.go#TestSetupEndpointCompletesEnterpriseInitialization"
+        ],
+        "negative": [
+          "backend/internal/server/server_test.go#TestSetupEndpointRejectsInvalidOrganization",
+          "backend/internal/server/server_test.go#TestSetupEndpointReturnsSanitizedServerErrorWhenPersistenceFails"
+        ],
+        "boundary": [
+          "backend/internal/server/server_test.go#TestSetupEndpointRejectsInvalidOrganization",
+          "backend/internal/server/server_test.go#TestSetupEndpointSerializesConcurrentRequests"
+        ],
+        "browser": [
+          "@e2e-setup-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:getAdminSettings",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/server_test.go#TestLoginAllowsConsoleSettingsAccess",
+          "backend/internal/settings/service_test.go#TestAuthenticationSettingsRoundTrip"
+        ],
+        "negative": [
+          "backend/internal/server/server_test.go#TestConsoleSettingsRequiresToken"
+        ],
+        "boundary": [
+          "backend/internal/settings/service_test.go#TestAuthenticationSettingsRoundTrip"
+        ],
+        "browser": [
+          "@e2e-email-001",
+          "@e2e-settings-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:getEmailTemplate",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/EmailTemplateEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates"
+        ],
+        "negative": [],
+        "boundary": [
+          "backend/internal/settings/service_test.go#TestEmailTemplatesListUpdateAndRestore"
+        ],
+        "browser": [
+          "@e2e-email-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:getEmailTemplateCatalog",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/EmailTemplateEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates"
+        ],
+        "negative": [],
+        "boundary": [
+          "backend/internal/settings/service_test.go#TestEmailTemplatesListUpdateAndRestore"
+        ],
+        "browser": [
+          "@e2e-email-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:getLegalDocument",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/LegalDocumentView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/server_test.go#TestLegalDocumentEndpointReturnsPublishedDocumentAndRejectsUnknownSlug"
+        ],
+        "negative": [],
+        "boundary": [
+          "backend/internal/server/server_test.go#TestLegalDocumentEndpointReturnsPublishedDocumentAndRejectsUnknownSlug"
+        ],
+        "browser": [
+          "@e2e-legal-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:previewEmailTemplate",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/EmailTemplateEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates"
+        ],
+        "negative": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates"
+        ],
+        "boundary": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates"
+        ],
+        "browser": [
+          "@e2e-email-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:restoreEmailTemplate",
+      "owner": "settings",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/EmailTemplateEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates"
+        ],
+        "negative": [
+          "backend/internal/settings/service_test.go#TestEmailTemplateRestoreDoesNotOverwriteConcurrentSettings"
+        ],
+        "boundary": [
+          "backend/internal/settings/service_test.go#TestEmailTemplateRestoreDoesNotOverwriteConcurrentSettings",
+          "backend/internal/settings/service_test.go#TestEmailTemplatesListUpdateAndRestore"
+        ],
+        "browser": [
+          "@e2e-email-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:runRetentionCleanup",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/controlplane/retention_service_test.go#TestCleanupRetainedDataDeletesExpiredRecordsButPreservesActiveAlertsAndAuditEvidence"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACProtectsPluginAndSystemWrites"
+        ],
+        "boundary": [
+          "backend/internal/controlplane/retention_service_test.go#TestCleanupRetainedDataDeletesExpiredRecordsButPreservesActiveAlertsAndAuditEvidence"
+        ],
+        "browser": [
+          "@e2e-settings-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:testEmailTemplate",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/EmailTemplateEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/email_settings_test.go#TestSMTPRoutesDeliverPlainAndRenderedMessagesOverSTARTTLS"
+        ],
+        "negative": [
+          "backend/internal/server/email_settings_test.go#TestSMTPRoutesRejectInvalidRecipientsAndTemplates"
+        ],
+        "boundary": [
+          "backend/internal/auth/mailer_test.go#TestSMTPMailerRejectsInjectedHeadersBeforeDial",
+          "backend/internal/auth/mailer_test.go#TestSMTPTLSConfigAppendsSSL_CERTFile"
+        ],
+        "browser": [
+          "@e2e-email-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:testSMTP",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/email_settings_test.go#TestSMTPRoutesDeliverPlainAndRenderedMessagesOverSTARTTLS"
+        ],
+        "negative": [
+          "backend/internal/server/email_settings_test.go#TestSMTPRoutesRejectInvalidRecipientsAndTemplates"
+        ],
+        "boundary": [
+          "backend/internal/auth/mailer_test.go#TestSMTPMailerRejectsInjectedHeadersBeforeDial",
+          "backend/internal/auth/mailer_test.go#TestSMTPTLSConfigAppendsSSL_CERTFile"
+        ],
+        "browser": [
+          "@e2e-email-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:testSMTPConnection",
+      "owner": "settings",
+      "risk": "P2",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/email_settings_test.go#TestSMTPRoutesDeliverPlainAndRenderedMessagesOverSTARTTLS"
+        ],
+        "negative": [
+          "backend/internal/server/email_settings_test.go#TestSMTPConnectionRouteUsesRequestConfiguration"
+        ],
+        "boundary": [
+          "backend/internal/auth/mailer_test.go#TestSMTPConnectionTestRequiresSTARTTLS",
+          "backend/internal/auth/mailer_test.go#TestSMTPTLSConfigAppendsSSL_CERTFile"
+        ],
+        "browser": [
+          "@e2e-email-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:updateAdminSettings",
+      "owner": "settings",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/settings/service_test.go#TestAuthenticationSettingsRoundTrip"
+        ],
+        "negative": [
+          "backend/internal/server/rbac_test.go#TestAdminRBACAllowsGlobalAuditorReadAndBlocksWrites"
+        ],
+        "boundary": [
+          "backend/internal/settings/service_test.go#TestAuthenticationSettingsRoundTrip"
+        ],
+        "browser": [
+          "@e2e-settings-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "settings:updateEmailTemplate",
+      "owner": "settings",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "put"
+      ],
+      "views": [
+        "frontend/src/views/admin/EmailTemplateEditor.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates"
+        ],
+        "negative": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates",
+          "backend/internal/settings/service_test.go#TestEmailTemplateUpdateDoesNotOverwriteConcurrentSettings"
+        ],
+        "boundary": [
+          "backend/internal/server/email_settings_test.go#TestEmailTemplateRoutesExposeLowercaseCatalogAndIndependentUpdates",
+          "backend/internal/settings/service_test.go#TestEmailTemplateUpdateDoesNotOverwriteConcurrentSettings"
+        ],
+        "browser": [
+          "@e2e-email-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:checkSystemUpdates",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestAdminSystemCheckUpdatesEndpoint"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestAdminSystemCheckUpdatesEndpoint"
+        ],
+        "browser": [
+          "@e2e-system-update-001",
+          "@e2e-system-update-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:createDiagnosticBundle",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestSystemDiagnosticRoutesCreateAndDownload"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/system/archive_test.go#TestDiagnosticBundleIsRedacted"
+        ],
+        "browser": [
+          "@e2e-system-diagnostic-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:createSystemBackup",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/system/archive_test.go#TestBackupRestoreIncludesPluginAssetsAndRequiresConfirmation"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication",
+          "backend/internal/system/archive_test.go#TestBackupRequiresPostgreSQL"
+        ],
+        "boundary": [
+          "backend/internal/system/archive_test.go#TestBackupRestoreIncludesPluginAssetsAndRequiresConfirmation"
+        ],
+        "browser": [
+          "@e2e-system-backup-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:downloadDiagnosticBundle",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestSystemDiagnosticRoutesCreateAndDownload"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestSystemDiagnosticRoutesRejectUnavailableServiceAndInvalidArchiveID"
+        ],
+        "browser": [
+          "@e2e-system-diagnostic-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:downloadS3Backup",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication",
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "browser": [
+          "@e2e-system-backup-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:downloadSystemBackup",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupRoutesListAndDownloadStoredArchive"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupRoutesListAndDownloadStoredArchive"
+        ],
+        "browser": [
+          "@e2e-system-backup-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:listS3Backups",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "browser": [
+          "@e2e-system-backup-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:listSystemBackups",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "query",
+      "methods": [
+        "get"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupRoutesListAndDownloadStoredArchive",
+          "backend/internal/system/archive_test.go#TestBackupRestoreIncludesPluginAssetsAndRequiresConfirmation"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupRoutesListAndDownloadStoredArchive",
+          "backend/internal/system/archive_test.go#TestBackupRestoreIncludesPluginAssetsAndRequiresConfirmation"
+        ],
+        "browser": [
+          "@e2e-system-backup-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:performSystemUpdate",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/system/service_test.go#TestPerformUpdateReturnsSuccessWhenAlreadyCurrent"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication",
+          "backend/internal/system/service_test.go#TestPerformUpdateSourceBuildRequiresManualUpdate"
+        ],
+        "boundary": [
+          "backend/internal/system/service_test.go#TestPerformUpdateReturnsSuccessWhenAlreadyCurrent"
+        ],
+        "browser": [
+          "@e2e-system-update-001",
+          "@e2e-system-update-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:restartSystem",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/system/service_test.go#TestRestartExitsIsolatedProcessWhenEnabled"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication",
+          "backend/internal/system/service_test.go#TestRestartRejectsDisabledMaintenance"
+        ],
+        "boundary": [
+          "backend/internal/system/service_test.go#TestRestartRejectsDisabledMaintenance"
+        ],
+        "browser": [
+          "@e2e-system-update-001",
+          "@e2e-system-update-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:restoreS3Backup",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication",
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "browser": [
+          "@e2e-system-backup-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:restoreSystemBackup",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/system/archive_test.go#TestBackupRestoreIncludesPluginAssetsAndRequiresConfirmation"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/system/archive_test.go#TestBackupRestoreIncludesPluginAssetsAndRequiresConfirmation"
+        ],
+        "browser": [
+          "@e2e-system-backup-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:rollbackSystemUpdate",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/system/service_test.go#TestRollbackReplacesIsolatedExecutableAndPreservesOperation"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication",
+          "backend/internal/system/service_test.go#TestRollbackRejectsMissingBackup"
+        ],
+        "boundary": [
+          "backend/internal/system/service_test.go#TestRollbackRejectsMissingBackup"
+        ],
+        "browser": [
+          "@e2e-system-update-001",
+          "@e2e-system-update-lifecycle-001"
+        ]
+      },
+      "notes": ""
+    },
+    {
+      "id": "system:testBackupS3",
+      "owner": "system",
+      "risk": "P0",
+      "interaction": "command",
+      "methods": [
+        "post"
+      ],
+      "views": [
+        "frontend/src/views/admin/AdminSettingsView.vue"
+      ],
+      "evidence": {
+        "success": [
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "negative": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemRoutesRequireAuthentication"
+        ],
+        "boundary": [
+          "backend/internal/server/admin_routes_test.go#TestSystemBackupEndpointsExposeEmptyListAndRejectMemoryBackup",
+          "backend/internal/server/admin_routes_test.go#TestSystemS3BackupRoutesTestListDownloadAndRestore"
+        ],
+        "browser": [
+          "@e2e-system-backup-001"
+        ]
+      },
+      "notes": ""
+    }
+  ]
+}

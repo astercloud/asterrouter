@@ -117,6 +117,8 @@ const router = createRouter({
         { path: 'organization', component: AdminUsersView, meta: { titleKey: 'console.organization', descriptionKey: 'console.organizationSubtitle' } },
         { path: 'organization/departments', component: AdminDepartmentsView, meta: { titleKey: 'admin.departments', descriptionKey: 'departments.subtitle' } },
         { path: 'organization/groups', component: AdminOrganizationGroupsView, meta: { titleKey: 'organizationGroups.title', descriptionKey: 'organizationGroups.subtitle' } },
+        { path: 'plugins', redirect: '/console/system/plugins' },
+        { path: 'plugins/:pluginId/workbench', redirect: (to) => `/console/system/plugins/${encodeURIComponent(String(to.params.pluginId || ''))}/workbench` },
         { path: 'system', component: AdminSettingsView, meta: { titleKey: 'console.system', descriptionKey: 'console.systemSubtitle' } },
         { path: 'system/plugins', component: AdminPluginsView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },
         { path: 'system/plugins/:pluginId/workbench', component: PluginFrontendView, meta: { titleKey: 'admin.plugins', descriptionKey: 'plugins.subtitle' } },

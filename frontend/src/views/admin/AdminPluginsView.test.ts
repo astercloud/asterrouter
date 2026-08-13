@@ -4,6 +4,10 @@ import i18n, { setLocale } from '@/i18n'
 import * as plugins from '@/api/plugins'
 import AdminPluginsView from './AdminPluginsView.vue'
 
+const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }))
+
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
+
 vi.mock('@/api/plugins', () => ({
   activateOfficialLicense: vi.fn(),
   createPluginAPIToken: vi.fn(),
@@ -112,6 +116,7 @@ describe('AdminPluginsView workbench', () => {
     await wrapper.get('[data-tab="registry"]').trigger('click')
     expect(wrapper.get('[data-section="registry"]').isVisible()).toBe(true)
     expect(wrapper.findAll('.plugin-tree-item')).toHaveLength(1)
+    expect(wrapper.get('[data-section="registry"]').text()).toContain('No packages are available for this plugin.')
 
     await wrapper.get('[data-tab="distribution"]').trigger('click')
     expect(wrapper.get('[data-section="distribution"]').text()).toContain('Official catalog')
@@ -206,6 +211,8 @@ describe('AdminPluginsView workbench', () => {
     const videoNavigationItem = wrapper.findAll('.plugin-launcher-item').find((item) => item.text().includes('Video generation workbench'))
     expect(videoNavigationItem).toBeDefined()
     expect(videoNavigationItem?.find('button.button').exists()).toBe(true)
+    await videoNavigationItem?.get('button.button').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/console/system/plugins/com.asterrouter.videogen.workbench/workbench')
 
     wrapper.unmount()
   })

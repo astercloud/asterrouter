@@ -5,7 +5,7 @@ description: Exercise and verify AsterRouter's Vue user interfaces in a browser,
 
 # AsterRouter UI Tests
 
-Read the UI coverage and critical journeys in `docs/test/v1/README.md`. Use an available browser-control tool for exploratory checks and Playwright suites once the v1 harness exists.
+Read `docs/test/v1/README.md` and `docs/test/v1/scenario-registry.json`. The registry is the machine source of truth for browser routes, stable scenario IDs, fixtures, proof levels, and delivery gates.
 
 ## Start safely
 
@@ -22,6 +22,7 @@ Read the UI coverage and critical journeys in `docs/test/v1/README.md`. Use an a
 4. Verify the browser URL, visible result, API request, persisted state after reload, and relevant audit evidence.
 5. Check that forbidden surfaces redirect or return an authorization-safe state without leaking data.
 6. Inspect console errors, failed network requests, unhandled promises, and unexpected page reloads.
+7. Assert the canonical URL after navigation so Vue catch-all redirects cannot make a stale route appear to pass.
 
 Prioritize these journeys:
 
@@ -38,6 +39,8 @@ Check at least `1440x900`, `1280x800`, and `390x844` for changed workflows. Veri
 For changed controls, verify keyboard navigation, visible focus, accessible names, labels, dialog focus behavior, disabled state, and error association. Check English and Simplified Chinese, light and dark themes, and long content where the component displays user data.
 
 Use screenshots as evidence, not as the only assertion. Prefer stable semantic locators and behavior assertions over CSS selectors or pixel-perfect snapshots.
+
+Do not use fixed sleeps. Use Playwright web-first assertions, response/event waits, or `expect.poll`. A new user-visible route requires a surface contract at all supported viewports and at least one registered vertical journey; run `npm run check:e2e-coverage` before broader browser tests.
 
 ## Report evidence
 

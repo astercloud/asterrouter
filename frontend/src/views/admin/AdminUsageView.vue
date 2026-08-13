@@ -189,6 +189,7 @@ function toDateTimeLocal(date: Date): string {
 
 function presetRange(preset: Exclude<TimePreset, 'custom'>): { from: string; to: string } {
   const to = new Date()
+  to.setMinutes(to.getMinutes() + 1, 0, 0)
   const hours = preset === '24h' ? 24 : preset === '7d' ? 24 * 7 : 24 * 30
   const from = new Date(to.getTime() - hours * 60 * 60 * 1000)
   return { from: toDateTimeLocal(from), to: toDateTimeLocal(to) }

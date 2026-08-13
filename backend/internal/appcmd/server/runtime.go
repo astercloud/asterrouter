@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +46,67 @@ type runtime struct {
 	closeErr            error
 }
 
+// applyE2EOIDCSettings is opt-in and exists only for the isolated browser
+// journey. It configures the real runtime before identity services initialize.
+func applyE2EOIDCSettings(ctx context.Context, service *settings.Service, current *settings.AdminSettings, databaseURL string) error {
+	if strings.TrimSpace(os.Getenv("ASTER_E2E_OIDC_ENABLED")) != "1" {
+		return nil
+	}
+	if !e2eOIDCStorageAllowed(databaseURL) {
+		return fmt.Errorf("ASTER_E2E_OIDC_ENABLED requires isolated memory or an explicitly available PostgreSQL database with an e2e or test name token")
+	}
+	port := strings.TrimSpace(os.Getenv("ASTER_E2E_OIDC_PORT"))
+	if port == "" {
+		return fmt.Errorf("ASTER_E2E_OIDC_PORT is required when ASTER_E2E_OIDC_ENABLED=1")
+	}
+	next := *current
+	next.PublicBaseURL = "https://127.0.0.1:" + port
+	next.OIDCEnabled = true
+	next.OIDCProviderName = "Fake OIDC"
+	next.OIDCIssuerURL = next.PublicBaseURL + "/oidc"
+	next.OIDCClientID = envOr("ASTER_E2E_OIDC_CLIENT_ID", "asterrouter-e2e")
+	next.OIDCClientSecret = envOr("ASTER_E2E_OIDC_CLIENT_SECRET", "asterrouter-e2e-secret")
+	next.OIDCRequireVerifiedEmail = true
+	updated, err := service.Update(ctx, next)
+	if err != nil {
+		return fmt.Errorf("configure E2E OIDC settings: %w", err)
+	}
+	*current = updated
+	return nil
+}
+
+var e2eDatabaseTokenSeparator = regexp.MustCompile(`[^a-z0-9]+`)
+
+func e2eOIDCStorageAllowed(databaseURL string) bool {
+	if strings.TrimSpace(os.Getenv("ASTER_DEV_ISOLATED_MEMORY")) == "1" {
+		return true
+	}
+	if strings.TrimSpace(os.Getenv("ASTER_E2E_POSTGRES_AVAILABLE")) != "1" {
+		return false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(databaseURL))
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || strings.TrimSpace(parsed.Hostname()) == "" {
+		return false
+	}
+	databaseName, err := url.PathUnescape(strings.TrimPrefix(parsed.Path, "/"))
+	if err != nil || strings.Contains(databaseName, "/") {
+		return false
+	}
+	for _, token := range e2eDatabaseTokenSeparator.Split(strings.ToLower(databaseName), -1) {
+		if token == "e2e" || token == "test" {
+			return true
+		}
+	}
+	return false
+}
+
+func envOr(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}
+
 func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error) {
 	rt := &runtime{closeInfrastructure: func() {}, backgroundErrors: make(chan error, 1)}
 	defer func() {
@@ -72,6 +137,9 @@ func newRuntime(ctx context.Context, cfg *config.Server) (_ *runtime, err error)
 	adminSettings, err := rt.settingsService.Admin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)
+	}
+	if err := applyE2EOIDCSettings(ctx, rt.settingsService, &adminSettings, cfg.Storage.DatabaseURL); err != nil {
+		return nil, err
 	}
 
 	oidcService, feishuService, githubOAuthService, googleOAuthService, dingTalkService, err := newIdentityServices(ctx, rt.settingsService, adminSettings)

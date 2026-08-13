@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/astercloud/asterrouter/backend/internal/controlplane"
@@ -79,6 +80,13 @@ func TestAdminAlertEndpoints(t *testing.T) {
 		t.Fatalf("ack mismatch: %+v", ackResp.Data)
 	}
 
+	repeatAckReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/alerts/"+alertID+"/acknowledge", nil)
+	repeatAckRec := httptest.NewRecorder()
+	handler.ServeHTTP(repeatAckRec, repeatAckReq)
+	if repeatAckRec.Code != http.StatusOK || !strings.Contains(repeatAckRec.Body.String(), `"status":"acknowledged"`) {
+		t.Fatalf("repeat ack status = %d body=%s", repeatAckRec.Code, repeatAckRec.Body.String())
+	}
+
 	resolveReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/alerts/"+alertID+"/resolve", nil)
 	resolveRec := httptest.NewRecorder()
 	handler.ServeHTTP(resolveRec, resolveReq)
@@ -93,5 +101,26 @@ func TestAdminAlertEndpoints(t *testing.T) {
 	}
 	if resolveResp.Data.Status != controlplane.AlertStatusResolved {
 		t.Fatalf("resolve mismatch: %+v", resolveResp.Data)
+	}
+
+	repeatResolveReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/alerts/"+alertID+"/resolve", nil)
+	repeatResolveRec := httptest.NewRecorder()
+	handler.ServeHTTP(repeatResolveRec, repeatResolveReq)
+	if repeatResolveRec.Code != http.StatusOK || !strings.Contains(repeatResolveRec.Body.String(), `"status":"resolved"`) {
+		t.Fatalf("repeat resolve status = %d body=%s", repeatResolveRec.Code, repeatResolveRec.Body.String())
+	}
+
+	resolvedAckReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/alerts/"+alertID+"/acknowledge", nil)
+	resolvedAckRec := httptest.NewRecorder()
+	handler.ServeHTTP(resolvedAckRec, resolvedAckReq)
+	if resolvedAckRec.Code != http.StatusBadRequest || !strings.Contains(resolvedAckRec.Body.String(), `"code":1520`) || !strings.Contains(resolvedAckRec.Body.String(), "resolved alert cannot be acknowledged") {
+		t.Fatalf("resolved alert ack status = %d body=%s", resolvedAckRec.Code, resolvedAckRec.Body.String())
+	}
+
+	missingResolveReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/alerts/alert_missing/resolve", nil)
+	missingResolveRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingResolveRec, missingResolveReq)
+	if missingResolveRec.Code != http.StatusBadRequest || !strings.Contains(missingResolveRec.Body.String(), `"code":1521`) || !strings.Contains(missingResolveRec.Body.String(), `alert \"alert_missing\" not found`) {
+		t.Fatalf("missing alert resolve status = %d body=%s", missingResolveRec.Code, missingResolveRec.Body.String())
 	}
 }

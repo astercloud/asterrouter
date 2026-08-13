@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -151,5 +152,40 @@ func TestPortalKeyManagementRequiresKeyManagerRole(t *testing.T) {
 	}
 	if err := svc.DisablePortalAPIKey(ctx, user.Email, created.Record.ID); err != nil {
 		t.Fatalf("DisablePortalAPIKey(): %v", err)
+	}
+}
+
+func TestPortalAPIKeyCreationRejectsReadOnlyPrincipal(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1")
+	user, err := svc.CreateWorkspaceUser(ctx, "tester", WorkspaceUserRequest{
+		Email:       "auditor@example.com",
+		DisplayName: "Read-only Auditor",
+		Status:      WorkspaceUserStatusActive,
+		Role:        RoleReadOnlyAuditor,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkspaceUser(): %v", err)
+	}
+
+	workspace, err := svc.PortalWorkspace(ctx, user.Email)
+	if err != nil {
+		t.Fatalf("PortalWorkspace(): %v", err)
+	}
+	if workspace.CanManageKeys {
+		t.Fatal("read-only auditor unexpectedly received portal key management access")
+	}
+	if _, err := svc.CreatePortalAPIKey(ctx, user.Email, APIKeyCreateRequest{
+		Name:           "Forbidden Key",
+		ModelAllowlist: []string{"gpt-4o-mini"},
+	}); err == nil || !strings.Contains(err.Error(), "cannot manage workspace keys") {
+		t.Fatalf("CreatePortalAPIKey() error=%v, want key management rejection", err)
+	}
+	keys, err := svc.ListAPIKeys(ctx)
+	if err != nil {
+		t.Fatalf("ListAPIKeys(): %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("rejected portal key creation mutated repository: %+v", keys)
 	}
 }

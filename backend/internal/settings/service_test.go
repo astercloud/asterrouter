@@ -90,6 +90,26 @@ func TestEmailTemplateUpdateDoesNotOverwriteConcurrentSettings(t *testing.T) {
 	}
 }
 
+func TestEmailTemplateRestoreDoesNotOverwriteConcurrentSettings(t *testing.T) {
+	repo := &conflictOnceSettingsRepository{MemoryRepository: NewMemoryRepository()}
+	stored := `[{"event":"quota_limit","locale":"en-US","subject":"Custom {{.SiteName}}","html":"<p>{{.Limit}}</p>"}]`
+	if err := repo.SetMultiple(t.Context(), map[string]string{KeyEmailTemplates: stored}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(repo, ServiceOptions{Version: "test", StorageMode: "memory"})
+	_, err := svc.RestoreEmailTemplate(t.Context(), "quota_limit", "en-US")
+	if !errors.Is(err, ErrSettingsChanged) {
+		t.Fatalf("RestoreEmailTemplate() error = %v", err)
+	}
+	values, err := repo.GetAll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values[KeyEmailTemplates] != stored {
+		t.Fatalf("conflicting template restore changed stored value: %s", values[KeyEmailTemplates])
+	}
+}
+
 func TestLegacyDefaultTemplatesAreNotReportedAsCustomized(t *testing.T) {
 	repo := NewMemoryRepository()
 	legacy, err := json.Marshal(auth.DefaultEmailTemplates())

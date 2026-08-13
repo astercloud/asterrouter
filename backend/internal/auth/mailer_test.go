@@ -3,9 +3,14 @@ package auth
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"net"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -129,5 +134,27 @@ func TestSMTPConnectionTestRequiresSTARTTLS(t *testing.T) {
 	err = (SMTPMailer{Config: SMTPConfig{Host: "127.0.0.1", Port: port}}).TestConnection(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "STARTTLS") {
 		t.Fatalf("TestConnection() error = %v, want mandatory STARTTLS failure", err)
+	}
+}
+
+func TestSMTPTLSConfigAppendsSSL_CERTFile(t *testing.T) {
+	server := httptest.NewTLSServer(nil)
+	defer server.Close()
+	certificate := server.Certificate()
+	caFile := t.TempDir() + "/smtp-ca.pem"
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", caFile)
+
+	config, err := smtpTLSConfig("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MinVersion != tls.VersionTLS12 || config.InsecureSkipVerify {
+		t.Fatalf("SMTP TLS config weakened verification: %+v", config)
+	}
+	if _, err := certificate.Verify(x509.VerifyOptions{DNSName: "127.0.0.1", Roots: config.RootCAs}); err != nil {
+		t.Fatalf("custom SMTP CA was not trusted: %v", err)
 	}
 }

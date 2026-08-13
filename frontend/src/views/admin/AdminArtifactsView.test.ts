@@ -58,6 +58,18 @@ const readyDetail: ArtifactAdminDetail = {
   events: detail.events
 }
 
+const deliveredCustomerArtifact: ArtifactAdminRecord = {
+  ...artifact,
+  status: 'delivered',
+  error_type: undefined,
+  delivered_at: '2026-07-15T10:02:00Z'
+}
+
+const deliveredCustomerDetail: ArtifactAdminDetail = {
+  artifact: deliveredCustomerArtifact,
+  events: detail.events
+}
+
 describe('AdminArtifactsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -131,6 +143,20 @@ describe('AdminArtifactsView', () => {
 
     await wrapper.get('button[aria-label="Close"]').trigger('click')
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:artifact-preview')
+    wrapper.unmount()
+  })
+
+  it('does not request content that was delivered only to a customer-owned sink', async () => {
+    vi.mocked(control.getArtifacts).mockResolvedValue([deliveredCustomerArtifact])
+    vi.mocked(control.getArtifact).mockResolvedValue(deliveredCustomerDetail)
+
+    const wrapper = mount(AdminArtifactsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.get('button[aria-label="Details"]').trigger('click')
+    await flushPromises()
+
+    expect(control.getArtifactContent).not.toHaveBeenCalled()
+    expect(wrapper.get('.artifact-preview').text()).toContain('not currently available for preview')
     wrapper.unmount()
   })
 

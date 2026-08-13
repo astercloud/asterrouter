@@ -2,7 +2,6 @@ package system
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -114,7 +113,7 @@ func (s *S3BackupStore) Download(ctx context.Context, key string) (io.ReadCloser
 	if key == "" || filepath.Dir(key) != expectedDir ||
 		!strings.HasPrefix(name, backupPrefix) || !strings.HasSuffix(name, ".tar.gz") ||
 		strings.Contains(key, "..") {
-		return nil, errors.New("S3 backup key is invalid")
+		return nil, fmt.Errorf("%w: S3 backup key is invalid", ErrBackupInvalid)
 	}
 	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.config.Bucket), Key: aws.String(key)})
 	if err != nil {

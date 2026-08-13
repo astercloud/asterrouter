@@ -18,7 +18,7 @@ async function focusWithTab(page: Page, target: ReturnType<Page['getByRole']>): 
   await expect(target).toBeFocused()
 }
 
-test('@smoke @j09 console overview has no serious accessibility violations', async ({ page }, testInfo) => {
+test('@e2e-a11y-console-001 console overview has no serious accessibility violations', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The semantic audit runs once; layout coverage runs in every Chromium viewport.')
 
   await loginDemo(page)
@@ -27,7 +27,7 @@ test('@smoke @j09 console overview has no serious accessibility violations', asy
   expect(blocking, JSON.stringify(blocking, null, 2)).toEqual([])
 })
 
-test('@smoke @j09 enterprise member sessions are isolated and keyboard-operable', async ({ browser, page }, testInfo) => {
+test('@e2e-a11y-session-001 enterprise member sessions are isolated and keyboard-operable', async ({ browser, page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The cross-session workflow is viewport-independent and runs once on desktop.')
 
   const errors = captureBrowserErrors(page)

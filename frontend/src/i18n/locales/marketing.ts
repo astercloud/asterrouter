@@ -9,7 +9,9 @@ export const marketingZh = {
     description: '在企业应用与已授权 AI 供应商之间建立统一控制面。一次完成身份校验、访问准入、资源选择、成本约束和请求级证据记录。',
     primaryAction: '进入企业控制台', secondaryAction: '查看请求决策', factsLabel: '产品事实',
     factProtocols: '统一接入 OpenAI、Anthropic 与 Gemini 兼容协议', factEvidence: '策略、路由、用量、成本与 Trace 使用同一证据链',
-    imageAlt: 'AsterRouter 路由策略工作台实际界面', actualProduct: '实际产品界面', actualProductDetail: '路由策略工作台 · v0.23.1'
+    imageAlt: 'AsterRouter 路由策略工作台实际界面',
+    liveDecisionLabel: 'AsterRouter 实时路由决策预览', liveDecision: '实时决策', requestApproved: '请求已进入首选线路', requestApprovedDetail: '策略版本、候选顺序与执行结果同步写入 Trace',
+    policyProof: '访问与路由策略已命中', policyProofDetail: '先准入，再选择供应资源', costProof: '成本边界已检查', costProofDetail: '有效价格未超过策略上限', capacityProof: '容量租约已获取', capacityProofDetail: '并发、RPM 与 TPM 均可用'
   },
   decision: {
     overline: 'ONE REQUEST, ONE EXPLAINABLE DECISION', title: '每一次模型请求，都经过同一条企业决策链',
@@ -59,7 +61,9 @@ export const marketingEn = {
     description: 'Place one control plane between enterprise applications and authorized AI providers. Enforce identity, access, supply selection, cost boundaries, and request-level evidence on every call.',
     primaryAction: 'Open enterprise console', secondaryAction: 'Inspect the decision flow', factsLabel: 'Product facts',
     factProtocols: 'One gateway for OpenAI, Anthropic, and Gemini-compatible protocols', factEvidence: 'Policy, routing, usage, cost, and traces share one evidence chain',
-    imageAlt: 'Actual AsterRouter routing policy workbench', actualProduct: 'Actual product interface', actualProductDetail: 'Routing policy workbench · v0.23.1'
+    imageAlt: 'Actual AsterRouter routing policy workbench',
+    liveDecisionLabel: 'AsterRouter live routing decision preview', liveDecision: 'Live decision', requestApproved: 'Request entered the preferred route', requestApprovedDetail: 'Policy version, candidate order, and outcome are written to the trace',
+    policyProof: 'Access and routing policy matched', policyProofDetail: 'Admit first, then select supply', costProof: 'Cost boundary checked', costProofDetail: 'Effective price remains inside policy', capacityProof: 'Capacity lease acquired', capacityProofDetail: 'Concurrency, RPM, and TPM are available'
   },
   decision: {
     overline: 'ONE REQUEST, ONE EXPLAINABLE DECISION', title: 'Every model request follows the same enterprise decision chain',

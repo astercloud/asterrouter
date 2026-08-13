@@ -735,6 +735,10 @@ export interface GatewaySimulation {
   route_group: string
   status: string
   summary: string
+  rejection_reason?: string
+  routing_policy_id?: string
+  routing_policy_version?: number
+  routing_policy_preset?: RoutingPolicyPreset
   candidates: GatewaySimulationCandidate[]
 }
 

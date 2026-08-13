@@ -486,7 +486,8 @@ export default {
   gatewaySimulator: {
     subtitle: '不调用上游、不消耗限流额度，解析并检查当前真实调度计划。',
     model: '请求模型', clientProtocol: '客户端协议', requiredFeatures: '必需能力', estimatedTokens: '预估 Token', run: '运行模拟', status: '状态', resolvedModel: '解析模型', routeGroup: '路由组', candidates: '候选',
-    route: '路由', account: 'Provider / 账号', adapter: 'Adapter', headroom: '余量', limits: '限流 / 熔断', decision: '调度结论', eligible: '可调度', eligibleCount: '{count} 个可调度', concurrent: '{count} 并发'
+    route: '路由', account: 'Provider / 账号', adapter: 'Adapter', headroom: '余量', limits: '限流 / 熔断', decision: '调度结论', eligible: '可调度', eligibleCount: '{count} 个可调度', concurrent: '{count} 并发',
+    reasons: { routing_policy_native_protocol_required: '要求原生协议', routing_policy_price_fact_missing: '缺少可比采购价', routing_policy_input_price_exceeded: '超过输入价格上限', routing_policy_output_price_exceeded: '超过输出价格上限', routing_policy_relative_price_exceeded: '超过相对最低价上限', routing_policy_low_price_pool_excluded: '不在低价候选池内', routing_policy_failover_disabled: '故障切换关闭，未进入候选', routing_policy_model_blocked: '模型被策略阻断', routing_policy_protocol_blocked: '协议被策略阻断', client_protocol_unsupported: '不支持的客户端协议', route_disabled: '路由已停用', account_disabled: '账号已停用', account_not_schedulable: '账号不可调度', account_expired: '账号已过期', account_cooling_down: '账号冷却中', secret_missing: '账号密钥缺失', upstream_model_not_exposed: '账号未开放该上游模型', provider_not_found: 'Provider 不存在', provider_disabled: 'Provider 已停用', provider_url_invalid: 'Provider 地址无效', circuit_open: '熔断器已打开', at_capacity: '并发容量已满', rpm_exhausted: 'RPM 已耗尽', tpm_exhausted: 'TPM 已耗尽', not_schedulable: '当前不可调度', protocol_incompatible_openai_embeddings: 'Embedding 协议不兼容', protocol_incompatible_native_media: '原生媒体协议不兼容', protocol_incompatible_response_format: '不支持响应格式约束', protocol_incompatible_top_k: '不支持 top_k' }
   },
   routingGroups: {
     subtitle: '维护 fallback、排序、容量和路由治理所需的高级路由边界。',
@@ -1266,7 +1267,7 @@ export default {
     offlinePackageFile: '离线插件包文件 JSON',
     installPackage: '安装',
     uninstallPackage: '卸载',
-    noPackages: '',
+    noPackages: '该插件暂无可用安装包。',
     status: '状态',
     actions: '操作',
     enable: '启用',
@@ -1437,7 +1438,7 @@ export default {
     allDeliveryStatuses: '全部投递状态',
     target: '目标',
     error: '错误',
-    noDeliveries: '',
+    noDeliveries: '当前筛选条件下暂无投递记录。',
     deliveryStatuses: {
       succeeded: '成功',
       failed: '失败',
@@ -1458,7 +1459,7 @@ export default {
     searchPlaceholder: '搜索插件、厂商或分类',
     allCategories: '全部分类',
     allTiers: '全部层级',
-    empty: ''
+    empty: '没有符合当前筛选条件的插件。'
   },
   console: {
     title: '管理控制台',

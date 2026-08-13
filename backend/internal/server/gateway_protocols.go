@@ -224,7 +224,7 @@ func executeGatewayProtocolDirect(c *gin.Context, control *controlplane.Service,
 		return
 	}
 	defer permit.Release()
-	affinity := controlplane.GatewayAffinityInput{ApplicationID: canonicalAuth.ApplicationID, PrincipalID: canonicalAuth.PrincipalID, CredentialID: canonicalAuth.CredentialID, Model: request.Model, Protocol: string(request.Protocol), RouteGroup: plan.RouteGroup, StickyKey: request.StickyKey, PolicyVersion: canonicalAuth.PolicyVersion}
+	affinity := gatewayAffinityInput(canonicalAuth, request, plan)
 	cohortKey := control.GatewayEffectivePricingCohortKey(affinity)
 	candidates := control.PreferGatewayCandidatesWithAffinity(c.Request.Context(), affinity, control.OrderGatewayCandidatesByEffectivePricing(c.Request.Context(), request.Model, string(request.Protocol), cohortKey, plan.Candidates))
 	resp, provider, release, attempts, attemptErr := attemptGatewayCandidatesForCanonicalRequest(c, control, operation.ID, affinity, candidates, request)

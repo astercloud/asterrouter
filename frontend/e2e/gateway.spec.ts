@@ -1,5 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
-import { adminPost, createGatewayFixture, createPublishedPricingRule, envelope, loginDemo, loginTestPrincipal } from './fixtures'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { adminPost, captureBrowserErrors, controlAPI, createGatewayFixture, createPublishedPricingRule, envelope, loginDemo, loginTestPrincipal } from './fixtures'
 
 type PolicyAlert = {
   id: string
@@ -40,7 +40,13 @@ async function expectUsageCost(page: Page, adminToken: string, keyID: string, ex
   }, { message: `usage cost for ${keyID}` }).toBe(expectedCostMicros)
 }
 
-test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }, testInfo) => {
+async function setUpstreamMode(request: APIRequestContext, mode: string): Promise<void> {
+  const upstreamPort = process.env.ASTER_E2E_UPSTREAM_PORT || '19000'
+  const response = await request.post(`http://127.0.0.1:${upstreamPort}/__test/mode`, { data: { mode } })
+  expect(response.status()).toBe(200)
+}
+
+test('@e2e-gateway-001 provider-to-gateway request records evidence', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
@@ -116,7 +122,7 @@ test('@smoke @j01 provider-to-gateway request records evidence', async ({ page }
   expect(audit).toContainEqual(expect.objectContaining({ action: 'invoke', resource_type: 'gateway_call' }))
 })
 
-test('@smoke @j05 quota and budget warn, deduplicate, escalate, and reject with evidence', async ({ page }, testInfo) => {
+test('@e2e-gateway-budget-001 quota and budget warn, deduplicate, escalate, and reject with evidence', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
@@ -216,7 +222,7 @@ test('@smoke @j05 quota and budget warn, deduplicate, escalate, and reject with 
   expect(audit).toContainEqual(expect.objectContaining({ action: 'invoke', resource_type: 'gateway_call', summary: expect.stringContaining('status=policy_rejected') }))
 })
 
-test('@smoke @j04 failed primary route falls back and records attempts', async ({ page }, testInfo) => {
+test('@e2e-gateway-failover-001 failed primary route falls back and records attempts', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The API workflow is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
@@ -296,4 +302,161 @@ test('@smoke @j04 failed primary route falls back and records attempts', async (
   expect(String(trace?.route_attempts)).toContain('"outcome":"failed"')
   expect(String(trace?.route_attempts)).toContain('"account_id":"' + fallback.id + '"')
   expect(String(trace?.route_attempts)).toContain('"outcome":"selected"')
+})
+
+test('@e2e-provider-cooldown-001 upstream failure cooldown is cleared in the UI and restores gateway traffic', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-desktop', 'The stateful cooldown lifecycle runs once; surface tests cover responsive projections.')
+  test.setTimeout(60_000)
+
+  const browserErrors = captureBrowserErrors(page)
+  await loginDemo(page)
+  const token = await loginTestPrincipal(page)
+  const runID = `${testInfo.project.name}-${Date.now()}`
+  const upstreamPort = process.env.ASTER_E2E_UPSTREAM_PORT || '19000'
+  const publicModel = `e2e-cooldown-${runID}`
+  const accountName = `E2E Cooldown Account ${runID}`
+  const provider = await adminPost<{ id: string }>(page, token, '/providers', {
+    name: `E2E Cooldown Provider ${runID}`,
+    type: 'openai_compatible',
+    base_url: `http://127.0.0.1:${upstreamPort}/v1`,
+    status: 'active',
+    priority: 10
+  })
+  const account = await adminPost<{ id: string }>(page, token, '/provider-accounts', {
+    provider_id: provider.id,
+    name: accountName,
+    platform: 'openai_compatible',
+    auth_type: 'api_key',
+    status: 'active',
+    schedulable: true,
+    priority: 10,
+    weight: 100,
+    concurrency: 1,
+    rpm_limit: 0,
+    tpm_limit: 0,
+    rate_multiplier: 1,
+    models: ['upstream-model'],
+    auto_enable_new_models: false,
+    group_ids: [],
+    secret: 'synthetic-cooldown-secret',
+    circuit_failure_threshold: 1,
+    circuit_open_seconds: 600,
+    temp_unschedulable_rules: [{ status_code: 500, keywords: ['synthetic upstream failure'], duration_minutes: 10 }]
+  })
+  const model = await adminPost<{ id: string }>(page, token, '/gateway-models', {
+    model_id: publicModel,
+    name: `E2E Cooldown Model ${runID}`,
+    modality: 'chat',
+    default_route_group: 'default',
+    status: 'active'
+  })
+  await adminPost(page, token, '/model-routes', {
+    gateway_model_id: model.id,
+    route_group: 'default',
+    provider_account_id: account.id,
+    upstream_model: 'upstream-model',
+    upstream_format: 'openai_chat',
+    priority: 10,
+    weight: 100,
+    status: 'active'
+  })
+  const workspaceKey = await adminPost<{ key: string; record: { id: string } }>(page, token, '/api-keys', {
+    name: `E2E Cooldown Key ${runID}`,
+    model_allowlist: [publicModel],
+    qps_limit: 10,
+    monthly_token_limit: 100000
+  })
+  const invoke = () => page.request.post('/v1/chat/completions', {
+    data: { model: publicModel, messages: [{ role: 'user', content: 'synthetic cooldown lifecycle request' }] },
+    headers: { Authorization: `Bearer ${workspaceKey.key}` }
+  })
+  const accountState = async () => {
+    const accounts = await envelope<Array<Record<string, unknown>>>(await page.request.get(controlAPI('/provider-accounts'), {
+      headers: { Authorization: `Bearer ${token}` }
+    }))
+    const current = accounts.find((candidate) => candidate.id === account.id)
+    expect(current, `missing provider account ${account.id}`).toBeTruthy()
+    return current!
+  }
+
+  await setUpstreamMode(page.request, 'normal')
+  try {
+    await setUpstreamMode(page.request, '500')
+    const failed = await invoke()
+    expect(failed.status()).toBe(500)
+    expect(await failed.text()).toContain('synthetic upstream failure')
+
+    await expect.poll(async () => accountState()).toMatchObject({
+      circuit_state: 'open',
+      consecutive_failures: 1,
+      temp_unschedulable_reason: expect.stringContaining('keyword="synthetic upstream failure"')
+    })
+    const cooled = await accountState()
+    expect(new Date(String(cooled.cooldown_until)).getTime()).toBeGreaterThan(Date.now() + 9 * 60_000)
+    expect(new Date(String(cooled.circuit_opened_until)).getTime()).toBeGreaterThan(Date.now() + 9 * 60_000)
+
+    const blocked = await invoke()
+    expect(blocked.status()).toBe(503)
+    await expect(blocked.json()).resolves.toMatchObject({ error: { type: 'route_unavailable' } })
+
+    await page.goto('/console/model-services/accounts')
+    let accountRow = page.locator(`tr[data-account-id="${account.id}"]`)
+    await expect(accountRow).toContainText(accountName)
+    await expect(accountRow).toContainText('cooldown')
+    await accountRow.getByRole('button', { name: 'More actions' }).click()
+    const clearResponsePromise = page.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/console/provider-accounts/${account.id}/clear-cooldown`) &&
+      response.request().method() === 'POST'
+    )
+    await accountRow.getByRole('button', { name: 'Clear cooldown' }).click()
+    const clearResponse = await clearResponsePromise
+    expect(clearResponse.status()).toBe(200)
+    const clearBody = await clearResponse.json() as { data: Record<string, unknown> }
+    expect(clearBody.data).toMatchObject({
+      id: account.id,
+      circuit_state: 'closed',
+      consecutive_failures: 0,
+      temp_unschedulable_reason: ''
+    })
+    expect(clearBody.data.cooldown_until).toBeUndefined()
+    expect(clearBody.data.circuit_opened_until).toBeUndefined()
+    await expect(page.getByText('Cooldown cleared')).toBeVisible()
+    await expect(accountRow).not.toContainText('cooldown')
+
+    await page.reload()
+    accountRow = page.locator(`tr[data-account-id="${account.id}"]`)
+    await expect(accountRow).toContainText(accountName)
+    await expect(accountRow).not.toContainText('cooldown')
+    await expect(accountState()).resolves.toMatchObject({
+      circuit_state: 'closed',
+      consecutive_failures: 0,
+      temp_unschedulable_reason: ''
+    })
+
+    await setUpstreamMode(page.request, 'normal')
+    const recovered = await invoke()
+    expect(recovered.status(), await recovered.text()).toBe(200)
+
+    const traces = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/console/gateway-traces?limit=100', {
+      headers: { Authorization: `Bearer ${token}` }
+    }))
+    const lifecycleTraces = traces.filter((trace) => trace.api_key_id === workspaceKey.record.id && trace.model === publicModel)
+    expect(lifecycleTraces).toContainEqual(expect.objectContaining({ provider_account_id: account.id, status: 'upstream_error', http_status: 500 }))
+    expect(lifecycleTraces).toContainEqual(expect.objectContaining({ status: 'error', http_status: 503, error_type: 'route_unavailable' }))
+    expect(lifecycleTraces).toContainEqual(expect.objectContaining({ provider_account_id: account.id, status: 'forwarded', http_status: 200 }))
+
+    const audit = await envelope<Array<Record<string, unknown>>>(await page.request.get('/api/v1/console/audit-logs?limit=100', {
+      headers: { Authorization: `Bearer ${token}` }
+    }))
+    expect(audit).toContainEqual(expect.objectContaining({
+      action: 'clear_cooldown',
+      resource_type: 'provider_account',
+      resource_id: account.id,
+      summary: expect.stringContaining(accountName)
+    }))
+    await testInfo.attach('provider-cooldown-cleared', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
+    expect(browserErrors).toEqual([])
+  } finally {
+    await setUpstreamMode(page.request, 'normal')
+  }
 })

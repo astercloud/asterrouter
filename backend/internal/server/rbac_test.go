@@ -106,6 +106,95 @@ func TestAdminRBACBlocksDeveloperButPortalStillWorks(t *testing.T) {
 	}
 }
 
+func TestAdminRBACRejectsDeveloperSupplyAndPricingOperations(t *testing.T) {
+	handler, control := newTestRuntime(t, RuntimeConfig{AdminToken: "secret"})
+	user, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{
+		Email: "supply-developer@example.com", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleDeveloper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/console/providers"},
+		{method: http.MethodPost, path: "/api/v1/console/providers", body: `{}`},
+		{method: http.MethodPut, path: "/api/v1/console/providers/provider", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/providers/provider/check"},
+		{method: http.MethodGet, path: "/api/v1/console/provider-health-checks"},
+		{method: http.MethodGet, path: "/api/v1/console/provider-accounts"},
+		{method: http.MethodPost, path: "/api/v1/console/provider-accounts", body: `{}`},
+		{method: http.MethodPut, path: "/api/v1/console/provider-accounts/account", body: `{}`},
+		{method: http.MethodDelete, path: "/api/v1/console/provider-accounts/account"},
+		{method: http.MethodPost, path: "/api/v1/console/provider-accounts/account/check"},
+		{method: http.MethodPost, path: "/api/v1/console/provider-accounts/account/clear-cooldown"},
+		{method: http.MethodGet, path: "/api/v1/console/provider-account-health-checks"},
+		{method: http.MethodGet, path: "/api/v1/console/provider-accounts/account/models"},
+		{method: http.MethodPost, path: "/api/v1/console/provider-accounts/account/models/discover"},
+		{method: http.MethodPost, path: "/api/v1/console/provider-accounts/account/models/sync", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/gateway-models"},
+		{method: http.MethodPost, path: "/api/v1/console/gateway-models", body: `{}`},
+		{method: http.MethodPut, path: "/api/v1/console/gateway-models/model", body: `{}`},
+		{method: http.MethodDelete, path: "/api/v1/console/gateway-models/model"},
+		{method: http.MethodGet, path: "/api/v1/console/model-routes"},
+		{method: http.MethodPost, path: "/api/v1/console/model-routes", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/model-routes/bulk", body: `{}`},
+		{method: http.MethodPut, path: "/api/v1/console/model-routes/route", body: `{}`},
+		{method: http.MethodDelete, path: "/api/v1/console/model-routes/route"},
+		{method: http.MethodPost, path: "/api/v1/console/gateway-simulator", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/routing-groups"},
+		{method: http.MethodPost, path: "/api/v1/console/routing-groups", body: `{}`},
+		{method: http.MethodPut, path: "/api/v1/console/routing-groups/group", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/routing-policies"},
+		{method: http.MethodPost, path: "/api/v1/console/routing-policies", body: `{}`},
+		{method: http.MethodPut, path: "/api/v1/console/routing-policies/policy", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/pricing-rules"},
+		{method: http.MethodPost, path: "/api/v1/console/pricing-rules", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/pricing-rules/rule"},
+		{method: http.MethodPut, path: "/api/v1/console/pricing-rules/rule/draft", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/pricing-rules/validate", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/pricing-rules/simulate", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/pricing-rules/rule/publish", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/pricing-rules/rule/activate/version", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/pricing-rules/rule/disable", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/pricing-evaluations/evaluation"},
+		{method: http.MethodGet, path: "/api/v1/console/effective-pricing/report"},
+		{method: http.MethodPut, path: "/api/v1/console/effective-pricing/policy", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/procurement-prices"},
+		{method: http.MethodPost, path: "/api/v1/console/procurement-prices", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/provider-billing-lines", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/provider-billing-sources/inspect", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/provider-billing-sources"},
+		{method: http.MethodPut, path: "/api/v1/console/provider-billing-sources", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/provider-billing-sources/source/sync"},
+		{method: http.MethodGet, path: "/api/v1/console/provider-billing-sources/source/evidence"},
+		{method: http.MethodGet, path: "/api/v1/console/provider-cache-capabilities"},
+		{method: http.MethodPut, path: "/api/v1/console/provider-cache-capabilities", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/provider-cache-probes"},
+		{method: http.MethodPost, path: "/api/v1/console/provider-cache-probes", body: `{}`},
+		{method: http.MethodGet, path: "/api/v1/console/effective-pricing/decisions"},
+		{method: http.MethodGet, path: "/api/v1/console/effective-pricing/decisions/decision/evaluations"},
+		{method: http.MethodPost, path: "/api/v1/console/effective-pricing/decisions/evaluate", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/effective-pricing/decisions/decision/action", body: `{}`},
+	}
+	for _, test := range tests {
+		req := httptest.NewRequest(test.method, test.path, bytes.NewBufferString(test.body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("X-Actor", user.Email)
+		if test.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s status=%d body=%s", test.method, test.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestAdminRBACResourceBindingOnlyGrantsMatchingResource(t *testing.T) {
 	handler, control := newTestRuntime(t, RuntimeConfig{AdminToken: "secret"})
 	user, err := control.CreateWorkspaceUser(context.Background(), "tester", controlplane.WorkspaceUserRequest{
@@ -424,7 +513,7 @@ func TestAdminRBACProtectsPluginAndSystemWrites(t *testing.T) {
 		t.Fatalf("CreateRoleBinding(): %v", err)
 	}
 
-	for _, target := range []string{"/api/v1/console/plugins/catalog-sync", "/api/v1/console/system/update"} {
+	for _, target := range []string{"/api/v1/console/plugins/catalog-sync", "/api/v1/console/system/update", "/api/v1/console/settings/retention/cleanup"} {
 		req := httptest.NewRequest(http.MethodPost, target, nil)
 		req.Header.Set("Authorization", "Bearer secret")
 		req.Header.Set("X-Actor", "auditor@example.com")

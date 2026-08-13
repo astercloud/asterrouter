@@ -31,6 +31,14 @@ const (
 	failureBodyPreviewLimit = 4 << 10
 )
 
+func gatewayAffinityInput(auth gatewaycore.CanonicalAuthContext, request gatewaycore.CanonicalRequest, plan controlplane.GatewayExecutionPlan) controlplane.GatewayAffinityInput {
+	return controlplane.GatewayAffinityInput{
+		ApplicationID: auth.ApplicationID, PrincipalID: auth.PrincipalID, CredentialID: auth.CredentialID,
+		Model: request.Model, Protocol: string(request.Protocol), RouteGroup: plan.RouteGroup, StickyKey: request.StickyKey,
+		AccessPolicyVersion: auth.PolicyVersion, RoutingPolicyID: plan.RoutingPolicyID, RoutingPolicyVersion: plan.RoutingPolicyVersion,
+	}
+}
+
 var (
 	errGatewayRequestTooLarge    = errors.New("gateway request body is too large")
 	errUpstreamResponseTooLarge  = errors.New("upstream response body is too large")
@@ -301,6 +309,16 @@ func attemptGatewayCandidatesForCanonicalRequest(c *gin.Context, control *contro
 			}
 			continue
 		}
+		var failureBodyPreview string
+		if isProviderAccountFailureStatus(candidateResp.StatusCode) {
+			originalBody := candidateResp.Body
+			bodyPreview, _ := io.ReadAll(io.LimitReader(originalBody, failureBodyPreviewLimit))
+			candidateResp.Body = &replayReadCloser{
+				Reader: io.MultiReader(bytes.NewReader(bodyPreview), originalBody),
+				Closer: originalBody,
+			}
+			failureBodyPreview = string(bodyPreview)
+		}
 		if bootstrapErr := prepareCanonicalTextStreamResponse(candidateResp, request, candidate); bootstrapErr != nil {
 			_ = candidateResp.Body.Close()
 			permit.Release()
@@ -328,7 +346,7 @@ func attemptGatewayCandidatesForCanonicalRequest(c *gin.Context, control *contro
 		}
 		if isProviderAccountFailureStatus(candidateResp.StatusCode) {
 			if candidate.AccountID != "" {
-				_ = control.RecordProviderAccountFailure(c.Request.Context(), candidate.AccountID, candidateResp.StatusCode, "")
+				_ = control.RecordProviderAccountFailure(c.Request.Context(), candidate.AccountID, candidateResp.StatusCode, failureBodyPreview)
 			}
 		} else if candidateResp.StatusCode >= 200 && candidateResp.StatusCode < 400 {
 			_ = control.RecordProviderAccountSuccess(c.Request.Context(), candidate.AccountID)

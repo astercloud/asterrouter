@@ -225,6 +225,9 @@ func TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt(t *test
 	if err != nil || decision.Status != EffectivePricingDecisionCanary {
 		t.Fatalf("approve canary decision=%+v err=%v", decision, err)
 	}
+	if _, err := svc.ActOnEffectivePricingDecision(ctx, "tester", decision.ID, EffectivePricingDecisionActionRequest{Action: "approve_canary", CanaryPercent: 100}); err == nil || !strings.Contains(err.Error(), "only recommended decisions") {
+		t.Fatalf("repeated approve canary error=%v", err)
+	}
 	candidates := []GatewayProvider{{ID: "provider-a", AccountID: "account-a"}, {ID: "provider-b", AccountID: "account-b"}}
 	ordered := svc.OrderGatewayCandidatesByEffectivePricing(ctx, "public-model", "openai_chat_completions", "fingerprint-a", candidates)
 	if ordered[0].AccountID != "account-b" || !strings.Contains(ordered[0].SelectionReason, decision.ID) {
@@ -256,6 +259,9 @@ func TestEffectivePricingDecisionCanaryOrdersCandidateAndRollbackStopsIt(t *test
 	ordered = svc.OrderGatewayCandidatesByEffectivePricing(ctx, "public-model", "openai_chat_completions", "fingerprint-a", candidates)
 	if ordered[0].AccountID != "account-a" {
 		t.Fatalf("rolled back decision still changed order=%+v", ordered)
+	}
+	if _, err := svc.ActOnEffectivePricingDecision(ctx, "tester", "missing", EffectivePricingDecisionActionRequest{Action: "hold"}); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing decision action error=%v", err)
 	}
 }
 

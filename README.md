@@ -93,6 +93,21 @@ cd frontend
 npm run build
 ```
 
+## Testing
+
+The machine-readable browser coverage source is [docs/test/v1/scenario-registry.json](./docs/test/v1/scenario-registry.json). The proof levels, fixtures, delivery gates, and evidence rules are documented in [docs/test/v1/README.md](./docs/test/v1/README.md).
+
+```bash
+# Static coverage contract and pull-request browser gate
+cd frontend
+npm run check:e2e-coverage
+npm run test:e2e:pr
+
+# Full local backend, frontend, and browser suite
+cd ..
+bash scripts/test.sh all
+```
+
 ## License
 
 AsterRouter is licensed under the [Apache License 2.0](./LICENSE).

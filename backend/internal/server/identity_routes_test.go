@@ -72,6 +72,12 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 	if bindingResp.Data.UserID != createResp.Data.ID || bindingResp.Data.ScopeType != controlplane.RoleScopeOrganization || bindingResp.Data.ScopeID != "" {
 		t.Fatalf("role binding mismatch: %+v", bindingResp.Data)
 	}
+	bindingsReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/role-bindings", nil)
+	bindingsRec := httptest.NewRecorder()
+	handler.ServeHTTP(bindingsRec, bindingsReq)
+	if bindingsRec.Code != http.StatusOK || !strings.Contains(bindingsRec.Body.String(), bindingResp.Data.ID) {
+		t.Fatalf("list role bindings status = %d body=%s", bindingsRec.Code, bindingsRec.Body.String())
+	}
 
 	usersReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/users", nil)
 	usersRec := httptest.NewRecorder()
@@ -101,6 +107,18 @@ func TestAdminIdentityUserAndRoleBindingEndpoints(t *testing.T) {
 	handler.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
 		t.Fatalf("delete binding status = %d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+	emptyBindingsReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/role-bindings", nil)
+	emptyBindingsRec := httptest.NewRecorder()
+	handler.ServeHTTP(emptyBindingsRec, emptyBindingsReq)
+	if emptyBindingsRec.Code != http.StatusOK || !strings.Contains(emptyBindingsRec.Body.String(), `"data":[]`) {
+		t.Fatalf("empty role bindings status = %d body=%s", emptyBindingsRec.Code, emptyBindingsRec.Body.String())
+	}
+	missingDeleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/console/role-bindings/missing", nil)
+	missingDeleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingDeleteRec, missingDeleteReq)
+	if missingDeleteRec.Code != http.StatusBadRequest || !strings.Contains(missingDeleteRec.Body.String(), "not found") {
+		t.Fatalf("missing role binding delete status = %d body=%s", missingDeleteRec.Code, missingDeleteRec.Body.String())
 	}
 
 	audit, err := control.ListAuditLogs(context.Background(), 20)
@@ -269,10 +287,60 @@ func TestAdminOrganizationGroupLifecycle(t *testing.T) {
 	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), createResponse.Data.ID) {
 		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
 	}
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/organization-groups/"+createResponse.Data.ID, bytes.NewBufferString(`{"name":"AI Platform Updated","description":"Enterprise AI team","status":"disabled","member_ids":["`+user.ID+`","`+user.ID+`"]}`))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	handler.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK || !strings.Contains(updateRec.Body.String(), `"name":"AI Platform Updated"`) || !strings.Contains(updateRec.Body.String(), `"status":"disabled"`) {
+		t.Fatalf("update status=%d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	var updateResponse struct {
+		Data controlplane.OrganizationGroup `json:"data"`
+	}
+	if err := json.Unmarshal(updateRec.Body.Bytes(), &updateResponse); err != nil || len(updateResponse.Data.MemberIDs) != 1 {
+		t.Fatalf("updated membership status=%d body=%s err=%v", updateRec.Code, updateRec.Body.String(), err)
+	}
+	for name, request := range map[string]*http.Request{
+		"missing member create": httptest.NewRequest(http.MethodPost, "/api/v1/console/organization-groups", bytes.NewBufferString(`{"name":"Invalid member","status":"active","member_ids":["missing"]}`)),
+		"missing group update":  httptest.NewRequest(http.MethodPut, "/api/v1/console/organization-groups/missing", bytes.NewBufferString(`{"name":"Missing","status":"active"}`)),
+	} {
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s status=%d body=%s", name, recorder.Code, recorder.Body.String())
+		}
+	}
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/console/organization-groups/"+createResponse.Data.ID, nil)
 	deleteRec := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {
 		t.Fatalf("delete status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+	missingDeleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/console/organization-groups/missing", nil)
+	missingDeleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingDeleteRec, missingDeleteReq)
+	if missingDeleteRec.Code != http.StatusBadRequest || !strings.Contains(missingDeleteRec.Body.String(), "not found") {
+		t.Fatalf("missing delete status=%d body=%s", missingDeleteRec.Code, missingDeleteRec.Body.String())
+	}
+}
+
+func TestAdminIdentityCollectionsRequirePermission(t *testing.T) {
+	handler, control := newTestRuntime(t, RuntimeConfig{AdminToken: "secret"})
+	user, err := control.CreateWorkspaceUser(t.Context(), "tester", controlplane.WorkspaceUserRequest{
+		Email: "identity-reader@example.test", Status: controlplane.WorkspaceUserStatusActive, Role: controlplane.RoleDeveloper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/console/role-bindings", "/api/v1/console/organization-groups"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("X-Actor", user.Email)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("GET %s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
 	}
 }

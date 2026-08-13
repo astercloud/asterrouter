@@ -125,7 +125,7 @@ function updateEnabled(event: Event) {
 
 function openProviderAccounts() {
   closeModal()
-  void router.push('/console/provider-accounts')
+  void router.push('/console/model-services/accounts')
 }
 
 function closeModal() {

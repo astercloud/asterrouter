@@ -16,14 +16,16 @@ const (
 )
 
 type GatewayAffinityInput struct {
-	ApplicationID string
-	PrincipalID   string
-	CredentialID  string
-	Model         string
-	Protocol      string
-	RouteGroup    string
-	StickyKey     string
-	PolicyVersion int
+	ApplicationID        string
+	PrincipalID          string
+	CredentialID         string
+	Model                string
+	Protocol             string
+	RouteGroup           string
+	StickyKey            string
+	AccessPolicyVersion  int
+	RoutingPolicyID      string
+	RoutingPolicyVersion int
 }
 
 type GatewayUpstreamAffinity struct {
@@ -73,7 +75,8 @@ func (s *Service) gatewayUpstreamAffinityValue(input GatewayAffinityInput, provi
 	}
 	identity := strings.Join([]string{
 		"upstream_cache", input.ApplicationID, principalID, input.CredentialID, input.Model, input.Protocol,
-		input.RouteGroup, input.StickyKey, strconv.Itoa(input.PolicyVersion), provider.ID, provider.AccountID, provider.UpstreamModel,
+		input.RouteGroup, input.StickyKey, strconv.Itoa(input.AccessPolicyVersion), input.RoutingPolicyID,
+		strconv.Itoa(input.RoutingPolicyVersion), provider.ID, provider.AccountID, provider.UpstreamModel,
 	}, "\x00")
 	mac := hmac.New(sha256.New, []byte(s.secretKey))
 	_, _ = mac.Write([]byte(identity))
@@ -118,7 +121,7 @@ func (s *Service) BindGatewayCandidateAffinity(ctx context.Context, input Gatewa
 	supplierBinding := RoutingAffinityBinding{
 		ScopeKey: s.gatewayAffinityScopeKey(AffinityBindingSupplier, input), Kind: AffinityBindingSupplier,
 		ProviderID: provider.ID, Model: strings.TrimSpace(input.Model), Protocol: strings.TrimSpace(input.Protocol),
-		PolicyVersion: input.PolicyVersion, CreatedAt: now, LastReusedAt: now, ExpiresAt: now.Add(supplierTTL),
+		PolicyVersion: input.RoutingPolicyVersion, CreatedAt: now, LastReusedAt: now, ExpiresAt: now.Add(supplierTTL),
 	}
 	supplierWinner, err := s.claimRoutingAffinityBinding(ctx, supplierBinding, supplierTTL)
 	if err != nil {
@@ -136,7 +139,7 @@ func (s *Service) BindGatewayCandidateAffinity(ctx context.Context, input Gatewa
 	accountBinding := RoutingAffinityBinding{
 		ScopeKey: s.gatewayAffinityScopeKey(AffinityBindingAccount, input), Kind: AffinityBindingAccount,
 		ProviderID: provider.ID, ProviderAccountID: provider.AccountID, RouteID: provider.RouteID,
-		Model: strings.TrimSpace(input.Model), Protocol: strings.TrimSpace(input.Protocol), PolicyVersion: input.PolicyVersion,
+		Model: strings.TrimSpace(input.Model), Protocol: strings.TrimSpace(input.Protocol), PolicyVersion: input.RoutingPolicyVersion,
 		CreatedAt: now, LastReusedAt: now, ExpiresAt: now.Add(accountTTL),
 	}
 	_, err = s.claimRoutingAffinityBinding(ctx, accountBinding, accountTTL)
@@ -234,13 +237,15 @@ func (s *Service) gatewayAffinityScopeKey(kind string, input GatewayAffinityInpu
 	identity := ""
 	switch kind {
 	case AffinityBindingAccount:
-		identity = strings.Join([]string{kind, input.CredentialID, input.Model, input.Protocol, input.RouteGroup, input.StickyKey, strconv.Itoa(input.PolicyVersion)}, "\x00")
+		identity = strings.Join([]string{kind, input.CredentialID, input.Model, input.Protocol, input.RouteGroup, input.StickyKey,
+			strconv.Itoa(input.AccessPolicyVersion), input.RoutingPolicyID, strconv.Itoa(input.RoutingPolicyVersion)}, "\x00")
 	default:
 		principalID := strings.TrimSpace(input.PrincipalID)
 		if principalID == "" {
 			principalID = strings.TrimSpace(input.CredentialID)
 		}
-		identity = strings.Join([]string{kind, input.ApplicationID, principalID, input.Model, input.Protocol, input.RouteGroup, strconv.Itoa(input.PolicyVersion)}, "\x00")
+		identity = strings.Join([]string{kind, input.ApplicationID, principalID, input.Model, input.Protocol, input.RouteGroup,
+			strconv.Itoa(input.AccessPolicyVersion), input.RoutingPolicyID, strconv.Itoa(input.RoutingPolicyVersion)}, "\x00")
 	}
 	mac := hmac.New(sha256.New, []byte(s.secretKey))
 	_, _ = mac.Write([]byte(identity))

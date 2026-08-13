@@ -5,7 +5,7 @@ description: Author and run risk-based tests for AsterRouter changes across the 
 
 # AsterRouter Test Authoring
 
-Read `docs/test/v1/README.md` before broad or cross-surface changes. Treat that plan as the source of truth for priorities, environments, and release gates.
+Read `docs/test/v1/README.md` and `docs/test/v1/scenario-registry.json` before broad or cross-surface changes. Treat them as the source of truth for proof levels, priorities, environments, and delivery gates.
 
 ## Select the test layer
 
@@ -20,6 +20,7 @@ Use these project conventions:
 - Use `httptest` for HTTP routes, authentication middleware, gateway forwarding, streaming, and upstream failures.
 - Use memory repositories for fast domain tests; use PostgreSQL for SQL, transactions, constraints, migration compatibility, and restart persistence.
 - Add frontend unit or component tests for deterministic state and rendering. Use browser tests for routing, authentication, forms, responsive behavior, and multi-step workflows.
+- Give every Playwright test one unique `@e2e-*` scenario ID and register its owner, fixture, proof level, claim boundary, routes, and delivery gates. New user-visible routes must have both a surface contract and a vertical journey.
 - Do not add production-only test hooks. Extract a real interface only when it improves production design.
 - Mock official services, identity providers, mail, object storage, plugins, and model upstreams by default. Never send secrets or test traffic to production.
 
@@ -55,9 +56,10 @@ cd frontend
 npm run typecheck
 npm run build
 npm run check:enterprise-surface
+npm run check:e2e-coverage
 ```
 
-When the test scripts defined by the v1 plan are present, also run the relevant `test:unit` and `test:e2e` targets. Do not claim frontend regression coverage based on typecheck or build alone.
+Run `test:e2e:pr`, `test:e2e:full`, or `test:e2e:release` according to the gate declared by the registry. Do not select release scenarios with hand-maintained grep lists, and do not claim frontend regression coverage based on typecheck or build alone.
 
 ## Report evidence
 

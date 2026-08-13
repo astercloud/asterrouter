@@ -73,6 +73,45 @@ func TestAdminRecordExportEndpointsSupportQueryParameters(t *testing.T) {
 	if len(auditRows) != 2 || auditRows[0][2] != "action" || auditRows[1][2] != "invoke" || !strings.Contains(auditRows[1][5], "Export") {
 		t.Fatalf("audit export query not applied: %+v", auditRows)
 	}
+
+	costReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/cost-allocation/export?dimension=api_key&api_key_id="+created.Record.ID+"&limit=10", nil)
+	costRec := httptest.NewRecorder()
+	handler.ServeHTTP(costRec, costReq)
+	costRows := readCSVRows(t, costRec)
+	if len(costRows) != 2 || costRows[0][0] != "dimension" || costRows[1][0] != controlplane.CostAllocationByAPIKey || costRows[1][3] != created.Record.ID || costRows[1][7] != "2" {
+		t.Fatalf("cost allocation export query not applied: %+v", costRows)
+	}
+
+	invalidCostReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/cost-allocation/export?dimension=project", nil)
+	invalidCostRec := httptest.NewRecorder()
+	handler.ServeHTTP(invalidCostRec, invalidCostReq)
+	if invalidCostRec.Code != http.StatusBadRequest || !strings.Contains(invalidCostRec.Body.String(), "invalid cost allocation dimension") {
+		t.Fatalf("invalid cost allocation export status=%d body=%s", invalidCostRec.Code, invalidCostRec.Body.String())
+	}
+
+	emptyUsageReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/usage/export?model=missing&limit=-1&offset=-1", nil)
+	emptyUsageRec := httptest.NewRecorder()
+	handler.ServeHTTP(emptyUsageRec, emptyUsageReq)
+	if rows := readCSVRows(t, emptyUsageRec); len(rows) != 1 {
+		t.Fatalf("empty usage export should contain only its header: %+v", rows)
+	}
+}
+
+func TestAdminRecordExportEndpointsRequireAuthentication(t *testing.T) {
+	handler, _ := newTestRuntime(t, RuntimeConfig{AdminToken: "secret"})
+	for _, path := range []string{
+		"/api/v1/console/usage/export",
+		"/api/v1/console/gateway-traces/export",
+		"/api/v1/console/audit-logs/export",
+		"/api/v1/console/cost-allocation/export?dimension=api_key",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
 }
 
 func TestAdminAsyncExportJobLifecycle(t *testing.T) {
@@ -121,6 +160,19 @@ func TestAdminAsyncExportJobLifecycle(t *testing.T) {
 	rows := readCSVRows(t, downloadRec)
 	if len(rows) != 2 || rows[1][2] != "invoke" || !strings.Contains(rows[1][5], "AsyncExport") {
 		t.Fatalf("async export CSV mismatch: %+v", rows)
+	}
+	repeatDownloadReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/export-jobs/"+job.ID+"/download", nil)
+	repeatDownloadRec := httptest.NewRecorder()
+	handler.ServeHTTP(repeatDownloadRec, repeatDownloadReq)
+	if repeatedRows := readCSVRows(t, repeatDownloadRec); len(repeatedRows) != len(rows) || repeatedRows[1][5] != rows[1][5] {
+		t.Fatalf("repeat async export CSV mismatch: first=%+v repeated=%+v", rows, repeatedRows)
+	}
+
+	missingDownloadReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/export-jobs/export_missing/download", nil)
+	missingDownloadRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingDownloadRec, missingDownloadReq)
+	if missingDownloadRec.Code != http.StatusNotFound || !strings.Contains(missingDownloadRec.Body.String(), `"code":1803`) {
+		t.Fatalf("missing export download status = %d body=%s", missingDownloadRec.Code, missingDownloadRec.Body.String())
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/export-jobs?limit=5", nil)

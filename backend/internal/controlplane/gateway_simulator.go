@@ -34,12 +34,16 @@ type GatewaySimulationCandidate struct {
 }
 
 type GatewaySimulation struct {
-	RequestedModel string                       `json:"requested_model"`
-	ResolvedModel  string                       `json:"resolved_model"`
-	RouteGroup     string                       `json:"route_group"`
-	Status         string                       `json:"status"`
-	Summary        string                       `json:"summary"`
-	Candidates     []GatewaySimulationCandidate `json:"candidates"`
+	RequestedModel       string                       `json:"requested_model"`
+	ResolvedModel        string                       `json:"resolved_model"`
+	RouteGroup           string                       `json:"route_group"`
+	Status               string                       `json:"status"`
+	Summary              string                       `json:"summary"`
+	RejectionReason      string                       `json:"rejection_reason,omitempty"`
+	RoutingPolicyID      string                       `json:"routing_policy_id,omitempty"`
+	RoutingPolicyVersion int                          `json:"routing_policy_version,omitempty"`
+	RoutingPolicyPreset  string                       `json:"routing_policy_preset,omitempty"`
+	Candidates           []GatewaySimulationCandidate `json:"candidates"`
 }
 
 func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulationRequest) (GatewaySimulation, error) {
@@ -54,7 +58,28 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 	}
 	result.ResolvedModel = resolved.GatewayModel.ModelID
 	result.RouteGroup = resolved.RouteGroup
-	ranked, hasRoutes, err := s.rankedModelRouteCandidates(ctx, resolved)
+	policy, err := s.activeRoutingPolicyForGroup(ctx, resolved.RouteGroup)
+	if err != nil {
+		return GatewaySimulation{}, err
+	}
+	if policy != nil {
+		result.RoutingPolicyID = policy.ID
+		result.RoutingPolicyVersion = policy.Version
+		result.RoutingPolicyPreset = policy.Strategy.Preset
+	}
+	if policy != nil && !routingPolicyAllowsModel(policy.Strategy, resolved.RequestedID) {
+		return s.blockedGatewaySimulation(ctx, result, resolved, "routing_policy_model_blocked")
+	}
+	if protocol := strings.TrimSpace(req.Protocol); protocol != "" {
+		if !routingPolicyProtocolSupported(protocol) {
+			return s.blockedGatewaySimulation(ctx, result, resolved, "client_protocol_unsupported")
+		}
+		if policy != nil && !routingPolicyAllowsProtocol(policy.Strategy, protocol) {
+			return s.blockedGatewaySimulation(ctx, result, resolved, "routing_policy_protocol_blocked")
+		}
+	}
+
+	baseCandidates, hasRoutes, err := s.GatewayProviderCandidatesForModel(ctx, req.Model)
 	if err != nil {
 		return GatewaySimulation{}, err
 	}
@@ -63,36 +88,93 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 		result.Summary = "no model routes exist for the resolved route group"
 		return result, nil
 	}
-	rankedByRouteID := make(map[string]struct{}, len(ranked))
-	for _, candidate := range ranked {
-		rankedByRouteID[candidate.route.ID] = struct{}{}
+	decision, err := s.applyRoutingPolicyCandidateRules(ctx, policy, strings.TrimSpace(req.Protocol), baseCandidates)
+	if err != nil {
+		return GatewaySimulation{}, err
 	}
-	for index, candidate := range ranked {
-		provider := GatewayProvider{
-			AccountID: candidate.account.ID, RPMLimit: candidate.account.RPMLimit, TPMLimit: candidate.account.TPMLimit,
-			CircuitState: candidate.circuitState, CircuitProbe: candidate.circuitProbe, Concurrency: candidate.account.Concurrency,
-		}
-		reason := simulationPermitReason(s, provider, req.EstimatedTokens)
+	baseByRouteID := make(map[string]GatewayProvider, len(baseCandidates))
+	for _, candidate := range baseCandidates {
+		baseByRouteID[candidate.RouteID] = candidate
+	}
+	for index, candidate := range decision.Candidates {
+		reason := simulationPermitReason(s, candidate, req.EstimatedTokens)
 		if reason == "" {
-			reason = simulationProtocolReason(req.Protocol, req.RequiredFeatures, candidate.route.UpstreamFormat)
+			reason = simulationProtocolReason(req.Protocol, req.RequiredFeatures, candidate.UpstreamFormat)
 		}
-		result.Candidates = append(result.Candidates, GatewaySimulationCandidate{
-			Rank: index + 1, RouteID: candidate.route.ID, RouteGroup: candidate.route.RouteGroup,
-			ProviderID: candidate.provider.ID, ProviderAccountID: candidate.account.ID, UpstreamModel: ProviderAccountDispatchModel(candidate.account, candidate.route.UpstreamModel, resolved.RequestedID),
-			ProviderType: candidate.provider.Type, UpstreamFormat: candidate.route.UpstreamFormat, Adapter: candidate.provider.Type,
-			Headroom: candidate.headroom, RPMLimit: candidate.account.RPMLimit, TPMLimit: candidate.account.TPMLimit,
-			Concurrency: candidate.account.Concurrency, CircuitState: candidate.circuitState,
-			Eligible: reason == "", Reason: reason,
-		})
+		result.Candidates = append(result.Candidates, gatewaySimulationCandidate(candidate, index+1, reason))
 	}
-	skipped, err := s.skippedSimulationCandidates(ctx, resolved, rankedByRouteID, len(result.Candidates)+1)
+	for _, exclusion := range decision.Exclusions {
+		candidate, found := baseByRouteID[exclusion.RouteID]
+		if !found {
+			continue
+		}
+		result.Candidates = append(result.Candidates, gatewaySimulationCandidate(candidate, len(result.Candidates)+1, exclusion.Reason))
+	}
+	consideredByRouteID := make(map[string]struct{}, len(baseCandidates))
+	for _, candidate := range baseCandidates {
+		consideredByRouteID[candidate.RouteID] = struct{}{}
+	}
+	skipped, err := s.skippedSimulationCandidates(ctx, resolved, consideredByRouteID, len(result.Candidates)+1)
 	if err != nil {
 		return GatewaySimulation{}, err
 	}
 	result.Candidates = append(result.Candidates, skipped...)
-	result.Status = "ready"
-	result.Summary = fmt.Sprintf("resolved %d candidates without consuming scheduling capacity", len(result.Candidates))
+	eligible := 0
+	for _, candidate := range result.Candidates {
+		if candidate.Eligible {
+			eligible++
+		}
+	}
+	if eligible == 0 {
+		result.Status = "blocked"
+		result.RejectionReason = "all_candidates_excluded"
+	} else {
+		result.Status = "ready"
+	}
+	result.Summary = fmt.Sprintf("resolved %d eligible candidates from %d routes without consuming scheduling capacity", eligible, len(result.Candidates))
 	return result, nil
+}
+
+func (s *Service) blockedGatewaySimulation(ctx context.Context, result GatewaySimulation, resolved ResolvedGatewayModel, reason string) (GatewaySimulation, error) {
+	result.Status = "blocked"
+	result.RejectionReason = reason
+	ranked, _, err := s.rankedModelRouteCandidates(ctx, resolved)
+	if err != nil {
+		return GatewaySimulation{}, err
+	}
+	considered := make(map[string]struct{}, len(ranked))
+	for _, candidate := range ranked {
+		considered[candidate.route.ID] = struct{}{}
+		provider := GatewayProvider{
+			ID: candidate.provider.ID, Type: candidate.provider.Type, AccountID: candidate.account.ID,
+			UpstreamModel:  ProviderAccountDispatchModel(candidate.account, candidate.route.UpstreamModel, resolved.RequestedID),
+			UpstreamFormat: candidate.route.UpstreamFormat, RouteID: candidate.route.ID, RouteGroup: candidate.route.RouteGroup,
+			RPMLimit: candidate.account.RPMLimit, TPMLimit: candidate.account.TPMLimit, Concurrency: candidate.account.Concurrency,
+			CircuitState: candidate.circuitState, Headroom: candidate.headroom,
+		}
+		result.Candidates = append(result.Candidates, gatewaySimulationCandidate(provider, len(result.Candidates)+1, reason))
+	}
+	skipped, err := s.skippedSimulationCandidates(ctx, resolved, considered, len(result.Candidates)+1)
+	if err != nil {
+		return GatewaySimulation{}, err
+	}
+	for index := range skipped {
+		skipped[index].Reason = reason
+	}
+	result.Candidates = append(result.Candidates, skipped...)
+	result.Summary = fmt.Sprintf("routing policy blocked all %d routes: %s", len(result.Candidates), reason)
+	return result, nil
+}
+
+func gatewaySimulationCandidate(candidate GatewayProvider, rank int, reason string) GatewaySimulationCandidate {
+	return GatewaySimulationCandidate{
+		Rank: rank, RouteID: candidate.RouteID, RouteGroup: candidate.RouteGroup,
+		ProviderID: candidate.ID, ProviderAccountID: candidate.AccountID, UpstreamModel: candidate.UpstreamModel,
+		ProviderType: candidate.Type, UpstreamFormat: candidate.UpstreamFormat, Adapter: candidate.Type,
+		Headroom: candidate.Headroom, RPMLimit: candidate.RPMLimit, TPMLimit: candidate.TPMLimit,
+		Concurrency: candidate.Concurrency, CircuitState: candidate.CircuitState,
+		Eligible: reason == "", Reason: reason,
+	}
 }
 
 func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved ResolvedGatewayModel, ranked map[string]struct{}, rankStart int) ([]GatewaySimulationCandidate, error) {
@@ -173,13 +255,13 @@ func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved Reso
 
 func simulationProtocolReason(protocol string, features []string, upstreamFormat string) string {
 	protocol = strings.TrimSpace(protocol)
-	if protocol != "" && !oneOf(protocol, "openai_chat_completions", "openai_responses", "openai_embeddings", "anthropic_messages", "gemini_generate_content") {
+	if protocol != "" && !routingPolicyProtocolSupported(protocol) {
 		return "client_protocol_unsupported"
 	}
 	if protocol == "openai_embeddings" && upstreamFormat != UpstreamFormatOpenAIEmbeddings {
 		return "protocol_incompatible:openai_embeddings"
 	}
-	if protocol != "" && upstreamFormat == UpstreamFormatNativeMedia {
+	if protocol != "" && upstreamFormat == UpstreamFormatNativeMedia && !routingPolicyNativeProtocolMatches(protocol, upstreamFormat) {
 		return "protocol_incompatible:native_media"
 	}
 	for _, feature := range cleanStringList(features) {

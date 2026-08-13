@@ -234,6 +234,15 @@ func TestPlanCanonicalGatewayRequestRecordsCandidateExclusions(t *testing.T) {
 			if !plan.HasRoutes || len(plan.Candidates) != 0 || plan.RejectionReason != "all_candidates_excluded" || len(plan.Exclusions) != 1 || plan.Exclusions[0].RouteID != route.ID || plan.Exclusions[0].Reason != test.wantReason {
 				t.Fatalf("plan = %+v", plan)
 			}
+			simulation, err := svc.SimulateGatewayRouting(ctx, GatewaySimulationRequest{
+				Model: "public-model", Protocol: string(gatewaycore.ProtocolOpenAIChat), EstimatedTokens: 100,
+			})
+			if err != nil {
+				t.Fatalf("SimulateGatewayRouting(): %v", err)
+			}
+			if simulation.Status != "blocked" || simulation.RejectionReason != "all_candidates_excluded" || len(simulation.Candidates) != 1 || simulation.Candidates[0].RouteID != route.ID || simulation.Candidates[0].Eligible || simulation.Candidates[0].Reason != test.wantReason {
+				t.Fatalf("simulation = %+v", simulation)
+			}
 		})
 	}
 }

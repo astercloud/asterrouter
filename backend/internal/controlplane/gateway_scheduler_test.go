@@ -109,7 +109,7 @@ func TestGatewayCandidateAffinityReusesAccountThenSupplierWithinScope(t *testing
 	}
 	input := GatewayAffinityInput{
 		ApplicationID: "application-a", PrincipalID: "customer-a", CredentialID: "key-a", Model: "public-model",
-		Protocol: "openai_chat", RouteGroup: "stable", StickyKey: "session-1", PolicyVersion: 3,
+		Protocol: "openai_chat", RouteGroup: "stable", StickyKey: "session-1", RoutingPolicyVersion: 3,
 	}
 	if err := svc.BindGatewayCandidateAffinity(ctx, input, candidates[1]); err != nil {
 		t.Fatalf("BindGatewayCandidateAffinity(): %v", err)
@@ -168,7 +168,7 @@ func TestResolveGatewayUpstreamAffinityUsesVerifiedCapabilityAndOpaqueValue(t *t
 	}
 	input := GatewayAffinityInput{
 		ApplicationID: "application-a", PrincipalID: "customer-a", CredentialID: "key-a", Model: "public-model",
-		Protocol: "openai_chat_completions", RouteGroup: "default", StickyKey: "raw-session-secret", PolicyVersion: 3,
+		Protocol: "openai_chat_completions", RouteGroup: "default", StickyKey: "raw-session-secret", RoutingPolicyVersion: 3,
 	}
 	provider := GatewayProvider{ID: "provider-a", AccountID: "account-a", UpstreamModel: "upstream-model"}
 	first, found, err := svc.ResolveGatewayUpstreamAffinity(ctx, input, provider)

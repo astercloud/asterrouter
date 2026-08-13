@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { envelope as data, loginDemo, loginTestPrincipal } from './fixtures'
 
-test('@smoke @j02 logout immediately revokes a dedicated user session', async ({ page }, testInfo) => {
+test('@e2e-session-001 logout immediately revokes a dedicated user session', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The session contract is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)
@@ -44,7 +44,7 @@ test('@smoke @j02 logout immediately revokes a dedicated user session', async ({
   })).status()).toBe(200)
 })
 
-test('@smoke @j02 role changes and disabling immediately revoke existing user sessions', async ({ page }, testInfo) => {
+test('@e2e-session-002 role changes and disabling immediately revoke existing user sessions', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-desktop', 'The session contract is viewport-independent and runs once on desktop.')
 
   await loginDemo(page)

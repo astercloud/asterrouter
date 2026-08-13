@@ -568,6 +568,277 @@ func TestGatewayChatCompletionFallsBackToNextAccountAfterUpstreamFailure(t *test
 	}
 }
 
+func TestRoutingPolicyFailoverToggleControlsRealGatewayAttempts(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		failoverEnabled bool
+		wantStatus      int
+		wantBackupCalls int32
+	}{
+		{name: "disabled", failoverEnabled: false, wantStatus: http.StatusUnauthorized, wantBackupCalls: 0},
+		{name: "enabled", failoverEnabled: true, wantStatus: http.StatusOK, wantBackupCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var primaryCalls, backupCalls atomic.Int32
+			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				primaryCalls.Add(1)
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":{"type":"invalid_api_key","message":"revoked"}}`))
+			}))
+			defer primary.Close()
+			backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				backupCalls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"policy-fallback","choices":[{"message":{"content":"fallback-ok"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`))
+			}))
+			defer backup.Close()
+
+			handler, control := newTestRuntime(t, RuntimeConfig{})
+			primaryProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+				Name: "Policy primary", Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: primary.URL + "/v1", Status: controlplane.ProviderStatusActive,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			backupProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+				Name: "Policy backup", Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: backup.URL + "/v1", Status: controlplane.ProviderStatusActive,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			primaryAccount := createGatewayTestAccount(t, control, primaryProvider, "policy-upstream", "primary-secret", 10, 3)
+			backupAccount := createGatewayTestAccount(t, control, backupProvider, "policy-upstream", "backup-secret", 20, 3)
+			createGatewayTestModelAndRoutes(t, control, "policy-failover-model", controlplane.DefaultModelRouteGroup, []gatewayTestRoute{
+				{account: primaryAccount, upstreamModel: "policy-upstream", priority: 10},
+				{account: backupAccount, upstreamModel: "policy-upstream", priority: 20},
+			})
+			policy, err := control.CreateRoutingPolicy(context.Background(), "tester", controlplane.RoutingPolicyRequest{
+				Name: "Real gateway failover", RouteGroup: controlplane.DefaultModelRouteGroup, Status: controlplane.RoutingPolicyStatusActive,
+				Strategy: controlplane.RoutingPolicyStrategy{
+					Preset: controlplane.RoutingPolicyPresetBalanced, StickyTTLSeconds: 900,
+					FailoverBeforeFirstByte: test.failoverEnabled, LowPricePoolMode: controlplane.RoutingPolicyLowPriceNone,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
+				Name: "Policy gateway key", ModelAllowlist: []string{"policy-failover-model"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"policy-failover-model","messages":[{"role":"user","content":"policy"}]}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+key.Key)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != test.wantStatus || primaryCalls.Load() != 1 || backupCalls.Load() != test.wantBackupCalls {
+				t.Fatalf("status=%d primary=%d backup=%d body=%s", rec.Code, primaryCalls.Load(), backupCalls.Load(), rec.Body.String())
+			}
+			traces, err := control.ListGatewayTraces(context.Background(), 10)
+			if err != nil || len(traces) != 1 {
+				t.Fatalf("traces=%+v err=%v", traces, err)
+			}
+			trace := traces[0]
+			if !strings.Contains(trace.RouteReason, "routing_policy="+policy.ID) || !strings.Contains(trace.RouteReason, "routing_policy_version=1") || !strings.Contains(trace.RouteReason, "preset=balanced") {
+				t.Fatalf("routing decision evidence missing: %+v", trace)
+			}
+			if test.failoverEnabled {
+				if !strings.Contains(trace.RouteAttempts, `"account_id":"`+primaryAccount.ID+`"`) || !strings.Contains(trace.RouteAttempts, `"outcome":"failed"`) || !strings.Contains(trace.RouteAttempts, `"account_id":"`+backupAccount.ID+`"`) || !strings.Contains(trace.RouteAttempts, `"outcome":"selected"`) {
+					t.Fatalf("enabled failover attempts=%s", trace.RouteAttempts)
+				}
+			} else if !strings.Contains(trace.RouteAttempts, `"account_id":"`+backupAccount.ID+`"`) || !strings.Contains(trace.RouteAttempts, `"outcome":"excluded"`) || !strings.Contains(trace.RouteAttempts, "routing_policy_failover_disabled") {
+				t.Fatalf("disabled failover evidence=%s", trace.RouteAttempts)
+			}
+		})
+	}
+}
+
+func TestRoutingPolicyUpdateInvalidatesStickyGatewaySelection(t *testing.T) {
+	var priorityCalls, cheapCalls atomic.Int32
+	priorityUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		priorityCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"priority","choices":[{"message":{"content":"priority"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer priorityUpstream.Close()
+	cheapUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		cheapCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"cheap","choices":[{"message":{"content":"cheap"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer cheapUpstream.Close()
+
+	handler, control := newTestRuntime(t, RuntimeConfig{})
+	priorityProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Priority", Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: priorityUpstream.URL + "/v1", Status: controlplane.ProviderStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cheapProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{Name: "Cheap", Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: cheapUpstream.URL + "/v1", Status: controlplane.ProviderStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createAccount := func(provider controlplane.ProviderConnection, name string, priority int, rate float64) controlplane.ProviderAccount {
+		schedulable := true
+		account, createErr := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+			ProviderID: provider.ID, Name: name, Platform: controlplane.ProviderTypeOpenAICompatible, AuthType: controlplane.ProviderAuthAPIKey,
+			Status: controlplane.AccountStatusActive, Schedulable: &schedulable, Priority: priority, Concurrency: 3,
+			RateMultiplier: rate, Models: []string{"policy-version-upstream"}, Secret: name + "-secret",
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return account
+	}
+	priorityAccount := createAccount(priorityProvider, "Priority account", 10, 2)
+	cheapAccount := createAccount(cheapProvider, "Cheap account", 20, 0.5)
+	createGatewayTestModelAndRoutes(t, control, "policy-version-model", controlplane.DefaultModelRouteGroup, []gatewayTestRoute{
+		{account: priorityAccount, upstreamModel: "policy-version-upstream", priority: 10},
+		{account: cheapAccount, upstreamModel: "policy-version-upstream", priority: 20},
+	})
+	policy, err := control.CreateRoutingPolicy(context.Background(), "tester", controlplane.RoutingPolicyRequest{
+		Name: "Sticky policy version", RouteGroup: controlplane.DefaultModelRouteGroup, Status: controlplane.RoutingPolicyStatusActive,
+		Strategy: controlplane.RoutingPolicyStrategy{Preset: controlplane.RoutingPolicyPresetBalanced, StickyRouting: true, StickyTTLSeconds: 900, FailoverBeforeFirstByte: true, LowPricePoolMode: controlplane.RoutingPolicyLowPriceNone},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{Name: "Sticky policy key", ModelAllowlist: []string{"policy-version-model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoke := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"policy-version-model","messages":[{"role":"user","content":"policy version"}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+key.Key)
+		req.Header.Set("X-AsterRouter-Sticky-Key", "stable-enterprise-session")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := invoke(); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "priority") {
+		t.Fatalf("version one status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := control.UpdateRoutingPolicy(context.Background(), "tester", policy.ID, controlplane.RoutingPolicyRequest{
+		Name: policy.Name, RouteGroup: policy.RouteGroup, Status: policy.Status,
+		Strategy: controlplane.RoutingPolicyStrategy{Preset: controlplane.RoutingPolicyPresetCost, StickyRouting: true, StickyTTLSeconds: 900, FailoverBeforeFirstByte: true, LowPricePoolMode: controlplane.RoutingPolicyLowPriceNone},
+	})
+	if err != nil || updated.Version != 2 {
+		t.Fatalf("updated policy=%+v err=%v", updated, err)
+	}
+	if rec := invoke(); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "cheap") {
+		t.Fatalf("version two status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if priorityCalls.Load() != 1 || cheapCalls.Load() != 1 {
+		t.Fatalf("priority calls=%d cheap calls=%d", priorityCalls.Load(), cheapCalls.Load())
+	}
+	traces, err := control.ListGatewayTraces(context.Background(), 10)
+	if err != nil || len(traces) != 2 || !strings.Contains(traces[0].RouteReason, "routing_policy_version=2") || !strings.Contains(traces[0].RouteReason, "preset=cost") {
+		t.Fatalf("updated routing trace evidence=%+v err=%v", traces, err)
+	}
+}
+
+func TestRoutingPolicySmartOptimizationReordersRealGatewayRequest(t *testing.T) {
+	var currentCalls, candidateCalls atomic.Int32
+	current := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		currentCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"current","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"current"},"finish_reason":"stop"}]}`))
+	}))
+	defer current.Close()
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		candidateCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"effective-cost-candidate","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"candidate"},"finish_reason":"stop"}]}`))
+	}))
+	defer candidate.Close()
+
+	handler, control := newTestRuntime(t, RuntimeConfig{})
+	currentProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name: "Current cost provider", Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: current.URL + "/v1", Status: controlplane.ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name: "Effective cost candidate", Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: candidate.URL + "/v1", Status: controlplane.ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentAccount := createGatewayTestAccount(t, control, currentProvider, "shared-upstream", "current-secret", 10, 2)
+	candidateAccount := createGatewayTestAccount(t, control, candidateProvider, "shared-upstream", "candidate-secret", 20, 2)
+	createGatewayTestModelAndRoutes(t, control, "effective-routing", controlplane.DefaultModelRouteGroup, []gatewayTestRoute{
+		{account: currentAccount, upstreamModel: "shared-upstream", priority: 10},
+		{account: candidateAccount, upstreamModel: "shared-upstream", priority: 20},
+	})
+	policy, err := control.CreateRoutingPolicy(context.Background(), "tester", controlplane.RoutingPolicyRequest{
+		Name: "Smart effective cost", RouteGroup: controlplane.DefaultModelRouteGroup, Status: controlplane.RoutingPolicyStatusActive,
+		Strategy: controlplane.RoutingPolicyStrategy{
+			Preset: controlplane.RoutingPolicyPresetBalanced, SmartOptimization: true, StickyTTLSeconds: 900,
+			FailoverBeforeFirstByte: true, LowPricePoolMode: controlplane.RoutingPolicyLowPriceNone,
+			ResourceBatches: []controlplane.RoutingPolicyBatch{{Name: "Production", ProviderAccountIDs: []string{currentAccount.ID, candidateAccount.ID}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := control.UpdateEffectivePricingPolicy(context.Background(), "tester", controlplane.EffectivePricingPolicyRequest{
+		Mode: controlplane.EffectivePricingModeRecommend, WindowHours: 24, MinSampleCount: 1, MinMetricsCoverage: 0.5,
+		MinCostImprovement: 0.08, MaxCacheTiebreakCostRegression: 0.02, MaxErrorRateRegression: 0.01,
+		MaxP95LatencyRegression: 0.2, CanaryPercent: 100, SupplierAffinityTTLSeconds: 3600, AccountAffinityTTLSeconds: 1800,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	totalTokens, uncachedTokens := 100, 100
+	currentCost, candidateCost := int64(100), int64(50)
+	for _, input := range []controlplane.GatewayUsageInput{
+		{Model: "effective-routing", UpstreamModel: "shared-upstream", Protocol: string(gatewaycore.ProtocolOpenAIChat), ProviderID: currentProvider.ID, ProviderAccountID: currentAccount.ID, Status: "forwarded", LatencyMS: 100, InputTokens: totalTokens, TotalInputTokens: &totalTokens, UncachedInputTokens: &uncachedTokens, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai", ProcurementCostMicros: &currentCost, ProcurementCostConfidence: controlplane.ProcurementCostConfidenceExact},
+		{Model: "effective-routing", UpstreamModel: "shared-upstream", Protocol: string(gatewaycore.ProtocolOpenAIChat), ProviderID: candidateProvider.ID, ProviderAccountID: candidateAccount.ID, Status: "forwarded", LatencyMS: 100, InputTokens: totalTokens, TotalInputTokens: &totalTokens, UncachedInputTokens: &uncachedTokens, CacheFieldsPresent: true, UsageNormalizationStatus: "normalized_openai", ProcurementCostMicros: &candidateCost, ProcurementCostConfidence: controlplane.ProcurementCostConfidenceExact},
+	} {
+		if err := control.RecordGatewayUsage(context.Background(), controlplane.GatewayAuthContext{APIKey: controlplane.APIKeyRecord{ID: "effective-pricing-evidence"}}, input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decision, err := control.EvaluateEffectivePricingDecision(context.Background(), "tester", controlplane.EffectivePricingDecisionEvaluationRequest{
+		Model: "effective-routing", UpstreamModel: "shared-upstream", Protocol: string(gatewaycore.ProtocolOpenAIChat),
+		CurrentProviderAccountID: currentAccount.ID, CandidateProviderAccountID: candidateAccount.ID,
+	})
+	if err != nil || decision.Status != controlplane.EffectivePricingDecisionRecommended {
+		t.Fatalf("effective pricing decision=%+v err=%v", decision, err)
+	}
+	decision, err = control.ActOnEffectivePricingDecision(context.Background(), "tester", decision.ID, controlplane.EffectivePricingDecisionActionRequest{Action: "approve_canary", CanaryPercent: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err = control.ActOnEffectivePricingDecision(context.Background(), "tester", decision.ID, controlplane.EffectivePricingDecisionActionRequest{Action: "activate"})
+	if err != nil || decision.Status != controlplane.EffectivePricingDecisionActive {
+		t.Fatalf("active effective pricing decision=%+v err=%v", decision, err)
+	}
+	key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{Name: "Effective pricing key", ModelAllowlist: []string{"effective-routing"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"effective-routing","messages":[{"role":"user","content":"route"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "effective-cost-candidate") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if currentCalls.Load() != 0 || candidateCalls.Load() != 1 {
+		t.Fatalf("current calls=%d candidate calls=%d", currentCalls.Load(), candidateCalls.Load())
+	}
+	traces, err := control.ListGatewayTraces(context.Background(), 10)
+	if err != nil || len(traces) != 1 || traces[0].ProviderAccountID != candidateAccount.ID || !strings.Contains(traces[0].RouteReason, "effective pricing active decision "+decision.ID) || !strings.Contains(traces[0].RouteReason, "routing_policy="+policy.ID) {
+		t.Fatalf("effective pricing gateway trace=%+v err=%v", traces, err)
+	}
+}
+
 func TestGatewayChatCompletionFallsBackAfterRateLimitAndServerError(t *testing.T) {
 	for _, test := range []struct {
 		name       string

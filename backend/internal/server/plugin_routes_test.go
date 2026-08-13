@@ -1,7 +1,9 @@
 package server
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -44,6 +46,59 @@ func TestAdminPluginsCatalogEndpoint(t *testing.T) {
 	if resp.Data.Summary.Total == 0 || resp.Data.Summary.PaidLocked == 0 {
 		t.Fatalf("unexpected plugin summary: %+v", resp.Data.Summary)
 	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/catalog-sync/status", nil)
+	statusRec := httptest.NewRecorder()
+	handler.ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("catalog status = %d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	var statusResponse struct {
+		Data plugins.OfficialCatalogStatus `json:"data"`
+	}
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &statusResponse); err != nil {
+		t.Fatalf("decode catalog status: %v", err)
+	}
+	if statusResponse.Data.Status == "" || statusResponse.Data.CatalogVersion != 0 || statusResponse.Data.PluginCount != 0 {
+		t.Fatalf("initial catalog status mismatch: %+v", statusResponse.Data)
+	}
+}
+
+func TestPluginRoutesRequireAuthentication(t *testing.T) {
+	handler := newTestHandler(t, RuntimeConfig{AdminToken: "secret"})
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/console/plugins"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/catalog-sync/status"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/license/status"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/feeds/client"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/feeds"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/feeds/sync-runs"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/api-tokens"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/com.asterrouter.notification.webhook/config"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/" + plugins.ArtifactS3SinkPluginID + "/artifact-sinks"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/com.asterrouter.notification.webhook/deliveries"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/missing/frontend/workbench"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/missing/frontend/assets/app.js"},
+		{method: http.MethodGet, path: "/api/v1/console/plugins/missing/runtime/status"},
+		{method: http.MethodDelete, path: "/api/v1/console/plugins/api-tokens/missing"},
+		{method: http.MethodPost, path: "/api/v1/console/plugins/license/activate", body: `{}`},
+		{method: http.MethodPost, path: "/api/v1/console/plugins/missing/packages/missing/uninstall"},
+	}
+	for _, test := range tests {
+		req := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+		if test.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s status=%d body=%s", test.method, test.path, rec.Code, rec.Body.String())
+		}
+	}
 }
 
 func TestAdminOfficialFeedSyncRecordsDisabledAttempt(t *testing.T) {
@@ -51,6 +106,22 @@ func TestAdminOfficialFeedSyncRecordsDisabledAttempt(t *testing.T) {
 	controlService := controlplane.NewService(controlplane.NewMemoryRepository(), "/v1")
 	pluginService := plugins.NewService(plugins.NewMemoryRepository())
 	handler := New(Options{Runtime: RuntimeConfig{}, SettingsService: settingsService, ControlService: controlService, PluginService: pluginService, SystemService: system.NewService(system.Config{Version: "test", BuildType: "source"})})
+
+	feedsReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/feeds?service_key=provider-intelligence", nil)
+	feedsRec := httptest.NewRecorder()
+	handler.ServeHTTP(feedsRec, feedsReq)
+	if feedsRec.Code != http.StatusOK {
+		t.Fatalf("feeds status = %d body=%s", feedsRec.Code, feedsRec.Body.String())
+	}
+	var feedsResponse struct {
+		Data []plugins.OfficialFeedStatus `json:"data"`
+	}
+	if err := json.Unmarshal(feedsRec.Body.Bytes(), &feedsResponse); err != nil {
+		t.Fatalf("decode feeds: %v", err)
+	}
+	if feedsResponse.Data == nil || len(feedsResponse.Data) != 0 {
+		t.Fatalf("unexpected official feed statuses: %+v", feedsResponse.Data)
+	}
 
 	body := bytes.NewBufferString(`{"service_key":"provider-intelligence"}`)
 	syncReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/feeds/sync", body)
@@ -170,6 +241,84 @@ func TestPluginOpenCatalogUsesScopedAPIToken(t *testing.T) {
 	}
 }
 
+func TestAdminPluginAPITokenLifecycleAuditsAndRevokesAccess(t *testing.T) {
+	handler, control := newTestRuntime(t, RuntimeConfig{})
+	createBody := bytes.NewBufferString(`{"name":"automation catalog","plugin_id":"com.asterrouter.notification.webhook","scopes":["catalog:read","plugin:action"]}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/api-tokens", createBody)
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Data plugins.PluginAPITokenCreateResult `json:"data"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if !strings.HasPrefix(created.Data.Secret, "arpt_") || created.Data.Token.Status != plugins.PluginAPITokenActive {
+		t.Fatalf("created token=%+v secret prefix valid=%t", created.Data.Token, strings.HasPrefix(created.Data.Secret, "arpt_"))
+	}
+
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/api-tokens", nil))
+	if listRec.Code != http.StatusOK || strings.Contains(listRec.Body.String(), created.Data.Secret) {
+		t.Fatalf("list status=%d leaked=%t body=%s", listRec.Code, strings.Contains(listRec.Body.String(), created.Data.Secret), listRec.Body.String())
+	}
+
+	openReq := httptest.NewRequest(http.MethodGet, "/api/v1/open/plugins/catalog", nil)
+	openReq.Header.Set("Authorization", "Bearer "+created.Data.Secret)
+	openRec := httptest.NewRecorder()
+	handler.ServeHTTP(openRec, openReq)
+	if openRec.Code != http.StatusOK {
+		t.Fatalf("open catalog status=%d body=%s", openRec.Code, openRec.Body.String())
+	}
+
+	revokeReq := httptest.NewRequest(http.MethodDelete, "/api/v1/console/plugins/api-tokens/"+created.Data.Token.ID, nil)
+	revokeRec := httptest.NewRecorder()
+	handler.ServeHTTP(revokeRec, revokeReq)
+	if revokeRec.Code != http.StatusOK || strings.Contains(revokeRec.Body.String(), created.Data.Secret) {
+		t.Fatalf("revoke status=%d leaked=%t body=%s", revokeRec.Code, strings.Contains(revokeRec.Body.String(), created.Data.Secret), revokeRec.Body.String())
+	}
+
+	revokedReq := httptest.NewRequest(http.MethodGet, "/api/v1/open/plugins/catalog", nil)
+	revokedReq.Header.Set("Authorization", "Bearer "+created.Data.Secret)
+	revokedRec := httptest.NewRecorder()
+	handler.ServeHTTP(revokedRec, revokedReq)
+	if revokedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token status=%d body=%s", revokedRec.Code, revokedRec.Body.String())
+	}
+
+	missingRevokeReq := httptest.NewRequest(http.MethodDelete, "/api/v1/console/plugins/api-tokens/missing", nil)
+	missingRevokeRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRevokeRec, missingRevokeReq)
+	if missingRevokeRec.Code != http.StatusNotFound {
+		t.Fatalf("missing revoke status=%d body=%s", missingRevokeRec.Code, missingRevokeRec.Body.String())
+	}
+
+	audit, err := control.ListAuditLogs(context.Background(), 20)
+	if err != nil {
+		t.Fatalf("ListAuditLogs(): %v", err)
+	}
+	seenCreate := false
+	seenRevoke := false
+	for _, event := range audit {
+		serialized, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			t.Fatalf("marshal audit event: %v", marshalErr)
+		}
+		if strings.Contains(string(serialized), created.Data.Secret) {
+			t.Fatalf("audit leaked token secret: %s", serialized)
+		}
+		seenCreate = seenCreate || event.ResourceType == "plugin" && event.Action == "api_token_create" && event.ResourceID == created.Data.Token.ID
+		seenRevoke = seenRevoke || event.ResourceType == "plugin" && event.Action == "api_token_revoke" && event.ResourceID == created.Data.Token.ID
+	}
+	if !seenCreate || !seenRevoke {
+		t.Fatalf("token audit missing create=%t revoke=%t audit=%+v", seenCreate, seenRevoke, audit)
+	}
+}
+
 func TestAdminPluginsCatalogSyncEndpoint(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -256,7 +405,7 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 		t.Fatalf("GenerateKey(): %v", err)
 	}
 	now := time.Date(2026, 7, 11, 2, 45, 0, 0, time.UTC)
-	content := []byte("router package content")
+	content := frontendPluginPackage(t, "com.astercloud.catalog.router-sync", "1.0.0")
 	checksumBytes := sha256.Sum256(content)
 	checksum := hex.EncodeToString(checksumBytes[:])
 	packageID := "pkg_router_darwin_arm64"
@@ -350,6 +499,7 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 			PublicKeyBase64: base64.StdEncoding.EncodeToString(publicKey),
 		},
 		PackageCacheDir: t.TempDir(),
+		PluginActiveDir: t.TempDir(),
 		CoreVersion:     "1.2.0",
 		TargetOS:        "darwin",
 		TargetArch:      "arm64",
@@ -400,6 +550,62 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 		t.Fatalf("install response mismatch: %+v", installResp.Data)
 	}
 
+	workbenchReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/frontend/workbench", nil)
+	workbenchRec := httptest.NewRecorder()
+	handler.ServeHTTP(workbenchRec, workbenchReq)
+	if workbenchRec.Code != http.StatusOK || workbenchRec.Header().Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Fatalf("workbench status=%d headers=%v body=%s", workbenchRec.Code, workbenchRec.Header(), workbenchRec.Body.String())
+	}
+	var workbench map[string]any
+	if err := json.Unmarshal(workbenchRec.Body.Bytes(), &workbench); err != nil {
+		t.Fatalf("decode workbench: %v", err)
+	}
+	if workbench["title"] != "Router Sync" || workbench["entry"] != "app.js" {
+		t.Fatalf("workbench mismatch: %+v", workbench)
+	}
+
+	assetReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/frontend/assets/app.js", nil)
+	assetRec := httptest.NewRecorder()
+	handler.ServeHTTP(assetRec, assetReq)
+	if assetRec.Code != http.StatusOK || assetRec.Body.String() != "window.AsterRouterPlugin = 'router-sync';\n" {
+		t.Fatalf("asset status=%d headers=%v body=%q", assetRec.Code, assetRec.Header(), assetRec.Body.String())
+	}
+
+	runtimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/runtime/status", nil)
+	runtimeRec := httptest.NewRecorder()
+	handler.ServeHTTP(runtimeRec, runtimeReq)
+	if runtimeRec.Code != http.StatusOK {
+		t.Fatalf("runtime status=%d body=%s", runtimeRec.Code, runtimeRec.Body.String())
+	}
+	var runtimeResp struct {
+		Data plugins.SidecarRuntimeStatus `json:"data"`
+	}
+	if err := json.Unmarshal(runtimeRec.Body.Bytes(), &runtimeResp); err != nil {
+		t.Fatalf("decode runtime status: %v", err)
+	}
+	if !runtimeResp.Data.Installed || runtimeResp.Data.Running || runtimeResp.Data.Version != "1.0.0" || runtimeResp.Data.PluginID != "com.astercloud.catalog.router-sync" {
+		t.Fatalf("runtime projection mismatch: %+v", runtimeResp.Data)
+	}
+
+	for _, target := range []string{
+		"/api/v1/console/plugins/com.astercloud.catalog.router-sync/frontend/assets/missing.js",
+		"/api/v1/console/plugins/com.astercloud.catalog.router-sync/frontend/assets/%2e%2e%2fplugin.json",
+		"/api/v1/console/plugins/com.astercloud.catalog.missing/frontend/workbench",
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("GET %s status=%d body=%s", target, rec.Code, rec.Body.String())
+		}
+	}
+	missingRuntimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/com.astercloud.catalog.missing/runtime/status", nil)
+	missingRuntimeRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRuntimeRec, missingRuntimeReq)
+	if missingRuntimeRec.Code != http.StatusOK || !strings.Contains(missingRuntimeRec.Body.String(), plugins.ErrPluginNotFound.Error()) {
+		t.Fatalf("missing runtime status=%d body=%s", missingRuntimeRec.Code, missingRuntimeRec.Body.String())
+	}
+
 	uninstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/packages/"+packageID+"/uninstall", nil)
 	uninstallRec := httptest.NewRecorder()
 	handler.ServeHTTP(uninstallRec, uninstallReq)
@@ -414,6 +620,18 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 	}
 	if uninstallResp.Data.Status != plugins.PackageInstallUninstalled || uninstallResp.Data.PackageID != packageID {
 		t.Fatalf("uninstall response mismatch: %+v", uninstallResp.Data)
+	}
+	repeatUninstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/packages/"+packageID+"/uninstall", nil)
+	repeatUninstallRec := httptest.NewRecorder()
+	handler.ServeHTTP(repeatUninstallRec, repeatUninstallReq)
+	if repeatUninstallRec.Code != http.StatusNotFound {
+		t.Fatalf("repeat uninstall status=%d body=%s", repeatUninstallRec.Code, repeatUninstallRec.Body.String())
+	}
+	removedWorkbenchReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/com.astercloud.catalog.router-sync/frontend/workbench", nil)
+	removedWorkbenchRec := httptest.NewRecorder()
+	handler.ServeHTTP(removedWorkbenchRec, removedWorkbenchReq)
+	if removedWorkbenchRec.Code != http.StatusNotFound {
+		t.Fatalf("uninstalled workbench status=%d body=%s", removedWorkbenchRec.Code, removedWorkbenchRec.Body.String())
 	}
 
 	audit, err := controlService.ListAuditLogs(context.Background(), 20)
@@ -432,6 +650,36 @@ func TestAdminPluginPackageDownloadEndpoint(t *testing.T) {
 	if !seenInstall || !seenUninstall {
 		t.Fatalf("package install audit missing install=%v uninstall=%v audit=%+v", seenInstall, seenUninstall, audit)
 	}
+}
+
+func frontendPluginPackage(t *testing.T, pluginID string, version string) []byte {
+	t.Helper()
+	files := []struct {
+		name    string
+		content []byte
+	}{
+		{name: "plugin.json", content: []byte(`{"id":"` + pluginID + `","version":"` + version + `","runtime":"frontend","entrypoint":{}}`)},
+		{name: "frontend/workbench.json", content: []byte(`{"title":"Router Sync","entry":"app.js"}`)},
+		{name: "frontend/app.js", content: []byte("window.AsterRouterPlugin = 'router-sync';\n")},
+	}
+	var archive bytes.Buffer
+	gzipWriter := gzip.NewWriter(&archive)
+	tarWriter := tar.NewWriter(gzipWriter)
+	for _, file := range files {
+		if err := tarWriter.WriteHeader(&tar.Header{Name: file.name, Mode: 0600, Size: int64(len(file.content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write %s header: %v", file.name, err)
+		}
+		if _, err := tarWriter.Write(file.content); err != nil {
+			t.Fatalf("write %s: %v", file.name, err)
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatalf("close plugin tar: %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatalf("close plugin gzip: %v", err)
+	}
+	return archive.Bytes()
 }
 
 func TestAdminPluginsEnableFreePluginAudits(t *testing.T) {
@@ -704,6 +952,19 @@ func TestAdminPluginDeliveriesEndpoint(t *testing.T) {
 	}
 	if len(resp.Data) != 1 || resp.Data[0].Status != plugins.DeliveryStatusSucceeded || resp.Data[0].HTTPStatus != http.StatusAccepted {
 		t.Fatalf("deliveries mismatch: %+v", resp.Data)
+	}
+
+	emptyReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/plugins/com.asterrouter.notification.webhook/deliveries?status=failed&limit=1&offset=1", nil)
+	emptyRec := httptest.NewRecorder()
+	handler.ServeHTTP(emptyRec, emptyReq)
+	if emptyRec.Code != http.StatusOK {
+		t.Fatalf("empty deliveries status=%d body=%s", emptyRec.Code, emptyRec.Body.String())
+	}
+	var emptyResponse struct {
+		Data []plugins.DeliveryAttempt `json:"data"`
+	}
+	if err := json.Unmarshal(emptyRec.Body.Bytes(), &emptyResponse); err != nil || emptyResponse.Data == nil || len(emptyResponse.Data) != 0 {
+		t.Fatalf("empty deliveries=%+v err=%v", emptyResponse.Data, err)
 	}
 }
 

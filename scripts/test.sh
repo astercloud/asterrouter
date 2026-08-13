@@ -40,6 +40,7 @@ frontend() {
     npm run check:public-doc-links
     npm run check:workflow-pipefail
     npm run check:enterprise-surface
+    npm run check:e2e-coverage
     npm run typecheck
     npm run test:unit:coverage
     npm run build
