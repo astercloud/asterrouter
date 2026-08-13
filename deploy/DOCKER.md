@@ -63,28 +63,26 @@ curl --fail -H "Authorization: Bearer ${ASTERROUTER_METRICS_TOKEN}" http://127.0
 
 ## GitHub Container Registry
 
-Docker 镜像使用独立的手动 GitHub Actions 工作流发布，不会阻断普通 CI 或 GitHub Release：
+Docker 镜像由独立的 GitHub Actions 工作流发布，不会阻断普通 CI 或 GitHub Release：
 
-1. 先完成正常的 `v*` Git tag 和 GitHub Release；手动工作流会检查 Release 已存在。
-2. 打开仓库的 `Actions` 页面，选择 `Docker Release`。
-3. 点击 `Run workflow`，输入已经存在且包含 Docker 部署文件的 tag，例如 `v1.2.3`。
-4. 仅在需要移动稳定入口时勾选 `publish_latest`。
+1. 推送符合 `v*` 的 Git tag，例如 `v1.2.3`。
+2. `Docker Release` 会自动校验版本、运行容器验收，并发布镜像。
 
-工作流会构建并发布 amd64/arm64 镜像：
+工作流会在原生 amd64 和 arm64 runner 上分别构建镜像，再合并为同一个多架构 manifest。Docker 版本标签与 Git tag 完全一致，例如 Git tag `v1.2.3` 会发布 `v1.2.3` 和 `latest`：
 
 ```bash
-docker pull ghcr.io/astercloud/asterrouter:1.2.3
-ASTERROUTER_IMAGE=ghcr.io/astercloud/asterrouter:1.2.3 docker compose up -d
+docker pull ghcr.io/astercloud/asterrouter:v1.2.3
+ASTERROUTER_IMAGE=ghcr.io/astercloud/asterrouter:v1.2.3 docker compose up -d
 ```
 
-镜像发布前会经过 release container acceptance，发布后还会检查多架构 manifest。GitHub Actions 使用 `GITHUB_TOKEN` 登录 GHCR，不需要额外的长期 Docker 密钥。
+镜像发布前会经过 release container acceptance，发布后还会确认 manifest 同时包含 `linux/amd64` 和 `linux/arm64`。GitHub Actions 使用 `GITHUB_TOKEN` 登录 GHCR，不需要额外的长期 Docker 密钥。
 
 首次使用前检查仓库设置：
 
 - 当前仓库默认 `GITHUB_TOKEN` 保持只读即可，不必扩大所有工作流权限；`Docker Release` 自身只申请 `contents: read` 和 `packages: write`。如果组织策略禁止工作流提升 Packages 权限，需要组织管理员单独放开。
 - 如果组织限制可用 Actions，需要允许 `actions/checkout`、`actions/upload-artifact` 和 `docker/*` 官方 Actions。
 - 首次发布后，在 GitHub Package 设置中选择镜像可见性。公开拉取需要将 Package 设为 Public；保持 Private 时，拉取方需要先执行 `docker login ghcr.io`。
-- `Docker Release` 文件必须先进入默认分支，GitHub 才会在 Actions 页面显示手动运行按钮。
+- `Docker Release` 文件必须先进入默认分支，tag 自动触发才会生效。
 
 ## 生产注意事项
 
