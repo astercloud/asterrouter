@@ -143,11 +143,12 @@
 .segmented-control button { min-height: 36px; border: 0; border-radius: 9px; background: transparent; color: var(--text-muted); cursor: pointer; }
 .segmented-control button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
 .switch { position: relative; display: inline-flex; flex: 0 0 auto; width: 42px; height: 24px; cursor: pointer; }
-.switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch input { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .switch span { width: 100%; border-radius: 999px; background: var(--accent-300); transition: background 160ms ease; pointer-events: none; }
 .switch span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #ffffff; box-shadow: 0 1px 3px rgb(15 23 42 / 20%); transition: transform 160ms ease; }
 .switch input:checked + span { background: var(--primary-500); }
 .switch input:checked + span::after { transform: translateX(18px); }
+.switch input:focus-visible + span { outline: 2px solid var(--primary-500); outline-offset: 2px; }
 .status-badge { padding: 5px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .status-badge.success { background: var(--success-bg); color: var(--success); }
 

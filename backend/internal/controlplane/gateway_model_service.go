@@ -435,19 +435,31 @@ func modelRouteUniqueKey(route ModelRoute) string {
 }
 
 type rankedModelRouteCandidate struct {
-	route        ModelRoute
-	account      ProviderAccount
-	provider     ProviderConnection
-	loadRatio    float64
-	headroom     float64
-	weightScore  float64
-	circuitState string
-	circuitProbe bool
-	policyBatch  int
-	policy       *RoutingPolicy
+	route               ModelRoute
+	account             ProviderAccount
+	provider            ProviderConnection
+	loadRatio           float64
+	headroom            float64
+	weightScore         float64
+	circuitState        string
+	circuitProbe        bool
+	policyBatch         int
+	policyBatchName     string
+	policyBatchPosition int
+	preferred           bool
+	routingMetrics      ProviderAccountRoutingMetrics
+	policy              *RoutingPolicy
 }
 
 func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved ResolvedGatewayModel) ([]rankedModelRouteCandidate, bool, error) {
+	policy, err := s.activeRoutingPolicyForGroup(ctx, resolved.RouteGroup)
+	if err != nil {
+		return nil, false, err
+	}
+	return s.rankedModelRouteCandidatesWithPolicy(ctx, resolved, policy)
+}
+
+func (s *Service) rankedModelRouteCandidatesWithPolicy(ctx context.Context, resolved ResolvedGatewayModel, policy *RoutingPolicy) ([]rankedModelRouteCandidate, bool, error) {
 	routes, err := s.repo.ListModelRoutes(ctx)
 	if err != nil {
 		return nil, false, err
@@ -460,10 +472,6 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 	}
 	if len(matchingRoutes) == 0 {
 		return nil, false, nil
-	}
-	policy, err := s.activeRoutingPolicyForGroup(ctx, resolved.RouteGroup)
-	if err != nil {
-		return nil, true, err
 	}
 	if policy != nil && !routingPolicyAllowsModel(policy.Strategy, resolved.RequestedID) {
 		return nil, true, nil
@@ -482,9 +490,17 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 	}
 	providersByID := providerByIDMap(providers)
 	now := time.Now().UTC()
+	routingMetrics, err := s.repo.SummarizeProviderAccountRoutingMetrics(ctx, now.Add(-24*time.Hour))
+	if err != nil {
+		return nil, true, err
+	}
+	routingMetricsByAccount := make(map[string]ProviderAccountRoutingMetrics, len(routingMetrics))
+	for _, metrics := range routingMetrics {
+		routingMetricsByAccount[metrics.ProviderAccountID] = metrics
+	}
 	billingHealthByAccount, _ := s.providerBillingRoutingHealthByAccount(ctx, now)
 	candidates := make([]rankedModelRouteCandidate, 0, len(matchingRoutes))
-	policyBatchByAccount := routingPolicyBatchByAccount(policy)
+	policyPlacementByAccount := routingPolicyPlacementByAccount(policy)
 	for _, route := range matchingRoutes {
 		if route.Status != ModelRouteStatusActive {
 			continue
@@ -505,10 +521,10 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 		if !eligible {
 			continue
 		}
-		policyBatch := 0
+		placement := routingPolicyPlacement{}
 		if policy != nil && len(policy.Strategy.ResourceBatches) > 0 {
 			var listed bool
-			policyBatch, listed = policyBatchByAccount[account.ID]
+			placement, listed = policyPlacementByAccount[account.ID]
 			if !listed {
 				continue
 			}
@@ -517,15 +533,28 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 		headroom := s.providerAccountRateHeadroom(account, now)
 		candidates = append(candidates, rankedModelRouteCandidate{
 			route: route, account: account, provider: provider, loadRatio: loadRatio,
-			headroom: headroom, weightScore: weightedCandidateScore(route.Weight * account.Weight),
+			headroom: headroom, weightScore: weightedCandidateScore(route.Weight * account.Weight), preferred: policy != nil && contains(policy.Strategy.PreferredProviderAccountIDs, account.ID),
 			circuitState: circuitState, circuitProbe: circuitProbe,
-			policyBatch: policyBatch, policy: policy,
+			policyBatch: placement.batch, policyBatchName: placement.name, policyBatchPosition: placement.position,
+			routingMetrics: routingMetricsByAccount[account.ID], policy: policy,
 		})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left, right := candidates[i], candidates[j]
 		if left.policyBatch != right.policyBatch {
 			return left.policyBatch < right.policyBatch
+		}
+		if policy != nil && policy.Strategy.StrictOrder {
+			if left.policyBatchPosition != right.policyBatchPosition {
+				return left.policyBatchPosition < right.policyBatchPosition
+			}
+			if left.route.Priority != right.route.Priority {
+				return left.route.Priority < right.route.Priority
+			}
+			return left.route.ID < right.route.ID
+		}
+		if left.preferred != right.preferred {
+			return left.preferred
 		}
 		preset := RoutingPolicyPresetBalanced
 		if policy != nil {
@@ -537,6 +566,9 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 				return left.account.RateMultiplier < right.account.RateMultiplier
 			}
 		case RoutingPolicyPresetSpeed:
+			if left.routingMetrics.RequestCount > 0 && right.routingMetrics.RequestCount > 0 && left.routingMetrics.AvgLatencyMS != right.routingMetrics.AvgLatencyMS {
+				return left.routingMetrics.AvgLatencyMS < right.routingMetrics.AvgLatencyMS
+			}
 			if left.headroom != right.headroom {
 				return left.headroom > right.headroom
 			}
@@ -544,9 +576,15 @@ func (s *Service) rankedModelRouteCandidates(ctx context.Context, resolved Resol
 				return left.loadRatio < right.loadRatio
 			}
 		case RoutingPolicyPresetStability:
+			if left.routingMetrics.RequestCount > 0 && right.routingMetrics.RequestCount > 0 && left.routingMetrics.SuccessRate != right.routingMetrics.SuccessRate {
+				return left.routingMetrics.SuccessRate > right.routingMetrics.SuccessRate
+			}
 			if left.circuitProbe != right.circuitProbe {
 				return !left.circuitProbe
 			}
+		}
+		if preset == RoutingPolicyPresetBalanced && left.routingMetrics.RequestCount > 0 && right.routingMetrics.RequestCount > 0 && left.routingMetrics.SuccessRate != right.routingMetrics.SuccessRate {
+			return left.routingMetrics.SuccessRate > right.routingMetrics.SuccessRate
 		}
 		if left.route.Priority != right.route.Priority {
 			return left.route.Priority < right.route.Priority
@@ -579,13 +617,20 @@ func (s *Service) activeRoutingPolicyForGroup(ctx context.Context, routeGroup st
 	if err != nil {
 		return nil, err
 	}
+	var fallback *RoutingPolicy
 	for _, policy := range policies {
 		if policy.Status == RoutingPolicyStatusActive && policy.RouteGroup == routeGroup {
-			selected := policy
-			return &selected, nil
+			if policy.IsDefault {
+				selected := policy
+				return &selected, nil
+			}
+			if fallback == nil {
+				selected := policy
+				fallback = &selected
+			}
 		}
 	}
-	return nil, nil
+	return fallback, nil
 }
 
 func routingPolicyAllowsModel(strategy RoutingPolicyStrategy, model string) bool {
@@ -629,15 +674,21 @@ func routingPolicyNativeProtocolMatches(protocol, upstreamFormat string) bool {
 	}
 }
 
-func routingPolicyBatchByAccount(policy *RoutingPolicy) map[string]int {
-	out := map[string]int{}
+type routingPolicyPlacement struct {
+	batch    int
+	name     string
+	position int
+}
+
+func routingPolicyPlacementByAccount(policy *RoutingPolicy) map[string]routingPolicyPlacement {
+	out := map[string]routingPolicyPlacement{}
 	if policy == nil {
 		return out
 	}
 	for batchIndex, batch := range policy.Strategy.ResourceBatches {
-		for _, accountID := range batch.ProviderAccountIDs {
+		for position, accountID := range batch.ProviderAccountIDs {
 			if _, exists := out[accountID]; !exists {
-				out[accountID] = batchIndex
+				out[accountID] = routingPolicyPlacement{batch: batchIndex, name: batch.Name, position: position}
 			}
 		}
 	}

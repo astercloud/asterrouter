@@ -53,16 +53,16 @@ func (s *Service) runAIJobDeliveryLeaseHeartbeat(
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			if err := queue.Extend(ctx, delivery, s.nowUTC().Add(deliveryLeaseDuration)); err != nil {
+				cancel()
+				return fmt.Errorf("extend ai job %s delivery lease: %w", job.ID, err)
+			}
 			if _, err := s.ExtendAIJobQueueLease(ctx, delivery.Envelope, jobLeaseDuration); err != nil {
 				if errors.Is(err, ErrAIJobStateConflict) && s.aiJobDeliveryLeaseNoLongerNeeded(ctx, job.ID) {
 					return nil
 				}
 				cancel()
 				return fmt.Errorf("extend ai job %s queue lease: %w", job.ID, err)
-			}
-			if err := queue.Extend(ctx, delivery, s.nowUTC().Add(deliveryLeaseDuration)); err != nil {
-				cancel()
-				return fmt.Errorf("extend ai job %s delivery lease: %w", job.ID, err)
 			}
 		}
 	}

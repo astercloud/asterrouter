@@ -512,7 +512,7 @@ async function createConfigKey() {
   error.value = ''
   notice.value = ''
   try {
-    const result = await createPortalAPIKey({ name: `${siteName.value} ${t('accountAccess.configKeySuffix')}`, policy_id: '', model_allowlist: [selectedModel.value], qps_limit: 0, monthly_token_limit: 0, expires_at: '' })
+    const result = await createPortalAPIKey({ name: `${siteName.value} ${t('accountAccess.configKeySuffix')}`, policy_id: '', routing_policy_id: '', model_allowlist: [selectedModel.value], qps_limit: 0, monthly_token_limit: 0, expires_at: '' })
     secretKeyID.value = result.record.id
     keySecret.value = result.key
     selectedKeyID.value = result.record.id

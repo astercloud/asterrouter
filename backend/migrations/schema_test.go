@@ -49,7 +49,7 @@ func TestMigrationSnapshotSequence(t *testing.T) {
 	}
 }
 
-func TestRoutingPolicyMigrationIsIdempotentAndEnforcesOneActivePolicyPerGroup(t *testing.T) {
+func TestRoutingPolicyMigrationIsIdempotentAndEnforcesOneDefaultPolicyPerGroup(t *testing.T) {
 	schema := testutil.NewPostgresSchema(t)
 	db := testutil.OpenPostgres(t, schema.URL)
 	body, err := migrationFiles.ReadFile("076_routing_policies.sql")
@@ -63,25 +63,28 @@ func TestRoutingPolicyMigrationIsIdempotentAndEnforcesOneActivePolicyPerGroup(t 
 	}
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
-	insert := func(id, routeGroup, status string, version int) error {
+	insert := func(id, routeGroup, status string, isDefault bool, version int) error {
 		_, err := db.ExecContext(ctx, `
-INSERT INTO routing_policies(id,name,route_group,status,strategy,version,created_at,updated_at)
-VALUES($1,$1,$2,$3,'{"preset":"balanced","resource_batches":[]}'::jsonb,$4,$5,$5)`, id, routeGroup, status, version, now)
+INSERT INTO routing_policies(id,name,route_group,status,is_default,strategy,version,created_at,updated_at)
+VALUES($1,$1,$2,$3,$4,'{"preset":"balanced","resource_batches":[]}'::jsonb,$5,$6,$6)`, id, routeGroup, status, isDefault, version, now)
 		return err
 	}
-	if err := insert("policy-active", "default", "active", 1); err != nil {
+	if err := insert("policy-default", "default", "active", true, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := insert("policy-active-duplicate", "default", "active", 1); err == nil {
-		t.Fatal("partial unique index accepted two active policies for one route group")
+	if err := insert("policy-default-duplicate", "default", "active", true, 1); err == nil {
+		t.Fatal("partial unique index accepted two default policies for one route group")
 	}
-	if err := insert("policy-disabled", "default", "disabled", 1); err != nil {
+	if err := insert("policy-active-explicit", "default", "active", false, 1); err != nil {
+		t.Fatalf("non-default active policy should coexist with the default: %v", err)
+	}
+	if err := insert("policy-disabled", "default", "disabled", false, 1); err != nil {
 		t.Fatalf("disabled policy should coexist with active policy: %v", err)
 	}
-	if err := insert("policy-invalid-status", "other", "draft", 1); err == nil {
+	if err := insert("policy-invalid-status", "other", "draft", false, 1); err == nil {
 		t.Fatal("routing policy status constraint accepted draft")
 	}
-	if err := insert("policy-invalid-version", "other", "disabled", 0); err == nil {
+	if err := insert("policy-invalid-version", "other", "disabled", false, 0); err == nil {
 		t.Fatal("routing policy version constraint accepted zero")
 	}
 }

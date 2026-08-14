@@ -485,10 +485,18 @@ export interface RoutingPolicyBatch {
 
 export type RoutingPolicyPreset = 'cost' | 'speed' | 'stability' | 'balanced'
 export type RoutingPolicyLowPricePoolMode = 'auto' | 'strict' | 'percentile' | 'none'
+export type RoutingPolicyMissingPriceAction = 'allow' | 'block'
+
+export interface RoutingPolicyModelPriceLimit {
+  model: string
+  absolute_max_input_per_1m: number
+  absolute_max_output_per_1m: number
+}
 
 export interface RoutingPolicyStrategy {
   preset: RoutingPolicyPreset
   smart_optimization: boolean
+  strict_order: boolean
   failover_before_first_byte: boolean
   sticky_routing: boolean
   sticky_ttl_seconds: number
@@ -499,7 +507,10 @@ export interface RoutingPolicyStrategy {
   low_price_pool_mode: RoutingPolicyLowPricePoolMode
   low_price_pool_percent: number
   low_price_pool_min_candidates: number
+  missing_price_action: RoutingPolicyMissingPriceAction
+  model_price_limits: RoutingPolicyModelPriceLimit[]
   resource_batches: RoutingPolicyBatch[]
+  preferred_provider_account_ids: string[]
   allowed_models: string[]
   denied_models: string[]
   allowed_protocols: string[]
@@ -512,6 +523,7 @@ export interface RoutingPolicy {
   description: string
   route_group: string
   status: string
+  is_default: boolean
   strategy: RoutingPolicyStrategy
   version: number
   created_at: string
@@ -523,6 +535,7 @@ export interface RoutingPolicyRequest {
   description: string
   route_group: string
   status: string
+  is_default: boolean
   strategy: RoutingPolicyStrategy
 }
 
@@ -727,6 +740,16 @@ export interface GatewaySimulationCandidate {
   circuit_state: string
   eligible: boolean
   reason: string
+  policy_batch_order: number
+  policy_batch_name: string
+  policy_batch_position: number
+  price_fact_present: boolean
+  estimated_input_micros_per_1m: number
+  estimated_output_micros_per_1m: number
+  observed_success_rate: number
+  observed_avg_latency_ms: number
+  observed_sample_count: number
+  selection_reason: string
 }
 
 export interface GatewaySimulation {
@@ -1410,6 +1433,7 @@ export interface APIKeyRecord {
   principal_type: string
   principal_reference: string
   policy_id: string
+  routing_policy_id: string
   scopes: string[]
   model_allowlist: string[]
   allowed_modalities: string[]
@@ -1441,6 +1465,7 @@ export interface APIKeyRecord {
 export interface APIKeyCreateRequest {
   name: string
   policy_id: string
+  routing_policy_id: string
   model_allowlist: string[]
   qps_limit: number
   monthly_token_limit: number
@@ -1468,6 +1493,7 @@ export interface APIKeyCreateRequest {
 export interface APIKeyUpdateRequest {
   name: string
   policy_id: string
+  routing_policy_id: string
   model_allowlist: string[]
   qps_limit: number
   monthly_token_limit: number

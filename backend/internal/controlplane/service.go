@@ -477,7 +477,13 @@ func (s *Service) CreateRoutingPolicy(ctx context.Context, actor string, req Rou
 	if err != nil {
 		return RoutingPolicy{}, err
 	}
-	if err := s.ensureRoutingPolicyRouteGroupUnique(ctx, policy, ""); err != nil {
+	if req.IsDefault == nil {
+		policy.IsDefault, err = s.routeGroupNeedsDefaultRoutingPolicy(ctx, policy.RouteGroup)
+		if err != nil {
+			return RoutingPolicy{}, err
+		}
+	}
+	if err := s.ensureRoutingPolicyDefaultUnique(ctx, policy, ""); err != nil {
 		return RoutingPolicy{}, err
 	}
 	policy.ID = "rpolicy_" + randomID(10)
@@ -499,7 +505,10 @@ func (s *Service) UpdateRoutingPolicy(ctx context.Context, actor string, id stri
 	if err != nil {
 		return RoutingPolicy{}, err
 	}
-	if err := s.ensureRoutingPolicyRouteGroupUnique(ctx, policy, existing.ID); err != nil {
+	if req.IsDefault == nil {
+		policy.IsDefault = existing.IsDefault
+	}
+	if err := s.ensureRoutingPolicyDefaultUnique(ctx, policy, existing.ID); err != nil {
 		return RoutingPolicy{}, err
 	}
 	policy.ID = existing.ID
@@ -831,6 +840,9 @@ func (s *Service) buildAPIKeyRecord(ctx context.Context, req APIKeyCreateRequest
 	if err := s.validateGovernancePolicyReference(ctx, req.PolicyID); err != nil {
 		return APIKeyRecord{}, err
 	}
+	if err := s.validateRoutingPolicyReference(ctx, req.RoutingPolicyID, models); err != nil {
+		return APIKeyRecord{}, err
+	}
 	expiresAt, err := parseOptionalDate(req.ExpiresAt)
 	if err != nil {
 		return APIKeyRecord{}, err
@@ -849,19 +861,20 @@ func (s *Service) buildAPIKeyRecord(ctx context.Context, req APIKeyCreateRequest
 	}
 	hash := hashAPIKey(rawKey)
 	record := APIKeyRecord{
-		ID:             id,
-		Name:           name,
-		KeyHash:        hash,
-		Fingerprint:    fingerprint(hash),
-		Prefix:         prefix(rawKey, 10),
-		Status:         APIKeyStatusActive,
-		KeyType:        keyType,
-		OwnerUserID:    ownerUserID,
-		PolicyID:       strings.TrimSpace(req.PolicyID),
-		ModelAllowlist: models,
-		ExpiresAt:      expiresAt,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:              id,
+		Name:            name,
+		KeyHash:         hash,
+		Fingerprint:     fingerprint(hash),
+		Prefix:          prefix(rawKey, 10),
+		Status:          APIKeyStatusActive,
+		KeyType:         keyType,
+		OwnerUserID:     ownerUserID,
+		PolicyID:        strings.TrimSpace(req.PolicyID),
+		RoutingPolicyID: strings.TrimSpace(req.RoutingPolicyID),
+		ModelAllowlist:  models,
+		ExpiresAt:       expiresAt,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	record.LifecycleStatus = APIKeyLifecycleActive
 	record.RotationFamilyID = strings.TrimSpace(rotationFamilyID)
@@ -900,6 +913,9 @@ func (s *Service) updateAPIKey(ctx context.Context, actor string, key APIKeyReco
 	if err := s.validateGovernancePolicyReference(ctx, req.PolicyID); err != nil {
 		return APIKeyRecord{}, err
 	}
+	if err := s.validateRoutingPolicyReference(ctx, req.RoutingPolicyID, models); err != nil {
+		return APIKeyRecord{}, err
+	}
 	status := req.Status
 	if status == "" {
 		status = key.Status
@@ -928,6 +944,7 @@ func (s *Service) updateAPIKey(ctx context.Context, actor string, key APIKeyReco
 	}
 	key.Name = name
 	key.PolicyID = strings.TrimSpace(req.PolicyID)
+	key.RoutingPolicyID = strings.TrimSpace(req.RoutingPolicyID)
 	key.ModelAllowlist = models
 	key.ExpiresAt = expiresAt
 	key.Status = status
@@ -1796,7 +1813,15 @@ func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model s
 	if err != nil || !found {
 		return nil, false, err
 	}
-	candidates, hasRoutes, err := s.rankedModelRouteCandidates(ctx, resolved)
+	policy, err := s.activeRoutingPolicyForGroup(ctx, resolved.RouteGroup)
+	if err != nil {
+		return nil, false, err
+	}
+	return s.gatewayProviderCandidatesForResolvedModel(ctx, resolved, policy)
+}
+
+func (s *Service) gatewayProviderCandidatesForResolvedModel(ctx context.Context, resolved ResolvedGatewayModel, policy *RoutingPolicy) ([]GatewayProvider, bool, error) {
+	candidates, hasRoutes, err := s.rankedModelRouteCandidatesWithPolicy(ctx, resolved, policy)
 	if err != nil {
 		return nil, hasRoutes, err
 	}
@@ -1825,38 +1850,43 @@ func (s *Service) GatewayProviderCandidatesForModel(ctx context.Context, model s
 			selectionReason += fmt.Sprintf(" routing_policy=%s routing_policy_version=%d preset=%s batch=%d", entry.policy.ID, entry.policy.Version, entry.policy.Strategy.Preset, entry.policyBatch+1)
 		}
 		routes = append(routes, GatewayProvider{
-			ID:                entry.provider.ID,
-			Name:              entry.provider.Name,
-			Type:              entry.provider.Type,
-			BaseURL:           EffectiveProviderAccountBaseURL(entry.account, entry.provider),
-			APIKey:            secret,
-			AuthType:          entry.account.AuthType,
-			AdapterConfig:     cloneStringMap(entry.account.AdapterConfig),
-			AccountID:         entry.account.ID,
-			AccountName:       entry.account.Name,
-			Concurrency:       entry.account.Concurrency,
-			GatewayModelID:    resolved.GatewayModel.ID,
-			RequestedModel:    resolved.RequestedID,
-			UpstreamModel:     upstreamModel,
-			UpstreamFormat:    entry.route.UpstreamFormat,
-			RouteID:           entry.route.ID,
-			RouteGroup:        resolved.RouteGroup,
-			RoutePriority:     entry.route.Priority,
-			RouteWeight:       entry.route.Weight,
-			AccountWeight:     entry.account.Weight,
-			RPMLimit:          entry.account.RPMLimit,
-			TPMLimit:          entry.account.TPMLimit,
-			CircuitState:      entry.circuitState,
-			CircuitProbe:      entry.circuitProbe,
-			Headroom:          entry.headroom,
-			StickyEnabled:     stickyEnabled,
-			StickyTTLSeconds:  stickyTTLSeconds,
-			RoutingPolicyID:   routingPolicyID,
-			PolicyBatchOrder:  entry.policyBatch,
-			FailoverEnabled:   failoverEnabled,
-			SmartOptimization: entry.policy == nil || entry.policy.Strategy.SmartOptimization,
-			Source:            "model_route",
-			SelectionReason:   selectionReason,
+			ID:                   entry.provider.ID,
+			Name:                 entry.provider.Name,
+			Type:                 entry.provider.Type,
+			BaseURL:              EffectiveProviderAccountBaseURL(entry.account, entry.provider),
+			APIKey:               secret,
+			AuthType:             entry.account.AuthType,
+			AdapterConfig:        cloneStringMap(entry.account.AdapterConfig),
+			AccountID:            entry.account.ID,
+			AccountName:          entry.account.Name,
+			Concurrency:          entry.account.Concurrency,
+			GatewayModelID:       resolved.GatewayModel.ID,
+			RequestedModel:       resolved.RequestedID,
+			UpstreamModel:        upstreamModel,
+			UpstreamFormat:       entry.route.UpstreamFormat,
+			RouteID:              entry.route.ID,
+			RouteGroup:           resolved.RouteGroup,
+			RoutePriority:        entry.route.Priority,
+			RouteWeight:          entry.route.Weight,
+			AccountWeight:        entry.account.Weight,
+			RPMLimit:             entry.account.RPMLimit,
+			TPMLimit:             entry.account.TPMLimit,
+			CircuitState:         entry.circuitState,
+			CircuitProbe:         entry.circuitProbe,
+			Headroom:             entry.headroom,
+			StickyEnabled:        stickyEnabled,
+			StickyTTLSeconds:     stickyTTLSeconds,
+			RoutingPolicyID:      routingPolicyID,
+			PolicyBatchOrder:     entry.policyBatch,
+			PolicyBatchName:      entry.policyBatchName,
+			PolicyBatchPosition:  entry.policyBatchPosition,
+			FailoverEnabled:      failoverEnabled,
+			SmartOptimization:    entry.policy == nil || entry.policy.Strategy.SmartOptimization,
+			ObservedSuccessRate:  entry.routingMetrics.SuccessRate,
+			ObservedAvgLatencyMS: entry.routingMetrics.AvgLatencyMS,
+			ObservedSampleCount:  entry.routingMetrics.RequestCount,
+			Source:               "model_route",
+			SelectionReason:      selectionReason,
 		})
 	}
 	return routes, true, nil
@@ -2127,8 +2157,38 @@ func (s *Service) routingPolicyByID(ctx context.Context, id string) (RoutingPoli
 	return RoutingPolicy{}, fmt.Errorf("routing policy %q not found", id)
 }
 
-func (s *Service) ensureRoutingPolicyRouteGroupUnique(ctx context.Context, candidate RoutingPolicy, exceptID string) error {
-	if candidate.Status != RoutingPolicyStatusActive {
+func (s *Service) validateRoutingPolicyReference(ctx context.Context, id string, models []string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	policy, err := s.routingPolicyByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("routing_policy_id: %w", err)
+	}
+	if policy.Status != RoutingPolicyStatusActive {
+		return errors.New("routing_policy_id must reference an active routing policy")
+	}
+	for _, model := range cleanStringList(models) {
+		resolved, found, resolveErr := s.ResolveGatewayModel(ctx, model)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if !found {
+			return fmt.Errorf("routing_policy_id cannot be validated because gateway model %q was not found", model)
+		}
+		if resolved.RouteGroup != policy.RouteGroup {
+			return fmt.Errorf("routing_policy_id route_group %q is incompatible with model %q route_group %q", policy.RouteGroup, model, resolved.RouteGroup)
+		}
+		if !routingPolicyAllowsModel(policy.Strategy, resolved.RequestedID) {
+			return fmt.Errorf("routing_policy_id does not allow model %q", model)
+		}
+	}
+	return nil
+}
+
+func (s *Service) ensureRoutingPolicyDefaultUnique(ctx context.Context, candidate RoutingPolicy, exceptID string) error {
+	if candidate.Status != RoutingPolicyStatusActive || !candidate.IsDefault {
 		return nil
 	}
 	policies, err := s.repo.ListRoutingPolicies(ctx)
@@ -2136,11 +2196,24 @@ func (s *Service) ensureRoutingPolicyRouteGroupUnique(ctx context.Context, candi
 		return err
 	}
 	for _, policy := range policies {
-		if policy.ID != exceptID && policy.Status == RoutingPolicyStatusActive && policy.RouteGroup == candidate.RouteGroup {
-			return fmt.Errorf("route_group %q already has an active routing policy", candidate.RouteGroup)
+		if policy.ID != exceptID && policy.Status == RoutingPolicyStatusActive && policy.IsDefault && policy.RouteGroup == candidate.RouteGroup {
+			return fmt.Errorf("route_group %q already has a default routing policy", candidate.RouteGroup)
 		}
 	}
 	return nil
+}
+
+func (s *Service) routeGroupNeedsDefaultRoutingPolicy(ctx context.Context, routeGroup string) (bool, error) {
+	policies, err := s.repo.ListRoutingPolicies(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, policy := range policies {
+		if policy.RouteGroup == routeGroup && policy.Status == RoutingPolicyStatusActive {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *Service) providerAccountByID(ctx context.Context, id string) (ProviderAccount, error) {
@@ -2322,10 +2395,40 @@ func routingPolicyFromRequest(req RoutingPolicyRequest, now time.Time) (RoutingP
 	if strategy.LowPricePoolMode == RoutingPolicyLowPricePercent && strategy.LowPricePoolPercent == 0 {
 		return RoutingPolicy{}, errors.New("strategy.low_price_pool_percent must be between 1 and 100 for percentile mode")
 	}
+	if strategy.MissingPriceAction == "" {
+		strategy.MissingPriceAction = RoutingPolicyMissingPriceAllow
+	}
+	if !oneOf(strategy.MissingPriceAction, RoutingPolicyMissingPriceAllow, RoutingPolicyMissingPriceBlock) {
+		return RoutingPolicy{}, errors.New("strategy.missing_price_action must be allow or block")
+	}
 	strategy.AllowedModels = cleanStringList(strategy.AllowedModels)
 	strategy.DeniedModels = cleanStringList(strategy.DeniedModels)
 	strategy.AllowedProtocols = cleanStringList(strategy.AllowedProtocols)
 	strategy.DeniedProtocols = cleanStringList(strategy.DeniedProtocols)
+	strategy.PreferredProviderAccountIDs = cleanStringList(strategy.PreferredProviderAccountIDs)
+	if strategy.ModelPriceLimits == nil {
+		strategy.ModelPriceLimits = []RoutingPolicyModelPriceLimit{}
+	}
+	modelPriceLimits := make([]RoutingPolicyModelPriceLimit, 0, len(strategy.ModelPriceLimits))
+	configuredModels := map[string]struct{}{}
+	for index, limit := range strategy.ModelPriceLimits {
+		limit.Model = strings.TrimSpace(limit.Model)
+		if limit.Model == "" {
+			return RoutingPolicy{}, fmt.Errorf("strategy.model_price_limits[%d].model is required", index)
+		}
+		if limit.AbsoluteMaxInputPer1M < 0 || limit.AbsoluteMaxOutputPer1M < 0 {
+			return RoutingPolicy{}, fmt.Errorf("strategy.model_price_limits[%d] caps must be greater than or equal to 0", index)
+		}
+		if limit.AbsoluteMaxInputPer1M == 0 && limit.AbsoluteMaxOutputPer1M == 0 {
+			return RoutingPolicy{}, fmt.Errorf("strategy.model_price_limits[%d] must configure at least one cap", index)
+		}
+		if _, exists := configuredModels[limit.Model]; exists {
+			return RoutingPolicy{}, fmt.Errorf("strategy.model_price_limits contains duplicate model %q", limit.Model)
+		}
+		configuredModels[limit.Model] = struct{}{}
+		modelPriceLimits = append(modelPriceLimits, limit)
+	}
+	strategy.ModelPriceLimits = modelPriceLimits
 	for _, protocol := range append(append([]string(nil), strategy.AllowedProtocols...), strategy.DeniedProtocols...) {
 		if !routingPolicyProtocolSupported(protocol) {
 			return RoutingPolicy{}, fmt.Errorf("strategy protocol %q is not supported", protocol)
@@ -2340,7 +2443,7 @@ func routingPolicyFromRequest(req RoutingPolicyRequest, now time.Time) (RoutingP
 		if strategy.ResourceBatches[i].Name == "" {
 			strategy.ResourceBatches[i].Name = fmt.Sprintf("Batch %d", i+1)
 		}
-		strategy.ResourceBatches[i].ProviderAccountIDs = cleanStringList(strategy.ResourceBatches[i].ProviderAccountIDs)
+		strategy.ResourceBatches[i].ProviderAccountIDs = cleanOrderedStringList(strategy.ResourceBatches[i].ProviderAccountIDs)
 		if len(strategy.ResourceBatches[i].ProviderAccountIDs) == 0 {
 			return RoutingPolicy{}, fmt.Errorf("strategy.resource_batches[%d] must contain at least one provider account", i)
 		}
@@ -2353,7 +2456,7 @@ func routingPolicyFromRequest(req RoutingPolicyRequest, now time.Time) (RoutingP
 	}
 	return RoutingPolicy{
 		Name: name, Description: strings.TrimSpace(req.Description), RouteGroup: routeGroup,
-		Status: status, Strategy: strategy, Version: 1, CreatedAt: now, UpdatedAt: now,
+		Status: status, IsDefault: req.IsDefault != nil && *req.IsDefault, Strategy: strategy, Version: 1, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 
@@ -2738,6 +2841,12 @@ func cleanTempUnschedulableRules(rules []ProviderAccountTempUnschedulableRule) (
 }
 
 func cleanStringList(values []string) []string {
+	out := cleanOrderedStringList(values)
+	sort.Strings(out)
+	return out
+}
+
+func cleanOrderedStringList(values []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(values))
 	for _, value := range values {
@@ -2751,7 +2860,6 @@ func cleanStringList(values []string) []string {
 		seen[item] = struct{}{}
 		out = append(out, item)
 	}
-	sort.Strings(out)
 	return out
 }
 

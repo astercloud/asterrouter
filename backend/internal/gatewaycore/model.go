@@ -107,6 +107,7 @@ type CanonicalAuthContext struct {
 	ExternalSubjectReference string           `json:"external_subject_reference,omitempty"`
 	PolicyID                 string           `json:"policy_id,omitempty"`
 	PolicyVersion            int              `json:"policy_version,omitempty"`
+	RoutingPolicyID          string           `json:"routing_policy_id,omitempty"`
 	Scopes                   []string         `json:"scopes"`
 	AllowedModels            []string         `json:"allowed_models"`
 	AllowedModalities        []string         `json:"allowed_modalities"`

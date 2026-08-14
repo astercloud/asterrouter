@@ -22,11 +22,18 @@ type GatewayExecutionPlan struct {
 }
 
 type GatewayCandidateExclusion struct {
-	RouteID           string `json:"route_id"`
-	ProviderID        string `json:"provider_id,omitempty"`
-	ProviderAccountID string `json:"provider_account_id,omitempty"`
-	UpstreamModel     string `json:"upstream_model,omitempty"`
-	Reason            string `json:"reason"`
+	RouteID                    string `json:"route_id"`
+	ProviderID                 string `json:"provider_id,omitempty"`
+	ProviderAccountID          string `json:"provider_account_id,omitempty"`
+	UpstreamModel              string `json:"upstream_model,omitempty"`
+	Reason                     string `json:"reason"`
+	PolicyBatchOrder           int    `json:"policy_batch_order,omitempty"`
+	PolicyBatchName            string `json:"policy_batch_name,omitempty"`
+	PolicyBatchPosition        int    `json:"policy_batch_position,omitempty"`
+	PriceFactPresent           bool   `json:"price_fact_present"`
+	EstimatedInputMicrosPer1M  int64  `json:"estimated_input_micros_per_1m,omitempty"`
+	EstimatedOutputMicrosPer1M int64  `json:"estimated_output_micros_per_1m,omitempty"`
+	SelectionReason            string `json:"selection_reason,omitempty"`
 }
 
 type routingPolicyCandidateDecision struct {
@@ -84,7 +91,7 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 	if !gatewayModelSupportsCanonicalRequest(resolved.GatewayModel, request) {
 		return GatewayExecutionPlan{Request: request, Auth: auth, GatewayModelID: resolved.GatewayModel.ID, RouteGroup: resolved.RouteGroup, RejectionReason: "capability_mismatch"}, nil
 	}
-	routingPolicy, err := s.activeRoutingPolicyForGroup(ctx, resolved.RouteGroup)
+	routingPolicy, err := s.routingPolicyForCanonicalAuth(ctx, auth, resolved.RouteGroup)
 	if err != nil {
 		return GatewayExecutionPlan{}, err
 	}
@@ -102,7 +109,7 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 			HasRoutes: true, RejectionReason: "routing_policy_protocol_blocked",
 		}, nil
 	}
-	candidates, hasRoutes, err := s.GatewayProviderCandidatesForModel(ctx, request.Model)
+	candidates, hasRoutes, err := s.gatewayProviderCandidatesForResolvedModel(ctx, resolved, routingPolicy)
 	if err != nil {
 		return GatewayExecutionPlan{}, err
 	}
@@ -136,6 +143,23 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 		plan.RoutingPolicyPreset = routingPolicy.Strategy.Preset
 	}
 	return plan, nil
+}
+
+func (s *Service) routingPolicyForCanonicalAuth(ctx context.Context, auth gatewaycore.CanonicalAuthContext, routeGroup string) (*RoutingPolicy, error) {
+	if strings.TrimSpace(auth.RoutingPolicyID) == "" {
+		return s.activeRoutingPolicyForGroup(ctx, routeGroup)
+	}
+	policy, err := s.routingPolicyByID(ctx, auth.RoutingPolicyID)
+	if err != nil {
+		return nil, err
+	}
+	if policy.Status != RoutingPolicyStatusActive {
+		return nil, ErrGatewayPolicyForbidden
+	}
+	if policy.RouteGroup != routeGroup {
+		return nil, ErrGatewayPolicyForbidden
+	}
+	return &policy, nil
 }
 
 func (s *Service) applyRoutingPolicyCandidateRules(ctx context.Context, policy *RoutingPolicy, protocol string, candidates []GatewayProvider) (routingPolicyCandidateDecision, error) {
@@ -178,6 +202,12 @@ func gatewayCandidatePolicyExclusion(candidate GatewayProvider, reason string) G
 	return GatewayCandidateExclusion{
 		RouteID: candidate.RouteID, ProviderID: candidate.ID, ProviderAccountID: candidate.AccountID,
 		UpstreamModel: candidate.UpstreamModel, Reason: reason,
+		PolicyBatchOrder: candidate.PolicyBatchOrder, PolicyBatchName: candidate.PolicyBatchName,
+		PolicyBatchPosition:        candidate.PolicyBatchPosition,
+		PriceFactPresent:           candidate.PriceFactPresent,
+		EstimatedInputMicrosPer1M:  candidate.EstimatedInputMicrosPer1M,
+		EstimatedOutputMicrosPer1M: candidate.EstimatedOutputMicrosPer1M,
+		SelectionReason:            candidate.SelectionReason,
 	}
 }
 
@@ -262,6 +292,7 @@ func (s *Service) canonicalAuthContext(auth GatewayAuthContext) gatewaycore.Cano
 		ExternalSubjectReference: auth.ExternalSubjectReference,
 		PolicyID:                 policyID,
 		PolicyVersion:            policyVersion,
+		RoutingPolicyID:          auth.APIKey.RoutingPolicyID,
 		Scopes:                   append([]string(nil), keyPolicy.scopes...),
 		AllowedModels:            allowedModels,
 		AllowedModalities:        append([]string(nil), keyPolicy.allowedModalities...),

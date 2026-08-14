@@ -681,6 +681,93 @@ func TestCreateAPIKeyEndpoint(t *testing.T) {
 	}
 }
 
+func TestAPIKeyRoutingPolicyBindingEndpoints(t *testing.T) {
+	handler, control := newTestRuntime(t, RuntimeConfig{})
+	model, err := control.CreateGatewayModel(context.Background(), "tester", controlplane.GatewayModelRequest{
+		ModelID: "bound-key-model", Name: "Bound key model", DefaultRouteGroup: "bound-key", Status: controlplane.GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := control.CreateRoutingPolicy(context.Background(), "tester", controlplane.RoutingPolicyRequest{
+		Name: "Bound key policy", RouteGroup: model.DefaultRouteGroup, Status: controlplane.RoutingPolicyStatusActive,
+		Strategy: controlplane.RoutingPolicyStrategy{Preset: controlplane.RoutingPolicyPresetBalanced, StickyTTLSeconds: 900},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createBody := bytes.NewBufferString(fmt.Sprintf(`{"name":"bound key","routing_policy_id":%q,"model_allowlist":[%q]}`, policy.ID, model.ModelID))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/api-keys", createBody)
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create bound key status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		Data controlplane.APIKeyCreateResponse `json:"data"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Data.Record.RoutingPolicyID != policy.ID {
+		t.Fatalf("created routing policy binding=%q want=%q", created.Data.Record.RoutingPolicyID, policy.ID)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/api-keys", nil)
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list bound key status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listed struct {
+		Data []controlplane.APIKeyRecord `json:"data"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, key := range listed.Data {
+		if key.ID == created.Data.Record.ID {
+			found = true
+			if key.RoutingPolicyID != policy.ID {
+				t.Fatalf("listed routing policy binding=%q want=%q", key.RoutingPolicyID, policy.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("created key missing from list: %+v", listed.Data)
+	}
+
+	updateBody := bytes.NewBufferString(fmt.Sprintf(`{"name":"bound key","routing_policy_id":"","model_allowlist":[%q]}`, model.ModelID))
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/api-keys/"+created.Data.Record.ID, updateBody)
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	handler.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("clear routing policy binding status=%d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	var updated struct {
+		Data controlplane.APIKeyRecord `json:"data"`
+	}
+	if err := json.Unmarshal(updateRec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Data.RoutingPolicyID != "" {
+		t.Fatalf("routing policy binding was not cleared: %+v", updated.Data)
+	}
+
+	invalidBody := bytes.NewBufferString(fmt.Sprintf(`{"name":"bound key","routing_policy_id":"missing","model_allowlist":[%q]}`, model.ModelID))
+	invalidReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/api-keys/"+created.Data.Record.ID, invalidBody)
+	invalidReq.Header.Set("Content-Type", "application/json")
+	invalidRec := httptest.NewRecorder()
+	handler.ServeHTTP(invalidRec, invalidReq)
+	if invalidRec.Code != http.StatusBadRequest || !strings.Contains(invalidRec.Body.String(), "routing_policy_id") || !strings.Contains(invalidRec.Body.String(), "not found") {
+		t.Fatalf("invalid routing policy binding status=%d body=%s", invalidRec.Code, invalidRec.Body.String())
+	}
+}
+
 func TestAPIKeyPolicyExplanationEndpoint(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
 
@@ -1116,7 +1203,7 @@ func TestAdminRoutingGroupBoundaryContracts(t *testing.T) {
 
 func TestAdminRoutingPolicyEndpoints(t *testing.T) {
 	handler := newTestHandler(t, RuntimeConfig{})
-	body := bytes.NewBufferString(`{"name":"Enterprise default","route_group":"default","status":"active","strategy":{"preset":"balanced","sticky_ttl_seconds":900,"failover_before_first_byte":true,"low_price_pool_mode":"auto"}}`)
+	body := bytes.NewBufferString(`{"name":"Enterprise default","route_group":"default","status":"active","is_default":true,"strategy":{"preset":"balanced","smart_optimization":true,"strict_order":true,"sticky_ttl_seconds":900,"failover_before_first_byte":true,"low_price_pool_mode":"none","missing_price_action":"block","absolute_max_input_per_1m":2,"absolute_max_output_per_1m":3,"model_price_limits":[{"model":"gpt-4o-mini","absolute_max_input_per_1m":1,"absolute_max_output_per_1m":1.5}],"resource_batches":[{"name":"Production","provider_account_ids":["account-b","account-a"]}],"preferred_provider_account_ids":["account-a"],"allowed_models":["gpt-4o-mini"],"allowed_protocols":["openai_chat_completions"]}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/console/routing-policies", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -1130,8 +1217,14 @@ func TestAdminRoutingPolicyEndpoints(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode routing policy: %v", err)
 	}
-	if created.Data.ID == "" || created.Data.Version != 1 || !created.Data.Strategy.FailoverBeforeFirstByte {
+	if created.Data.ID == "" || created.Data.Version != 1 || !created.Data.IsDefault || !created.Data.Strategy.FailoverBeforeFirstByte || !created.Data.Strategy.SmartOptimization || !created.Data.Strategy.StrictOrder {
 		t.Fatalf("unexpected routing policy: %+v", created.Data)
+	}
+	if created.Data.Strategy.MissingPriceAction != controlplane.RoutingPolicyMissingPriceBlock || len(created.Data.Strategy.ModelPriceLimits) != 1 || len(created.Data.Strategy.ResourceBatches) != 1 || len(created.Data.Strategy.PreferredProviderAccountIDs) != 1 {
+		t.Fatalf("routing policy strategy fields were not decoded: %+v", created.Data.Strategy)
+	}
+	if got := created.Data.Strategy.ResourceBatches[0].ProviderAccountIDs; len(got) != 2 || got[0] != "account-b" || got[1] != "account-a" {
+		t.Fatalf("routing policy declaration order changed over HTTP: %v", got)
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/console/routing-policies", nil)
@@ -1146,11 +1239,11 @@ func TestAdminRoutingPolicyEndpoints(t *testing.T) {
 	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode routing policies: %v", err)
 	}
-	if len(listed.Data) != 1 || listed.Data[0].ID != created.Data.ID {
+	if len(listed.Data) != 1 || listed.Data[0].ID != created.Data.ID || !listed.Data[0].Strategy.StrictOrder || listed.Data[0].Strategy.MissingPriceAction != controlplane.RoutingPolicyMissingPriceBlock {
 		t.Fatalf("unexpected routing policy list: %+v", listed.Data)
 	}
 
-	updateBody := bytes.NewBufferString(`{"name":"Enterprise stable","route_group":"default","status":"active","strategy":{"preset":"stability","sticky_ttl_seconds":1200,"low_price_pool_mode":"none"}}`)
+	updateBody := bytes.NewBufferString(`{"name":"Enterprise stable","route_group":"default","status":"active","is_default":true,"strategy":{"preset":"stability","strict_order":true,"sticky_ttl_seconds":1200,"low_price_pool_mode":"none","missing_price_action":"allow","resource_batches":[{"name":"Production","provider_account_ids":["account-b","account-a"]}]}}`)
 	updateReq := httptest.NewRequest(http.MethodPut, "/api/v1/console/routing-policies/"+created.Data.ID, updateBody)
 	updateReq.Header.Set("Content-Type", "application/json")
 	updateRec := httptest.NewRecorder()
@@ -1164,7 +1257,7 @@ func TestAdminRoutingPolicyEndpoints(t *testing.T) {
 	if err := json.Unmarshal(updateRec.Body.Bytes(), &updated); err != nil {
 		t.Fatalf("decode updated routing policy: %v", err)
 	}
-	if updated.Data.Version != 2 || updated.Data.Name != "Enterprise stable" || updated.Data.Strategy.Preset != controlplane.RoutingPolicyPresetStability {
+	if updated.Data.Version != 2 || updated.Data.Name != "Enterprise stable" || updated.Data.Strategy.Preset != controlplane.RoutingPolicyPresetStability || !updated.Data.IsDefault || !updated.Data.Strategy.StrictOrder || updated.Data.Strategy.MissingPriceAction != controlplane.RoutingPolicyMissingPriceAllow {
 		t.Fatalf("unexpected updated routing policy: %+v", updated.Data)
 	}
 
@@ -1206,8 +1299,20 @@ func TestAdminGatewaySimulatorContracts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	policy, err := control.CreateRoutingPolicy(context.Background(), "tester", controlplane.RoutingPolicyRequest{
+		Name: "Explicit simulation policy", RouteGroup: model.DefaultRouteGroup, Status: controlplane.RoutingPolicyStatusActive,
+		Strategy: controlplane.RoutingPolicyStrategy{
+			Preset: controlplane.RoutingPolicyPresetStability, StrictOrder: true, StickyTTLSeconds: 900,
+			FailoverBeforeFirstByte: true, LowPricePoolMode: controlplane.RoutingPolicyLowPriceNone,
+			ResourceBatches:             []controlplane.RoutingPolicyBatch{{Name: "Production", ProviderAccountIDs: []string{account.ID}}},
+			PreferredProviderAccountIDs: []string{account.ID},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	readyReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/gateway-simulator", bytes.NewBufferString(`{"model":"simulated-chat","estimated_tokens":1000,"protocol":"openai_chat_completions","required_features":["text"]}`))
+	readyReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/gateway-simulator", bytes.NewBufferString(fmt.Sprintf(`{"model":"simulated-chat","estimated_tokens":1000,"protocol":"openai_chat_completions","required_features":["text"],"routing_policy_id":%q}`, policy.ID)))
 	readyReq.Header.Set("Content-Type", "application/json")
 	readyRec := httptest.NewRecorder()
 	handler.ServeHTTP(readyRec, readyReq)
@@ -1220,8 +1325,12 @@ func TestAdminGatewaySimulatorContracts(t *testing.T) {
 	if err := json.Unmarshal(readyRec.Body.Bytes(), &ready); err != nil {
 		t.Fatal(err)
 	}
-	if ready.Data.Status != "ready" || ready.Data.ResolvedModel != "simulated-chat" || len(ready.Data.Candidates) != 1 || !ready.Data.Candidates[0].Eligible {
+	if ready.Data.Status != "ready" || ready.Data.ResolvedModel != "simulated-chat" || ready.Data.RoutingPolicyID != policy.ID || ready.Data.RoutingPolicyVersion != 1 || ready.Data.RoutingPolicyPreset != controlplane.RoutingPolicyPresetStability || len(ready.Data.Candidates) != 1 || !ready.Data.Candidates[0].Eligible {
 		t.Fatalf("unexpected ready simulation: %+v", ready.Data)
+	}
+	candidate := ready.Data.Candidates[0]
+	if candidate.PolicyBatchName != "Production" || candidate.PolicyBatchOrder != 0 || candidate.PolicyBatchPosition != 0 || candidate.ProviderAccountID != account.ID || candidate.SelectionReason == "" || candidate.PriceFactPresent {
+		t.Fatalf("simulation decision evidence incomplete: %+v", candidate)
 	}
 
 	unresolvedReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/gateway-simulator", bytes.NewBufferString(`{"model":"missing-model","estimated_tokens":1000,"protocol":"openai_chat_completions"}`))
@@ -1238,6 +1347,14 @@ func TestAdminGatewaySimulatorContracts(t *testing.T) {
 	handler.ServeHTTP(invalidRec, invalidReq)
 	if invalidRec.Code != http.StatusBadRequest || !strings.Contains(invalidRec.Body.String(), "invalid gateway simulation payload") {
 		t.Fatalf("invalid simulation status=%d body=%s", invalidRec.Code, invalidRec.Body.String())
+	}
+
+	missingPolicyReq := httptest.NewRequest(http.MethodPost, "/api/v1/console/gateway-simulator", bytes.NewBufferString(`{"model":"simulated-chat","estimated_tokens":1000,"protocol":"openai_chat_completions","routing_policy_id":"missing"}`))
+	missingPolicyReq.Header.Set("Content-Type", "application/json")
+	missingPolicyRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingPolicyRec, missingPolicyReq)
+	if missingPolicyRec.Code != http.StatusBadRequest || !strings.Contains(missingPolicyRec.Body.String(), "routing policy") || !strings.Contains(missingPolicyRec.Body.String(), "not found") {
+		t.Fatalf("missing explicit policy status=%d body=%s", missingPolicyRec.Code, missingPolicyRec.Body.String())
 	}
 }
 

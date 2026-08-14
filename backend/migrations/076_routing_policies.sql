@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS routing_policies (
   description TEXT NOT NULL DEFAULT '',
   route_group TEXT NOT NULL DEFAULT 'default',
   status TEXT NOT NULL DEFAULT 'active',
+  is_default BOOLEAN NOT NULL DEFAULT false,
   strategy JSONB NOT NULL DEFAULT '{}'::jsonb,
   version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL,
@@ -43,5 +44,5 @@ END $$;
 CREATE INDEX IF NOT EXISTS routing_policies_route_group_idx
   ON routing_policies(route_group, status);
 
-CREATE UNIQUE INDEX IF NOT EXISTS routing_policies_one_active_per_group_idx
-  ON routing_policies(route_group) WHERE status = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS routing_policies_one_default_per_group_idx
+  ON routing_policies(route_group) WHERE status = 'active' AND is_default;
