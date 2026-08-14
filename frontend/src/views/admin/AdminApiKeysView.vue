@@ -13,12 +13,13 @@ import {
   getGatewayTraces,
   getGatewayModels,
   getGovernancePolicies,
+  getRoutingPolicies,
   getUsageReport,
 	getWorkspaceUsers,
   rotateAPIKey,
   updateAPIKey
 } from '@/api/control'
-import type { APIKeyCreateRequest, APIKeyRecord, GatewayModel, GatewayPolicyExplanation, GatewayTrace, GovernancePolicy, UsageReport, WorkspaceUser } from '@/types'
+import type { APIKeyCreateRequest, APIKeyRecord, GatewayModel, GatewayPolicyExplanation, GatewayTrace, GovernancePolicy, RoutingPolicy, UsageReport, WorkspaceUser } from '@/types'
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -38,6 +39,7 @@ const rotationTarget = ref<APIKeyRecord | null>(null)
 const rotationSaving = ref(false)
 const apiKeys = ref<APIKeyRecord[]>([])
 const policies = ref<GovernancePolicy[]>([])
+const routingPolicies = ref<RoutingPolicy[]>([])
 const users = ref<WorkspaceUser[]>([])
 const gatewayModels = ref<GatewayModel[]>([])
 const query = ref('')
@@ -49,6 +51,7 @@ const operationOptions = ['list_models', 'chat_completion', 'image_generation', 
 const form = reactive<APIKeyCreateRequest>({
   name: '',
   policy_id: '',
+  routing_policy_id: '',
   model_allowlist: [],
   qps_limit: 10,
   monthly_token_limit: 1000000,
@@ -63,6 +66,11 @@ const form = reactive<APIKeyCreateRequest>({
 
 const policyByID = computed(() => new Map(policies.value.map((item) => [item.id, item])))
 const activePolicies = computed(() => policies.value.filter((item) => item.status === 'active'))
+const routingPolicyByID = computed(() => new Map(routingPolicies.value.map((item) => [item.id, item])))
+const compatibleRoutingPolicies = computed(() => {
+  const routeGroups = new Set(form.model_allowlist.map((modelID) => gatewayModels.value.find((model) => model.model_id === modelID)?.default_route_group || 'default'))
+  return routingPolicies.value.filter((policy) => policy.status === 'active' && (routeGroups.size === 0 || (routeGroups.size === 1 && routeGroups.has(policy.route_group))))
+})
 const defaultGatewayModel = computed(() => gatewayModels.value.find((item) => item.status === 'active')?.model_id || '')
 
 const filteredKeys = computed(() => {
@@ -71,7 +79,8 @@ const filteredKeys = computed(() => {
     if (statusFilter.value && apiKeyLifecycleStatus(key) !== statusFilter.value) return false
     if (!keyword) return true
     const policy = key.policy_id ? policyByID.value.get(key.policy_id)?.name || key.policy_id : ''
-    return [key.name, key.fingerprint, key.prefix, key.key_type, key.owner_user_id, policy, key.model_allowlist.join(' ')].some((value) =>
+    const routingPolicy = key.routing_policy_id ? routingPolicyByID.value.get(key.routing_policy_id)?.name || key.routing_policy_id : ''
+    return [key.name, key.fingerprint, key.prefix, key.key_type, key.owner_user_id, policy, routingPolicy, key.model_allowlist.join(' ')].some((value) =>
       value.toLowerCase().includes(keyword)
     )
   })
@@ -82,7 +91,7 @@ const summary = computed(() => ({
   active: apiKeys.value.filter((item) => apiKeyLifecycleStatus(item) === 'active').length,
   retiring: apiKeys.value.filter((item) => apiKeyLifecycleStatus(item) === 'retiring').length,
   disabled: apiKeys.value.filter((item) => ['disabled', 'retired'].includes(apiKeyLifecycleStatus(item))).length,
-  policies: new Set(apiKeys.value.map((item) => item.policy_id).filter(Boolean)).size
+  policies: new Set(apiKeys.value.flatMap((item) => [item.policy_id, item.routing_policy_id]).filter(Boolean)).size
 }))
 
 function dateInputValue(value?: string): string {
@@ -94,6 +103,7 @@ function openCreate() {
   Object.assign(form, {
     name: '',
     policy_id: '',
+    routing_policy_id: '',
     model_allowlist: defaultGatewayModel.value ? [defaultGatewayModel.value] : [],
     qps_limit: 10,
     monthly_token_limit: 1000000,
@@ -114,6 +124,7 @@ function openEdit(key: APIKeyRecord) {
   Object.assign(form, {
     name: key.name,
     policy_id: key.policy_id || '',
+    routing_policy_id: key.routing_policy_id || '',
     model_allowlist: [...key.model_allowlist],
     qps_limit: key.qps_limit,
     monthly_token_limit: key.monthly_token_limit,
@@ -153,9 +164,10 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [keyResult, policyResult, userResult, modelResult] = await Promise.allSettled([
+    const [keyResult, policyResult, routingPolicyResult, userResult, modelResult] = await Promise.allSettled([
       getAPIKeys(),
       getGovernancePolicies(),
+      getRoutingPolicies(),
       getWorkspaceUsers(),
       getGatewayModels()
     ])
@@ -163,6 +175,7 @@ async function load() {
     if (modelResult.status === 'rejected') throw modelResult.reason
     apiKeys.value = keyResult.value
     policies.value = policyResult.status === 'fulfilled' ? policyResult.value : []
+    routingPolicies.value = routingPolicyResult.status === 'fulfilled' ? routingPolicyResult.value : []
     users.value = userResult.status === 'fulfilled' ? userResult.value : []
     gatewayModels.value = modelResult.value
   } catch (err) {
@@ -181,6 +194,7 @@ async function save() {
       await updateAPIKey(editing.value.id, {
         name: form.name,
         policy_id: form.policy_id,
+        routing_policy_id: form.routing_policy_id,
         model_allowlist: [...form.model_allowlist],
         qps_limit: form.qps_limit,
         monthly_token_limit: form.monthly_token_limit,
@@ -350,8 +364,8 @@ onMounted(load)
               <td>{{ key.fingerprint }}</td>
               <td><span class="pill" :class="apiKeyLifecycleClass(key)">{{ t(apiKeyLifecycleLabelKey(key)) }}</span></td>
               <td>
-                <strong>{{ key.policy_id ? policyByID.get(key.policy_id)?.name || key.policy_id : t('policies.inherit') }}</strong>
-                <span>{{ key.policy_id ? t('policies.explicitBinding') : t('policies.scopeFallback') }}</span>
+                <strong>{{ t('apiKeys.accessPolicy') }} · {{ key.policy_id ? policyByID.get(key.policy_id)?.name || key.policy_id : t('policies.inherit') }}</strong>
+                <span>{{ t('apiKeys.routingPolicy') }} · {{ key.routing_policy_id ? routingPolicyByID.get(key.routing_policy_id)?.name || key.routing_policy_id : t('apiKeys.routeGroupDefault') }}</span>
               </td>
               <td>
                 <div class="chip-list">
@@ -406,11 +420,19 @@ onMounted(load)
             <input v-model="form.name" />
           </div>
           <div class="field form-span-2">
-            <label>{{ t('policies.policy') }}</label>
+            <label>{{ t('apiKeys.accessPolicy') }}</label>
             <select v-model="form.policy_id">
               <option value="">{{ t('policies.inherit') }}</option>
               <option v-for="policy in activePolicies" :key="policy.id" :value="policy.id">{{ policy.name }}</option>
             </select>
+          </div>
+          <div class="field form-span-2">
+            <label>{{ t('apiKeys.routingPolicy') }}</label>
+            <select v-model="form.routing_policy_id">
+              <option value="">{{ t('apiKeys.routeGroupDefault') }}</option>
+              <option v-for="policy in compatibleRoutingPolicies" :key="policy.id" :value="policy.id">{{ policy.name }} · {{ policy.route_group }}{{ policy.is_default ? ` · ${t('routingPolicy.defaultPolicy')}` : '' }}</option>
+            </select>
+            <small>{{ t('apiKeys.routingPolicyHelp') }}</small>
           </div>
           <div class="field">
             <label>{{ t('apiKeys.keyType') }}</label>
@@ -536,8 +558,12 @@ onMounted(load)
               <p>{{ selectedKey.monthly_token_limit ? formatTokens(selectedKey.monthly_token_limit) : t('apiKeys.unlimited') }}</p>
             </div>
             <div>
-              <label>{{ t('policies.policy') }}</label>
+              <label>{{ t('apiKeys.accessPolicy') }}</label>
               <p>{{ selectedKey.policy_id ? policyByID.get(selectedKey.policy_id)?.name || selectedKey.policy_id : t('policies.inherit') }}</p>
+            </div>
+            <div>
+              <label>{{ t('apiKeys.routingPolicy') }}</label>
+              <p>{{ selectedKey.routing_policy_id ? routingPolicyByID.get(selectedKey.routing_policy_id)?.name || selectedKey.routing_policy_id : t('apiKeys.routeGroupDefault') }}</p>
             </div>
             <div>
               <label>{{ t('apiKeys.lastUsed') }}</label>

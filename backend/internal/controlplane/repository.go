@@ -202,6 +202,7 @@ type Repository interface {
 	ListGatewayTraces(ctx context.Context, limit int) ([]GatewayTrace, error)
 	QueryGatewayTraces(ctx context.Context, query GatewayTraceQuery) ([]GatewayTrace, error)
 	SummarizeGatewayTraces(ctx context.Context, query GatewayTraceQuery) (GatewayTraceSummary, error)
+	SummarizeProviderAccountRoutingMetrics(ctx context.Context, from time.Time) ([]ProviderAccountRoutingMetrics, error)
 	ListAuditLogs(ctx context.Context, limit int) ([]AuditLog, error)
 	QueryAuditLogs(ctx context.Context, query AuditLogQuery) ([]AuditLog, error)
 	SummarizeAuditLogs(ctx context.Context, query AuditLogQuery) (AuditLogSummary, error)
@@ -758,6 +759,40 @@ func (r *MemoryRepository) SummarizeGatewayTraces(_ context.Context, query Gatew
 		summary.AvgLatencyMS = latencyTotal / int64(summary.Total)
 	}
 	return summary, nil
+}
+
+func (r *MemoryRepository) SummarizeProviderAccountRoutingMetrics(_ context.Context, from time.Time) ([]ProviderAccountRoutingMetrics, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	type accumulator struct {
+		requests  int
+		successes int
+		latency   int64
+	}
+	byAccount := map[string]accumulator{}
+	for _, trace := range r.gatewayTraces {
+		if trace.ProviderAccountID == "" || trace.CreatedAt.Before(from) {
+			continue
+		}
+		item := byAccount[trace.ProviderAccountID]
+		item.requests++
+		if trace.HTTPStatus >= 200 && trace.HTTPStatus < 400 && trace.ErrorType == "" {
+			item.successes++
+		}
+		item.latency += trace.LatencyMS
+		byAccount[trace.ProviderAccountID] = item
+	}
+	out := make([]ProviderAccountRoutingMetrics, 0, len(byAccount))
+	for accountID, item := range byAccount {
+		metrics := ProviderAccountRoutingMetrics{ProviderAccountID: accountID, RequestCount: item.requests}
+		if item.requests > 0 {
+			metrics.SuccessRate = float64(item.successes) / float64(item.requests)
+			metrics.AvgLatencyMS = item.latency / int64(item.requests)
+		}
+		out = append(out, metrics)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ProviderAccountID < out[j].ProviderAccountID })
+	return out, nil
 }
 
 func (r *MemoryRepository) ListAuditLogs(_ context.Context, limit int) ([]AuditLog, error) {
@@ -1334,6 +1369,7 @@ CREATE TABLE IF NOT EXISTS routing_policies (
   description TEXT NOT NULL DEFAULT '',
   route_group TEXT NOT NULL DEFAULT 'default',
   status TEXT NOT NULL DEFAULT 'active',
+  is_default BOOLEAN NOT NULL DEFAULT false,
   strategy JSONB NOT NULL DEFAULT '{}'::jsonb,
   version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL,
@@ -1348,8 +1384,26 @@ CREATE TABLE IF NOT EXISTS routing_policies (
 CREATE INDEX IF NOT EXISTS routing_policies_route_group_idx
   ON routing_policies(route_group, status);
 
-CREATE UNIQUE INDEX IF NOT EXISTS routing_policies_one_active_per_group_idx
-  ON routing_policies(route_group) WHERE status = 'active';
+ALTER TABLE routing_policies ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT false;
+DROP INDEX IF EXISTS routing_policies_one_active_per_group_idx;
+
+UPDATE routing_policies AS policy
+SET is_default = true
+WHERE policy.id IN (
+  SELECT DISTINCT ON (route_group) id
+  FROM routing_policies
+  WHERE status = 'active'
+  ORDER BY route_group, updated_at DESC, id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM routing_policies AS existing
+  WHERE existing.route_group = policy.route_group
+    AND existing.status = 'active'
+    AND existing.is_default
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS routing_policies_one_default_per_group_idx
+  ON routing_policies(route_group) WHERE status = 'active' AND is_default;
 
 CREATE TABLE IF NOT EXISTS provider_accounts (
   id TEXT PRIMARY KEY,
@@ -1672,6 +1726,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   principal_type TEXT NOT NULL DEFAULT '',
   principal_reference TEXT NOT NULL DEFAULT '',
   policy_id TEXT NOT NULL DEFAULT '',
+  routing_policy_id TEXT NOT NULL DEFAULT '',
   scopes TEXT NOT NULL DEFAULT '["gateway:invoke","models:read"]',
   model_allowlist TEXT NOT NULL DEFAULT '[]',
   allowed_modalities TEXT NOT NULL DEFAULT '["metadata","text"]',
@@ -1700,6 +1755,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS policy_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS routing_policy_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_type TEXT NOT NULL DEFAULT 'workspace';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS owner_user_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS application_id TEXT NOT NULL DEFAULT '';
@@ -1735,6 +1791,10 @@ CREATE INDEX IF NOT EXISTS api_keys_application_principal_idx
 
 CREATE INDEX IF NOT EXISTS api_keys_principal_reference_idx
   ON api_keys(application_id, principal_reference, status);
+
+CREATE INDEX IF NOT EXISTS api_keys_routing_policy_id_idx
+  ON api_keys(routing_policy_id)
+  WHERE routing_policy_id <> '';
 
 CREATE INDEX IF NOT EXISTS api_keys_rotation_family_idx
   ON api_keys(rotation_family_id)
@@ -3063,7 +3123,7 @@ ON CONFLICT(id) DO UPDATE SET
 
 func (r *PostgresRepository) ListRoutingPolicies(ctx context.Context) ([]RoutingPolicy, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, name, description, route_group, status, strategy::text, version, created_at, updated_at
+SELECT id, name, description, route_group, status, is_default, strategy::text, version, created_at, updated_at
 FROM routing_policies
 ORDER BY updated_at DESC, name ASC
 `)
@@ -3075,7 +3135,7 @@ ORDER BY updated_at DESC, name ASC
 	for rows.Next() {
 		var policy RoutingPolicy
 		var strategy string
-		if err := rows.Scan(&policy.ID, &policy.Name, &policy.Description, &policy.RouteGroup, &policy.Status, &strategy, &policy.Version, &policy.CreatedAt, &policy.UpdatedAt); err != nil {
+		if err := rows.Scan(&policy.ID, &policy.Name, &policy.Description, &policy.RouteGroup, &policy.Status, &policy.IsDefault, &strategy, &policy.Version, &policy.CreatedAt, &policy.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if strings.TrimSpace(strategy) != "" {
@@ -3094,17 +3154,18 @@ func (r *PostgresRepository) SaveRoutingPolicy(ctx context.Context, policy Routi
 		return err
 	}
 	_, err = r.db.ExecContext(ctx, `
-INSERT INTO routing_policies(id, name, description, route_group, status, strategy, version, created_at, updated_at)
-VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9)
+INSERT INTO routing_policies(id, name, description, route_group, status, is_default, strategy, version, created_at, updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)
 ON CONFLICT(id) DO UPDATE SET
   name = EXCLUDED.name,
   description = EXCLUDED.description,
   route_group = EXCLUDED.route_group,
   status = EXCLUDED.status,
+  is_default = EXCLUDED.is_default,
   strategy = EXCLUDED.strategy,
   version = EXCLUDED.version,
   updated_at = EXCLUDED.updated_at
-`, policy.ID, policy.Name, policy.Description, policy.RouteGroup, policy.Status, string(strategy), policy.Version, policy.CreatedAt, policy.UpdatedAt)
+`, policy.ID, policy.Name, policy.Description, policy.RouteGroup, policy.Status, policy.IsDefault, string(strategy), policy.Version, policy.CreatedAt, policy.UpdatedAt)
 	return err
 }
 
@@ -3326,7 +3387,7 @@ FROM provider_accounts
 
 const apiKeySelectColumns = `id, name, key_hash, fingerprint, prefix, status, key_type, owner_user_id,
 application_id, gateway_principal_id, principal_type, principal_reference,
-policy_id, scopes, model_allowlist, allowed_modalities, allowed_operations,
+policy_id, routing_policy_id, scopes, model_allowlist, allowed_modalities, allowed_operations,
 qps_limit, rpm_limit, tpm_limit, concurrency_limit, monthly_token_limit, monthly_budget_micros,
 monthly_image_limit, monthly_video_seconds_limit, monthly_audio_seconds_limit,
 allowed_cidrs, lane_policy, artifact_policy, artifact_sink_id, rotation_family_id,
@@ -3344,7 +3405,7 @@ func scanAPIKey(scanner apiKeyScanner) (APIKeyRecord, error) {
 	err := scanner.Scan(
 		&key.ID, &key.Name, &key.KeyHash, &key.Fingerprint, &key.Prefix, &key.Status, &key.KeyType, &key.OwnerUserID,
 		&key.ApplicationID, &key.GatewayPrincipalID, &key.PrincipalType, &key.PrincipalReference,
-		&key.PolicyID, &scopes, &allowlist, &modalities, &operations,
+		&key.PolicyID, &key.RoutingPolicyID, &scopes, &allowlist, &modalities, &operations,
 		&key.QPSLimit, &key.RPMLimit, &key.TPMLimit, &key.ConcurrencyLimit, &key.MonthlyTokenLimit, &key.MonthlyBudgetMicros,
 		&key.MonthlyImageLimit, &key.MonthlyVideoSecondsLimit, &key.MonthlyAudioSecondsLimit,
 		&allowedCIDRs, &key.LanePolicy, &key.ArtifactPolicy, &key.ArtifactSinkID, &key.RotationFamilyID,
@@ -3412,7 +3473,7 @@ const apiKeyInsertStatement = `
 INSERT INTO api_keys(
   id, name, key_hash, fingerprint, prefix, status, key_type, owner_user_id,
 	  application_id, gateway_principal_id, principal_type, principal_reference,
-  policy_id, scopes, model_allowlist, allowed_modalities, allowed_operations,
+  policy_id, routing_policy_id, scopes, model_allowlist, allowed_modalities, allowed_operations,
   qps_limit, rpm_limit, tpm_limit, concurrency_limit, monthly_token_limit, monthly_budget_micros,
   monthly_image_limit, monthly_video_seconds_limit, monthly_audio_seconds_limit,
   allowed_cidrs, lane_policy, artifact_policy, artifact_sink_id, rotation_family_id,
@@ -3421,7 +3482,7 @@ INSERT INTO api_keys(
 )
 VALUES(
 	  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-	  $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38
+	  $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
 )
 `
 
@@ -3439,6 +3500,7 @@ ON CONFLICT(id) DO UPDATE SET
 	principal_type = EXCLUDED.principal_type,
   principal_reference = EXCLUDED.principal_reference,
   policy_id = EXCLUDED.policy_id,
+  routing_policy_id = EXCLUDED.routing_policy_id,
   scopes = EXCLUDED.scopes,
   model_allowlist = EXCLUDED.model_allowlist,
   allowed_modalities = EXCLUDED.allowed_modalities,
@@ -3474,7 +3536,7 @@ func apiKeyWriteArgs(key APIKeyRecord) []any {
 	return []any{
 		key.ID, key.Name, key.KeyHash, key.Fingerprint, key.Prefix, key.Status, key.KeyType, key.OwnerUserID,
 		key.ApplicationID, key.GatewayPrincipalID, key.PrincipalType, key.PrincipalReference,
-		key.PolicyID, scopes, allowlist, modalities, operations,
+		key.PolicyID, key.RoutingPolicyID, scopes, allowlist, modalities, operations,
 		key.QPSLimit, key.RPMLimit, key.TPMLimit, key.ConcurrencyLimit, key.MonthlyTokenLimit, key.MonthlyBudgetMicros,
 		key.MonthlyImageLimit, key.MonthlyVideoSecondsLimit, key.MonthlyAudioSecondsLimit,
 		allowedCIDRs, key.LanePolicy, key.ArtifactPolicy, key.ArtifactSinkID, key.RotationFamilyID,
@@ -3786,6 +3848,31 @@ FROM gateway_traces`
 		summary.AvgLatencyMS = latencyTotal / total
 	}
 	return summary, nil
+}
+
+func (r *PostgresRepository) SummarizeProviderAccountRoutingMetrics(ctx context.Context, from time.Time) ([]ProviderAccountRoutingMetrics, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT provider_account_id,
+       COUNT(*),
+       COALESCE(AVG(CASE WHEN http_status >= 200 AND http_status < 400 AND error_type = '' THEN 1.0 ELSE 0.0 END), 0),
+       COALESCE(FLOOR(AVG(latency_ms)), 0)::BIGINT
+FROM gateway_traces
+WHERE provider_account_id <> '' AND created_at >= $1
+GROUP BY provider_account_id
+ORDER BY provider_account_id`, from)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ProviderAccountRoutingMetrics, 0)
+	for rows.Next() {
+		var metrics ProviderAccountRoutingMetrics
+		if err := rows.Scan(&metrics.ProviderAccountID, &metrics.RequestCount, &metrics.SuccessRate, &metrics.AvgLatencyMS); err != nil {
+			return nil, err
+		}
+		out = append(out, metrics)
+	}
+	return out, rows.Err()
 }
 
 func (r *PostgresRepository) ListAuditLogs(ctx context.Context, limit int) ([]AuditLog, error) {

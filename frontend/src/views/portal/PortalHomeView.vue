@@ -23,6 +23,7 @@ const createdSecret = ref('')
 const form = reactive<APIKeyCreateRequest>({
   name: '',
   policy_id: '',
+  routing_policy_id: '',
   model_allowlist: [],
   qps_limit: 0,
   monthly_token_limit: 0,

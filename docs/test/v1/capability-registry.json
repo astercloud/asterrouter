@@ -681,7 +681,8 @@
           "backend/internal/controlplane/service_test.go#TestCreateAPIKeyReturnsSecretOnceAndStoresHash"
         ],
         "browser": [
-          "@e2e-application-001"
+          "@e2e-application-001",
+          "@e2e-routing-policy-001"
         ]
       },
       "notes": ""
@@ -1132,7 +1133,9 @@
           "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints"
         ],
         "browser": [
-          "@e2e-routing-policy-001"
+          "@e2e-routing-policy-001",
+          "@e2e-routing-policy-002",
+          "@e2e-routing-policy-003"
         ]
       },
       "notes": ""
@@ -1778,7 +1781,8 @@
         "browser": [
           "@e2e-application-001",
           "@e2e-credential-boundary-001",
-          "@e2e-gateway-budget-001"
+          "@e2e-gateway-budget-001",
+          "@e2e-routing-policy-001"
         ]
       },
       "notes": ""
@@ -2206,7 +2210,8 @@
         "frontend/src/views/admin/AdminGatewayModelsView.vue",
         "frontend/src/views/admin/AdminGatewaySimulatorView.vue",
         "frontend/src/views/admin/AdminModelRoutesView.vue",
-        "frontend/src/views/admin/AdminPoliciesView.vue"
+        "frontend/src/views/admin/AdminPoliciesView.vue",
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
       ],
       "evidence": {
         "success": [
@@ -2229,6 +2234,8 @@
           "@e2e-model-inventory-001",
           "@e2e-model-supply-lifecycle-001",
           "@e2e-routing-policy-001",
+          "@e2e-routing-policy-002",
+          "@e2e-routing-policy-003",
           "@e2e-routing-resources-001"
         ]
       },
@@ -2315,7 +2322,8 @@
           "@e2e-application-001",
           "@e2e-credential-boundary-001",
           "@e2e-gateway-budget-001",
-          "@e2e-list-contract-001"
+          "@e2e-list-contract-001",
+          "@e2e-routing-policy-001"
         ]
       },
       "notes": ""
@@ -2502,7 +2510,9 @@
         "boundary": [],
         "browser": [
           "@e2e-effective-pricing-001",
-          "@e2e-routing-policy-001"
+          "@e2e-routing-policy-001",
+          "@e2e-routing-policy-002",
+          "@e2e-routing-policy-003"
         ]
       },
       "notes": ""
@@ -2602,7 +2612,9 @@
           "@e2e-model-inventory-001",
           "@e2e-model-supply-lifecycle-001",
           "@e2e-provider-cooldown-001",
-          "@e2e-routing-policy-001"
+          "@e2e-routing-policy-001",
+          "@e2e-routing-policy-002",
+          "@e2e-routing-policy-003"
         ]
       },
       "notes": ""
@@ -2841,6 +2853,7 @@
         "get"
       ],
       "views": [
+        "frontend/src/views/admin/AdminApiKeysView.vue",
         "frontend/src/views/admin/AdminRoutingPolicyView.vue"
       ],
       "evidence": {
@@ -2852,7 +2865,9 @@
         ],
         "boundary": [],
         "browser": [
-          "@e2e-routing-policy-001"
+          "@e2e-routing-policy-001",
+          "@e2e-routing-policy-002",
+          "@e2e-routing-policy-003"
         ]
       },
       "notes": ""
@@ -2928,6 +2943,7 @@
         "boundary": [],
         "browser": [
           "@e2e-identity-001",
+          "@e2e-routing-policy-001",
           "@e2e-session-002"
         ]
       },
@@ -3174,7 +3190,8 @@
         "post"
       ],
       "views": [
-        "frontend/src/views/admin/AdminGatewaySimulatorView.vue"
+        "frontend/src/views/admin/AdminGatewaySimulatorView.vue",
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
       ],
       "evidence": {
         "success": [
@@ -3693,7 +3710,9 @@
           "backend/internal/server/admin_routes_test.go#TestAdminRoutingPolicyEndpoints"
         ],
         "browser": [
-          "@e2e-routing-policy-001"
+          "@e2e-routing-policy-001",
+          "@e2e-routing-policy-002",
+          "@e2e-routing-policy-003"
         ]
       },
       "notes": ""

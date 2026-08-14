@@ -38,7 +38,8 @@ func (s *Service) evaluateRoutingPolicyPriceRules(ctx context.Context, policy *R
 		return decision, nil
 	}
 	strategy := policy.Strategy
-	priceRulesConfigured := strategy.AbsoluteMaxInputPer1M > 0 || strategy.AbsoluteMaxOutputPer1M > 0 || strategy.MaxPriceMultipleOfCheapest > 0 || oneOf(strategy.LowPricePoolMode, RoutingPolicyLowPriceAuto, RoutingPolicyLowPriceStrict, RoutingPolicyLowPricePercent)
+	inputLimit, outputLimit := routingPolicyAbsolutePriceLimits(strategy, routingPolicyRequestedModel(candidates))
+	priceRulesConfigured := inputLimit > 0 || outputLimit > 0 || strategy.MaxPriceMultipleOfCheapest > 0 || strategy.MissingPriceAction == RoutingPolicyMissingPriceBlock || oneOf(strategy.LowPricePoolMode, RoutingPolicyLowPriceAuto, RoutingPolicyLowPriceStrict, RoutingPolicyLowPricePercent)
 	if !priceRulesConfigured && strategy.Preset != RoutingPolicyPresetCost {
 		return decision, nil
 	}
@@ -49,36 +50,37 @@ func (s *Service) evaluateRoutingPolicyPriceRules(ctx context.Context, policy *R
 	now := s.nowUTC()
 	activePrices := activeRoutingPrices(prices, protocol, now)
 	if len(activePrices) == 0 {
-		return decision, nil
-	}
-	comparablePriceByBatch := make(map[int]bool)
-	for _, candidate := range candidates {
-		if _, found := activePrices[routingPriceKey(candidate.AccountID, candidate.UpstreamModel)]; found {
-			comparablePriceByBatch[candidate.PolicyBatchOrder] = true
+		if strategy.MissingPriceAction == RoutingPolicyMissingPriceBlock && priceRulesConfigured {
+			for _, candidate := range candidates {
+				decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate, reason: "routing_policy_price_fact_missing"})
+			}
+			decision.candidates = nil
 		}
-	}
-	if len(comparablePriceByBatch) == 0 {
 		return decision, nil
 	}
 	priced := make([]routingPolicyCandidatePrice, 0, len(candidates))
 	for index, candidate := range candidates {
 		price, found := activePrices[routingPriceKey(candidate.AccountID, candidate.UpstreamModel)]
 		if !found {
-			if !priceRulesConfigured || !comparablePriceByBatch[candidate.PolicyBatchOrder] {
+			if strategy.MissingPriceAction != RoutingPolicyMissingPriceBlock {
 				priced = append(priced, routingPolicyCandidatePrice{candidate: candidate, order: index})
 			} else {
 				decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate, reason: "routing_policy_price_fact_missing"})
 			}
 			continue
 		}
-		if strategy.AbsoluteMaxInputPer1M > 0 && price.UncachedInputMicrosPer1MTokens > dollarsToMicros(strategy.AbsoluteMaxInputPer1M) {
+		candidate.PriceFactPresent = true
+		candidate.EstimatedInputMicrosPer1M = price.UncachedInputMicrosPer1MTokens
+		candidate.EstimatedOutputMicrosPer1M = price.OutputMicrosPer1MTokens
+		if inputLimit > 0 && price.UncachedInputMicrosPer1MTokens > dollarsToMicros(inputLimit) {
 			decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate, reason: "routing_policy_input_price_exceeded"})
 			continue
 		}
-		if strategy.AbsoluteMaxOutputPer1M > 0 && price.OutputMicrosPer1MTokens > dollarsToMicros(strategy.AbsoluteMaxOutputPer1M) {
+		if outputLimit > 0 && price.OutputMicrosPer1MTokens > dollarsToMicros(outputLimit) {
 			decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate, reason: "routing_policy_output_price_exceeded"})
 			continue
 		}
+		candidate.SelectionReason = appendSelectionReason(candidate.SelectionReason, "price facts applied")
 		priced = append(priced, routingPolicyCandidatePrice{
 			candidate: candidate,
 			price:     adjustedRoutingPrice(price),
@@ -144,9 +146,28 @@ func (s *Service) evaluateRoutingPolicyPriceRules(ctx context.Context, policy *R
 			}
 		}
 	}
-	if strategy.Preset != RoutingPolicyPresetCost {
+	if strategy.Preset != RoutingPolicyPresetCost || strategy.StrictOrder {
 		sort.SliceStable(priced, func(i, j int) bool {
 			return priced[i].order < priced[j].order
+		})
+	} else {
+		sort.SliceStable(priced, func(i, j int) bool {
+			left, right := priced[i], priced[j]
+			if left.candidate.PolicyBatchOrder != right.candidate.PolicyBatchOrder {
+				return left.candidate.PolicyBatchOrder < right.candidate.PolicyBatchOrder
+			}
+			leftPreferred := contains(strategy.PreferredProviderAccountIDs, left.candidate.AccountID)
+			rightPreferred := contains(strategy.PreferredProviderAccountIDs, right.candidate.AccountID)
+			if leftPreferred != rightPreferred {
+				return leftPreferred
+			}
+			if left.priced != right.priced {
+				return left.priced
+			}
+			if left.priced && left.price != right.price {
+				return left.price < right.price
+			}
+			return left.order < right.order
 		})
 	}
 	decision.candidates = make([]GatewayProvider, 0, len(priced))
@@ -154,6 +175,42 @@ func (s *Service) evaluateRoutingPolicyPriceRules(ctx context.Context, policy *R
 		decision.candidates = append(decision.candidates, candidate.candidate)
 	}
 	return decision, nil
+}
+
+func routingPolicyRequestedModel(candidates []GatewayProvider) string {
+	for _, candidate := range candidates {
+		if model := strings.TrimSpace(candidate.RequestedModel); model != "" {
+			return model
+		}
+	}
+	return ""
+}
+
+func routingPolicyAbsolutePriceLimits(strategy RoutingPolicyStrategy, model string) (float64, float64) {
+	input := strategy.AbsoluteMaxInputPer1M
+	output := strategy.AbsoluteMaxOutputPer1M
+	baseModel := strings.TrimSpace(model)
+	if separator := strings.LastIndex(baseModel, ":"); separator > 0 {
+		baseModel = baseModel[:separator]
+	}
+	for _, limit := range strategy.ModelPriceLimits {
+		if limit.Model != strings.TrimSpace(model) && limit.Model != baseModel {
+			continue
+		}
+		input = lowerPositiveFloat(input, limit.AbsoluteMaxInputPer1M)
+		output = lowerPositiveFloat(output, limit.AbsoluteMaxOutputPer1M)
+	}
+	return input, output
+}
+
+func lowerPositiveFloat(left, right float64) float64 {
+	if left <= 0 {
+		return right
+	}
+	if right <= 0 || left <= right {
+		return left
+	}
+	return right
 }
 
 func routingPolicyPriceCandidateKey(candidate GatewayProvider) string {
@@ -207,28 +264,31 @@ func lowPriceCandidatePool(candidates []routingPolicyCandidatePrice, strategy Ro
 	out := make([]routingPolicyCandidatePrice, 0, len(candidates))
 	for _, batch := range batchOrder {
 		items := byBatch[batch]
-		hasPrice := false
+		knownPriceItems := make([]routingPolicyCandidatePrice, 0, len(items))
+		unknownPriceItems := make([]routingPolicyCandidatePrice, 0, len(items))
 		for _, item := range items {
 			if item.priced {
-				hasPrice = true
-				break
+				knownPriceItems = append(knownPriceItems, item)
+			} else {
+				unknownPriceItems = append(unknownPriceItems, item)
 			}
 		}
-		if !hasPrice {
+		if len(knownPriceItems) == 0 {
 			out = append(out, items...)
 			continue
 		}
 		keep := 1
 		if oneOf(strategy.LowPricePoolMode, RoutingPolicyLowPriceAuto, RoutingPolicyLowPricePercent) {
-			keep = int(math.Ceil(float64(len(items)) * float64(strategy.LowPricePoolPercent) / 100))
+			keep = int(math.Ceil(float64(len(knownPriceItems)) * float64(strategy.LowPricePoolPercent) / 100))
 			if strategy.LowPricePoolMinCandidates > keep {
 				keep = strategy.LowPricePoolMinCandidates
 			}
 		}
-		if keep > len(items) {
-			keep = len(items)
+		if keep > len(knownPriceItems) {
+			keep = len(knownPriceItems)
 		}
-		out = append(out, items[:keep]...)
+		out = append(out, knownPriceItems[:keep]...)
+		out = append(out, unknownPriceItems...)
 	}
 	return out
 }

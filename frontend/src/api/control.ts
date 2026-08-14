@@ -441,12 +441,13 @@ export async function deleteModelRoute(id: string): Promise<void> {
   await apiClient.delete(`/console/model-routes/${id}`)
 }
 
-export async function simulateGatewayRouting(model: string, estimatedTokens: number, protocol = 'openai_chat_completions', requiredFeatures: string[] = []): Promise<GatewaySimulation> {
+export async function simulateGatewayRouting(model: string, estimatedTokens: number, protocol = 'openai_chat_completions', requiredFeatures: string[] = [], routingPolicyID = ''): Promise<GatewaySimulation> {
   const response = await apiClient.post<GatewaySimulationPayload>('/console/gateway-simulator', {
     model,
     estimated_tokens: estimatedTokens,
     protocol,
-    required_features: requiredFeatures
+    required_features: requiredFeatures,
+    routing_policy_id: routingPolicyID
   })
   return { ...response.data, candidates: listOrEmpty(response.data.candidates) }
 }

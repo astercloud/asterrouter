@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
 )
 
 type GatewaySimulationRequest struct {
@@ -12,25 +14,36 @@ type GatewaySimulationRequest struct {
 	EstimatedTokens  int      `json:"estimated_tokens"`
 	Protocol         string   `json:"protocol"`
 	RequiredFeatures []string `json:"required_features"`
+	RoutingPolicyID  string   `json:"routing_policy_id"`
 }
 
 type GatewaySimulationCandidate struct {
-	Rank              int     `json:"rank"`
-	RouteID           string  `json:"route_id"`
-	RouteGroup        string  `json:"route_group"`
-	ProviderID        string  `json:"provider_id"`
-	ProviderAccountID string  `json:"provider_account_id"`
-	UpstreamModel     string  `json:"upstream_model"`
-	ProviderType      string  `json:"provider_type"`
-	UpstreamFormat    string  `json:"upstream_format"`
-	Adapter           string  `json:"adapter"`
-	Headroom          float64 `json:"headroom"`
-	RPMLimit          int     `json:"rpm_limit"`
-	TPMLimit          int     `json:"tpm_limit"`
-	Concurrency       int     `json:"concurrency"`
-	CircuitState      string  `json:"circuit_state"`
-	Eligible          bool    `json:"eligible"`
-	Reason            string  `json:"reason"`
+	Rank                       int     `json:"rank"`
+	RouteID                    string  `json:"route_id"`
+	RouteGroup                 string  `json:"route_group"`
+	ProviderID                 string  `json:"provider_id"`
+	ProviderAccountID          string  `json:"provider_account_id"`
+	UpstreamModel              string  `json:"upstream_model"`
+	ProviderType               string  `json:"provider_type"`
+	UpstreamFormat             string  `json:"upstream_format"`
+	Adapter                    string  `json:"adapter"`
+	Headroom                   float64 `json:"headroom"`
+	RPMLimit                   int     `json:"rpm_limit"`
+	TPMLimit                   int     `json:"tpm_limit"`
+	Concurrency                int     `json:"concurrency"`
+	CircuitState               string  `json:"circuit_state"`
+	Eligible                   bool    `json:"eligible"`
+	Reason                     string  `json:"reason"`
+	PolicyBatchOrder           int     `json:"policy_batch_order"`
+	PolicyBatchName            string  `json:"policy_batch_name"`
+	PolicyBatchPosition        int     `json:"policy_batch_position"`
+	PriceFactPresent           bool    `json:"price_fact_present"`
+	EstimatedInputMicrosPer1M  int64   `json:"estimated_input_micros_per_1m"`
+	EstimatedOutputMicrosPer1M int64   `json:"estimated_output_micros_per_1m"`
+	ObservedSuccessRate        float64 `json:"observed_success_rate"`
+	ObservedAvgLatencyMS       int64   `json:"observed_avg_latency_ms"`
+	ObservedSampleCount        int     `json:"observed_sample_count"`
+	SelectionReason            string  `json:"selection_reason"`
 }
 
 type GatewaySimulation struct {
@@ -58,7 +71,7 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 	}
 	result.ResolvedModel = resolved.GatewayModel.ModelID
 	result.RouteGroup = resolved.RouteGroup
-	policy, err := s.activeRoutingPolicyForGroup(ctx, resolved.RouteGroup)
+	policy, err := s.routingPolicyForCanonicalAuth(ctx, gatewaycore.CanonicalAuthContext{RoutingPolicyID: strings.TrimSpace(req.RoutingPolicyID)}, resolved.RouteGroup)
 	if err != nil {
 		return GatewaySimulation{}, err
 	}
@@ -68,18 +81,18 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 		result.RoutingPolicyPreset = policy.Strategy.Preset
 	}
 	if policy != nil && !routingPolicyAllowsModel(policy.Strategy, resolved.RequestedID) {
-		return s.blockedGatewaySimulation(ctx, result, resolved, "routing_policy_model_blocked")
+		return s.blockedGatewaySimulation(ctx, result, resolved, policy, "routing_policy_model_blocked")
 	}
 	if protocol := strings.TrimSpace(req.Protocol); protocol != "" {
 		if !routingPolicyProtocolSupported(protocol) {
-			return s.blockedGatewaySimulation(ctx, result, resolved, "client_protocol_unsupported")
+			return s.blockedGatewaySimulation(ctx, result, resolved, policy, "client_protocol_unsupported")
 		}
 		if policy != nil && !routingPolicyAllowsProtocol(policy.Strategy, protocol) {
-			return s.blockedGatewaySimulation(ctx, result, resolved, "routing_policy_protocol_blocked")
+			return s.blockedGatewaySimulation(ctx, result, resolved, policy, "routing_policy_protocol_blocked")
 		}
 	}
 
-	baseCandidates, hasRoutes, err := s.GatewayProviderCandidatesForModel(ctx, req.Model)
+	baseCandidates, hasRoutes, err := s.gatewayProviderCandidatesForResolvedModel(ctx, resolved, policy)
 	if err != nil {
 		return GatewaySimulation{}, err
 	}
@@ -108,6 +121,13 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 		if !found {
 			continue
 		}
+		candidate.PolicyBatchOrder = exclusion.PolicyBatchOrder
+		candidate.PolicyBatchName = exclusion.PolicyBatchName
+		candidate.PolicyBatchPosition = exclusion.PolicyBatchPosition
+		candidate.PriceFactPresent = exclusion.PriceFactPresent
+		candidate.EstimatedInputMicrosPer1M = exclusion.EstimatedInputMicrosPer1M
+		candidate.EstimatedOutputMicrosPer1M = exclusion.EstimatedOutputMicrosPer1M
+		candidate.SelectionReason = exclusion.SelectionReason
 		result.Candidates = append(result.Candidates, gatewaySimulationCandidate(candidate, len(result.Candidates)+1, exclusion.Reason))
 	}
 	consideredByRouteID := make(map[string]struct{}, len(baseCandidates))
@@ -135,10 +155,10 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 	return result, nil
 }
 
-func (s *Service) blockedGatewaySimulation(ctx context.Context, result GatewaySimulation, resolved ResolvedGatewayModel, reason string) (GatewaySimulation, error) {
+func (s *Service) blockedGatewaySimulation(ctx context.Context, result GatewaySimulation, resolved ResolvedGatewayModel, policy *RoutingPolicy, reason string) (GatewaySimulation, error) {
 	result.Status = "blocked"
 	result.RejectionReason = reason
-	ranked, _, err := s.rankedModelRouteCandidates(ctx, resolved)
+	ranked, _, err := s.rankedModelRouteCandidatesWithPolicy(ctx, resolved, policy)
 	if err != nil {
 		return GatewaySimulation{}, err
 	}
@@ -151,6 +171,9 @@ func (s *Service) blockedGatewaySimulation(ctx context.Context, result GatewaySi
 			UpstreamFormat: candidate.route.UpstreamFormat, RouteID: candidate.route.ID, RouteGroup: candidate.route.RouteGroup,
 			RPMLimit: candidate.account.RPMLimit, TPMLimit: candidate.account.TPMLimit, Concurrency: candidate.account.Concurrency,
 			CircuitState: candidate.circuitState, Headroom: candidate.headroom,
+			PolicyBatchOrder: candidate.policyBatch, PolicyBatchName: candidate.policyBatchName, PolicyBatchPosition: candidate.policyBatchPosition,
+			ObservedSuccessRate: candidate.routingMetrics.SuccessRate, ObservedAvgLatencyMS: candidate.routingMetrics.AvgLatencyMS,
+			ObservedSampleCount: candidate.routingMetrics.RequestCount,
 		}
 		result.Candidates = append(result.Candidates, gatewaySimulationCandidate(provider, len(result.Candidates)+1, reason))
 	}
@@ -174,6 +197,13 @@ func gatewaySimulationCandidate(candidate GatewayProvider, rank int, reason stri
 		Headroom: candidate.Headroom, RPMLimit: candidate.RPMLimit, TPMLimit: candidate.TPMLimit,
 		Concurrency: candidate.Concurrency, CircuitState: candidate.CircuitState,
 		Eligible: reason == "", Reason: reason,
+		PolicyBatchOrder: candidate.PolicyBatchOrder, PolicyBatchName: candidate.PolicyBatchName,
+		PolicyBatchPosition:        candidate.PolicyBatchPosition,
+		PriceFactPresent:           candidate.PriceFactPresent,
+		EstimatedInputMicrosPer1M:  candidate.EstimatedInputMicrosPer1M,
+		EstimatedOutputMicrosPer1M: candidate.EstimatedOutputMicrosPer1M,
+		ObservedSuccessRate:        candidate.ObservedSuccessRate, ObservedAvgLatencyMS: candidate.ObservedAvgLatencyMS,
+		ObservedSampleCount: candidate.ObservedSampleCount, SelectionReason: candidate.SelectionReason,
 	}
 }
 

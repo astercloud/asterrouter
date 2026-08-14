@@ -221,14 +221,17 @@ func TestDurableAIJobDeliveryWorkerRejectsExpiredDatabaseLease(t *testing.T) {
 
 func TestDurableAIJobDeliveryWorkerRenewsDatabaseAndDeliveryLeases(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(NewMemoryRepository(), "/v1", "delivery-heartbeat-secret")
+	queueExtended := &atomic.Bool{}
+	repo := &leaseRenewalOrderRepository{Repository: NewMemoryRepository(), queueExtended: queueExtended}
+	svc := NewService(repo, "/v1", "delivery-heartbeat-secret")
 	setupDurableWorkerRoutes(t, svc)
 	job := beginDurableWorkerJob(t, svc, "delivery-heartbeat")
 	leaseDuration := 120 * time.Millisecond
-	queue, err := NewMemoryAIJobDeliveryQueue(leaseDuration)
+	memoryQueue, err := NewMemoryAIJobDeliveryQueue(leaseDuration)
 	if err != nil {
 		t.Fatal(err)
 	}
+	queue := &leaseRenewalOrderQueue{AIJobDeliveryQueue: memoryQueue, extended: queueExtended}
 	if report, err := svc.RunDurableAIJobSchedulerOnce(ctx, "scheduler", leaseDuration, 1, queue); err != nil || report.Published != 1 {
 		t.Fatalf("scheduler report=%+v err=%v", report, err)
 	}
@@ -275,6 +278,9 @@ func TestDurableAIJobDeliveryWorkerRenewsDatabaseAndDeliveryLeases(t *testing.T)
 	if duplicate, err := queue.Receive(ctx, "duplicate-worker", 1, 0); err != nil || len(duplicate) != 0 {
 		t.Fatalf("delivery lease was not extended: deliveries=%+v err=%v", duplicate, err)
 	}
+	if repo.databaseExtendedBeforeQueue.Load() {
+		t.Fatal("database lease was extended before the delivery lease")
+	}
 	close(adapter.release)
 	select {
 	case completed := <-result:
@@ -288,6 +294,40 @@ func TestDurableAIJobDeliveryWorkerRenewsDatabaseAndDeliveryLeases(t *testing.T)
 		t.Fatalf("provider dispatch calls=%d", adapter.dispatchCalls.Load())
 	}
 	assertAIJobStatus(t, svc, job.ID, AIJobStatusRunning)
+}
+
+type leaseRenewalOrderRepository struct {
+	Repository
+	queueExtended               *atomic.Bool
+	databaseExtendedBeforeQueue atomic.Bool
+}
+
+func (r *leaseRenewalOrderRepository) ExtendAIJobQueueLease(
+	ctx context.Context,
+	id string,
+	expectedVersion int,
+	fenceToken int64,
+	leaseToken string,
+	leaseUntil time.Time,
+	extendedAt time.Time,
+) (AIJob, bool, error) {
+	if !r.queueExtended.Load() {
+		r.databaseExtendedBeforeQueue.Store(true)
+	}
+	return r.Repository.ExtendAIJobQueueLease(ctx, id, expectedVersion, fenceToken, leaseToken, leaseUntil, extendedAt)
+}
+
+type leaseRenewalOrderQueue struct {
+	AIJobDeliveryQueue
+	extended *atomic.Bool
+}
+
+func (q *leaseRenewalOrderQueue) Extend(ctx context.Context, delivery AIJobDelivery, leaseUntil time.Time) error {
+	if err := q.AIJobDeliveryQueue.Extend(ctx, delivery, leaseUntil); err != nil {
+		return err
+	}
+	q.extended.Store(true)
+	return nil
 }
 
 type failOnceFindAIJobRepository struct {

@@ -53,6 +53,49 @@ func TestPostgresRepositoryEmptyListContracts(t *testing.T) {
 	assertEmptyList(t, "ListAuditLogs", func() ([]AuditLog, error) { return repo.ListAuditLogs(ctx, 100) })
 }
 
+func TestProviderAccountRoutingMetricsRepositoryContract(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*testing.T) Repository
+	}{
+		{name: "memory", open: func(*testing.T) Repository { return NewMemoryRepository() }},
+		{name: "postgres", open: func(t *testing.T) Repository {
+			schema := testutil.NewPostgresSchema(t)
+			repo, err := NewPostgresRepository(context.Background(), schema.URL)
+			if err != nil {
+				t.Fatalf("NewPostgresRepository(): %v", err)
+			}
+			return repo
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := test.open(t)
+			t.Cleanup(func() { _ = repo.Close() })
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			traces := []GatewayTrace{
+				{ID: "routing-metrics-success", ProviderAccountID: "account-a", Status: "forwarded", HTTPStatus: 200, LatencyMS: 10, CreatedAt: now.Add(-10 * time.Minute)},
+				{ID: "routing-metrics-error", ProviderAccountID: "account-a", Status: "upstream_error", HTTPStatus: 500, ErrorType: "upstream", LatencyMS: 11, CreatedAt: now.Add(-5 * time.Minute)},
+				{ID: "routing-metrics-old", ProviderAccountID: "account-b", Status: "forwarded", HTTPStatus: 200, LatencyMS: 99, CreatedAt: now.Add(-25 * time.Hour)},
+			}
+			for _, trace := range traces {
+				if err := repo.SaveGatewayTrace(ctx, trace); err != nil {
+					t.Fatalf("SaveGatewayTrace(%s): %v", trace.ID, err)
+				}
+			}
+			metrics, err := repo.SummarizeProviderAccountRoutingMetrics(ctx, now.Add(-24*time.Hour))
+			if err != nil {
+				t.Fatalf("SummarizeProviderAccountRoutingMetrics(): %v", err)
+			}
+			if len(metrics) != 1 || metrics[0].ProviderAccountID != "account-a" || metrics[0].RequestCount != 2 ||
+				metrics[0].SuccessRate != 0.5 || metrics[0].AvgLatencyMS != 10 {
+				t.Fatalf("routing metrics = %#v", metrics)
+			}
+		})
+	}
+}
+
 func TestPostgresRepositorySerializesConcurrentMigrations(t *testing.T) {
 	schema := testutil.NewPostgresSchema(t)
 	ctx := context.Background()
@@ -177,7 +220,8 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 		ID: "key-postgres", Name: "Postgres Key", KeyHash: "hash-postgres", Fingerprint: "fingerprint",
 		Prefix: "ast_test", Status: APIKeyStatusActive, KeyType: APIKeyTypeWorkspace,
 		ApplicationID: gatewayDefaultApplicationID, PrincipalType: APIKeyTypeService, PrincipalReference: "service-postgres",
-		Scopes: []string{GatewayScopeInvoke}, ModelAllowlist: []string{"model-a"}, AllowedModalities: []string{GatewayModalityText},
+		RoutingPolicyID: "routing-policy-postgres",
+		Scopes:          []string{GatewayScopeInvoke}, ModelAllowlist: []string{"model-a"}, AllowedModalities: []string{GatewayModalityText},
 		AllowedOperations: []string{GatewayOperationChatCompletion}, QPSLimit: 2, RPMLimit: 30, TPMLimit: 4000,
 		ConcurrencyLimit: 3, MonthlyTokenLimit: 5000, MonthlyBudgetMicros: 600,
 		MonthlyImageLimit: 7, MonthlyVideoSecondsLimit: 8, MonthlyAudioSecondsLimit: 9,
@@ -200,7 +244,7 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 		Strategy: RoutingPolicyStrategy{
 			Preset: RoutingPolicyPresetBalanced, StickyRouting: true, StickyTTLSeconds: 900,
 			FailoverBeforeFirstByte: true, AllowedModels: []string{"model-a"},
-			ResourceBatches: []RoutingPolicyBatch{{Name: "Primary", ProviderAccountIDs: []string{"account-a"}}},
+			ResourceBatches: []RoutingPolicyBatch{{Name: "Primary", ProviderAccountIDs: []string{"account-b", "account-a"}}},
 		},
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}
@@ -232,7 +276,8 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 		found.TPMLimit != 4000 || found.ConcurrencyLimit != 3 || found.MonthlyBudgetMicros != 600 ||
 		found.MonthlyImageLimit != 7 || found.MonthlyVideoSecondsLimit != 8 || found.MonthlyAudioSecondsLimit != 9 ||
 		len(found.AllowedCIDRs) != 1 || found.LanePolicy != GatewayLanePolicyDirectAndDurable ||
-		found.ArtifactPolicy != GatewayArtifactPolicyManaged || found.RotationFamilyID != "key-family-postgres" {
+		found.ArtifactPolicy != GatewayArtifactPolicyManaged || found.RotationFamilyID != "key-family-postgres" ||
+		found.RoutingPolicyID != "routing-policy-postgres" {
 		t.Fatalf("persisted key ok=%t key=%#v", ok, found)
 	}
 	users, err := reopened.ListWorkspaceUsers(ctx)
@@ -248,6 +293,9 @@ func TestPostgresRepositoryPersistsCoreRecordsAcrossRestart(t *testing.T) {
 	}
 	if len(policies) != 1 || policies[0].ID != routingPolicy.ID || policies[0].Strategy.Preset != RoutingPolicyPresetBalanced || len(policies[0].Strategy.ResourceBatches) != 1 {
 		t.Fatalf("persisted routing policies=%#v", policies)
+	}
+	if got := policies[0].Strategy.ResourceBatches[0].ProviderAccountIDs; len(got) != 2 || got[0] != "account-b" || got[1] != "account-a" {
+		t.Fatalf("routing policy resource declaration order changed after PostgreSQL round trip: %v", got)
 	}
 }
 

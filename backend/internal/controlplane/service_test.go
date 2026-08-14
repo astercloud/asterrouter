@@ -739,14 +739,14 @@ func TestRoutingPolicyLifecycleNormalizesStrategyAndVersionsUpdates(t *testing.T
 			AllowedModels:              []string{"gpt-4o", " gpt-4o ", ""},
 			ResourceBatches: []RoutingPolicyBatch{{
 				Name:               "Primary",
-				ProviderAccountIDs: []string{"account-a", "account-a", "account-b"},
+				ProviderAccountIDs: []string{" account-b ", "account-b", "account-a"},
 			}},
 		},
 	})
 	if err != nil {
 		t.Fatalf("CreateRoutingPolicy(): %v", err)
 	}
-	if created.ID == "" || created.Name != "Enterprise production" || created.Version != 1 {
+	if created.ID == "" || created.Name != "Enterprise production" || created.Version != 1 || !created.IsDefault {
 		t.Fatalf("unexpected created policy: %+v", created)
 	}
 	if created.Strategy.LowPricePoolMode != RoutingPolicyLowPriceAuto || created.Strategy.LowPricePoolPercent != 30 || created.Strategy.LowPricePoolMinCandidates != 2 {
@@ -754,6 +754,16 @@ func TestRoutingPolicyLifecycleNormalizesStrategyAndVersionsUpdates(t *testing.T
 	}
 	if len(created.Strategy.AllowedModels) != 1 || len(created.Strategy.ResourceBatches[0].ProviderAccountIDs) != 2 {
 		t.Fatalf("strategy lists not normalized: %+v", created.Strategy)
+	}
+	if got := created.Strategy.ResourceBatches[0].ProviderAccountIDs; got[0] != "account-b" || got[1] != "account-a" {
+		t.Fatalf("resource batch declaration order changed: %v", got)
+	}
+	storedPolicies, err := svc.ListRoutingPolicies(context.Background())
+	if err != nil || len(storedPolicies) != 1 {
+		t.Fatalf("ListRoutingPolicies()=%+v err=%v", storedPolicies, err)
+	}
+	if got := storedPolicies[0].Strategy.ResourceBatches[0].ProviderAccountIDs; got[0] != "account-b" || got[1] != "account-a" {
+		t.Fatalf("stored resource batch declaration order changed: %v", got)
 	}
 
 	updated, err := svc.UpdateRoutingPolicy(context.Background(), "tester", created.ID, RoutingPolicyRequest{
@@ -775,11 +785,19 @@ func TestRoutingPolicyLifecycleNormalizesStrategyAndVersionsUpdates(t *testing.T
 	if err != nil || len(policies) != 1 || policies[0].Version != 2 {
 		t.Fatalf("ListRoutingPolicies()=%+v err=%v", policies, err)
 	}
-	if _, err := svc.CreateRoutingPolicy(context.Background(), "tester", RoutingPolicyRequest{
+	secondary, err := svc.CreateRoutingPolicy(context.Background(), "tester", RoutingPolicyRequest{
 		Name: "Duplicate active policy", RouteGroup: created.RouteGroup, Status: RoutingPolicyStatusActive,
 		Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900},
+	})
+	if err != nil || secondary.IsDefault {
+		t.Fatalf("a route group should accept a non-default active policy: policy=%+v err=%v", secondary, err)
+	}
+	makeDefault := true
+	if _, err := svc.UpdateRoutingPolicy(context.Background(), "tester", secondary.ID, RoutingPolicyRequest{
+		Name: secondary.Name, RouteGroup: secondary.RouteGroup, Status: secondary.Status, IsDefault: &makeDefault,
+		Strategy: secondary.Strategy,
 	}); err == nil {
-		t.Fatal("a route group must not accept two active routing policies")
+		t.Fatal("a route group must not accept two default routing policies")
 	}
 }
 
@@ -792,6 +810,9 @@ func TestRoutingPolicyRejectsInvalidHardConstraints(t *testing.T) {
 		{Name: "bad percentile", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, LowPricePoolMode: RoutingPolicyLowPricePercent}},
 		{Name: "empty batch", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, ResourceBatches: []RoutingPolicyBatch{{Name: "Primary"}}}},
 		{Name: "unknown protocol", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, AllowedProtocols: []string{"openai_chat_completion"}}},
+		{Name: "bad missing price", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, MissingPriceAction: "guess"}},
+		{Name: "empty model price limit", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, ModelPriceLimits: []RoutingPolicyModelPriceLimit{{Model: "model"}}}},
+		{Name: "duplicate model price limit", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, ModelPriceLimits: []RoutingPolicyModelPriceLimit{{Model: "model", AbsoluteMaxInputPer1M: 1}, {Model: " model ", AbsoluteMaxOutputPer1M: 1}}}},
 		{Name: "duplicate account across batches", RouteGroup: "default", Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, ResourceBatches: []RoutingPolicyBatch{{Name: "Primary", ProviderAccountIDs: []string{"account-a"}}, {Name: "Fallback", ProviderAccountIDs: []string{"account-a"}}}}},
 	}
 	for index, req := range tests {

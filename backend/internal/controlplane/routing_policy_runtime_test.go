@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -136,7 +137,7 @@ func TestRoutingPolicyModelScopeAndPriceGuardrails(t *testing.T) {
 		}
 	}
 	policy := &RoutingPolicy{Strategy: RoutingPolicyStrategy{
-		Preset: RoutingPolicyPresetCost, MaxPriceMultipleOfCheapest: 2, LowPricePoolMode: RoutingPolicyLowPriceNone,
+		Preset: RoutingPolicyPresetCost, MaxPriceMultipleOfCheapest: 2, LowPricePoolMode: RoutingPolicyLowPriceNone, MissingPriceAction: RoutingPolicyMissingPriceBlock,
 	}}
 	candidates := []GatewayProvider{
 		{AccountID: "expensive", UpstreamModel: "upstream"},
@@ -152,6 +153,156 @@ func TestRoutingPolicyModelScopeAndPriceGuardrails(t *testing.T) {
 	}
 	if routingPolicyAllowsModel(RoutingPolicyStrategy{DeniedModels: []string{"blocked"}}, "blocked:stable") {
 		t.Fatal("base model denylist must reject qualified model ids")
+	}
+}
+
+func TestRoutingPolicyModelPriceLimitsAndMissingPriceAction(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1", "test-secret")
+	now := time.Now().UTC().Add(-time.Minute)
+	if err := repo.SaveProcurementPrice(ctx, ProcurementPrice{
+		ID: "priced", ProviderAccountID: "priced", UpstreamModel: "upstream",
+		Protocol: string(gatewaycore.ProtocolOpenAIChat), Currency: "USD",
+		UncachedInputMicrosPer1MTokens: 600_000, OutputMicrosPer1MTokens: 600_000,
+		RechargeMultiplier: 1, Status: ProcurementPriceStatusActive, EffectiveFrom: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidates := []GatewayProvider{
+		{RouteID: "unknown", AccountID: "unknown", RequestedModel: "enterprise-model:stable", UpstreamModel: "upstream"},
+		{RouteID: "priced", AccountID: "priced", RequestedModel: "enterprise-model:stable", UpstreamModel: "upstream"},
+	}
+	policy := &RoutingPolicy{Strategy: RoutingPolicyStrategy{
+		Preset: RoutingPolicyPresetBalanced, MissingPriceAction: RoutingPolicyMissingPriceAllow,
+		AbsoluteMaxInputPer1M: 1, AbsoluteMaxOutputPer1M: 1,
+		ModelPriceLimits: []RoutingPolicyModelPriceLimit{{Model: "enterprise-model", AbsoluteMaxInputPer1M: 0.5, AbsoluteMaxOutputPer1M: 0.5}},
+	}}
+	decision, err := svc.evaluateRoutingPolicyPriceRules(ctx, policy, string(gatewaycore.ProtocolOpenAIChat), candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.candidates) != 1 || decision.candidates[0].AccountID != "unknown" {
+		t.Fatalf("allow must retain unknown price while the stricter model cap rejects priced candidate: %+v", decision)
+	}
+	if len(decision.exclusions) != 1 || decision.exclusions[0].reason != "routing_policy_input_price_exceeded" {
+		t.Fatalf("model price cap exclusion=%+v", decision.exclusions)
+	}
+	policy.Strategy.MissingPriceAction = RoutingPolicyMissingPriceBlock
+	decision, err = svc.evaluateRoutingPolicyPriceRules(ctx, policy, string(gatewaycore.ProtocolOpenAIChat), candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.candidates) != 0 || len(decision.exclusions) != 2 {
+		t.Fatalf("block must reject both unknown and over-cap candidates: %+v", decision)
+	}
+	wantReasons := map[string]bool{
+		"routing_policy_price_fact_missing":   false,
+		"routing_policy_input_price_exceeded": false,
+	}
+	for _, exclusion := range decision.exclusions {
+		if _, ok := wantReasons[exclusion.reason]; !ok {
+			t.Fatalf("unexpected exclusion=%+v", exclusion)
+		}
+		wantReasons[exclusion.reason] = true
+	}
+	for reason, found := range wantReasons {
+		if !found {
+			t.Fatalf("missing exclusion %q: %+v", reason, decision.exclusions)
+		}
+	}
+
+	policy.Strategy = RoutingPolicyStrategy{
+		Preset: RoutingPolicyPresetBalanced, MissingPriceAction: RoutingPolicyMissingPriceBlock,
+		LowPricePoolMode: RoutingPolicyLowPriceNone,
+	}
+	decision, err = svc.evaluateRoutingPolicyPriceRules(ctx, policy, string(gatewaycore.ProtocolOpenAIChat), candidates[:1])
+	if err != nil || len(decision.candidates) != 0 || len(decision.exclusions) != 1 || decision.exclusions[0].reason != "routing_policy_price_fact_missing" {
+		t.Fatalf("missing-price block must remain a standalone hard constraint: decision=%+v err=%v", decision, err)
+	}
+}
+
+func TestRoutingPolicyStrictOrderKeepsDeclaredOrder(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1", "test-secret")
+	now := time.Now().UTC().Add(-time.Minute)
+	for _, price := range []ProcurementPrice{
+		{ID: "first", ProviderAccountID: "first", UpstreamModel: "upstream", Protocol: string(gatewaycore.ProtocolOpenAIChat), Currency: "USD", UncachedInputMicrosPer1MTokens: 900_000, OutputMicrosPer1MTokens: 900_000, RechargeMultiplier: 1, Status: ProcurementPriceStatusActive, EffectiveFrom: now},
+		{ID: "second", ProviderAccountID: "second", UpstreamModel: "upstream", Protocol: string(gatewaycore.ProtocolOpenAIChat), Currency: "USD", UncachedInputMicrosPer1MTokens: 100_000, OutputMicrosPer1MTokens: 100_000, RechargeMultiplier: 1, Status: ProcurementPriceStatusActive, EffectiveFrom: now},
+	} {
+		if err := repo.SaveProcurementPrice(ctx, price); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := &RoutingPolicy{Strategy: RoutingPolicyStrategy{
+		Preset: RoutingPolicyPresetCost, StrictOrder: true, LowPricePoolMode: RoutingPolicyLowPriceNone,
+	}}
+	candidates := []GatewayProvider{
+		{RouteID: "first", AccountID: "first", RequestedModel: "model", UpstreamModel: "upstream"},
+		{RouteID: "second", AccountID: "second", RequestedModel: "model", UpstreamModel: "upstream"},
+	}
+	decision, err := svc.evaluateRoutingPolicyPriceRules(ctx, policy, string(gatewaycore.ProtocolOpenAIChat), candidates)
+	if err != nil || len(decision.candidates) != 2 || decision.candidates[0].AccountID != "first" || decision.candidates[1].AccountID != "second" {
+		t.Fatalf("strict order changed by price: decision=%+v err=%v", decision, err)
+	}
+}
+
+func TestRoutingPolicyPreferredResourcesStayWithinTheirDeclaredBatch(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret")
+	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
+		Name: "Preferred provider", Type: ProviderTypeOpenAICompatible, BaseURL: "https://provider.example/v1", Status: ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := createRoutingPolicyTestAccount(t, svc, provider.ID, "Primary", "preferred-model", 1)
+	preferredPrimary := createRoutingPolicyTestAccount(t, svc, provider.ID, "Preferred primary", "preferred-model", 1)
+	preferredFallback := createRoutingPolicyTestAccount(t, svc, provider.ID, "Preferred fallback", "preferred-model", 1)
+	model := mustCreateGatewayModelRoutes(t, svc, "preferred-model", []ProviderAccount{primary, preferredPrimary, preferredFallback})
+	now := time.Now().UTC().Add(-time.Minute)
+	for index, account := range []ProviderAccount{primary, preferredPrimary, preferredFallback} {
+		if err := svc.repo.SaveProcurementPrice(ctx, ProcurementPrice{
+			ID: "preferred-price-" + fmt.Sprint(index), ProviderAccountID: account.ID, UpstreamModel: "preferred-model",
+			Protocol: string(gatewaycore.ProtocolOpenAIChat), Currency: "USD",
+			UncachedInputMicrosPer1MTokens: int64(index+1) * 100_000, OutputMicrosPer1MTokens: int64(index+1) * 100_000,
+			RechargeMultiplier: 1, Status: ProcurementPriceStatusActive, EffectiveFrom: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy, err := svc.CreateRoutingPolicy(ctx, "tester", RoutingPolicyRequest{
+		Name: "Preferred resources", RouteGroup: model.DefaultRouteGroup, Status: RoutingPolicyStatusActive,
+		Strategy: RoutingPolicyStrategy{
+			Preset: RoutingPolicyPresetCost, StickyTTLSeconds: 900, FailoverBeforeFirstByte: true, LowPricePoolMode: RoutingPolicyLowPriceNone,
+			PreferredProviderAccountIDs: []string{preferredPrimary.ID, preferredFallback.ID},
+			ResourceBatches: []RoutingPolicyBatch{
+				{Name: "Primary", ProviderAccountIDs: []string{primary.ID, preferredPrimary.ID}},
+				{Name: "Fallback", ProviderAccountIDs: []string{preferredFallback.ID}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, _, err := svc.GatewayProviderCandidatesForModel(ctx, model.ModelID)
+	if err != nil || len(candidates) != 3 {
+		t.Fatalf("preferred candidates=%+v err=%v", candidates, err)
+	}
+	if candidates[0].AccountID != preferredPrimary.ID || candidates[1].AccountID != primary.ID || candidates[2].AccountID != preferredFallback.ID {
+		t.Fatalf("preferred resources must reorder only inside a batch: %+v", candidates)
+	}
+
+	policy.Strategy.StrictOrder = true
+	if _, err := svc.UpdateRoutingPolicy(ctx, "tester", policy.ID, RoutingPolicyRequest{
+		Name: policy.Name, RouteGroup: policy.RouteGroup, Status: policy.Status, Strategy: policy.Strategy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidates, _, err = svc.GatewayProviderCandidatesForModel(ctx, model.ModelID)
+	if err != nil || len(candidates) != 3 || candidates[0].AccountID != primary.ID || candidates[1].AccountID != preferredPrimary.ID || candidates[2].AccountID != preferredFallback.ID {
+		t.Fatalf("strict order must override preferred resources: candidates=%+v err=%v", candidates, err)
 	}
 }
 
@@ -173,7 +324,7 @@ func TestRoutingPolicyPriceExclusionsRemainExplainable(t *testing.T) {
 	}
 	policy := &RoutingPolicy{Strategy: RoutingPolicyStrategy{
 		Preset: RoutingPolicyPresetBalanced, AbsoluteMaxInputPer1M: 1, AbsoluteMaxOutputPer1M: 1,
-		MaxPriceMultipleOfCheapest: 2, LowPricePoolMode: RoutingPolicyLowPriceStrict,
+		MaxPriceMultipleOfCheapest: 2, LowPricePoolMode: RoutingPolicyLowPriceStrict, MissingPriceAction: RoutingPolicyMissingPriceBlock,
 	}}
 	candidates := []GatewayProvider{
 		{RouteID: "route-missing", AccountID: "missing", UpstreamModel: "upstream"},
@@ -600,6 +751,76 @@ func TestRoutingPolicySimulatorMatchesPlannerHardConstraints(t *testing.T) {
 	}
 }
 
+func TestRoutingPolicyUsesObservedMetricsAndExplainsSimulation(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1", "observed-routing-secret")
+	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
+		Name: "Observed provider", Type: ProviderTypeOpenAICompatible, BaseURL: "https://provider.example/v1", Status: ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reliable := createRoutingPolicyTestAccount(t, svc, provider.ID, "Reliable", "observed-model", 1)
+	fast := createRoutingPolicyTestAccount(t, svc, provider.ID, "Fast", "observed-model", 1)
+	model := mustCreateGatewayModelRoutes(t, svc, "observed-model", []ProviderAccount{reliable, fast})
+	now := time.Now().UTC().Add(-time.Hour)
+	for index := 0; index < 10; index++ {
+		if err := repo.SaveGatewayTrace(ctx, GatewayTrace{
+			ID: "reliable-" + fmt.Sprint(index), ProviderAccountID: reliable.ID,
+			HTTPStatus: 200, LatencyMS: 500, CreatedAt: now.Add(time.Duration(index) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		status := 500
+		errorType := "upstream"
+		if index < 5 {
+			status = 200
+			errorType = ""
+		}
+		if err := repo.SaveGatewayTrace(ctx, GatewayTrace{
+			ID: "fast-" + fmt.Sprint(index), ProviderAccountID: fast.ID,
+			HTTPStatus: status, ErrorType: errorType, LatencyMS: 50, CreatedAt: now.Add(time.Duration(index) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy, err := svc.CreateRoutingPolicy(ctx, "tester", RoutingPolicyRequest{
+		Name: "Observed metrics", RouteGroup: model.DefaultRouteGroup, Status: RoutingPolicyStatusActive,
+		Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetSpeed, StickyTTLSeconds: 900, FailoverBeforeFirstByte: true, LowPricePoolMode: RoutingPolicyLowPriceNone,
+			ResourceBatches: []RoutingPolicyBatch{{Name: "Production", ProviderAccountIDs: []string{reliable.ID, fast.ID}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, _, err := svc.GatewayProviderCandidatesForModel(ctx, model.ModelID)
+	if err != nil || len(candidates) != 2 || candidates[0].AccountID != fast.ID {
+		t.Fatalf("speed candidates=%+v err=%v", candidates, err)
+	}
+	if candidates[0].ObservedAvgLatencyMS != 50 || candidates[0].ObservedSampleCount != 10 {
+		t.Fatalf("speed evidence=%+v", candidates[0])
+	}
+	policy, err = svc.UpdateRoutingPolicy(ctx, "tester", policy.ID, RoutingPolicyRequest{
+		Name: policy.Name, RouteGroup: policy.RouteGroup, Status: policy.Status,
+		Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetStability, StickyTTLSeconds: 900, FailoverBeforeFirstByte: true, LowPricePoolMode: RoutingPolicyLowPriceNone,
+			ResourceBatches: policy.Strategy.ResourceBatches},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, _, err = svc.GatewayProviderCandidatesForModel(ctx, model.ModelID)
+	if err != nil || len(candidates) != 2 || candidates[0].AccountID != reliable.ID || candidates[0].ObservedSuccessRate != 1 {
+		t.Fatalf("stability candidates=%+v err=%v", candidates, err)
+	}
+	simulation, err := svc.SimulateGatewayRouting(ctx, GatewaySimulationRequest{Model: model.ModelID, Protocol: string(gatewaycore.ProtocolOpenAIChat)})
+	if err != nil || len(simulation.Candidates) != 2 {
+		t.Fatalf("simulation=%+v err=%v", simulation, err)
+	}
+	if simulation.Candidates[0].PolicyBatchName != "Production" || simulation.Candidates[0].PolicyBatchPosition != 0 || simulation.Candidates[0].ObservedSampleCount != 10 || simulation.Candidates[0].SelectionReason == "" {
+		t.Fatalf("simulation evidence=%+v", simulation.Candidates[0])
+	}
+}
+
 func TestRoutingPolicyVersionInvalidatesAffinityScope(t *testing.T) {
 	svc := NewService(NewMemoryRepository(), "/v1", "affinity-policy-version-secret")
 	input := GatewayAffinityInput{
@@ -620,6 +841,88 @@ func TestRoutingPolicyVersionInvalidatesAffinityScope(t *testing.T) {
 	input.RoutingPolicyVersion = 2
 	if got := svc.PreferGatewayCandidatesWithAffinity(context.Background(), input, candidates); got[0].AccountID != "account-a" {
 		t.Fatalf("version two reused a stale routing-policy binding: %+v", got)
+	}
+}
+
+func TestAPIKeyRoutingPolicyBindingUsesExactlyOneCompatiblePolicy(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1", "routing-policy-key-secret")
+	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
+		Name: "Binding provider", Type: ProviderTypeOpenAICompatible, BaseURL: "https://provider.example/v1", Status: ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultAccount := createRoutingPolicyTestAccount(t, svc, provider.ID, "Default account", "binding-model", 1)
+	explicitAccount := createRoutingPolicyTestAccount(t, svc, provider.ID, "Explicit account", "binding-model", 1)
+	model := mustCreateGatewayModelRoutes(t, svc, "binding-model", []ProviderAccount{defaultAccount, explicitAccount})
+	defaultPolicy, err := svc.CreateRoutingPolicy(ctx, "tester", RoutingPolicyRequest{
+		Name: "Default policy", RouteGroup: model.DefaultRouteGroup, Status: RoutingPolicyStatusActive,
+		Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetStability, StickyTTLSeconds: 900, FailoverBeforeFirstByte: true, LowPricePoolMode: RoutingPolicyLowPriceNone,
+			ResourceBatches: []RoutingPolicyBatch{{Name: "Default only", ProviderAccountIDs: []string{defaultAccount.ID}}}},
+	})
+	if err != nil || !defaultPolicy.IsDefault {
+		t.Fatalf("default policy=%+v err=%v", defaultPolicy, err)
+	}
+	explicitPolicy, err := svc.CreateRoutingPolicy(ctx, "tester", RoutingPolicyRequest{
+		Name: "Explicit policy", RouteGroup: model.DefaultRouteGroup, Status: RoutingPolicyStatusActive,
+		Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetCost, StickyTTLSeconds: 900, FailoverBeforeFirstByte: true, LowPricePoolMode: RoutingPolicyLowPriceNone,
+			ResourceBatches: []RoutingPolicyBatch{{Name: "Explicit only", ProviderAccountIDs: []string{explicitAccount.ID}}}},
+	})
+	if err != nil || explicitPolicy.IsDefault {
+		t.Fatalf("explicit policy=%+v err=%v", explicitPolicy, err)
+	}
+
+	created, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{
+		Name: "Explicit routing key", ModelAllowlist: []string{model.ModelID}, RoutingPolicyID: explicitPolicy.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := gatewaycore.CanonicalRequest{
+		Protocol: gatewaycore.ProtocolOpenAIChat, Operation: GatewayOperationChatCompletion,
+		Modality: GatewayModalityText, Lane: gatewaycore.LaneDirect, Model: model.ModelID,
+	}
+	_, canonical, err := svc.AuthorizeCanonicalGatewayRequest(ctx, gatewaycore.CredentialEnvelope{BearerToken: created.Key}, request)
+	if err != nil || canonical.RoutingPolicyID != explicitPolicy.ID {
+		t.Fatalf("canonical=%+v err=%v", canonical, err)
+	}
+	plan, err := svc.PlanCanonicalGatewayRequest(ctx, canonical, request)
+	if err != nil || plan.RoutingPolicyID != explicitPolicy.ID || len(plan.Candidates) != 1 || plan.Candidates[0].AccountID != explicitAccount.ID {
+		t.Fatalf("explicit plan=%+v err=%v", plan, err)
+	}
+	defaultPlan, err := svc.PlanCanonicalGatewayRequest(ctx, gatewaycore.CanonicalAuthContext{CredentialID: "unbound"}, request)
+	if err != nil || defaultPlan.RoutingPolicyID != defaultPolicy.ID || len(defaultPlan.Candidates) != 1 || defaultPlan.Candidates[0].AccountID != defaultAccount.ID {
+		t.Fatalf("default plan=%+v err=%v", defaultPlan, err)
+	}
+	rotated, err := svc.RotateAPIKey(ctx, "tester", created.Record.ID)
+	if err != nil || rotated.Record.RoutingPolicyID != explicitPolicy.ID {
+		t.Fatalf("rotated=%+v err=%v", rotated.Record, err)
+	}
+
+	otherModel, err := svc.CreateGatewayModel(ctx, "tester", GatewayModelRequest{
+		ModelID: "other-binding-model", Name: "Other binding model", DefaultRouteGroup: "other", Status: GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{
+		Name: "Mismatch", ModelAllowlist: []string{otherModel.ModelID}, RoutingPolicyID: explicitPolicy.ID,
+	}); err == nil || !strings.Contains(err.Error(), "incompatible") {
+		t.Fatalf("cross-group binding error=%v", err)
+	}
+	disabledPolicy, err := svc.CreateRoutingPolicy(ctx, "tester", RoutingPolicyRequest{
+		Name: "Disabled policy", RouteGroup: model.DefaultRouteGroup, Status: RoutingPolicyStatusDisabled,
+		Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateAPIKey(ctx, "tester", APIKeyCreateRequest{
+		Name: "Disabled", ModelAllowlist: []string{model.ModelID}, RoutingPolicyID: disabledPolicy.ID,
+	}); err == nil || !strings.Contains(err.Error(), "active routing policy") {
+		t.Fatalf("disabled binding error=%v", err)
 	}
 }
 
