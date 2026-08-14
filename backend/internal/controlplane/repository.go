@@ -3855,7 +3855,7 @@ func (r *PostgresRepository) SummarizeProviderAccountRoutingMetrics(ctx context.
 SELECT provider_account_id,
        COUNT(*),
        COALESCE(AVG(CASE WHEN http_status >= 200 AND http_status < 400 AND error_type = '' THEN 1.0 ELSE 0.0 END), 0),
-       COALESCE(AVG(latency_ms), 0)
+       COALESCE(FLOOR(AVG(latency_ms)), 0)::BIGINT
 FROM gateway_traces
 WHERE provider_account_id <> '' AND created_at >= $1
 GROUP BY provider_account_id

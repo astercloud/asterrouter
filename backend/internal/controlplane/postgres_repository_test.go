@@ -53,6 +53,49 @@ func TestPostgresRepositoryEmptyListContracts(t *testing.T) {
 	assertEmptyList(t, "ListAuditLogs", func() ([]AuditLog, error) { return repo.ListAuditLogs(ctx, 100) })
 }
 
+func TestProviderAccountRoutingMetricsRepositoryContract(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*testing.T) Repository
+	}{
+		{name: "memory", open: func(*testing.T) Repository { return NewMemoryRepository() }},
+		{name: "postgres", open: func(t *testing.T) Repository {
+			schema := testutil.NewPostgresSchema(t)
+			repo, err := NewPostgresRepository(context.Background(), schema.URL)
+			if err != nil {
+				t.Fatalf("NewPostgresRepository(): %v", err)
+			}
+			return repo
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := test.open(t)
+			t.Cleanup(func() { _ = repo.Close() })
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			traces := []GatewayTrace{
+				{ID: "routing-metrics-success", ProviderAccountID: "account-a", Status: "forwarded", HTTPStatus: 200, LatencyMS: 10, CreatedAt: now.Add(-10 * time.Minute)},
+				{ID: "routing-metrics-error", ProviderAccountID: "account-a", Status: "upstream_error", HTTPStatus: 500, ErrorType: "upstream", LatencyMS: 11, CreatedAt: now.Add(-5 * time.Minute)},
+				{ID: "routing-metrics-old", ProviderAccountID: "account-b", Status: "forwarded", HTTPStatus: 200, LatencyMS: 99, CreatedAt: now.Add(-25 * time.Hour)},
+			}
+			for _, trace := range traces {
+				if err := repo.SaveGatewayTrace(ctx, trace); err != nil {
+					t.Fatalf("SaveGatewayTrace(%s): %v", trace.ID, err)
+				}
+			}
+			metrics, err := repo.SummarizeProviderAccountRoutingMetrics(ctx, now.Add(-24*time.Hour))
+			if err != nil {
+				t.Fatalf("SummarizeProviderAccountRoutingMetrics(): %v", err)
+			}
+			if len(metrics) != 1 || metrics[0].ProviderAccountID != "account-a" || metrics[0].RequestCount != 2 ||
+				metrics[0].SuccessRate != 0.5 || metrics[0].AvgLatencyMS != 10 {
+				t.Fatalf("routing metrics = %#v", metrics)
+			}
+		})
+	}
+}
+
 func TestPostgresRepositorySerializesConcurrentMigrations(t *testing.T) {
 	schema := testutil.NewPostgresSchema(t)
 	ctx := context.Background()
