@@ -473,7 +473,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', handleScroll))
 @media (max-width: 560px) {
   .header-inner { height: 66px; }
   .marketing-brand small { display: none; }
-  .marketing-hero { height: 810px; min-height: 810px; }
+  .marketing-hero { height: 806px; min-height: 806px; }
   .hero-content { padding: 92px 16px 0; }
   .hero-overline { font-size: 8px; }
   .marketing-hero h1 { margin-top: 15px; font-size: 40px; }
