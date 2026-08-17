@@ -101,19 +101,26 @@ func (s *Service) SimulateGatewayRouting(ctx context.Context, req GatewaySimulat
 		result.Summary = "no model routes exist for the resolved route group"
 		return result, nil
 	}
-	decision, err := s.applyRoutingPolicyCandidateRules(ctx, policy, strings.TrimSpace(req.Protocol), baseCandidates)
+	capableCandidates := make([]GatewayProvider, 0, len(baseCandidates))
+	capabilityExclusions := make([]GatewayCandidateExclusion, 0)
+	for _, candidate := range baseCandidates {
+		if reason := simulationProtocolReason(req.Protocol, req.RequiredFeatures, candidate.Type, resolved.GatewayModel.Modality, candidate.UpstreamFormat); reason != "" {
+			capabilityExclusions = append(capabilityExclusions, gatewayCandidatePolicyExclusion(candidate, reason))
+			continue
+		}
+		capableCandidates = append(capableCandidates, candidate)
+	}
+	decision, err := s.applyRoutingPolicyCandidateRules(ctx, policy, strings.TrimSpace(req.Protocol), capableCandidates)
 	if err != nil {
 		return GatewaySimulation{}, err
 	}
+	decision.Exclusions = append(capabilityExclusions, decision.Exclusions...)
 	baseByRouteID := make(map[string]GatewayProvider, len(baseCandidates))
 	for _, candidate := range baseCandidates {
 		baseByRouteID[candidate.RouteID] = candidate
 	}
 	for index, candidate := range decision.Candidates {
 		reason := simulationPermitReason(s, candidate, req.EstimatedTokens)
-		if reason == "" {
-			reason = simulationProtocolReason(req.Protocol, req.RequiredFeatures, candidate.UpstreamFormat)
-		}
 		result.Candidates = append(result.Candidates, gatewaySimulationCandidate(candidate, index+1, reason))
 	}
 	for _, exclusion := range decision.Exclusions {
@@ -283,10 +290,13 @@ func (s *Service) skippedSimulationCandidates(ctx context.Context, resolved Reso
 	return out, nil
 }
 
-func simulationProtocolReason(protocol string, features []string, upstreamFormat string) string {
+func simulationProtocolReason(protocol string, features []string, providerType, modality, upstreamFormat string) string {
 	protocol = strings.TrimSpace(protocol)
 	if protocol != "" && !routingPolicyProtocolSupported(protocol) {
 		return "client_protocol_unsupported"
+	}
+	if protocol != "" && !ProviderSupportsGatewayModelRoute(providerType, modality, upstreamFormat) {
+		return "provider_capability_incompatible"
 	}
 	if protocol == "openai_embeddings" && upstreamFormat != UpstreamFormatOpenAIEmbeddings {
 		return "protocol_incompatible:openai_embeddings"

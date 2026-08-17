@@ -72,7 +72,7 @@ func (s *Service) evaluateRoutingPolicyPriceRules(ctx context.Context, policy *R
 		candidate.PriceFactPresent = true
 		candidate.EstimatedInputMicrosPer1M = price.UncachedInputMicrosPer1MTokens
 		candidate.EstimatedOutputMicrosPer1M = price.OutputMicrosPer1MTokens
-		if inputLimit > 0 && price.UncachedInputMicrosPer1MTokens > dollarsToMicros(inputLimit) {
+		if inputLimit > 0 && routingPolicyInputPriceExceeded(price, dollarsToMicros(inputLimit)) {
 			decision.exclusions = append(decision.exclusions, routingPolicyPriceExclusion{candidate: candidate, reason: "routing_policy_input_price_exceeded"})
 			continue
 		}
@@ -247,6 +247,26 @@ func adjustedRoutingPrice(price ProcurementPrice) int64 {
 	return int64(math.Round(float64(combined) * multiplier))
 }
 
+// routingPolicyInputPriceExceeded treats an unquoted cache price as the
+// uncached input price. A policy cap must therefore protect every input path,
+// while an explicitly quoted cache price can be cheaper or more expensive.
+func routingPolicyInputPriceExceeded(price ProcurementPrice, limit int64) bool {
+	uncached := price.UncachedInputMicrosPer1MTokens
+	for _, quoted := range []int64{
+		price.CacheReadMicrosPer1MTokens,
+		price.CacheWrite5mMicrosPer1MTokens,
+		price.CacheWrite1hMicrosPer1MTokens,
+	} {
+		if quoted <= 0 {
+			quoted = uncached
+		}
+		if quoted > uncached {
+			uncached = quoted
+		}
+	}
+	return uncached > limit
+}
+
 func dollarsToMicros(value float64) int64 {
 	return int64(math.Round(value * 1_000_000))
 }
@@ -277,12 +297,16 @@ func lowPriceCandidatePool(candidates []routingPolicyCandidatePrice, strategy Ro
 			out = append(out, items...)
 			continue
 		}
-		keep := 1
-		if oneOf(strategy.LowPricePoolMode, RoutingPolicyLowPriceAuto, RoutingPolicyLowPricePercent) {
-			keep = int(math.Ceil(float64(len(knownPriceItems)) * float64(strategy.LowPricePoolPercent) / 100))
-			if strategy.LowPricePoolMinCandidates > keep {
-				keep = strategy.LowPricePoolMinCandidates
-			}
+		percent := strategy.LowPricePoolPercent
+		if strategy.LowPricePoolMode == RoutingPolicyLowPriceAuto && percent == 0 {
+			percent = 70
+		}
+		if strategy.LowPricePoolMode == RoutingPolicyLowPriceStrict && percent == 0 {
+			percent = 30
+		}
+		keep := int(math.Ceil(float64(len(knownPriceItems)) * float64(percent) / 100))
+		if strategy.LowPricePoolMinCandidates > keep {
+			keep = strategy.LowPricePoolMinCandidates
 		}
 		if keep > len(knownPriceItems) {
 			keep = len(knownPriceItems)

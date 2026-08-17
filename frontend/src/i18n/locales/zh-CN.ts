@@ -23,6 +23,7 @@ export default {
     export: '导出',
     details: '详情',
     search: '搜索',
+    reset: '重置',
     apply: '应用',
     from: '开始',
     to: '结束',
@@ -1891,6 +1892,55 @@ export default {
     nextHelp: '进入当前员工账号可操作的 Key、用量和告警页面。'
   },
   marketing: marketingZh,
+  supplyCatalog: {
+    title: '模型广场',
+    subtitle: '集中比较企业已批准的模型与供应线路，并将优先资源和有序降级批次直接写入路由策略。',
+    summaryLabel: '模型广场概览',
+    summary: { models: '已上架模型', routes: '供应线路', available: '可调度', unpriced: '缺少报价' },
+    policyScope: {
+      title: '策略作用范围', actsOn: '作用于路由策略', select: '请选择路由策略',
+      summary: '路由组 {group} · v{version} · {bindings} 个凭据绑定 · {preferred} 个优先资源 · {batches} 个降级批次',
+      empty: '选择一份启用中的路由策略后，才能设置优先资源和有序批次。', manage: '管理策略'
+    },
+    filters: {
+      title: '模型广场筛选', family: '按模型家族筛选', modality: '按模态筛选', allModalities: '全部模态', all: '全部', view: '广场视图', byRoute: '按线路', byModel: '按模型',
+      search: '搜索模型、供应商或线路说明', searchAria: '搜索模型广场', model: '按模型筛选', allModels: '全部模型',
+      routeGroup: '按路由组筛选', allRouteGroups: '全部路由组', provider: '按供应商筛选', allProviders: '全部供应商', protocol: '按协议筛选', allProtocols: '全部协议', tag: '按标签筛选', allTags: '全部标签', schedulableOnly: '仅看可调度线路'
+    },
+    families: { claude: 'Claude', openai: 'OpenAI', gemini: 'Gemini', grok: 'Grok', deepseek: 'DeepSeek', qwen: 'Qwen', glm: 'GLM', other: '其他' },
+    modalities: { chat: '对话', embedding: '向量', image: '图片', video: '视频', audio: '音频', multimodal: '多模态' },
+    modelViewLabel: '按模型查看模型广场', routeViewLabel: '按线路查看模型广场',
+    table: {
+      model: '模型服务', supply: '供应来源', startPrice: '最低输入价', routeCount: '可用线路', bestSuccess: '最佳成功率',
+      inputPrice: '输入实际价 / 百万 Token', outputPrice: '输出实际价 / 百万 Token', multiplier: '报价倍率', reference: '参考', successRate: '24 小时成功率', latency: '检查延迟',
+      health: '健康状态', tags: '标签', samples: '次'
+    },
+    tags: { healthy: '健康', low_cost: '低成本', low_latency: '低延迟', unpriced: '无报价', unavailable: '不可调度' },
+    health: { ok: '正常', warning: '需关注', error: '异常', unchecked: '未检查', unavailable: '不可调度' },
+    actions: {
+      addPreferred: '优先使用', removePreferred: '取消优先资源', preferred: '已优先',
+      addPreferredFor: '将 {account} 设为优先资源', removePreferredFor: '取消 {account} 的优先资源',
+      batch: '有序批次', batchFor: '设置 {account} 的有序批次', batchNumber: '第 {number} 批', notInBatch: '动态候选',
+      createPrimaryBatch: '新建主用批次并加入', primaryBatch: '主用线路', selectPolicyFirst: '请先选择路由策略。',
+      routeGroupMismatch: '当前策略只作用于路由组 {group}，不能配置这条线路。'
+    },
+    messages: {
+      preferredAdded: '已将 {account} 设为优先资源', preferredRemoved: '已取消 {account} 的优先资源',
+      batchUpdated: '已更新 {account} 的有序批次', batchRemoved: '已将 {account} 恢复为动态候选'
+    },
+    empty: {
+      title: '暂无供应线路', description: '先发布模型服务并配置至少一条供应线路。', manageRoutes: '管理供应线路',
+      filteredTitle: '没有符合条件的线路', filteredDescription: '调整筛选条件后重试。'
+    },
+    detail: {
+      identity: '线路标识', routeID: '线路 ID', routeGroup: '路由组', providerType: '供应商类型', priorityWeight: '优先级 / 权重',
+      price: '采购价与证据', referenceInput: '参考输入价', referenceOutput: '参考输出价', cacheRead: '缓存读取价', cacheWrite: '5 分钟缓存写入价', requestPrice: '单次请求价', quotedMultiplier: '报价倍率', rechargeMultiplier: '结算倍率', priceSource: '价格来源', priceConfidence: '可信度',
+      priceNote: '这里展示当前生效的企业采购价；成本治理和价格证据仍以有效成本页面为事实源。',
+      evidence: '运行证据', requests24h: '24 小时请求数', fallbackRate: '故障切换率', lastChecked: '最近检查',
+      policyUse: '在路由策略中使用', policySummary: '当前操作写入“{name}”，并受路由组 {group} 约束。',
+      manageAccount: '查看供应账号', reviewPricing: '查看成本证据', openSimulator: '打开策略试算'
+    }
+  },
   routingPolicy: {
     title: '路由策略', subtitle: '把资源范围、成本边界、质量偏好和故障切换固化为一份可审计的企业路由合同。',
     newPolicy: '新建策略', policyLibrary: '策略库', policyList: '路由策略列表', name: '策略名称', description: '策略说明', routeGroup: '路由组标识', routeGroupHelp: '与模型路由的 route_group 精确匹配。', status: '状态', preset: '策略偏好', guardrails: '关键约束', updatedAt: '最近更新', active: '启用', enabled: '已启用', disabled: '停用', unnamed: '未命名策略',
@@ -1905,11 +1955,11 @@ export default {
     flowTitle: '一次请求如何决策', flowHelp: '按照固定阶段收敛候选，保证每次路由都有一致且可解释的判断顺序。',
     flow: { scope: '候选资源范围', hardRules: '硬约束淘汰', preference: '偏好评分', fallback: '有序降级', failover: '故障切换' },
     hardRulesTitle: '硬约束与成本护栏', hardRulesHelp: '任何不满足条件的资源都会在评分前被淘汰，偏好不能绕过这些限制。',
-    nativeProtocolOnly: '仅使用原生协议', nativeProtocolShort: '原生协议', nativeProtocolOnlyHelp: '要求上游格式与客户端协议直接兼容，减少转换带来的不确定性。', protocolRules: '协议准入规则', protocolRulesHelp: '允许列表一旦非空，未明确允许的协议都会被拒绝；禁止规则优先。', protocolNeutral: '跟随默认', protocolAllow: '允许', protocolDeny: '禁止', protocols: { openai_chat_completions: 'OpenAI Chat Completions', openai_responses: 'OpenAI Responses', openai_embeddings: 'OpenAI Embeddings', anthropic_messages: 'Anthropic Messages', anthropic_count_tokens: 'Anthropic Token 计数', gemini_generate_content: 'Gemini Generate Content', openai_images_generations: 'OpenAI 图片生成', openai_media_generations: 'OpenAI 媒体生成', openai_audio_transcriptions: 'OpenAI 音频转写', openai_audio_translations: 'OpenAI 音频翻译', openai_audio_speech: 'OpenAI 语音生成', realtime: '实时会话', aster_jobs: 'Aster 异步任务' }, inputPriceCap: '输入价格绝对上限', outputPriceCap: '输出价格绝对上限', usdPerMillion: '美元 / 百万 Token，0 表示不限制', relativePriceCap: '相对最低价倍数', relativePriceCapHelp: '超过当前最低合格价倍数的资源会被淘汰，0 表示不限制。', missingPriceAction: '缺失价格事实时', missingPriceActionHelp: '严格成本治理请选择拦截；允许模式会保留未知价格候选并明确标注。', missingPriceActions: { allow: '允许并标记未知', block: '作为硬约束拦截' }, modelPriceLimits: '按模型设置价格上限', modelPriceLimitsHelp: '模型上限与全局上限同时存在时取更严格值。', addModelPriceLimit: '添加模型上限', removeModelPriceLimit: '移除模型上限', noModelPriceLimits: '未配置按模型价格上限。', selectModel: '请选择模型', priceFactsMissing: '尚未导入有效的 USD 采购价，请确认缺失价格事实的处理方式符合企业成本要求。',
-    lowPricePoolTitle: '低价候选池', lowPricePoolHelp: '先形成成本可控的候选集合，再按策略偏好排序。', poolMode: '候选池模式', poolModes: { auto: '自动平衡', strict: '仅最低价', percentile: '自定义价格分位', none: '不按价格筛选' }, poolPercent: '保留价格分位（%）', minCandidates: '最少候选数',
+    nativeProtocolOnly: '仅使用原生协议', nativeProtocolShort: '原生协议', nativeProtocolOnlyHelp: '要求上游格式与客户端协议直接兼容，减少转换带来的不确定性。', protocolRules: '协议准入规则', protocolRulesHelp: '允许列表一旦非空，未明确允许的协议都会被拒绝；禁止规则优先。', protocolNeutral: '跟随默认', protocolAllow: '允许', protocolDeny: '禁止', protocols: { openai_chat_completions: 'OpenAI Chat Completions', openai_responses: 'OpenAI Responses', openai_embeddings: 'OpenAI Embeddings', anthropic_messages: 'Anthropic Messages', anthropic_count_tokens: 'Anthropic Token 计数', gemini_generate_content: 'Gemini Generate Content', native_media: '原生媒体', openai_images_generations: 'OpenAI 图片生成', openai_media_generations: 'OpenAI 媒体生成', openai_audio_transcriptions: 'OpenAI 音频转写', openai_audio_translations: 'OpenAI 音频翻译', openai_audio_speech: 'OpenAI 语音生成', realtime: '实时会话', aster_jobs: 'Aster 异步任务' }, inputPriceCap: '输入价格绝对上限', outputPriceCap: '输出价格绝对上限', usdPerMillion: '美元 / 百万 Token，0 表示不限制', relativePriceCap: '相对最低价倍数', relativePriceCapHelp: '超过当前最低合格价倍数的资源会被淘汰，0 表示不限制。', missingPriceAction: '缺失价格事实时', missingPriceActionHelp: '严格成本治理请选择拦截；允许模式会保留未知价格候选并明确标注。', missingPriceActions: { allow: '允许并标记未知', block: '作为硬约束拦截' }, modelPriceLimits: '按模型设置价格上限', modelPriceLimitsHelp: '模型上限与全局上限同时存在时取更严格值。', addModelPriceLimit: '添加模型上限', removeModelPriceLimit: '移除模型上限', noModelPriceLimits: '未配置按模型价格上限。', selectModel: '请选择模型', priceFactsMissing: '尚未导入有效的 USD 采购价，请确认缺失价格事实的处理方式符合企业成本要求。',
+    lowPricePoolTitle: '低价候选池', lowPricePoolHelp: '先形成成本可控的候选集合，再按策略偏好排序。自动保留价格前 70% 且至少 2 条；严格保留价格前 30% 且至少 2 条；自定义模式按 N% 和 M 条执行。', poolMode: '候选池模式', poolModes: { auto: '自动：前 70%，至少 2 条', strict: '严格：前 30%，至少 2 条', percentile: '自定义价格分位', none: '不按价格筛选' }, poolPercent: '保留价格分位（%）', minCandidates: '最少候选数',
     modelScopeTitle: '模型范围', modelScopeHelp: '白名单为空时允许全部模型；黑名单始终优先。', allowedModels: '允许模型', deniedModels: '禁止模型', onePerLine: '每行一个模型 ID',
     batchesTitle: '有序资源批次', batchesHelp: '同一批次内参与评分；只有当前批次全部失败后才进入下一批次。', addBatch: '添加批次', batchName: '第 {index} 批', batchLabel: '批次名称', moveUp: '上移批次', moveDown: '下移批次', removeBatch: '移除批次', declaredResourceOrder: '批次内声明顺序', moveResourceUp: '上移资源', moveResourceDown: '下移资源', removeResource: '移除资源', noAccounts: '暂无可用路由资源', emptyBatches: '尚未配置固定资源批次', emptyBatchesHelp: '不配置时使用路由组内全部合格资源动态降级。', preferredResources: '同批次优先资源', preferredResourcesHelp: '仅在资源所属批次内提升优先级，绝不会越过前序批次。',
-    resilienceTitle: '粘性路由与故障切换', resilienceHelp: '控制请求在资源之间保持一致，以及上游失败时何时允许切换。', failoverBeforeFirstByte: '启用首字节前故障切换', failoverBeforeFirstByteHelp: '上游在输出前失败时尝试下一候选；一旦开始输出，始终禁止切换，避免内容拼接或重复。', failoverShort: '首字节切换', stickyRouting: '启用粘性路由', stickyRoutingHelp: '同一会话在资源健康时尽量保持到同一上游。', stickyTTL: '粘性有效期', seconds: '秒', smartOptimization: '有效成本动态优化', smartOptimizationHelp: '允许已经通过质量门槛的有效成本决策在当前资源批次内调整候选顺序。', strictOrder: '严格按声明顺序', strictOrderHelp: '通过硬约束后保持批次内声明顺序，不再按成本、速度、稳定性或权重重排。',
+    resilienceTitle: '粘性路由与故障切换', resilienceHelp: '控制请求在资源之间保持一致，以及上游失败时何时允许切换。', failoverBeforeFirstByte: '启用首字节前故障切换', failoverBeforeFirstByteHelp: '上游在输出前失败时尝试下一候选；一旦开始输出，始终禁止切换，避免内容拼接或重复。', failoverShort: '首字节切换', stickyRouting: '启用粘性路由', stickyRoutingHelp: '同一会话在资源健康时尽量保持到同一上游。', stickyTTL: '粘性有效期', seconds: '秒', smartOptimization: '启用动态候选优化', smartOptimizationHelp: '允许通过质量门槛的有效成本决策和资源权重在当前批次内调整顺序；关闭后采用稳定排序。', strictOrder: '严格按声明顺序', strictOrderHelp: '通过硬约束后保持批次内声明顺序，不再按成本、速度、稳定性或权重重排。',
     simulation: { title: '决策试算', help: '使用已保存的当前策略运行真实候选算法，不消耗供应账号容量。', run: '运行试算', saveFirst: '请先保存策略，再针对该策略运行试算。', dynamicBatch: '动态候选', batch: '第 {index} 批 · {name}', price: '输入价 / 输出价', quality: '成功率 / 延迟', capacity: '容量 / 熔断', priceKnown: '价格事实有效', priceUnknown: '价格事实缺失' },
     preview: { title: '策略决策预览', live: '实时', currentPolicy: '当前策略', preset: '决策偏好', models: '模型范围', hardRules: '硬约束', batches: '降级批次', resources: '指定资源', allModels: '全部模型', modelCount: '{count} 个允许模型', noHardRules: '未配置', ruleCount: '{count} 项', dynamicFallback: '动态候选', batchCount: '{count} 个批次', safetyTitle: '流式安全边界', safetyHelp: '首字节后禁止切换上游，确保流式响应来源唯一。' },
     validationRequired: '请填写策略名称和路由组标识。', created: '路由策略已创建', updated: '路由策略已更新', savePolicy: '保存策略', unsavedPolicy: '未保存的新策略', saveHint: '保存后新版本将立即用于匹配该路由组的后续请求。', empty: '暂无路由策略，请创建企业默认策略。'

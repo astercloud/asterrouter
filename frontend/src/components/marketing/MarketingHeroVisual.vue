@@ -22,47 +22,38 @@ const { t } = useI18n()
       />
     </div>
 
-    <section class="hero-decision-window" :aria-label="t('marketing.hero.liveDecisionLabel')">
-      <header>
-        <span><SquareActivity :size="15" />{{ t('marketing.hero.liveDecision') }}</span>
-        <b><i></i>LIVE</b>
-      </header>
-      <div class="hero-request-heading">
-        <span>req_7f2c8a19</span>
+    <section class="hero-decision-strip" :aria-label="t('marketing.hero.liveDecisionLabel')">
+      <div class="hero-request-identity">
+        <span>
+          <SquareActivity :size="15" />
+          {{ t('marketing.hero.liveDecision') }}
+          <b><i></i>LIVE</b>
+        </span>
         <strong>Customer Support Copilot</strong>
-        <small>enterprise-chat · production</small>
+        <small>req_7f2c8a19 · enterprise-chat · production</small>
       </div>
-      <div class="hero-candidate selected">
-        <span>01</span>
-        <p><strong>Primary East</strong><small>{{ t('marketing.decision.candidatePrimary') }}</small></p>
-        <b>{{ t('marketing.decision.selected') }}</b>
+
+      <div class="hero-proof-list">
+        <div>
+          <ShieldCheck :size="17" />
+          <span><strong>{{ t('marketing.hero.policyProof') }}</strong><small>{{ t('marketing.hero.policyProofDetail') }}</small></span>
+        </div>
+        <div>
+          <CircleDollarSign :size="17" />
+          <span><strong>{{ t('marketing.hero.costProof') }}</strong><small>{{ t('marketing.hero.costProofDetail') }}</small></span>
+        </div>
+        <div>
+          <Gauge :size="17" />
+          <span><strong>{{ t('marketing.hero.capacityProof') }}</strong><small>{{ t('marketing.hero.capacityProofDetail') }}</small></span>
+        </div>
       </div>
-      <div class="hero-candidate excluded">
-        <span>03</span>
-        <p><strong>Overflow Pool</strong><small>{{ t('marketing.decision.candidateExcluded') }}</small></p>
-        <b>{{ t('marketing.decision.excluded') }}</b>
-      </div>
+
       <footer>
-        <Check :size="15" />
+        <Check :size="17" />
         <span><strong>{{ t('marketing.hero.requestApproved') }}</strong><small>{{ t('marketing.hero.requestApprovedDetail') }}</small></span>
+        <Route :size="17" />
       </footer>
     </section>
-
-    <div class="hero-signal is-policy">
-      <ShieldCheck :size="17" />
-      <span><strong>{{ t('marketing.hero.policyProof') }}</strong><small>{{ t('marketing.hero.policyProofDetail') }}</small></span>
-    </div>
-    <div class="hero-signal is-cost">
-      <CircleDollarSign :size="17" />
-      <span><strong>{{ t('marketing.hero.costProof') }}</strong><small>{{ t('marketing.hero.costProofDetail') }}</small></span>
-    </div>
-    <div class="hero-signal is-capacity">
-      <Gauge :size="17" />
-      <span><strong>{{ t('marketing.hero.capacityProof') }}</strong><small>{{ t('marketing.hero.capacityProofDetail') }}</small></span>
-    </div>
-    <div class="hero-route-proof" aria-hidden="true">
-      <Route :size="16" /><span>Policy</span><i></i><span>Supply</span><i></i><span>Trace</span>
-    </div>
   </div>
 </template>
 
@@ -70,18 +61,21 @@ const { t } = useI18n()
 .marketing-home-scene {
   position: absolute;
   z-index: 0;
-  top: 102px;
-  left: 50%;
-  width: min(720px, calc(50% - 24px));
-  height: 590px;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .hero-image-stage {
   position: absolute;
-  inset: 34px 0 68px 30px;
+  top: 535px;
+  left: 50%;
+  width: min(1120px, calc(100% - 72px));
+  height: 520px;
   overflow: hidden;
-  border: 1px solid rgba(18, 25, 38, .16);
-  border-radius: 8px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(18, 25, 38, .15);
+  border-radius: 8px 8px 0 0;
   background: #fff;
   box-shadow: 0 30px 72px rgba(18, 37, 54, .17);
 }
@@ -92,7 +86,7 @@ const { t } = useI18n()
   inset: 0 0 auto;
   height: 30px;
   border-bottom: 1px solid rgba(18, 25, 38, .09);
-  background: rgba(255, 255, 255, .94);
+  background: rgba(255, 255, 255, .96);
   content: '';
 }
 
@@ -117,172 +111,184 @@ const { t } = useI18n()
   object-position: left top;
 }
 
-.hero-decision-window {
+.hero-decision-strip {
   position: absolute;
   z-index: 4;
-  right: -18px;
-  bottom: 0;
-  width: 390px;
+  top: 490px;
+  left: 50%;
+  width: min(900px, calc(100% - 120px));
+  min-height: 112px;
+  display: grid;
+  grid-template-columns: minmax(210px, .8fr) minmax(360px, 1.5fr) minmax(220px, .9fr);
+  align-items: stretch;
+  transform: translateX(-50%);
   overflow: hidden;
-  border: 1px solid rgba(18, 25, 38, .15);
+  border: 1px solid rgba(18, 25, 38, .13);
   border-radius: 8px;
-  background: rgba(255, 255, 255, .97);
-  box-shadow: 0 24px 58px rgba(18, 37, 54, .18);
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 24px 58px rgba(18, 37, 54, .16);
   backdrop-filter: blur(16px);
 }
 
-.hero-decision-window > header {
-  min-height: 45px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 14px;
-  border-bottom: 1px solid rgba(18, 25, 38, .1);
+.hero-request-identity,
+.hero-proof-list,
+.hero-decision-strip > footer {
+  min-width: 0;
+  padding: 16px 18px;
 }
 
-.hero-decision-window > header > span,
-.hero-decision-window > header > b {
-  display: inline-flex;
+.hero-request-identity {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-right: 1px solid rgba(18, 25, 38, .1);
+}
+
+.hero-request-identity > span {
+  display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 9px;
+  gap: 6px;
+  color: #175cd3;
+  font-size: 8px;
   font-weight: 800;
 }
 
-.hero-decision-window > header > span { color: #121926; }
-.hero-decision-window > header > span svg { color: #175cd3; }
-.hero-decision-window > header > b { color: #087f76; }
-.hero-decision-window > header i { width: 6px; height: 6px; border-radius: 50%; background: #12b76a; box-shadow: 0 0 0 4px rgba(18, 183, 106, .11); }
-
-.hero-request-heading { padding: 13px 14px 10px; }
-.hero-request-heading span,
-.hero-request-heading strong,
-.hero-request-heading small { display: block; }
-.hero-request-heading span { color: #087f76; font: 8px "SFMono-Regular", "Cascadia Code", monospace; }
-.hero-request-heading strong { margin-top: 4px; color: #121926; font-size: 12px; }
-.hero-request-heading small { margin-top: 2px; color: #667085; font-size: 8px; }
-
-.hero-candidate {
-  min-height: 51px;
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+.hero-request-identity > span b {
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 14px;
-  border-top: 1px solid rgba(18, 25, 38, .09);
+  gap: 5px;
+  margin-left: auto;
+  color: #087f76;
+  font-size: 7px;
 }
 
-.hero-candidate > span { color: #667085; font: 8px "SFMono-Regular", "Cascadia Code", monospace; }
-.hero-candidate p { min-width: 0; margin: 0; }
-.hero-candidate strong,
-.hero-candidate small { display: block; }
-.hero-candidate strong { color: #121926; font-size: 9px; }
-.hero-candidate small { margin-top: 2px; overflow: hidden; color: #667085; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
-.hero-candidate > b { color: #667085; font-size: 7px; }
-.hero-candidate.selected { border-color: rgba(8, 127, 118, .18); background: #edf9f7; }
-.hero-candidate.selected > b { color: #087f76; }
-.hero-candidate.excluded > b { color: #c2413b; }
-
-.hero-decision-window > footer {
-  min-height: 50px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-top: 1px solid rgba(18, 25, 38, .09);
-  color: #175cd3;
+.hero-request-identity > span i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #12b76a;
+  box-shadow: 0 0 0 4px rgba(18, 183, 106, .11);
 }
 
-.hero-decision-window > footer strong,
-.hero-decision-window > footer small { display: block; }
-.hero-decision-window > footer strong { color: #121926; font-size: 9px; }
-.hero-decision-window > footer small { margin-top: 2px; color: #667085; font-size: 7px; }
-
-.hero-signal {
-  position: absolute;
-  z-index: 5;
-  min-width: 190px;
-  min-height: 58px;
-  display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 9px 12px;
-  border: 1px solid rgba(18, 25, 38, .14);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, .97);
-  box-shadow: 0 16px 40px rgba(18, 37, 54, .12);
-  backdrop-filter: blur(14px);
+.hero-request-identity > strong,
+.hero-request-identity > small,
+.hero-proof-list strong,
+.hero-proof-list small,
+.hero-decision-strip > footer strong,
+.hero-decision-strip > footer small {
+  display: block;
 }
 
-.hero-signal svg { color: #175cd3; }
-.hero-signal strong,
-.hero-signal small { display: block; }
-.hero-signal strong { color: #121926; font-size: 9px; }
-.hero-signal small { margin-top: 2px; color: #667085; font-size: 7px; }
-.hero-signal.is-policy { top: 0; left: 0; }
-.hero-signal.is-cost { top: 90px; right: -4px; }
-.hero-signal.is-cost svg { color: #b54708; }
-.hero-signal.is-capacity { bottom: 10px; left: 8px; }
-.hero-signal.is-capacity svg { color: #087f76; }
+.hero-request-identity > strong {
+  margin-top: 10px;
+  overflow: hidden;
+  color: #121926;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-.hero-route-proof {
-  position: absolute;
-  z-index: 3;
-  top: 102px;
-  left: 12px;
-  display: flex;
+.hero-request-identity > small {
+  margin-top: 3px;
+  overflow: hidden;
+  color: #667085;
+  font: 7px "SFMono-Regular", "Cascadia Code", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hero-proof-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: 0;
+  border-right: 1px solid rgba(18, 25, 38, .1);
+}
+
+.hero-proof-list > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding-inline: 10px;
+  border-right: 1px solid rgba(18, 25, 38, .08);
+}
+
+.hero-proof-list > div:last-child { border-right: 0; }
+.hero-proof-list svg { color: #175cd3; }
+.hero-proof-list > div:nth-child(2) svg { color: #b54708; }
+.hero-proof-list > div:nth-child(3) svg { color: #087f76; }
+.hero-proof-list strong { color: #121926; font-size: 8px; line-height: 1.35; }
+.hero-proof-list small { margin-top: 3px; color: #667085; font-size: 6px; line-height: 1.4; }
+
+.hero-decision-strip > footer {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 18px;
   align-items: center;
   gap: 7px;
-  padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, .18);
-  border-radius: 6px;
-  background: #121926;
-  color: rgba(255, 255, 255, .7);
-  font-size: 7px;
-  font-weight: 750;
-  box-shadow: 0 12px 30px rgba(18, 25, 38, .2);
+  background: #edf9f7;
+  color: #087f76;
 }
 
-.hero-route-proof svg { color: #78e2d8; }
-.hero-route-proof i { width: 13px; height: 1px; background: rgba(120, 226, 216, .55); }
+.hero-decision-strip > footer strong { color: #121926; font-size: 9px; line-height: 1.35; }
+.hero-decision-strip > footer small { margin-top: 3px; color: #667085; font-size: 6px; line-height: 1.4; }
 
 @media (max-width: 1080px) {
-  .marketing-home-scene { top: auto; right: 24px; bottom: 38px; left: 24px; width: auto; height: 330px; }
-  .hero-image-stage { inset: 0 12% 10px 0; }
-  .hero-decision-window { right: 0; width: min(390px, 62%); }
-  .hero-signal.is-policy { top: -24px; left: auto; right: 18px; }
-  .hero-signal.is-cost,
-  .hero-signal.is-capacity,
-  .hero-route-proof { display: none; }
+  .hero-image-stage { top: 555px; width: calc(100% - 48px); }
+  .hero-decision-strip {
+    top: 510px;
+    width: min(820px, calc(100% - 72px));
+    grid-template-columns: minmax(190px, .8fr) minmax(340px, 1.5fr) minmax(190px, .85fr);
+  }
+  .hero-request-identity,
+  .hero-proof-list,
+  .hero-decision-strip > footer { padding-inline: 14px; }
+}
+
+@media (max-width: 820px) {
+  .hero-image-stage { top: 575px; width: calc(100% - 32px); height: 400px; }
+  .hero-decision-strip {
+    top: 530px;
+    width: calc(100% - 48px);
+    grid-template-columns: minmax(0, 1.35fr) minmax(190px, .8fr);
+  }
+  .hero-request-identity { display: none; }
+  .hero-proof-list { border-left: 0; }
 }
 
 @media (max-width: 560px) {
-  .marketing-home-scene { right: 16px; bottom: 34px; left: 16px; height: 275px; }
-  .hero-image-stage { inset: 0 0 12px; }
-  .hero-product-image { object-position: 18% top; }
-  .hero-decision-window { right: 8px; bottom: 0; width: calc(100% - 16px); }
-  .hero-decision-window > header,
-  .hero-request-heading,
-  .hero-candidate { padding-right: 11px; padding-left: 11px; }
-  .hero-candidate.excluded { display: none; }
-  .hero-signal.is-policy { display: none; }
+  .hero-image-stage { top: 650px; width: calc(100% - 24px); height: 300px; }
+  .hero-product-image { object-position: 15% top; }
+  .hero-decision-strip {
+    top: 595px;
+    width: calc(100% - 32px);
+    min-height: 118px;
+    grid-template-columns: 1fr;
+  }
+  .hero-proof-list {
+    min-height: 61px;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(18, 25, 38, .1);
+  }
+  .hero-proof-list > div { grid-template-columns: 1fr; justify-items: center; padding-inline: 6px; text-align: center; }
+  .hero-proof-list small { display: none; }
+  .hero-decision-strip > footer { min-height: 56px; padding: 8px 12px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .hero-image-stage { animation: hero-stage-enter 520ms ease-out both; }
-  .hero-decision-window { animation: hero-panel-enter 600ms 80ms ease-out both; }
+  .hero-decision-strip { animation: hero-strip-enter 600ms 80ms ease-out both; }
 }
 
 @keyframes hero-stage-enter {
-  from { opacity: 0; transform: translateY(14px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-@keyframes hero-panel-enter {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes hero-strip-enter {
+  from { opacity: 0; margin-top: 12px; }
+  to { opacity: 1; margin-top: 0; }
 }
 </style>

@@ -531,9 +531,13 @@ func (s *Service) rankedModelRouteCandidatesWithPolicy(ctx context.Context, reso
 		}
 		loadRatio := float64(s.providerAccountSlotUsage(account.ID)) / float64(account.EffectiveLoadFactor())
 		headroom := s.providerAccountRateHeadroom(account, now)
+		weightScore := 0.0
+		if policy == nil || policy.Strategy.SmartOptimization {
+			weightScore = weightedCandidateScore(route.Weight * account.Weight)
+		}
 		candidates = append(candidates, rankedModelRouteCandidate{
 			route: route, account: account, provider: provider, loadRatio: loadRatio,
-			headroom: headroom, weightScore: weightedCandidateScore(route.Weight * account.Weight), preferred: policy != nil && contains(policy.Strategy.PreferredProviderAccountIDs, account.ID),
+			headroom: headroom, weightScore: weightScore, preferred: policy != nil && contains(policy.Strategy.PreferredProviderAccountIDs, account.ID),
 			circuitState: circuitState, circuitProbe: circuitProbe,
 			policyBatch: placement.batch, policyBatchName: placement.name, policyBatchPosition: placement.position,
 			routingMetrics: routingMetricsByAccount[account.ID], policy: policy,
@@ -617,20 +621,15 @@ func (s *Service) activeRoutingPolicyForGroup(ctx context.Context, routeGroup st
 	if err != nil {
 		return nil, err
 	}
-	var fallback *RoutingPolicy
 	for _, policy := range policies {
 		if policy.Status == RoutingPolicyStatusActive && policy.RouteGroup == routeGroup {
 			if policy.IsDefault {
 				selected := policy
 				return &selected, nil
 			}
-			if fallback == nil {
-				selected := policy
-				fallback = &selected
-			}
 		}
 	}
-	return fallback, nil
+	return nil, nil
 }
 
 func routingPolicyAllowsModel(strategy RoutingPolicyStrategy, model string) bool {

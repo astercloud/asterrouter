@@ -2385,12 +2385,14 @@ func routingPolicyFromRequest(req RoutingPolicyRequest, now time.Time) (RoutingP
 		return RoutingPolicy{}, errors.New("strategy.low_price_pool_mode is invalid")
 	}
 	if strategy.LowPricePoolMode == RoutingPolicyLowPriceAuto {
-		if strategy.LowPricePoolPercent == 0 {
-			strategy.LowPricePoolPercent = 30
-		}
+		strategy.LowPricePoolPercent = 70
 		if strategy.LowPricePoolMinCandidates == 0 {
 			strategy.LowPricePoolMinCandidates = 2
 		}
+	}
+	if strategy.LowPricePoolMode == RoutingPolicyLowPriceStrict {
+		strategy.LowPricePoolPercent = 30
+		strategy.LowPricePoolMinCandidates = 2
 	}
 	if strategy.LowPricePoolMode == RoutingPolicyLowPricePercent && strategy.LowPricePoolPercent == 0 {
 		return RoutingPolicy{}, errors.New("strategy.low_price_pool_percent must be between 1 and 100 for percentile mode")

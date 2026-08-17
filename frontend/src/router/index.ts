@@ -26,6 +26,7 @@ const AdminOrganizationGroupsView = () => import('@/views/admin/AdminOrganizatio
 const AdminExportJobsView = () => import('@/views/admin/AdminExportJobsView.vue')
 const AdminGatewayTracesView = () => import('@/views/admin/AdminGatewayTracesView.vue')
 const AdminGatewayModelsView = () => import('@/views/admin/AdminGatewayModelsView.vue')
+const AdminSupplyCatalogView = () => import('@/views/admin/AdminSupplyCatalogView.vue')
 const AdminGatewaySimulatorView = () => import('@/views/admin/AdminGatewaySimulatorView.vue')
 const AdminPricingView = () => import('@/views/admin/AdminPricingView.vue')
 const AdminModelRoutesView = () => import('@/views/admin/AdminModelRoutesView.vue')
@@ -97,6 +98,7 @@ const router = createRouter({
         { path: 'applications', component: AdminOnboardingView, meta: { titleKey: 'console.applications', descriptionKey: 'console.applicationsSubtitle' } },
         { path: 'applications/credentials', component: AdminApiKeysView, meta: { titleKey: 'console.credentials', descriptionKey: 'apiKeys.subtitle' } },
         { path: 'model-services', component: AdminGatewayModelsView, meta: { titleKey: 'console.modelServices', descriptionKey: 'console.modelServicesSubtitle' } },
+        { path: 'model-services/catalog', component: AdminSupplyCatalogView, meta: { titleKey: 'supplyCatalog.title', descriptionKey: 'supplyCatalog.subtitle' } },
         { path: 'model-services/providers', component: AdminProvidersView, meta: { titleKey: 'admin.providers', descriptionKey: 'providers.subtitle' } },
         { path: 'model-services/accounts', component: AdminProviderAccountsView, meta: { titleKey: 'admin.providerAccounts', descriptionKey: 'providerAccounts.subtitle' } },
         { path: 'model-services/routes', component: AdminModelRoutesView, meta: { titleKey: 'admin.modelRoutes', descriptionKey: 'modelRoutes.subtitle' } },

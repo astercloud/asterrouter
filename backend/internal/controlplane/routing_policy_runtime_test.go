@@ -222,6 +222,99 @@ func TestRoutingPolicyModelPriceLimitsAndMissingPriceAction(t *testing.T) {
 	}
 }
 
+func TestRoutingPolicyInputCapCoversUnquotedCachePrices(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	svc := NewService(repo, "/v1", "test-secret")
+	now := time.Now().UTC().Add(-time.Minute)
+	if err := repo.SaveProcurementPrice(ctx, ProcurementPrice{
+		ID: "cache-expensive", ProviderAccountID: "cache-expensive", UpstreamModel: "upstream",
+		Protocol: string(gatewaycore.ProtocolOpenAIChat), Currency: "USD",
+		UncachedInputMicrosPer1MTokens: 100_000, CacheReadMicrosPer1MTokens: 2_000_000,
+		OutputMicrosPer1MTokens: 100_000, RechargeMultiplier: 1, Status: ProcurementPriceStatusActive, EffectiveFrom: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveProcurementPrice(ctx, ProcurementPrice{
+		ID: "cache-unquoted", ProviderAccountID: "cache-unquoted", UpstreamModel: "upstream",
+		Protocol: string(gatewaycore.ProtocolOpenAIChat), Currency: "USD",
+		UncachedInputMicrosPer1MTokens: 1_500_000, CacheReadMicrosPer1MTokens: 0,
+		OutputMicrosPer1MTokens: 100_000, RechargeMultiplier: 1, Status: ProcurementPriceStatusActive, EffectiveFrom: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	policy := &RoutingPolicy{Strategy: RoutingPolicyStrategy{
+		Preset: RoutingPolicyPresetBalanced, AbsoluteMaxInputPer1M: 1,
+		LowPricePoolMode: RoutingPolicyLowPriceNone, MissingPriceAction: RoutingPolicyMissingPriceBlock,
+	}}
+	decision, err := svc.evaluateRoutingPolicyPriceRules(ctx, policy, string(gatewaycore.ProtocolOpenAIChat), []GatewayProvider{
+		{RouteID: "cache-expensive", AccountID: "cache-expensive", UpstreamModel: "upstream"},
+		{RouteID: "cache-unquoted", AccountID: "cache-unquoted", UpstreamModel: "upstream"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.candidates) != 0 || len(decision.exclusions) != 2 {
+		t.Fatalf("input cap must reject quoted and unquoted cache prices: %+v", decision)
+	}
+	for _, exclusion := range decision.exclusions {
+		if exclusion.reason != "routing_policy_input_price_exceeded" {
+			t.Fatalf("unexpected cache price exclusion: %+v", exclusion)
+		}
+	}
+}
+
+func TestRoutingPolicyInputPriceCapChecksEveryCachePriceBoundary(t *testing.T) {
+	const limit = int64(1_000_000)
+	tests := []struct {
+		name  string
+		price ProcurementPrice
+		want  bool
+	}{
+		{name: "all below", price: ProcurementPrice{UncachedInputMicrosPer1MTokens: 900_000, CacheReadMicrosPer1MTokens: 800_000, CacheWrite5mMicrosPer1MTokens: 900_000, CacheWrite1hMicrosPer1MTokens: 950_000}},
+		{name: "equal limit", price: ProcurementPrice{UncachedInputMicrosPer1MTokens: limit, CacheReadMicrosPer1MTokens: limit, CacheWrite5mMicrosPer1MTokens: limit, CacheWrite1hMicrosPer1MTokens: limit}},
+		{name: "cache read above", price: ProcurementPrice{UncachedInputMicrosPer1MTokens: 100_000, CacheReadMicrosPer1MTokens: limit + 1}, want: true},
+		{name: "five minute cache write above", price: ProcurementPrice{UncachedInputMicrosPer1MTokens: 100_000, CacheWrite5mMicrosPer1MTokens: limit + 1}, want: true},
+		{name: "one hour cache write above", price: ProcurementPrice{UncachedInputMicrosPer1MTokens: 100_000, CacheWrite1hMicrosPer1MTokens: limit + 1}, want: true},
+		{name: "unquoted cache uses uncached below", price: ProcurementPrice{UncachedInputMicrosPer1MTokens: limit - 1}},
+		{name: "unquoted cache uses uncached above", price: ProcurementPrice{UncachedInputMicrosPer1MTokens: limit + 1}, want: true},
+		{name: "mixed quotes reject highest", price: ProcurementPrice{UncachedInputMicrosPer1MTokens: 100_000, CacheReadMicrosPer1MTokens: 500_000, CacheWrite5mMicrosPer1MTokens: limit + 1, CacheWrite1hMicrosPer1MTokens: 300_000}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := routingPolicyInputPriceExceeded(test.price, limit); got != test.want {
+				t.Fatalf("routingPolicyInputPriceExceeded()=%v want=%v price=%+v", got, test.want, test.price)
+			}
+		})
+	}
+}
+
+func TestRoutingPolicyStrictLowPricePoolUsesTopThirtyPercentWithFloor(t *testing.T) {
+	policy, err := routingPolicyFromRequest(RoutingPolicyRequest{
+		Name: "Strict low price pool", Strategy: RoutingPolicyStrategy{
+			Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, LowPricePoolMode: RoutingPolicyLowPriceStrict,
+			LowPricePoolPercent: 40, LowPricePoolMinCandidates: 1,
+		},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Strategy.LowPricePoolPercent != 30 || policy.Strategy.LowPricePoolMinCandidates != 2 {
+		t.Fatalf("strict low price defaults were not normalized: %+v", policy.Strategy)
+	}
+	candidates := make([]routingPolicyCandidatePrice, 0, 5)
+	for index, price := range []int64{100, 200, 300, 400, 500} {
+		candidates = append(candidates, routingPolicyCandidatePrice{
+			candidate: GatewayProvider{AccountID: fmt.Sprintf("account-%d", index+1), PolicyBatchOrder: 0},
+			price:     price, priced: true, order: index,
+		})
+	}
+	retained := lowPriceCandidatePool(candidates, policy.Strategy)
+	if len(retained) != 2 || retained[0].price != 100 || retained[1].price != 200 {
+		t.Fatalf("strict pool must retain top 30%% with a two-candidate floor: %+v", retained)
+	}
+}
+
 func TestRoutingPolicyStrictOrderKeepsDeclaredOrder(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemoryRepository()
@@ -306,6 +399,65 @@ func TestRoutingPolicyPreferredResourcesStayWithinTheirDeclaredBatch(t *testing.
 	}
 }
 
+func TestRoutingPolicyDisablesRandomWeightTieBreakWhenSmartOptimizationIsOff(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1", "test-secret")
+	provider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
+		Name: "Stable ordering provider", Type: ProviderTypeOpenAICompatible, BaseURL: "https://provider.example/v1", Status: ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createAccount := func(name string, weight int) ProviderAccount {
+		account, createErr := svc.CreateProviderAccount(ctx, "tester", ProviderAccountRequest{
+			ProviderID: provider.ID, Name: name, Platform: ProviderTypeOpenAICompatible, AuthType: ProviderAuthAPIKey,
+			Status: AccountStatusActive, Priority: 10, Weight: weight, Concurrency: 10,
+			RateMultiplier: 1, Models: []string{"stable-order-upstream"}, Secret: name + "-secret",
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return account
+	}
+	first := createAccount("First", 1)
+	second := createAccount("Second", 1000)
+	model, err := svc.CreateGatewayModel(ctx, "tester", GatewayModelRequest{ModelID: "stable-order-model", Name: "Stable order", Status: GatewayModelStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []ProviderAccount{first, second} {
+		if _, err := svc.CreateModelRoute(ctx, "tester", ModelRouteRequest{
+			GatewayModelID: model.ID, RouteGroup: DefaultModelRouteGroup, ProviderAccountID: account.ID,
+			UpstreamModel: "stable-order-upstream", UpstreamFormat: UpstreamFormatOpenAIChat,
+			Priority: 10, Weight: 100, Status: ModelRouteStatusActive,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := svc.CreateRoutingPolicy(ctx, "tester", RoutingPolicyRequest{
+		Name: "Stable order policy", RouteGroup: DefaultModelRouteGroup, Status: RoutingPolicyStatusActive,
+		Strategy: RoutingPolicyStrategy{
+			Preset: RoutingPolicyPresetBalanced, SmartOptimization: false, LowPricePoolMode: RoutingPolicyLowPriceNone,
+			ResourceBatches: []RoutingPolicyBatch{{Name: "Declared", ProviderAccountIDs: []string{first.ID, second.ID}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var firstOrder string
+	for attempt := 0; attempt < 30; attempt++ {
+		candidates, _, err := svc.GatewayProviderCandidatesForModel(ctx, model.ModelID)
+		if err != nil || len(candidates) != 2 {
+			t.Fatalf("candidate resolution attempt %d: candidates=%+v err=%v", attempt, candidates, err)
+		}
+		order := candidates[0].AccountID + "," + candidates[1].AccountID
+		if attempt == 0 {
+			firstOrder = order
+		} else if order != firstOrder {
+			t.Fatalf("smart optimization disabled but tie-break order changed: first=%s current=%s", firstOrder, order)
+		}
+	}
+}
+
 func TestRoutingPolicyPriceExclusionsRemainExplainable(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemoryRepository()
@@ -368,8 +520,21 @@ func TestRoutingPolicyAutomaticLowPricePoolUsesNormalizedDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.Strategy.LowPricePoolPercent != 30 || policy.Strategy.LowPricePoolMinCandidates != 2 {
+	if policy.Strategy.LowPricePoolPercent != 70 || policy.Strategy.LowPricePoolMinCandidates != 2 {
 		t.Fatalf("automatic low price defaults were not normalized: %+v", policy.Strategy)
+	}
+	customized, err := routingPolicyFromRequest(RoutingPolicyRequest{
+		Name: "Automatic pool with custom floor",
+		Strategy: RoutingPolicyStrategy{
+			Preset: RoutingPolicyPresetBalanced, StickyTTLSeconds: 900, LowPricePoolMode: RoutingPolicyLowPriceAuto,
+			LowPricePoolPercent: 40, LowPricePoolMinCandidates: 3,
+		},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if customized.Strategy.LowPricePoolPercent != 70 || customized.Strategy.LowPricePoolMinCandidates != 3 {
+		t.Fatalf("automatic mode must fix the percentile while retaining its configurable candidate floor: %+v", customized.Strategy)
 	}
 
 	now := time.Now().UTC().Add(-time.Minute)
@@ -398,8 +563,8 @@ func TestRoutingPolicyAutomaticLowPricePoolUsesNormalizedDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filtered) != 2 || filtered[0].AccountID != "account-2" || filtered[1].AccountID != "account-1" {
-		t.Fatalf("automatic low price pool must preserve the non-cost preference order: %+v", filtered)
+	if len(filtered) != 3 || filtered[0].AccountID != "account-2" || filtered[1].AccountID != "account-1" || filtered[2].AccountID != "account-3" {
+		t.Fatalf("automatic low price pool must retain the cheapest 70%% and preserve non-cost preference order: %+v", filtered)
 	}
 
 	policy.Strategy.Preset = RoutingPolicyPresetCost
@@ -407,7 +572,7 @@ func TestRoutingPolicyAutomaticLowPricePoolUsesNormalizedDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(costOrdered) != 2 || costOrdered[0].AccountID != "account-1" || costOrdered[1].AccountID != "account-2" {
+	if len(costOrdered) != 3 || costOrdered[0].AccountID != "account-1" || costOrdered[1].AccountID != "account-2" || costOrdered[2].AccountID != "account-3" {
 		t.Fatalf("cost preference did not order the retained pool by price: %+v", costOrdered)
 	}
 
@@ -418,8 +583,8 @@ func TestRoutingPolicyAutomaticLowPricePoolUsesNormalizedDefaults(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(strict) != 1 || strict[0].AccountID != "account-1" {
-		t.Fatalf("strict low price pool must retain exactly the cheapest candidate: %+v", strict)
+	if len(strict) != 4 {
+		t.Fatalf("strict low price pool floor must not be capped below the requested minimum: %+v", strict)
 	}
 
 	withoutFacts, err := svc.applyRoutingPolicyPriceRules(ctx, &policy, string(gatewaycore.ProtocolAnthropicMessages), candidates)
@@ -923,6 +1088,29 @@ func TestAPIKeyRoutingPolicyBindingUsesExactlyOneCompatiblePolicy(t *testing.T) 
 		Name: "Disabled", ModelAllowlist: []string{model.ModelID}, RoutingPolicyID: disabledPolicy.ID,
 	}); err == nil || !strings.Contains(err.Error(), "active routing policy") {
 		t.Fatalf("disabled binding error=%v", err)
+	}
+}
+
+func TestUnboundGatewayRequestDoesNotUseNonDefaultRoutingPolicy(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1", "routing-policy-default-secret")
+	nonDefault := false
+	policy, err := svc.CreateRoutingPolicy(ctx, "tester", RoutingPolicyRequest{
+		Name: "Explicit-only", RouteGroup: "enterprise", Status: RoutingPolicyStatusActive, IsDefault: &nonDefault,
+		Strategy: RoutingPolicyStrategy{Preset: RoutingPolicyPresetCost, StickyTTLSeconds: 900, LowPricePoolMode: RoutingPolicyLowPriceNone},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.IsDefault {
+		t.Fatalf("explicit non-default policy became default: %+v", policy)
+	}
+	selected, err := svc.activeRoutingPolicyForGroup(ctx, "enterprise")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != nil {
+		t.Fatalf("unbound requests must not inherit non-default policy: %+v", selected)
 	}
 }
 
