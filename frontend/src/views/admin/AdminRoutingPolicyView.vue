@@ -163,7 +163,7 @@ function defaultStrategy(): RoutingPolicyStrategy {
     absolute_max_output_per_1m: 0,
     max_price_multiple_of_cheapest: 2,
     low_price_pool_mode: 'auto',
-    low_price_pool_percent: 30,
+    low_price_pool_percent: 70,
     low_price_pool_min_candidates: 2,
     missing_price_action: 'allow',
     model_price_limits: [],
@@ -182,7 +182,7 @@ function defaultRequest(): RoutingPolicyRequest {
     description: t('routingPolicy.defaultDescription'),
     route_group: 'default',
     status: 'active',
-    is_default: false,
+    is_default: true,
     strategy: defaultStrategy()
   }
 }

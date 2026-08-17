@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Boxes, Building2, Gauge, KeyRound, Puzzle, Settings, ShieldCheck } from '@lucide/vue'
+import { BarChart3, Boxes, Building2, Gauge, KeyRound, Puzzle, Settings, ShieldCheck, Store } from '@lucide/vue'
 import ProductShell from '@/components/ProductShell.vue'
 
 const navGroups = [
@@ -8,6 +8,7 @@ const navGroups = [
     items: [
       { to: '/console/workbench', label: 'console.workbench', icon: Gauge },
       { to: '/console/applications', label: 'console.applications', icon: KeyRound },
+      { to: '/console/model-services/catalog', label: 'supplyCatalog.title', icon: Store },
       { to: '/console/model-services', label: 'console.modelServices', icon: Boxes }
     ]
   },

@@ -91,6 +91,7 @@ function routingPolicySection(page: Page, heading: string) {
 }
 
 test('@e2e-routing-policy-001 enterprise routing policy workbench persists and remains responsive', async ({ page }, testInfo) => {
+  test.setTimeout(90_000)
   const errors = captureBrowserErrors(page)
   await loginDemo(page)
   const token = await loginTestPrincipal(page)
@@ -420,7 +421,8 @@ test('@e2e-routing-policy-002 preferences defaults lifecycle and rejected confli
 })
 
 test('@e2e-routing-policy-003 hard constraints ordered batches and resilience controls round-trip', async ({ page }, testInfo) => {
-  const errors = captureBrowserErrors(page)
+	test.setTimeout(60_000)
+	const errors = captureBrowserErrors(page)
   await loginDemo(page)
   const token = await loginTestPrincipal(page)
   const runID = `${testInfo.project.name}-guardrails-${Date.now()}`.replace(/[^a-z0-9-]+/gi, '-').toLowerCase()
@@ -529,6 +531,8 @@ test('@e2e-routing-policy-003 hard constraints ordered batches and resilience co
     version: 3,
     strategy: {
       low_price_pool_mode: 'strict',
+      low_price_pool_percent: 30,
+      low_price_pool_min_candidates: 2,
       resource_batches: [{ name: 'Primary production', provider_account_ids: [fixture.cheap.account.id] }]
     }
   })

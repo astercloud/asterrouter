@@ -1765,7 +1765,8 @@
         "get"
       ],
       "views": [
-        "frontend/src/views/admin/AdminApiKeysView.vue"
+        "frontend/src/views/admin/AdminApiKeysView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -1782,7 +1783,8 @@
           "@e2e-application-001",
           "@e2e-credential-boundary-001",
           "@e2e-gateway-budget-001",
-          "@e2e-routing-policy-001"
+          "@e2e-routing-policy-001",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -2211,7 +2213,8 @@
         "frontend/src/views/admin/AdminGatewaySimulatorView.vue",
         "frontend/src/views/admin/AdminModelRoutesView.vue",
         "frontend/src/views/admin/AdminPoliciesView.vue",
-        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -2236,7 +2239,8 @@
           "@e2e-routing-policy-001",
           "@e2e-routing-policy-002",
           "@e2e-routing-policy-003",
-          "@e2e-routing-resources-001"
+          "@e2e-routing-resources-001",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -2337,7 +2341,8 @@
         "get"
       ],
       "views": [
-        "frontend/src/views/admin/AdminModelRoutesView.vue"
+        "frontend/src/views/admin/AdminModelRoutesView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -2352,7 +2357,8 @@
         "browser": [
           "@e2e-gateway-failover-001",
           "@e2e-model-inventory-001",
-          "@e2e-model-supply-lifecycle-001"
+          "@e2e-model-supply-lifecycle-001",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -2498,7 +2504,8 @@
         "get"
       ],
       "views": [
-        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -2512,7 +2519,8 @@
           "@e2e-effective-pricing-001",
           "@e2e-routing-policy-001",
           "@e2e-routing-policy-002",
-          "@e2e-routing-policy-003"
+          "@e2e-routing-policy-003",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -2526,7 +2534,8 @@
         "get"
       ],
       "views": [
-        "frontend/src/views/admin/AdminProviderAccountsView.vue"
+        "frontend/src/views/admin/AdminProviderAccountsView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -2542,7 +2551,8 @@
         "browser": [
           "@e2e-model-account-001",
           "@e2e-model-inventory-001",
-          "@e2e-model-supply-lifecycle-001"
+          "@e2e-model-supply-lifecycle-001",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -2589,7 +2599,8 @@
         "frontend/src/views/admin/AdminEffectivePricingView.vue",
         "frontend/src/views/admin/AdminModelRoutesView.vue",
         "frontend/src/views/admin/AdminProviderAccountsView.vue",
-        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -2614,7 +2625,8 @@
           "@e2e-provider-cooldown-001",
           "@e2e-routing-policy-001",
           "@e2e-routing-policy-002",
-          "@e2e-routing-policy-003"
+          "@e2e-routing-policy-003",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -2770,7 +2782,8 @@
       ],
       "views": [
         "frontend/src/views/admin/AdminProviderAccountsView.vue",
-        "frontend/src/views/admin/AdminProvidersView.vue"
+        "frontend/src/views/admin/AdminProvidersView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -2785,7 +2798,8 @@
         "browser": [
           "@e2e-model-account-001",
           "@e2e-model-inventory-001",
-          "@e2e-model-supply-lifecycle-001"
+          "@e2e-model-supply-lifecycle-001",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -2854,7 +2868,8 @@
       ],
       "views": [
         "frontend/src/views/admin/AdminApiKeysView.vue",
-        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -2867,7 +2882,8 @@
         "browser": [
           "@e2e-routing-policy-001",
           "@e2e-routing-policy-002",
-          "@e2e-routing-policy-003"
+          "@e2e-routing-policy-003",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -2881,6 +2897,7 @@
         "get"
       ],
       "views": [
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue",
         "frontend/src/views/admin/AdminSupplyView.vue"
       ],
       "evidence": {
@@ -2890,7 +2907,8 @@
         "negative": [],
         "boundary": [],
         "browser": [
-          "@e2e-operations-001"
+          "@e2e-operations-001",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""
@@ -3697,7 +3715,8 @@
         "put"
       ],
       "views": [
-        "frontend/src/views/admin/AdminRoutingPolicyView.vue"
+        "frontend/src/views/admin/AdminRoutingPolicyView.vue",
+        "frontend/src/views/admin/AdminSupplyCatalogView.vue"
       ],
       "evidence": {
         "success": [
@@ -3712,7 +3731,8 @@
         "browser": [
           "@e2e-routing-policy-001",
           "@e2e-routing-policy-002",
-          "@e2e-routing-policy-003"
+          "@e2e-routing-policy-003",
+          "@e2e-supply-catalog-001"
         ]
       },
       "notes": ""

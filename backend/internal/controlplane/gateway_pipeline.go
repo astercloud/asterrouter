@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/astercloud/asterrouter/backend/internal/gatewaycore"
@@ -114,10 +115,12 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 		return GatewayExecutionPlan{}, err
 	}
 	consideredCandidates := append([]GatewayProvider(nil), candidates...)
+	candidates, capabilityExclusions := filterCanonicalRequestCandidates(request, candidates)
 	decision, err := s.applyRoutingPolicyCandidateRules(ctx, routingPolicy, string(request.Protocol), candidates)
 	if err != nil {
 		return GatewayExecutionPlan{}, err
 	}
+	decision.Exclusions = append(capabilityExclusions, decision.Exclusions...)
 	candidates = decision.Candidates
 	exclusions, err := s.gatewayCandidateExclusions(ctx, resolved, consideredCandidates, decision.Exclusions)
 	if err != nil {
@@ -143,6 +146,69 @@ func (s *Service) planCanonicalGatewayRequest(ctx context.Context, auth gatewayc
 		plan.RoutingPolicyPreset = routingPolicy.Strategy.Preset
 	}
 	return plan, nil
+}
+
+// filterCanonicalRequestCandidates applies executable protocol and provider
+// capability checks before policy ordering or failover truncation. This keeps
+// an incompatible first candidate from hiding a compatible fallback.
+func filterCanonicalRequestCandidates(request gatewaycore.CanonicalRequest, candidates []GatewayProvider) ([]GatewayProvider, []GatewayCandidateExclusion) {
+	retained := make([]GatewayProvider, 0, len(candidates))
+	exclusions := make([]GatewayCandidateExclusion, 0)
+	tokenizerGroup := ""
+	for _, candidate := range candidates {
+		if reason := canonicalRequestCandidateCapabilityReason(request, candidate); reason != "" {
+			exclusions = append(exclusions, gatewayCandidatePolicyExclusion(candidate, reason))
+			continue
+		}
+		if request.Protocol == gatewaycore.ProtocolAnthropicCountTokens {
+			group := strings.ToLower(strings.TrimSpace(candidate.UpstreamModel))
+			if tokenizerGroup == "" {
+				tokenizerGroup = group
+			} else if group != tokenizerGroup {
+				exclusions = append(exclusions, gatewayCandidatePolicyExclusion(candidate, "protocol_incompatible:tokenizer_compatibility_group"))
+				continue
+			}
+		}
+		retained = append(retained, candidate)
+	}
+	// Keep the original set when no route can execute the request. The
+	// protocol-specific execution path still owns its established error
+	// contract and records a skipped attempt for every incompatible route.
+	if len(retained) == 0 && len(candidates) > 0 {
+		return candidates, nil
+	}
+	return retained, exclusions
+}
+
+func canonicalRequestCandidateCapabilityReason(request gatewaycore.CanonicalRequest, candidate GatewayProvider) string {
+	if request.Protocol == gatewaycore.ProtocolAnthropicCountTokens && (candidate.Type != ProviderTypeAnthropicCompatible || candidate.UpstreamFormat != UpstreamFormatAnthropic) {
+		return "protocol_incompatible:anthropic_count_tokens"
+	}
+	modality := strings.TrimSpace(request.Modality)
+	if modality == GatewayModalityText {
+		// ProviderSupportsGatewayModelRoute uses the gateway model modality name
+		// for text routes, while canonical requests use "text".
+		modality = "chat"
+	}
+	if request.Text != nil {
+		var err error
+		if request.Protocol == gatewaycore.ProtocolAnthropicCountTokens && candidate.UpstreamFormat == UpstreamFormatAnthropic {
+			_, err = gatewaycore.EncodeAnthropicCountTokensRequest(*request.Text, candidate.UpstreamModel)
+		} else {
+			_, err = gatewaycore.EncodeCanonicalTextRequest(*request.Text, gatewaycore.UpstreamFormat(candidate.UpstreamFormat), candidate.UpstreamModel)
+		}
+		if err != nil {
+			var unsupported *gatewaycore.UnsupportedTextFeatureError
+			if errors.As(err, &unsupported) && strings.TrimSpace(unsupported.Feature) != "" {
+				return "protocol_incompatible:" + unsupported.Feature
+			}
+			return "protocol_incompatible"
+		}
+	}
+	if !ProviderSupportsGatewayModelRoute(candidate.Type, modality, candidate.UpstreamFormat) {
+		return "provider_capability_incompatible"
+	}
+	return ""
 }
 
 func (s *Service) routingPolicyForCanonicalAuth(ctx context.Context, auth gatewaycore.CanonicalAuthContext, routeGroup string) (*RoutingPolicy, error) {

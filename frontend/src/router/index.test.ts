@@ -65,7 +65,7 @@ describe('enterprise router guards', () => {
     const paths = router.getRoutes().map((route) => route.path)
     for (const legacy of ['/admin', '/operator', '/customer', '/platform']) expect(paths).not.toContain(legacy)
     for (const current of [
-      '/console/workbench', '/console/applications', '/console/model-services',
+      '/console/workbench', '/console/applications', '/console/model-services', '/console/model-services/catalog',
       '/console/policies/access', '/console/policies/routing', '/console/usage',
       '/console/organization', '/console/system', '/console/system/plugins', '/portal/overview',
       '/portal/applications', '/portal/access', '/portal/usage', '/portal/account'

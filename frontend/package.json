@@ -1,7 +1,7 @@
 {
   "name": "asterrouter-frontend",
   "private": true,
-  "version": "0.25.0",
+  "version": "0.26.0",
   "type": "module",
   "overrides": {
     "nanoid": "^3.3.17"

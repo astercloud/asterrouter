@@ -23,6 +23,7 @@ export default {
     export: 'Export',
     details: 'Details',
     search: 'Search',
+    reset: 'Reset',
     apply: 'Apply',
     from: 'From',
     to: 'To',
@@ -1891,6 +1892,55 @@ export default {
     nextHelp: 'Open the key, usage, and alert pages available to this employee account.'
   },
   marketing: marketingEn,
+  supplyCatalog: {
+    title: 'Model Hub',
+    subtitle: 'Compare enterprise-approved models and supply routes, then write preferred resources and ordered fallback batches directly into a routing policy.',
+    summaryLabel: 'Model Hub summary',
+    summary: { models: 'Published models', routes: 'Supply routes', available: 'Schedulable', unpriced: 'Missing price' },
+    policyScope: {
+      title: 'Policy scope', actsOn: 'Apply to routing policy', select: 'Select a routing policy',
+      summary: 'Route group {group} · v{version} · {bindings} credential bindings · {preferred} preferred resources · {batches} fallback batches',
+      empty: 'Select an active routing policy before changing preferred resources or ordered batches.', manage: 'Manage policies'
+    },
+    filters: {
+      title: 'Model Hub filters', family: 'Filter by model family', modality: 'Filter by modality', allModalities: 'All modalities', all: 'All', view: 'Hub view', byRoute: 'By route', byModel: 'By model',
+      search: 'Search models, providers, or route descriptions', searchAria: 'Search Model Hub', model: 'Filter by model', allModels: 'All models',
+      routeGroup: 'Filter by route group', allRouteGroups: 'All route groups', provider: 'Filter by provider', allProviders: 'All providers', protocol: 'Filter by protocol', allProtocols: 'All protocols', tag: 'Filter by tag', allTags: 'All tags', schedulableOnly: 'Schedulable routes only'
+    },
+    families: { claude: 'Claude', openai: 'OpenAI', gemini: 'Gemini', grok: 'Grok', deepseek: 'DeepSeek', qwen: 'Qwen', glm: 'GLM', other: 'Other' },
+    modalities: { chat: 'Chat', embedding: 'Embedding', image: 'Image', video: 'Video', audio: 'Audio', multimodal: 'Multimodal' },
+    modelViewLabel: 'Model Hub grouped by model', routeViewLabel: 'Model Hub grouped by route',
+    table: {
+      model: 'Model service', supply: 'Supply source', startPrice: 'Lowest input price', routeCount: 'Available routes', bestSuccess: 'Best success rate',
+      inputPrice: 'Actual input / 1M tokens', outputPrice: 'Actual output / 1M tokens', multiplier: 'Quoted multiplier', reference: 'Reference', successRate: '24-hour success rate', latency: 'Check latency',
+      health: 'Health', tags: 'Tags', samples: 'samples'
+    },
+    tags: { healthy: 'Healthy', low_cost: 'Low cost', low_latency: 'Low latency', unpriced: 'Unpriced', unavailable: 'Unavailable' },
+    health: { ok: 'Operational', warning: 'Needs attention', error: 'Error', unchecked: 'Unchecked', unavailable: 'Unavailable' },
+    actions: {
+      addPreferred: 'Prefer route', removePreferred: 'Remove preference', preferred: 'Preferred',
+      addPreferredFor: 'Set {account} as preferred', removePreferredFor: 'Remove preference for {account}',
+      batch: 'Ordered batch', batchFor: 'Set ordered batch for {account}', batchNumber: 'Batch {number}', notInBatch: 'Dynamic candidate',
+      createPrimaryBatch: 'Create primary batch and add', primaryBatch: 'Primary routes', selectPolicyFirst: 'Select a routing policy first.',
+      routeGroupMismatch: 'The selected policy only applies to route group {group}, so this route cannot be configured.'
+    },
+    messages: {
+      preferredAdded: '{account} is now preferred', preferredRemoved: '{account} is no longer preferred',
+      batchUpdated: 'Updated the ordered batch for {account}', batchRemoved: '{account} is now a dynamic candidate'
+    },
+    empty: {
+      title: 'No supply routes', description: 'Publish a model service and configure at least one supply route first.', manageRoutes: 'Manage supply routes',
+      filteredTitle: 'No matching routes', filteredDescription: 'Adjust the filters and try again.'
+    },
+    detail: {
+      identity: 'Route identity', routeID: 'Route ID', routeGroup: 'Route group', providerType: 'Provider type', priorityWeight: 'Priority / weight',
+      price: 'Procurement price and evidence', referenceInput: 'Reference input price', referenceOutput: 'Reference output price', cacheRead: 'Cache read price', cacheWrite: '5-minute cache write price', requestPrice: 'Per-request price', quotedMultiplier: 'Quoted multiplier', rechargeMultiplier: 'Recharge multiplier', priceSource: 'Price source', priceConfidence: 'Confidence',
+      priceNote: 'This view shows the currently effective enterprise procurement price. Effective Pricing remains the source of truth for cost governance and price evidence.',
+      evidence: 'Runtime evidence', requests24h: '24-hour requests', fallbackRate: 'Fallback rate', lastChecked: 'Last checked',
+      policyUse: 'Use in routing policy', policySummary: 'Actions update “{name}” and remain constrained to route group {group}.',
+      manageAccount: 'View provider account', reviewPricing: 'Review cost evidence', openSimulator: 'Open policy simulator'
+    }
+  },
   routingPolicy: {
     title: 'Routing Policies', subtitle: 'Codify resource scope, cost boundaries, quality preferences, and failover as an auditable enterprise routing contract.',
     newPolicy: 'New policy', policyLibrary: 'Policy library', policyList: 'Routing policy list', name: 'Policy name', description: 'Description', routeGroup: 'Route group', routeGroupHelp: 'Must exactly match the model route_group.', status: 'Status', preset: 'Preference', guardrails: 'Guardrails', updatedAt: 'Updated', active: 'Active', enabled: 'Enabled', disabled: 'Disabled', unnamed: 'Unnamed policy',
@@ -1905,11 +1955,11 @@ export default {
     flowTitle: 'How one request is decided', flowHelp: 'Candidates move through fixed stages so every routing decision is consistent and explainable.',
     flow: { scope: 'Candidate scope', hardRules: 'Hard filters', preference: 'Preference scoring', fallback: 'Ordered fallback', failover: 'Failover' },
     hardRulesTitle: 'Hard constraints and cost guardrails', hardRulesHelp: 'Resources that violate a constraint are removed before scoring. Preferences cannot override these limits.',
-    nativeProtocolOnly: 'Native protocol only', nativeProtocolShort: 'Native protocol', nativeProtocolOnlyHelp: 'Require direct protocol compatibility to reduce translation uncertainty.', protocolRules: 'Protocol admission rules', protocolRulesHelp: 'When the allowlist is non-empty, protocols not explicitly allowed are rejected. Deny rules take precedence.', protocolNeutral: 'Use default', protocolAllow: 'Allow', protocolDeny: 'Deny', protocols: { openai_chat_completions: 'OpenAI Chat Completions', openai_responses: 'OpenAI Responses', openai_embeddings: 'OpenAI Embeddings', anthropic_messages: 'Anthropic Messages', anthropic_count_tokens: 'Anthropic Token Count', gemini_generate_content: 'Gemini Generate Content', openai_images_generations: 'OpenAI Image Generation', openai_media_generations: 'OpenAI Media Generation', openai_audio_transcriptions: 'OpenAI Audio Transcription', openai_audio_translations: 'OpenAI Audio Translation', openai_audio_speech: 'OpenAI Speech Generation', realtime: 'Realtime Session', aster_jobs: 'Aster Asynchronous Jobs' }, inputPriceCap: 'Maximum input price', outputPriceCap: 'Maximum output price', usdPerMillion: 'USD per million tokens; 0 means unlimited', relativePriceCap: 'Maximum cheapest-price multiple', relativePriceCapHelp: 'Exclude resources priced above this multiple of the cheapest eligible option; 0 means unlimited.', missingPriceAction: 'When price facts are missing', missingPriceActionHelp: 'Choose block for strict cost governance. Allow keeps unknown-price candidates with explicit evidence.', missingPriceActions: { allow: 'Allow and mark unknown', block: 'Block as a hard constraint' }, modelPriceLimits: 'Per-model price limits', modelPriceLimitsHelp: 'When both model and global limits exist, the stricter value wins.', addModelPriceLimit: 'Add model limit', removeModelPriceLimit: 'Remove model limit', noModelPriceLimits: 'No per-model price limits configured.', selectModel: 'Select a model', priceFactsMissing: 'No active USD procurement prices are available. Confirm that missing-price handling matches enterprise cost requirements.',
-    lowPricePoolTitle: 'Low-price candidate pool', lowPricePoolHelp: 'Build a cost-controlled candidate set before applying preference scoring.', poolMode: 'Pool mode', poolModes: { auto: 'Automatic balance', strict: 'Cheapest only', percentile: 'Custom price percentile', none: 'No price filtering' }, poolPercent: 'Price percentile retained (%)', minCandidates: 'Minimum candidates',
+    nativeProtocolOnly: 'Native protocol only', nativeProtocolShort: 'Native protocol', nativeProtocolOnlyHelp: 'Require direct protocol compatibility to reduce translation uncertainty.', protocolRules: 'Protocol admission rules', protocolRulesHelp: 'When the allowlist is non-empty, protocols not explicitly allowed are rejected. Deny rules take precedence.', protocolNeutral: 'Use default', protocolAllow: 'Allow', protocolDeny: 'Deny', protocols: { openai_chat_completions: 'OpenAI Chat Completions', openai_responses: 'OpenAI Responses', openai_embeddings: 'OpenAI Embeddings', anthropic_messages: 'Anthropic Messages', anthropic_count_tokens: 'Anthropic Token Count', gemini_generate_content: 'Gemini Generate Content', native_media: 'Native Media', openai_images_generations: 'OpenAI Image Generation', openai_media_generations: 'OpenAI Media Generation', openai_audio_transcriptions: 'OpenAI Audio Transcription', openai_audio_translations: 'OpenAI Audio Translation', openai_audio_speech: 'OpenAI Speech Generation', realtime: 'Realtime Session', aster_jobs: 'Aster Asynchronous Jobs' }, inputPriceCap: 'Maximum input price', outputPriceCap: 'Maximum output price', usdPerMillion: 'USD per million tokens; 0 means unlimited', relativePriceCap: 'Maximum cheapest-price multiple', relativePriceCapHelp: 'Exclude resources priced above this multiple of the cheapest eligible option; 0 means unlimited.', missingPriceAction: 'When price facts are missing', missingPriceActionHelp: 'Choose block for strict cost governance. Allow keeps unknown-price candidates with explicit evidence.', missingPriceActions: { allow: 'Allow and mark unknown', block: 'Block as a hard constraint' }, modelPriceLimits: 'Per-model price limits', modelPriceLimitsHelp: 'When both model and global limits exist, the stricter value wins.', addModelPriceLimit: 'Add model limit', removeModelPriceLimit: 'Remove model limit', noModelPriceLimits: 'No per-model price limits configured.', selectModel: 'Select a model', priceFactsMissing: 'No active USD procurement prices are available. Confirm that missing-price handling matches enterprise cost requirements.',
+    lowPricePoolTitle: 'Low-price candidate pool', lowPricePoolHelp: 'Build a cost-controlled candidate set before preference scoring. Automatic keeps the cheapest 70% with at least 2; strict keeps the cheapest 30% with at least 2; custom uses N% and M.', poolMode: 'Pool mode', poolModes: { auto: 'Automatic: top 70%, min 2', strict: 'Strict: top 30%, min 2', percentile: 'Custom price percentile', none: 'No price filtering' }, poolPercent: 'Price percentile retained (%)', minCandidates: 'Minimum candidates',
     modelScopeTitle: 'Model scope', modelScopeHelp: 'An empty allowlist permits all models. The denylist always wins.', allowedModels: 'Allowed models', deniedModels: 'Denied models', onePerLine: 'One model ID per line',
     batchesTitle: 'Ordered resource batches', batchesHelp: 'Resources score within a batch. The next batch is only tried after every resource in the current batch fails.', addBatch: 'Add batch', batchName: 'Batch {index}', batchLabel: 'Batch name', moveUp: 'Move batch up', moveDown: 'Move batch down', removeBatch: 'Remove batch', declaredResourceOrder: 'Declared resource order', moveResourceUp: 'Move resource up', moveResourceDown: 'Move resource down', removeResource: 'Remove resource', noAccounts: 'No route resources available', emptyBatches: 'No fixed resource batches', emptyBatchesHelp: 'Without batches, all eligible resources in the route group use dynamic fallback.', preferredResources: 'Preferred resources in batch', preferredResourcesHelp: 'Raise priority only within a resource batch and never skip an earlier batch.',
-    resilienceTitle: 'Stickiness and failover', resilienceHelp: 'Control session consistency and when a failed upstream may be replaced.', failoverBeforeFirstByte: 'Enable pre-first-byte failover', failoverBeforeFirstByteHelp: 'Try the next candidate when an upstream fails before output. Switching always stops once output begins.', failoverShort: 'Pre-byte failover', stickyRouting: 'Sticky routing', stickyRoutingHelp: 'Keep a session on the same healthy upstream whenever possible.', stickyTTL: 'Sticky TTL', seconds: 'seconds', smartOptimization: 'Effective-cost optimization', smartOptimizationHelp: 'Allow quality-gated effective-cost decisions to adjust ordering inside the current resource batch.', strictOrder: 'Strict declared order', strictOrderHelp: 'After hard constraints, preserve declared order within a batch without cost, speed, reliability, or weight reordering.',
+    resilienceTitle: 'Stickiness and failover', resilienceHelp: 'Control session consistency and when a failed upstream may be replaced.', failoverBeforeFirstByte: 'Enable pre-first-byte failover', failoverBeforeFirstByteHelp: 'Try the next candidate when an upstream fails before output. Switching always stops once output begins.', failoverShort: 'Pre-byte failover', stickyRouting: 'Sticky routing', stickyRoutingHelp: 'Keep a session on the same healthy upstream whenever possible.', stickyTTL: 'Sticky TTL', seconds: 'seconds', smartOptimization: 'Effective-cost optimization', smartOptimizationHelp: 'Let quality-gated effective-cost decisions and resource weights adjust order inside the current batch; off uses stable ordering.', strictOrder: 'Strict declared order', strictOrderHelp: 'After hard constraints, preserve declared order within a batch without cost, speed, reliability, or weight reordering.',
     simulation: { title: 'Decision simulation', help: 'Run the real candidate algorithm against the saved policy without consuming provider capacity.', run: 'Run simulation', saveFirst: 'Save the policy before simulating this policy.', dynamicBatch: 'Dynamic candidates', batch: 'Batch {index} · {name}', price: 'Input / output price', quality: 'Success / latency', capacity: 'Capacity / circuit', priceKnown: 'Price facts available', priceUnknown: 'Price facts missing' },
     preview: { title: 'Decision preview', live: 'Live', currentPolicy: 'Current policy', preset: 'Preference', models: 'Model scope', hardRules: 'Hard constraints', batches: 'Fallback batches', resources: 'Pinned resources', allModels: 'All models', modelCount: '{count} allowed models', noHardRules: 'None', ruleCount: '{count} rules', dynamicFallback: 'Dynamic candidates', batchCount: '{count} batches', safetyTitle: 'Streaming safety boundary', safetyHelp: 'Upstreams cannot change after the first byte, preserving a single response source.' },
     validationRequired: 'Enter a policy name and route group.', created: 'Routing policy created', updated: 'Routing policy updated', savePolicy: 'Save policy', unsavedPolicy: 'Unsaved new policy', saveHint: 'After saving, the new version applies to subsequent requests matching this route group.', empty: 'No routing policies. Create the enterprise default policy.'

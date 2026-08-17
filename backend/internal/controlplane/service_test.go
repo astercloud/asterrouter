@@ -749,7 +749,7 @@ func TestRoutingPolicyLifecycleNormalizesStrategyAndVersionsUpdates(t *testing.T
 	if created.ID == "" || created.Name != "Enterprise production" || created.Version != 1 || !created.IsDefault {
 		t.Fatalf("unexpected created policy: %+v", created)
 	}
-	if created.Strategy.LowPricePoolMode != RoutingPolicyLowPriceAuto || created.Strategy.LowPricePoolPercent != 30 || created.Strategy.LowPricePoolMinCandidates != 2 {
+	if created.Strategy.LowPricePoolMode != RoutingPolicyLowPriceAuto || created.Strategy.LowPricePoolPercent != 70 || created.Strategy.LowPricePoolMinCandidates != 2 {
 		t.Fatalf("strategy defaults not applied: %+v", created.Strategy)
 	}
 	if len(created.Strategy.AllowedModels) != 1 || len(created.Strategy.ResourceBatches[0].ProviderAccountIDs) != 2 {
@@ -781,8 +781,26 @@ func TestRoutingPolicyLifecycleNormalizesStrategyAndVersionsUpdates(t *testing.T
 	if updated.Version != 2 || updated.Strategy.Preset != RoutingPolicyPresetStability || !updated.CreatedAt.Equal(created.CreatedAt) {
 		t.Fatalf("unexpected updated policy: before=%+v after=%+v", created, updated)
 	}
+	strict, err := svc.UpdateRoutingPolicy(context.Background(), "tester", created.ID, RoutingPolicyRequest{
+		Name:       created.Name,
+		RouteGroup: created.RouteGroup,
+		Status:     created.Status,
+		Strategy: RoutingPolicyStrategy{
+			Preset:                    RoutingPolicyPresetStability,
+			StickyTTLSeconds:          1200,
+			LowPricePoolMode:          RoutingPolicyLowPriceStrict,
+			LowPricePoolPercent:       40,
+			LowPricePoolMinCandidates: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateRoutingPolicy(strict): %v", err)
+	}
+	if strict.Strategy.LowPricePoolPercent != 30 || strict.Strategy.LowPricePoolMinCandidates != 2 {
+		t.Fatalf("strict mode retained stale custom pool settings: %+v", strict.Strategy)
+	}
 	policies, err := svc.ListRoutingPolicies(context.Background())
-	if err != nil || len(policies) != 1 || policies[0].Version != 2 {
+	if err != nil || len(policies) != 1 || policies[0].Version != 3 {
 		t.Fatalf("ListRoutingPolicies()=%+v err=%v", policies, err)
 	}
 	secondary, err := svc.CreateRoutingPolicy(context.Background(), "tester", RoutingPolicyRequest{

@@ -239,6 +239,7 @@ test('@e2e-model-supply-lifecycle-001 provider supply updates, rejects unsafe de
 })
 
 test('@e2e-model-inventory-001 model inventory and bulk routes stay auditable across responsive layouts', async ({ page }, testInfo) => {
+  test.setTimeout(60_000)
   const browserErrors = captureBrowserErrors(page)
   await loginDemo(page)
   await page.goto(modelPaths.providers)

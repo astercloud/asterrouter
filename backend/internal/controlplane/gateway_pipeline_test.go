@@ -59,6 +59,137 @@ func TestPlanCanonicalGatewayRequestRejectsCapabilityMismatch(t *testing.T) {
 	}
 }
 
+func TestPlanCanonicalGatewayRequestFiltersIncompatibleFirstCandidateBeforeFailoverTruncation(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(NewMemoryRepository(), "/v1", "planner-capability-secret")
+	anthropicProvider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
+		Name: "Anthropic", Type: ProviderTypeAnthropicCompatible, BaseURL: "https://anthropic.example/v1", Status: ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	openAIProvider, err := svc.CreateProvider(ctx, "tester", ProviderRequest{
+		Name: "OpenAI", Type: ProviderTypeOpenAICompatible, BaseURL: "https://openai.example/v1", Status: ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createAccount := func(provider ProviderConnection, name, platform, secret string) ProviderAccount {
+		account, createErr := svc.CreateProviderAccount(ctx, "tester", ProviderAccountRequest{
+			ProviderID: provider.ID, Name: name, Platform: platform, AuthType: ProviderAuthAPIKey,
+			Status: AccountStatusActive, Priority: 50, Models: []string{"upstream-model"}, Secret: secret,
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return account
+	}
+	anthropicAccount := createAccount(anthropicProvider, "Anthropic account", ProviderTypeAnthropicCompatible, "anthropic-secret")
+	openAIAccount := createAccount(openAIProvider, "OpenAI account", ProviderTypeOpenAICompatible, "openai-secret")
+	model, err := svc.CreateGatewayModel(ctx, "tester", GatewayModelRequest{ModelID: "capability-model", Name: "Capability", Modality: "chat", Status: GatewayModelStatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateModelRoute(ctx, "tester", ModelRouteRequest{
+		GatewayModelID: model.ID, RouteGroup: DefaultModelRouteGroup, ProviderAccountID: anthropicAccount.ID,
+		UpstreamModel: "upstream-model", UpstreamFormat: UpstreamFormatAnthropic, Priority: 1, Status: ModelRouteStatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	openAIRoute, err := svc.CreateModelRoute(ctx, "tester", ModelRouteRequest{
+		GatewayModelID: model.ID, RouteGroup: DefaultModelRouteGroup, ProviderAccountID: openAIAccount.ID,
+		UpstreamModel: "upstream-model", UpstreamFormat: UpstreamFormatOpenAIChat, Priority: 2, Status: ModelRouteStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failoverDisabled := false
+	isDefault := true
+	if _, err := svc.CreateRoutingPolicy(ctx, "tester", RoutingPolicyRequest{
+		Name: "No pre-byte failover", RouteGroup: DefaultModelRouteGroup, Status: RoutingPolicyStatusActive,
+		IsDefault: &isDefault, Strategy: RoutingPolicyStrategy{
+			Preset: RoutingPolicyPresetBalanced, FailoverBeforeFirstByte: failoverDisabled, LowPricePoolMode: RoutingPolicyLowPriceNone,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	maxOutputTokens := 32
+	request := gatewaycore.CanonicalRequest{
+		Protocol: gatewaycore.ProtocolOpenAIChat, Operation: GatewayOperationChatCompletion, Modality: GatewayModalityText,
+		Lane: gatewaycore.LaneDirect, Model: model.ModelID,
+		Text: &gatewaycore.CanonicalTextRequest{
+			Model: model.ModelID, Messages: []gatewaycore.TextMessage{{Role: gatewaycore.TextRoleUser, Content: []gatewaycore.TextContent{{Kind: gatewaycore.TextContentText, Text: "hello"}}}},
+			Generation:     gatewaycore.TextGenerationConfig{MaxOutputTokens: &maxOutputTokens},
+			ResponseFormat: gatewaycore.TextResponseFormat{Type: "json_schema", Name: "answer", Schema: []byte(`{"type":"object"}`)},
+		},
+	}
+	plan, err := svc.PlanCanonicalGatewayRequest(ctx, gatewaycore.CanonicalAuthContext{CredentialID: "capability-key"}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Candidates) != 1 || plan.Candidates[0].RouteID != openAIRoute.ID {
+		t.Fatalf("plan candidates=%+v exclusions=%+v", plan.Candidates, plan.Exclusions)
+	}
+	if len(plan.Exclusions) != 1 || plan.Exclusions[0].Reason != "protocol_incompatible:response_format" {
+		t.Fatalf("plan exclusions=%+v", plan.Exclusions)
+	}
+	simulation, err := svc.SimulateGatewayRouting(ctx, GatewaySimulationRequest{
+		Model: model.ModelID, Protocol: string(gatewaycore.ProtocolOpenAIChat), RequiredFeatures: []string{"response_format"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSimulationCandidateReason(t, simulation, anthropicAccount.ID, "protocol_incompatible:response_format")
+	assertSimulationCandidateReason(t, simulation, openAIAccount.ID, "")
+	countTokensRequest := request
+	countTokensRequest.Protocol = gatewaycore.ProtocolAnthropicCountTokens
+	countTokensRequest.Operation = GatewayOperationCountTokens
+	countTokensRequest.Text = &gatewaycore.CanonicalTextRequest{
+		Model:    model.ModelID,
+		Messages: []gatewaycore.TextMessage{{Role: gatewaycore.TextRoleUser, Content: []gatewaycore.TextContent{{Kind: gatewaycore.TextContentText, Text: "hello"}}}},
+	}
+	countTokensPlan, err := svc.PlanCanonicalGatewayRequest(ctx, gatewaycore.CanonicalAuthContext{CredentialID: "capability-key"}, countTokensRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(countTokensPlan.Candidates) != 1 || countTokensPlan.Candidates[0].AccountID != anthropicAccount.ID || len(countTokensPlan.Exclusions) != 1 || countTokensPlan.Exclusions[0].Reason != "protocol_incompatible:anthropic_count_tokens" {
+		t.Fatalf("count tokens plan=%+v", countTokensPlan)
+	}
+}
+
+func TestFilterCanonicalRequestCandidatesExplainsTokenizerAndProviderCapabilityExclusions(t *testing.T) {
+	countTokens := gatewaycore.CanonicalRequest{
+		Protocol: gatewaycore.ProtocolAnthropicCountTokens,
+		Modality: GatewayModalityText,
+		Text: &gatewaycore.CanonicalTextRequest{
+			Messages: []gatewaycore.TextMessage{{Role: gatewaycore.TextRoleUser, Content: []gatewaycore.TextContent{{Kind: gatewaycore.TextContentText, Text: "hello"}}}},
+		},
+	}
+	candidates := []GatewayProvider{
+		{AccountID: "compatible", Type: ProviderTypeAnthropicCompatible, UpstreamFormat: UpstreamFormatAnthropic, UpstreamModel: "claude-family-a"},
+		{AccountID: "different-tokenizer", Type: ProviderTypeAnthropicCompatible, UpstreamFormat: UpstreamFormatAnthropic, UpstreamModel: "claude-family-b"},
+		{AccountID: "wrong-protocol", Type: ProviderTypeOpenAICompatible, UpstreamFormat: UpstreamFormatOpenAIChat, UpstreamModel: "gpt-family"},
+	}
+	retained, exclusions := filterCanonicalRequestCandidates(countTokens, candidates)
+	if len(retained) != 1 || retained[0].AccountID != "compatible" {
+		t.Fatalf("retained=%+v exclusions=%+v", retained, exclusions)
+	}
+	if len(exclusions) != 2 || exclusions[0].Reason != "protocol_incompatible:tokenizer_compatibility_group" || exclusions[1].Reason != "protocol_incompatible:anthropic_count_tokens" {
+		t.Fatalf("count-token exclusions=%+v", exclusions)
+	}
+
+	media := gatewaycore.CanonicalRequest{Protocol: gatewaycore.ProtocolOpenAIImages, Modality: GatewayModalityImage}
+	retained, exclusions = filterCanonicalRequestCandidates(media, []GatewayProvider{{
+		AccountID: "provider-mismatch", Type: ProviderTypeAnthropicCompatible, UpstreamFormat: UpstreamFormatOpenAIChat,
+	}})
+	if len(retained) != 1 || len(exclusions) != 0 {
+		t.Fatalf("all-incompatible fallback contract changed: retained=%+v exclusions=%+v", retained, exclusions)
+	}
+	if reason := canonicalRequestCandidateCapabilityReason(media, retained[0]); reason != "provider_capability_incompatible" {
+		t.Fatalf("provider capability reason=%q", reason)
+	}
+}
+
 func TestPlanCanonicalGatewayRequestSupportsAsterJobsByModality(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewMemoryRepository(), "/v1")

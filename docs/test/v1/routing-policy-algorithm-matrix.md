@@ -1,7 +1,7 @@
 # 路由策略算法验收矩阵
 
 > 状态：`CURRENT`
-> 适用版本：`v0.25.0`
+> 适用版本：`v0.26.0`
 > 事实源：[`README.md`](./README.md)、[`scenario-registry.json`](./scenario-registry.json)
 > 产品边界：企业 AI Gateway 的静态策略、运行时调度、路由试算与执行证据
 
@@ -26,6 +26,7 @@
 | 策略标识与版本 | 创建为 v1；更新后递增；Planner、Simulator 和 Trace 暴露实际策略 ID、版本与偏好 | `backend/internal/controlplane/service_test.go#TestRoutingPolicyLifecycleNormalizesStrategyAndVersionsUpdates`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicySimulatorMatchesPlannerHardConstraints`；`backend/internal/server/gateway_routes_test.go#TestRoutingPolicyUpdateInvalidatesStickyGatewaySelection` | L1/L2 | 通过 |
 | 模型准入 | allowlist 之外或 denylist 命中的基础/限定模型均阻断，Planner 与 Simulator 原因一致 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyModelScopeAndPriceGuardrails`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicySimulatorMatchesPlannerHardConstraints` | L1/L2 | 通过 |
 | 协议准入 | 13 种受支持协议可配置；未知协议拒绝；deny 优先于 allow；Planner 与 Simulator 原因一致 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyProtocolMatrixIsCompleteAndRejectsUnknownValues`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyProtocolAdmissionAndNativeProtocolAreEnforcedByPlanner`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicySimulatorMatchesPlannerHardConstraints` | L1/L2 | 通过 |
+| 候选协议与能力 | Planner 在 failover 裁剪前过滤文本特性、Embedding、媒体和 Provider 能力不兼容候选；首候选不兼容时保留后续兼容线路，并在 exclusions/Trace 中解释 | `backend/internal/controlplane/gateway_pipeline_test.go#TestPlanCanonicalGatewayRequestFiltersIncompatibleFirstCandidateBeforeFailoverTruncation`；`backend/internal/server/gateway_protocols_test.go#TestGatewaySkipsProtocolIncompatibleCandidateBeforeUpstreamCall` | L2 | 通过 |
 | 原生协议 | `native_protocol_only` 仅保留无需跨协议转换的上游格式 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyProtocolAdmissionAndNativeProtocolAreEnforcedByPlanner` | L2 | 通过 |
 | 四种偏好 | 成本优先、速度优先、稳定优先、综合均衡在信号冲突时均确定性选中对应线路 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyPresetsResolveConflictingSignalsDeterministically` | L2 | 通过 |
 | 输入价格绝对上限 | 超限候选淘汰并记录 `routing_policy_input_price_exceeded` | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyPriceExclusionsRemainExplainable` | L1 | 通过 |
@@ -33,9 +34,10 @@
 | 按模型价格上限 | 基础模型和带路由组限定的模型均命中同一模型上限；与全局上限同时存在时取更严格的正值 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyModelPriceLimitsAndMissingPriceAction` | L1 | 通过 |
 | 相对最低价 | 每个资源批次独立计算最低价；超过倍数的同批次候选淘汰并记录 `routing_policy_relative_price_exceeded`；更便宜或零价的备用批次不得提前淘汰主批次 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyPriceExclusionsRemainExplainable`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyOrdersBatchesAndControlsFailover` | L1/L2 | 通过 |
 | 价格事实缺失 | `allow` 始终保留未知价格候选并标注事实缺失；`block` 作为独立硬约束淘汰未知价格候选，不依赖其他价格规则 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyModelPriceLimitsAndMissingPriceAction`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyPriceExclusionsRemainExplainable` | L1 | 通过 |
-| 低价池 | 自动模式使用归一化比例与最少候选；严格模式只保留最低价；成本优先在池内按价格排序 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyAutomaticLowPricePoolUsesNormalizedDefaults` | L1 | 通过 |
+| 低价池 | 自动模式保留价格前 70% 且至少 2 条；严格模式保留价格前 30% 且至少 2 条；自定义模式按 N% 和 M 条；成本优先在池内按价格排序 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyAutomaticLowPricePoolUsesNormalizedDefaults`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyStrictLowPricePoolUsesTopThirtyPercentWithFloor` | L1 | 通过 |
 | 有序资源批次 | 只使用策略列出的账号；trim、去重、内存保存和 PostgreSQL JSON 往返均保持管理员声明顺序；粘性和动态有效成本不得跨越当前批次 | `backend/internal/controlplane/service_test.go#TestRoutingPolicyLifecycleNormalizesStrategyAndVersionsUpdates`；`backend/internal/controlplane/postgres_repository_test.go#TestPostgresRepositoryPersistsCoreRecordsAcrossRestart`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyOrdersBatchesAndControlsFailover` | L1/L3 | 通过 |
 | 严格声明顺序 | 硬约束仍可淘汰候选；保留下来的同批次资源不再被成本、速度、稳定、权重或 preferred 重排 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyStrictOrderKeepsDeclaredOrder`；`backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyPreferredResourcesStayWithinTheirDeclaredBatch` | L1/L2 | 通过 |
+| 动态候选优化开关 | 关闭时不再使用随机权重平局打散，重复规划保持稳定顺序；开启时才允许权重 tie-break 和有效成本动态调整 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyDisablesRandomWeightTieBreakWhenSmartOptimizationIsOff` | L2 | 通过 |
 | 同批次优先资源 | preferred 在价格硬约束和低价池之后提升剩余候选，成本偏好下也有效，但不得越过前序批次 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyPreferredResourcesStayWithinTheirDeclaredBatch` | L2 | 通过 |
 | 24 小时观测指标 | 速度偏好使用平均延迟，稳定/综合偏好使用成功率；Simulator 返回样本量、批次位置和选择依据 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestRoutingPolicyUsesObservedMetricsAndExplainsSimulation` | L2 | 通过 |
 | Workspace Key 策略绑定 | 同一路由组允许多条启用策略且仅一条默认；未绑定 Key 使用默认，显式绑定只使用指定策略、不与默认合并；跨组、停用和不存在的策略均拒绝，轮换继承绑定 | `backend/internal/controlplane/routing_policy_runtime_test.go#TestAPIKeyRoutingPolicyBindingUsesExactlyOneCompatiblePolicy`；`backend/internal/server/admin_routes_test.go#TestAPIKeyRoutingPolicyBindingEndpoints`；`frontend/e2e/routing-policy.spec.ts#@e2e-routing-policy-001` | L1/L2/Gate A | 通过 |
@@ -65,6 +67,8 @@
 - `allow` 适合首次部署或价格接入尚未完成的场景，未知价格候选保留，并在 Simulator 中标记 `price_fact_present=false`；
 - `block` 适合严格成本治理，任何缺少当前协议有效 USD 采购价的候选都会以 `routing_policy_price_fact_missing` 淘汰，即使未配置价格上限或低价池；
 - 绝对价格上限、相对最低价和低价池不会为了满足最少候选数而重新放回已被硬约束淘汰的候选。
+
+低价池的默认语义与企业成本护栏保持一致：自动模式为价格前 70% 且至少 2 条，严格模式为价格前 30% 且至少 2 条，自定义模式由管理员填写 N% 和 M；保底只扩充仍通过绝对上限、相对最低价和价格事实规则的候选。
 
 ### 3.2 试算器不声明最终运行时顺序
 

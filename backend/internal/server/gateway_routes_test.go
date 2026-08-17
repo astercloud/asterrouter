@@ -656,6 +656,104 @@ func TestRoutingPolicyFailoverToggleControlsRealGatewayAttempts(t *testing.T) {
 	}
 }
 
+func TestGatewayFiltersIncompatibleFirstCandidateBeforeRealForwarding(t *testing.T) {
+	var incompatibleCalls, compatibleCalls atomic.Int32
+	incompatible := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		incompatibleCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer incompatible.Close()
+	compatible := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		compatibleCalls.Add(1)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		if !bytes.Contains(body, []byte(`"response_format"`)) {
+			t.Errorf("compatible upstream request omitted response_format: %s", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"compatible-fallback","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`))
+	}))
+	defer compatible.Close()
+
+	handler, control := newTestRuntime(t, RuntimeConfig{})
+	anthropicProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name: "Incompatible Anthropic", Type: controlplane.ProviderTypeAnthropicCompatible, BaseURL: incompatible.URL + "/v1", Status: controlplane.ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	openAIProvider, err := control.CreateProvider(context.Background(), "tester", controlplane.ProviderRequest{
+		Name: "Compatible OpenAI", Type: controlplane.ProviderTypeOpenAICompatible, BaseURL: compatible.URL + "/v1", Status: controlplane.ProviderStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createAccount := func(provider controlplane.ProviderConnection, platform, name string, priority int) controlplane.ProviderAccount {
+		schedulable := true
+		account, createErr := control.CreateProviderAccount(context.Background(), "tester", controlplane.ProviderAccountRequest{
+			ProviderID: provider.ID, Name: name, Platform: platform, AuthType: controlplane.ProviderAuthAPIKey,
+			Status: controlplane.AccountStatusActive, Schedulable: &schedulable, Priority: priority,
+			Concurrency: 2, RateMultiplier: 1, Models: []string{"capability-upstream"}, Secret: name + "-secret",
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return account
+	}
+	anthropicAccount := createAccount(anthropicProvider, controlplane.ProviderTypeAnthropicCompatible, "Anthropic first", 10)
+	openAIAccount := createAccount(openAIProvider, controlplane.ProviderTypeOpenAICompatible, "OpenAI fallback", 20)
+	model, err := control.CreateGatewayModel(context.Background(), "tester", controlplane.GatewayModelRequest{
+		ModelID: "capability-fallback-model", Name: "Capability fallback", Modality: "chat",
+		DefaultRouteGroup: controlplane.DefaultModelRouteGroup, Status: controlplane.GatewayModelStatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []controlplane.ModelRouteRequest{
+		{GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: anthropicAccount.ID, UpstreamModel: "capability-upstream", UpstreamFormat: controlplane.UpstreamFormatAnthropic, Priority: 10, Weight: 100, Status: controlplane.ModelRouteStatusActive},
+		{GatewayModelID: model.ID, RouteGroup: controlplane.DefaultModelRouteGroup, ProviderAccountID: openAIAccount.ID, UpstreamModel: "capability-upstream", UpstreamFormat: controlplane.UpstreamFormatOpenAIChat, Priority: 20, Weight: 100, Status: controlplane.ModelRouteStatusActive},
+	} {
+		if _, err := control.CreateModelRoute(context.Background(), "tester", route); err != nil {
+			t.Fatal(err)
+		}
+	}
+	isDefault := true
+	policy, err := control.CreateRoutingPolicy(context.Background(), "tester", controlplane.RoutingPolicyRequest{
+		Name: "Capability before failover", RouteGroup: controlplane.DefaultModelRouteGroup, Status: controlplane.RoutingPolicyStatusActive,
+		IsDefault: &isDefault, Strategy: controlplane.RoutingPolicyStrategy{
+			Preset: controlplane.RoutingPolicyPresetBalanced, StickyTTLSeconds: 900,
+			FailoverBeforeFirstByte: false, LowPricePoolMode: controlplane.RoutingPolicyLowPriceNone,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := control.CreateAPIKey(context.Background(), "tester", controlplane.APIKeyCreateRequest{
+		Name: "Capability fallback key", ModelAllowlist: []string{model.ModelID}, RoutingPolicyID: policy.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"capability-fallback-model","messages":[{"role":"user","content":"hello"}],"response_format":{"type":"json_object"}}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+key.Key)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || incompatibleCalls.Load() != 0 || compatibleCalls.Load() != 1 {
+		t.Fatalf("status=%d incompatible=%d compatible=%d body=%s", response.Code, incompatibleCalls.Load(), compatibleCalls.Load(), response.Body.String())
+	}
+	traces, err := control.ListGatewayTraces(context.Background(), 10)
+	if err != nil || len(traces) != 1 {
+		t.Fatalf("traces=%+v err=%v", traces, err)
+	}
+	attempts := traces[0].RouteAttempts
+	if !strings.Contains(attempts, `"account_id":"`+anthropicAccount.ID+`"`) || !strings.Contains(attempts, `"outcome":"excluded"`) || !strings.Contains(attempts, "protocol_incompatible:") || !strings.Contains(attempts, `"account_id":"`+openAIAccount.ID+`"`) || !strings.Contains(attempts, `"outcome":"selected"`) {
+		t.Fatalf("route attempts=%s", attempts)
+	}
+}
+
 func TestRoutingPolicyUpdateInvalidatesStickyGatewaySelection(t *testing.T) {
 	var priorityCalls, cheapCalls atomic.Int32
 	priorityUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
