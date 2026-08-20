@@ -1902,28 +1902,39 @@ onMounted(load)
 
 <style scoped>
 .plugin-center-page {
-  padding-bottom: 48px;
+  align-content: start;
+  grid-auto-rows: max-content;
+  gap: 12px;
+  padding-bottom: 24px;
 }
 
 .plugin-page-actions,
 .plugin-quick-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+
+.plugin-center-page > .page-header {
+  margin-bottom: 0;
 }
 
 .plugin-center-tabs {
   display: flex;
-  gap: 4px;
-  margin-top: 4px;
+  min-height: 40px;
+  gap: 0;
+  margin-top: 0;
   overflow-x: auto;
+  padding: 0 4px;
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   scrollbar-width: thin;
 }
 
 .plugin-center-tab {
   min-width: max-content;
-  min-height: 44px;
+  min-height: 40px;
   padding: 0 12px;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -1932,10 +1943,7 @@ onMounted(load)
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
-  transition:
-    border-color 150ms ease,
-    color 150ms ease,
-    background-color 150ms ease;
+  transition: color 150ms ease, background-color 150ms ease;
 }
 
 .plugin-center-tab:hover {
@@ -1956,11 +1964,15 @@ onMounted(load)
 .plugin-dashboard,
 .plugin-tab-content,
 .plugin-distribution-grid {
-  margin-top: 16px;
+  margin-top: 0;
+}
+
+.plugin-metric-grid {
+  gap: 8px;
 }
 
 .plugin-metric-grid .metric-card {
-  min-height: 96px;
+  min-height: 88px;
   padding: 16px;
 }
 
@@ -1971,8 +1983,8 @@ onMounted(load)
 .plugin-dashboard-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(280px, 0.75fr);
-  gap: 16px;
-  margin-top: 16px;
+  gap: 12px;
+  margin-top: 12px;
   align-items: start;
 }
 
@@ -1980,12 +1992,12 @@ onMounted(load)
 .plugin-dashboard-side {
   display: grid;
   min-width: 0;
-  gap: 16px;
+  gap: 12px;
 }
 
 .workbench-panel .panel-header {
-  min-height: 62px;
-  padding: 12px 18px;
+  min-height: 52px;
+  padding: 10px 16px;
 }
 
 .workbench-items {
@@ -1997,8 +2009,8 @@ onMounted(load)
   grid-template-columns: 20px minmax(0, 1fr) auto 36px;
   gap: 12px;
   align-items: center;
-  min-height: 76px;
-  padding: 12px 18px;
+  min-height: 64px;
+  padding: 10px 16px;
   border-top: 1px solid var(--border);
 }
 
@@ -2051,12 +2063,12 @@ onMounted(load)
 .plugin-health-list {
   display: grid;
   margin: 0;
-  padding: 6px 18px 14px;
+  padding: 4px 16px 12px;
 }
 
 .plugin-health-list > div {
   display: flex;
-  min-height: 44px;
+  min-height: 40px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -2081,7 +2093,7 @@ onMounted(load)
 
 .plugin-quick-actions {
   display: grid;
-  padding: 14px 18px 18px;
+  padding: 12px 16px 16px;
 }
 
 .plugin-quick-actions .button {
@@ -2092,7 +2104,7 @@ onMounted(load)
 .plugin-distribution-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
-  gap: 16px;
+  gap: 12px;
   align-items: start;
 }
 

@@ -228,6 +228,10 @@ function familyLabel(family: ModelFamily): string {
   return t(`supplyCatalog.families.${family}`)
 }
 
+function providerInitial(name: string): string {
+  return name.trim().slice(0, 1).toUpperCase() || '?'
+}
+
 function protocolLabel(protocol: string): string {
   const key = protocolLabelKey(protocol)
   const translated = t(`routingPolicy.protocols.${key}`)
@@ -357,13 +361,16 @@ onMounted(load)
 <template>
   <main class="content supply-catalog-page">
     <section class="page-header">
-      <div>
+      <div class="catalog-heading">
         <h1>{{ t('supplyCatalog.title') }}</h1>
         <p>{{ t('supplyCatalog.subtitle') }}</p>
       </div>
-      <button class="button secondary" type="button" :disabled="loading" @click="load">
-        <RefreshCw :size="17" :class="{ spinning: loading }" />{{ t('common.refresh') }}
-      </button>
+      <div class="catalog-heading-actions">
+        <RouterLink class="catalog-policy-link" to="/console/policies/routing">{{ t('supplyCatalog.policyScope.manage') }}<ExternalLink :size="14" /></RouterLink>
+        <button class="icon-button catalog-refresh" type="button" :disabled="loading" :aria-label="t('common.refresh')" :title="t('common.refresh')" @click="load">
+          <RefreshCw :size="16" :class="{ spinning: loading }" />
+        </button>
+      </div>
     </section>
 
     <section class="catalog-summary" :aria-label="t('supplyCatalog.summaryLabel')">
@@ -470,7 +477,7 @@ onMounted(load)
             <thead><tr><th>{{ t('supplyCatalog.table.supply') }}</th><th>{{ t('supplyCatalog.table.inputPrice') }}</th><th>{{ t('supplyCatalog.table.outputPrice') }}</th><th>{{ t('supplyCatalog.table.multiplier') }}</th><th>{{ t('supplyCatalog.table.successRate') }}</th><th>{{ t('supplyCatalog.table.latency') }}</th><th>{{ t('supplyCatalog.table.health') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
             <tbody>
               <tr v-for="row in group.rows" :key="row.id" class="clickable-row" tabindex="0" @click="openDetails(row)" @keydown.enter="openDetails(row)">
-                <td><strong>{{ row.providerName }}</strong><span>{{ row.accountName }} · {{ row.upstreamModel }}</span></td>
+                <td><div class="supply-source"><span class="provider-avatar" aria-hidden="true">{{ providerInitial(row.providerName) }}</span><span><strong>{{ row.providerName }}</strong><small>{{ row.accountName }} · {{ row.upstreamModel }}</small></span></div></td>
                 <td class="num price-cell"><strong>{{ formatPrice(row.price?.uncached_input_micros_per_1m_tokens) }}</strong><span>{{ t('supplyCatalog.table.reference') }} {{ formatPrice(row.price?.reference_input_micros_per_1m_tokens) }}</span></td>
                 <td class="num price-cell"><strong>{{ formatPrice(row.price?.output_micros_per_1m_tokens) }}</strong><span>{{ t('supplyCatalog.table.reference') }} {{ formatPrice(row.price?.reference_output_micros_per_1m_tokens) }}</span></td>
                 <td class="num"><span class="multiplier-pill">{{ formatMultiplier(row.price?.quoted_multiplier) }}</span></td>
@@ -498,7 +505,7 @@ onMounted(load)
         <tbody>
           <tr v-for="row in filteredRows" :key="row.id" class="clickable-row" tabindex="0" @click="openDetails(row)" @keydown.enter="openDetails(row)">
             <td><strong>{{ row.modelID }}</strong><span>{{ row.routeGroup }} · {{ row.upstreamFormat }}</span></td>
-            <td><strong>{{ row.providerName }}</strong><span>{{ row.accountName }} · {{ row.upstreamModel }}</span></td>
+            <td><div class="supply-source"><span class="provider-avatar" aria-hidden="true">{{ providerInitial(row.providerName) }}</span><span><strong>{{ row.providerName }}</strong><small>{{ row.accountName }} · {{ row.upstreamModel }}</small></span></div></td>
             <td class="num price-cell"><strong>{{ formatPrice(row.price?.uncached_input_micros_per_1m_tokens) }}</strong><span>{{ t('supplyCatalog.table.reference') }} {{ formatPrice(row.price?.reference_input_micros_per_1m_tokens) }}</span></td>
             <td class="num price-cell"><strong>{{ formatPrice(row.price?.output_micros_per_1m_tokens) }}</strong><span>{{ t('supplyCatalog.table.reference') }} {{ formatPrice(row.price?.reference_output_micros_per_1m_tokens) }}</span></td>
             <td class="num"><span class="multiplier-pill">{{ formatMultiplier(row.price?.quoted_multiplier) }}</span></td>
@@ -748,5 +755,250 @@ onMounted(load)
   .detail-policy-section { grid-column: auto; }
   .detail-grid { grid-template-columns: 1fr 1fr; }
   .detail-footer .button { flex: 1 1 100%; }
+}
+
+/* The model hub is a dense comparison workspace, not a card dashboard. */
+.supply-catalog-page {
+  width: min(1180px, 100%);
+  margin-inline: auto;
+  gap: 20px;
+  padding-top: 30px;
+  color: #172033;
+}
+.supply-catalog-page .page-header {
+  position: relative;
+  display: block;
+  margin: 0;
+  padding: 2px 150px 4px;
+  text-align: center;
+}
+.supply-catalog-page .catalog-heading h1 {
+  margin: 0;
+  color: #111827;
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.supply-catalog-page .catalog-heading p {
+  max-width: 760px;
+  margin: 7px auto 0;
+  color: #7b8494;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.catalog-heading-actions {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.catalog-policy-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #3d79d8;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.catalog-policy-link:hover { color: #2563c7; text-decoration: underline; }
+.catalog-refresh { width: 30px; height: 30px; border: 1px solid #e5e8ee; border-radius: 6px; color: #8a94a5; }
+.catalog-refresh:hover:not(:disabled) { background: #f4f7fb; color: #3d79d8; }
+.catalog-summary { display: none; }
+.supply-catalog-page .policy-scope-bar {
+  grid-template-columns: 19px minmax(260px, 360px) minmax(220px, 1fr) auto;
+  gap: 13px;
+  padding: 11px 14px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 2%);
+}
+.supply-catalog-page .policy-scope-bar > svg { color: #8893a4; }
+.supply-catalog-page .policy-scope-select { gap: 4px; }
+.supply-catalog-page .policy-scope-select label { color: #596579; font-size: 11px; font-weight: 600; }
+.supply-catalog-page .policy-scope-select select,
+.supply-catalog-page .filter-grid select,
+.supply-catalog-page .filter-grid input {
+  min-height: 34px;
+  border: 1px solid #dfe3ea;
+  border-radius: 5px;
+  background: #fff;
+  color: #2f3b4f;
+  font-size: 12px;
+}
+.supply-catalog-page .policy-scope-copy { color: #8a94a5; font-size: 11px; }
+.supply-catalog-page .policy-scope-bar > .button { min-height: 32px; border-radius: 5px; font-size: 11px; }
+.supply-catalog-page .notice { margin: -5px 0 0; border-radius: 6px; font-size: 12px; }
+.supply-catalog-page .catalog-controls { gap: 11px; }
+.supply-catalog-page .catalog-control-row { align-items: end; gap: 18px; }
+.supply-catalog-page .model-family-tabs,
+.supply-catalog-page .view-toggle {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.supply-catalog-page .model-family-tabs { flex: 1; overflow-x: auto; }
+.supply-catalog-page .model-family-tabs button,
+.supply-catalog-page .view-toggle button {
+  min-height: 34px;
+  padding: 5px 10px;
+  border-radius: 0;
+  color: #8993a3;
+  font-size: 11px;
+  font-weight: 600;
+}
+.supply-catalog-page .model-family-tabs button:hover,
+.supply-catalog-page .view-toggle button:hover { color: #4a6fae; background: #f6f8fb; }
+.supply-catalog-page .model-family-tabs button.active,
+.supply-catalog-page .view-toggle button.active {
+  color: #2563c7;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 #3579dd;
+}
+.supply-catalog-page .family-mark {
+  width: 19px;
+  height: 19px;
+  border-color: #e1e5eb;
+  background: #f8fafc;
+  color: #667085;
+  font-size: 9px;
+}
+.supply-catalog-page .filter-grid {
+  grid-template-columns: minmax(220px, 1.6fr) repeat(6, minmax(92px, 1fr)) max-content max-content;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid #e6e9ee;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+.supply-catalog-page .filter-grid > select,
+.supply-catalog-page .filter-grid > .search-box { min-width: 0; }
+.supply-catalog-page .search-box {
+  min-height: 34px;
+  border: 1px solid #dfe3ea;
+  border-radius: 5px;
+  background: #fff;
+}
+.supply-catalog-page .search-box svg { color: #a0a9b8; }
+.supply-catalog-page .search-box input { border: 0; background: transparent; }
+.supply-catalog-page .catalog-switch { min-height: 34px; padding: 0 6px; color: #667085; font-size: 11px; }
+.supply-catalog-page .catalog-switch input { accent-color: #3579dd; }
+.supply-catalog-page .filter-grid .button { min-height: 32px; padding-inline: 10px; border-radius: 5px; font-size: 11px; box-shadow: none; }
+.supply-catalog-page .model-catalog-list,
+.supply-catalog-page .route-catalog-table {
+  overflow: hidden;
+  border: 1px solid #e3e7ed;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 2%);
+}
+.supply-catalog-page .model-catalog-list { border-top: 1px solid #e3e7ed; }
+.supply-catalog-page .model-catalog-group { border-bottom-color: #e7eaf0; }
+.supply-catalog-page .model-catalog-group:last-child { border-bottom: 0; }
+.supply-catalog-page .model-group-header {
+  grid-template-columns: 18px minmax(240px, 1fr) repeat(3, minmax(100px, 125px)) minmax(145px, auto);
+  min-height: 62px;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #fff;
+}
+.supply-catalog-page .model-group-header:hover { background: #fafbfc; }
+.supply-catalog-page .model-group-header > svg { color: #9aa4b3; }
+.supply-catalog-page .model-group-name strong { color: #202b3c; font-size: 13px; font-weight: 700; }
+.supply-catalog-page .model-group-name small,
+.supply-catalog-page .model-group-stat small { color: #98a1af; font-size: 10px; }
+.supply-catalog-page .model-group-stat strong { color: #3a4658; font-size: 12px; font-weight: 650; }
+.supply-catalog-page .catalog-tags { justify-content: flex-end; }
+.supply-catalog-page .catalog-tags .pill,
+.supply-catalog-page .model-group-header .pill { padding: 3px 6px; border: 1px solid #dbe7f8; border-radius: 4px; background: #f4f8fe; color: #4c79b7; font-size: 9px; }
+.supply-catalog-page .catalog-table-scroll { border-top-color: #eef0f3; }
+.supply-catalog-page .data-table { min-width: 1100px; font-size: 11px; }
+.supply-catalog-page .data-table th { padding: 9px 12px; border-bottom-color: #e7eaf0; background: #fafbfc; color: #8993a3; font-size: 10px; font-weight: 600; text-transform: none; }
+.supply-catalog-page .data-table td { padding: 12px; border-bottom-color: #eef0f3; color: #5f6b7d; }
+.supply-catalog-page .data-table tbody tr:hover { background: #fbfcfe; }
+.supply-catalog-page .data-table td strong { color: #303b4d; font-size: 11px; font-weight: 650; }
+.supply-catalog-page .data-table td > span:not(.pill):not(.catalog-tags) { color: #9aa3b2; font-size: 10px; }
+.supply-source { display: flex; align-items: center; gap: 8px; min-width: 170px; }
+.supply-source > span:last-child { display: grid; gap: 2px; min-width: 0; }
+.supply-source small { overflow: hidden; color: #9aa3b2; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.provider-avatar { display: inline-grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border: 1px solid #e1e6ee; border-radius: 50%; background: #f7f9fc; color: #667085; font-size: 10px; font-weight: 700; }
+.supply-catalog-page .price-cell strong { color: #273449; font-size: 12px; font-variant-numeric: tabular-nums; }
+.supply-catalog-page .price-cell span { font-variant-numeric: tabular-nums; }
+.supply-catalog-page .multiplier-pill { padding: 3px 6px; border: 1px solid #d6eddf; border-radius: 4px; background: #f0fbf4; color: #37a361; font-size: 10px; font-weight: 650; }
+.supply-catalog-page .success-cell { min-width: 142px; }
+.supply-catalog-page .success-meter { width: 54px; height: 5px; margin-right: 6px; border-radius: 1px; background: #edf0f3; }
+.supply-catalog-page .success-meter i { background: #38a866; }
+.supply-catalog-page .success-cell strong { color: #36a260; font-size: 11px; }
+.supply-catalog-page .success-cell > span:last-child { color: #a0a8b5; font-size: 10px; }
+.supply-catalog-page .catalog-actions { min-width: 225px; gap: 6px; }
+.supply-catalog-page .catalog-actions .preferred-action { min-height: 30px; padding-inline: 9px; border: 1px solid #d7e5fb; border-radius: 5px; background: #fff; color: #3478d3; box-shadow: none; font-size: 10px; }
+.supply-catalog-page .catalog-actions .preferred-action.active { border-color: #3478d3; background: #3478d3; color: #fff; }
+.supply-catalog-page .catalog-actions select { width: 96px; min-height: 30px; border-color: #dfe3ea; border-radius: 5px; font-size: 10px; }
+.supply-catalog-page .pill.status-success { border-color: #d4eedf; background: #f0fbf4; color: #32a05d; }
+.supply-catalog-page .pill.status-warning { border-color: #f3e5be; background: #fffbef; color: #ad7b16; }
+.supply-catalog-page .pill.status-danger { border-color: #f3d2d2; background: #fff6f6; color: #c44d4d; }
+
+:global(:root[data-theme="dark"]) .supply-catalog-page { color: var(--text); }
+:global(:root[data-theme="dark"]) .supply-catalog-page .catalog-heading h1,
+:global(:root[data-theme="dark"]) .supply-catalog-page .model-group-name strong,
+:global(:root[data-theme="dark"]) .supply-catalog-page .model-group-stat strong,
+:global(:root[data-theme="dark"]) .supply-catalog-page .data-table td strong,
+:global(:root[data-theme="dark"]) .supply-catalog-page .price-cell strong { color: var(--text); }
+:global(:root[data-theme="dark"]) .supply-catalog-page .catalog-heading p,
+:global(:root[data-theme="dark"]) .supply-catalog-page .policy-scope-copy,
+:global(:root[data-theme="dark"]) .supply-catalog-page .model-group-name small,
+:global(:root[data-theme="dark"]) .supply-catalog-page .model-group-stat small,
+:global(:root[data-theme="dark"]) .supply-catalog-page .supply-source small { color: var(--text-muted); }
+:global(:root[data-theme="dark"]) .supply-catalog-page .policy-scope-bar,
+:global(:root[data-theme="dark"]) .supply-catalog-page .model-catalog-list,
+:global(:root[data-theme="dark"]) .supply-catalog-page .route-catalog-table,
+:global(:root[data-theme="dark"]) .supply-catalog-page .model-group-header,
+:global(:root[data-theme="dark"]) .supply-catalog-page .policy-scope-select select,
+:global(:root[data-theme="dark"]) .supply-catalog-page .filter-grid select,
+:global(:root[data-theme="dark"]) .supply-catalog-page .filter-grid input,
+:global(:root[data-theme="dark"]) .supply-catalog-page .search-box { border-color: var(--border); background: var(--surface); color: var(--text-secondary); }
+:global(:root[data-theme="dark"]) .supply-catalog-page .filter-grid,
+:global(:root[data-theme="dark"]) .supply-catalog-page .data-table th { border-color: var(--border); background: var(--surface-subtle); }
+:global(:root[data-theme="dark"]) .supply-catalog-page .model-group-header:hover,
+:global(:root[data-theme="dark"]) .supply-catalog-page .data-table tbody tr:hover { background: var(--surface-hover); }
+:global(:root[data-theme="dark"]) .supply-catalog-page .family-mark,
+:global(:root[data-theme="dark"]) .supply-catalog-page .provider-avatar { border-color: var(--border); background: var(--surface-subtle); color: var(--text-secondary); }
+:global(:root[data-theme="dark"]) .supply-catalog-page .data-table td,
+:global(:root[data-theme="dark"]) .supply-catalog-page .model-catalog-group,
+:global(:root[data-theme="dark"]) .supply-catalog-page .catalog-table-scroll { border-color: var(--border); }
+
+@media (max-width: 1200px) {
+  .supply-catalog-page .page-header { padding-inline: 92px; }
+  .supply-catalog-page .filter-grid { grid-template-columns: minmax(240px, 1.7fr) repeat(3, minmax(120px, 1fr)); }
+  .supply-catalog-page .catalog-switch { grid-column: span 1; }
+}
+@media (min-width: 721px) and (max-width: 1300px) {
+  .supply-catalog-page .supply-route-table { min-width: 0; width: 100%; table-layout: fixed; }
+  .supply-catalog-page .catalog-actions { min-width: 0; width: 190px; }
+  .supply-catalog-page .catalog-actions .preferred-action { padding-inline: 7px; }
+  .supply-catalog-page .catalog-actions select { width: 88px; }
+}
+@media (max-width: 720px) {
+  .supply-catalog-page { padding: 20px 14px 32px; gap: 14px; }
+  .supply-catalog-page .page-header { padding: 0 42px; }
+  .supply-catalog-page .catalog-heading h1 { font-size: 21px; }
+  .supply-catalog-page .catalog-heading p { font-size: 11px; }
+  .catalog-heading-actions { top: 0; right: 0; }
+  .catalog-policy-link { display: none; }
+  .supply-catalog-page .policy-scope-bar { grid-template-columns: 19px minmax(0, 1fr); padding: 11px; }
+  .supply-catalog-page .policy-scope-copy,
+  .supply-catalog-page .policy-scope-bar > .button { grid-column: 1 / -1; }
+  .supply-catalog-page .filter-grid { grid-template-columns: 1fr 1fr; padding: 8px; }
+  .supply-catalog-page .filter-grid .search-box { grid-column: 1 / -1; }
+  .supply-catalog-page .model-family-tabs { max-width: calc(100vw - 28px); }
+  .supply-catalog-page .view-toggle { width: 100%; justify-content: center; }
+  .supply-catalog-page .model-group-header { grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; padding: 11px; }
+  .supply-catalog-page .model-group-stat:nth-of-type(3),
+  .supply-catalog-page .model-group-stat:nth-of-type(4),
+  .supply-catalog-page .model-group-header .catalog-tags { display: none; }
+  .supply-catalog-page .mobile-route-item { border-color: #e3e7ed; border-radius: 8px; box-shadow: 0 1px 2px rgb(15 23 42 / 2%); }
 }
 </style>

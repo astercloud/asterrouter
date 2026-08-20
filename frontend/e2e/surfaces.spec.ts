@@ -57,6 +57,131 @@ async function loginThroughPage(page: Page, email: string, password: string): Pr
   await expect(page).toHaveURL(/\/portal\/overview$/)
 }
 
+async function verifyPortalApplicationsSpacing(page: Page): Promise<void> {
+  const sections = ['access', 'current-key', 'key-list', 'security']
+    .map((section) => page.locator(`[data-portal-section="${section}"]`))
+  for (const section of sections) await expect(section).toBeVisible()
+
+  const boxes = await Promise.all(sections.map((section) => section.boundingBox()))
+  for (let index = 1; index < boxes.length; index += 1) {
+    const previous = boxes[index - 1]
+    const current = boxes[index]
+    if (!previous || !current) throw new Error('Portal application section bounds are unavailable.')
+    expect(current.y - previous.y - previous.height).toBeGreaterThanOrEqual(16)
+  }
+}
+
+async function verifyEnterpriseShell(page: Page): Promise<void> {
+  const viewport = page.viewportSize()
+  if (!viewport) throw new Error('Viewport dimensions are unavailable.')
+
+  const header = page.locator('[data-global-header]')
+  const tabbar = page.locator('[data-shell-tabs]')
+  await expect(header).toBeVisible()
+  await expect(tabbar).toBeVisible()
+  const headerBox = await header.boundingBox()
+  const tabbarBox = await tabbar.boundingBox()
+  if (!headerBox || !tabbarBox) throw new Error('Enterprise shell bounds are unavailable.')
+  expect(Math.abs(headerBox.height - 48)).toBeLessThanOrEqual(1)
+  expect(Math.abs(tabbarBox.height - 36)).toBeLessThanOrEqual(1)
+  expect(Math.abs(headerBox.width - viewport.width)).toBeLessThanOrEqual(1)
+
+  const sidebar = page.locator('[data-shell-sidebar]')
+  const sidebarBox = await sidebar.boundingBox()
+  if (!sidebarBox) throw new Error('Enterprise sidebar bounds are unavailable.')
+  if (viewport.width > 920) {
+    expect(Math.abs(sidebarBox.width - 200)).toBeLessThanOrEqual(1)
+    expect(Math.abs(sidebarBox.y - 48)).toBeLessThanOrEqual(1)
+  } else {
+    await expect.poll(async () => {
+      const box = await sidebar.boundingBox()
+      return box ? box.x + box.width : Number.POSITIVE_INFINITY
+    }, { timeout: 2_000 }).toBeLessThanOrEqual(1)
+  }
+}
+
+async function verifyPluginCenterDensity(page: Page): Promise<void> {
+  const pageRoot = page.locator('.plugin-center-page')
+  const header = pageRoot.locator('.page-header')
+  const tabs = pageRoot.locator('.plugin-center-tabs')
+  const dashboard = pageRoot.locator('[data-section="workbench"]')
+  await expect(pageRoot).toBeVisible()
+  await expect(tabs).toBeVisible()
+  await expect(dashboard).toBeVisible()
+
+  const geometry = await page.evaluate(() => {
+    const root = document.querySelector('.plugin-center-page')
+    const header = root?.querySelector('.page-header')
+    const tabs = root?.querySelector('.plugin-center-tabs')
+    const dashboard = root?.querySelector('[data-section="workbench"]')
+    if (!root || !header || !tabs || !dashboard) return null
+    const box = (element: Element) => {
+      const rect = element.getBoundingClientRect()
+      return { top: rect.top, bottom: rect.bottom, height: rect.height }
+    }
+    return {
+      root: box(root),
+      header: box(header),
+      tabs: box(tabs),
+      dashboard: box(dashboard),
+      alignContent: getComputedStyle(root).alignContent
+    }
+  })
+  expect(geometry).not.toBeNull()
+  expect(geometry?.alignContent).toBe('start')
+  expect(geometry!.tabs.top - geometry!.header.bottom).toBeGreaterThanOrEqual(8)
+  expect(geometry!.tabs.top - geometry!.header.bottom).toBeLessThanOrEqual(28)
+  expect(geometry!.dashboard.top - geometry!.tabs.bottom).toBeGreaterThanOrEqual(8)
+  expect(geometry!.dashboard.top - geometry!.tabs.bottom).toBeLessThanOrEqual(28)
+}
+
+async function verifyEffectivePricingDensity(page: Page): Promise<void> {
+  const root = page.locator('.effective-pricing-page')
+  const header = root.locator('.page-header')
+  const tabs = root.locator('.effective-tabs')
+  const filters = root.locator('.effective-filters')
+  const metrics = root.locator('.metric-grid').first()
+  const panel = root.locator('.effective-panel').first()
+  await expect(root).toBeVisible()
+  await expect(tabs).toBeVisible()
+  await expect(filters).toBeVisible()
+  await expect(metrics).toBeVisible()
+  await expect(panel).toBeVisible()
+
+  const geometry = await page.evaluate(() => {
+    const root = document.querySelector('.effective-pricing-page')
+    const header = root?.querySelector('.page-header')
+    const tabs = root?.querySelector('.effective-tabs')
+    const filters = root?.querySelector('.effective-filters')
+    const metrics = root?.querySelector('.metric-grid')
+    const panel = root?.querySelector('.effective-panel')
+    if (!root || !header || !tabs || !filters || !metrics || !panel) return null
+    const box = (element: Element) => {
+      const rect = element.getBoundingClientRect()
+      return { top: rect.top, bottom: rect.bottom, height: rect.height }
+    }
+    return {
+      root: box(root),
+      header: box(header),
+      tabs: box(tabs),
+      filters: box(filters),
+      metrics: box(metrics),
+      panel: box(panel),
+      alignContent: getComputedStyle(root).alignContent
+    }
+  })
+  expect(geometry).not.toBeNull()
+  expect(geometry?.alignContent).toBe('start')
+  expect(geometry!.tabs.top - geometry!.header.bottom).toBeGreaterThanOrEqual(8)
+  expect(geometry!.tabs.top - geometry!.header.bottom).toBeLessThanOrEqual(28)
+  expect(geometry!.filters.top - geometry!.tabs.bottom).toBeGreaterThanOrEqual(8)
+  expect(geometry!.filters.top - geometry!.tabs.bottom).toBeLessThanOrEqual(28)
+  expect(geometry!.metrics.top - geometry!.filters.bottom).toBeGreaterThanOrEqual(8)
+  expect(geometry!.metrics.top - geometry!.filters.bottom).toBeLessThanOrEqual(28)
+  expect(geometry!.panel.top - geometry!.metrics.bottom).toBeGreaterThanOrEqual(8)
+  expect(geometry!.panel.top - geometry!.metrics.bottom).toBeLessThanOrEqual(28)
+}
+
 test('@e2e-surface-public-001 public routes remain reachable and correctly projected', async ({ page }) => {
   const errors = captureBrowserErrors(page)
   for (const surface of publicSurfaces) {
@@ -76,6 +201,8 @@ test('@e2e-surface-console-001 console routes remain reachable across supported 
   await pluginCenterLink.click()
   await expect(page).toHaveURL(escapedPath('/console/system/plugins'))
   await expect(page.getByRole('heading', { level: 1, name: 'Plugin Center' })).toBeVisible()
+  await verifyEnterpriseShell(page)
+  await verifyPluginCenterDensity(page)
   for (const surface of consoleSurfaces) {
     await test.step(surface.route, async () => {
       const previousErrorCount = errors.length
@@ -87,6 +214,7 @@ test('@e2e-surface-console-001 console routes remain reachable across supported 
           })
         : undefined
       await verifySurface(page, surface)
+      if (surface.route === '/console/model-services/effective-pricing') await verifyEffectivePricingDensity(page)
       if (surface.route.includes(':pluginId')) {
         expect((await missingWorkbenchResponse!).status()).toBe(404)
         await expect(page.getByRole('alert')).toContainText('not available')
@@ -116,7 +244,10 @@ test('@e2e-surface-portal-001 portal routes remain reachable across supported vi
   await loginThroughPage(page, developer.email, password)
 
   for (const surface of portalSurfaces) {
-    await test.step(surface.route, () => verifySurface(page, surface))
+    await test.step(surface.route, async () => {
+      await verifySurface(page, surface)
+      if (surface.route === '/portal/applications') await verifyPortalApplicationsSpacing(page)
+    })
   }
   await page.goto('/console/workbench')
   await expect(page).toHaveURL(/\/portal\/overview$/)

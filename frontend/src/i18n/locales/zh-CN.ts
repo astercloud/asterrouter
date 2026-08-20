@@ -60,6 +60,8 @@ export default {
     expand: '展开侧栏',
     openMenu: '打开导航',
     closeMenu: '关闭导航',
+    openTabs: '已打开页面',
+    closeTab: '关闭{name}',
     lightMode: '浅色模式',
     darkMode: '深色模式',
     demoMode: '演示模式'
@@ -1821,6 +1823,7 @@ export default {
     globalHelp: '用于 OpenAI-compatible 客户端的通用入口。新建或轮换后会显示一次完整 Key。',
     emptyGlobal: '还没有 API Key，点击“创建新 Key”开始。',
     secretOnce: '完整 Key 仅在本次创建或轮换后保留在当前页面，请立即复制。',
+    listTitle: '密钥列表',
     searchPlaceholder: '搜索名称、备注、前缀或模型…',
     count: '{count} 个 Key',
     nameColumn: '名称 / 备注',
@@ -1894,13 +1897,13 @@ export default {
   marketing: marketingZh,
   supplyCatalog: {
     title: '模型广场',
-    subtitle: '集中比较企业已批准的模型与供应线路，并将优先资源和有序降级批次直接写入路由策略。',
+    subtitle: '同一模型下并列比较企业已批准的供应线路；价格、成功率与延迟均来自当前配置和运行证据。',
     summaryLabel: '模型广场概览',
     summary: { models: '已上架模型', routes: '供应线路', available: '可调度', unpriced: '缺少报价' },
     policyScope: {
-      title: '策略作用范围', actsOn: '作用于路由策略', select: '请选择路由策略',
+      title: '策略作用范围', actsOn: '用于路由策略', select: '请选择路由策略',
       summary: '路由组 {group} · v{version} · {bindings} 个凭据绑定 · {preferred} 个优先资源 · {batches} 个降级批次',
-      empty: '选择一份启用中的路由策略后，才能设置优先资源和有序批次。', manage: '管理策略'
+      empty: '选择一份启用中的路由策略后，才能设置优先资源和有序批次。', manage: '查看路由策略'
     },
     filters: {
       title: '模型广场筛选', family: '按模型家族筛选', modality: '按模态筛选', allModalities: '全部模态', all: '全部', view: '广场视图', byRoute: '按线路', byModel: '按模型',

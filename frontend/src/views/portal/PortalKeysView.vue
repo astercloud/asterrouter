@@ -197,24 +197,26 @@ onMounted(() => {
     <div v-if="notice" class="notice success">{{ notice }}</div>
 
     <template v-if="!loading">
-      <section class="portal-key-banner">
-        <div class="portal-key-banner-icon"><KeyRound :size="20" /></div>
-        <div>
-          <strong>{{ t('portalKeys.modelBanner', { count: models.length }) }}</strong>
-          <span>{{ models.length ? t('portalKeys.modelBannerHelp') : t('portalKeys.noModelsHelp') }}</span>
+      <section class="portal-access-grid" data-portal-section="access">
+        <div class="portal-key-banner" :class="{ 'is-ready': models.length }">
+          <div class="portal-key-banner-icon"><KeyRound :size="18" /></div>
+          <div>
+            <strong>{{ t('portalKeys.modelBanner', { count: models.length }) }}</strong>
+            <span>{{ models.length ? t('portalKeys.modelBannerHelp') : t('portalKeys.noModelsHelp') }}</span>
+          </div>
         </div>
-      </section>
 
-      <section class="portal-endpoint-stack">
-        <div class="portal-endpoint-row">
-          <strong>Base URL</strong>
-          <code>{{ baseURL }}</code>
-          <button class="icon-button inverse" type="button" :title="t('common.copy')" @click="copyText(baseURL, 'base')"><Check v-if="copied === 'base'" :size="16" /><Copy v-else :size="16" /></button>
-        </div>
-        <div class="portal-endpoint-row">
-          <strong>{{ t('portalKeys.installCommand') }}</strong>
-          <code>{{ installCommand }}</code>
-          <button class="icon-button inverse" type="button" :title="t('common.copy')" @click="copyText(installCommand, 'install')"><Check v-if="copied === 'install'" :size="16" /><Copy v-else :size="16" /></button>
+        <div class="portal-endpoint-stack">
+          <div class="portal-endpoint-row">
+            <strong>Base URL</strong>
+            <code>{{ baseURL }}</code>
+            <button class="icon-button" type="button" :aria-label="`${t('common.copy')} Base URL`" :title="t('common.copy')" @click="copyText(baseURL, 'base')"><Check v-if="copied === 'base'" :size="16" /><Copy v-else :size="16" /></button>
+          </div>
+          <div class="portal-endpoint-row">
+            <strong>{{ t('portalKeys.installCommand') }}</strong>
+            <code>{{ installCommand }}</code>
+            <button class="icon-button" type="button" :aria-label="`${t('common.copy')} ${t('portalKeys.installCommand')}`" :title="t('common.copy')" @click="copyText(installCommand, 'install')"><Check v-if="copied === 'install'" :size="16" /><Copy v-else :size="16" /></button>
+          </div>
         </div>
       </section>
 
@@ -236,7 +238,7 @@ onMounted(() => {
         </form>
       </section>
 
-      <section class="panel portal-global-key">
+      <section class="panel portal-global-key" data-portal-section="current-key">
         <div class="panel-header split-header">
           <div><h2>{{ t('portalKeys.globalTitle') }}</h2><p>{{ t('portalKeys.globalHelp') }}</p></div>
           <button v-if="selectedKey" class="button secondary compact-button" type="button" :disabled="saving || !canManageKeys || !canRotateAPIKey(selectedKey)" @click="rotateKey(selectedKey)"><RotateCw :size="15" />{{ t('portalKeys.rotate') }}</button>
@@ -248,12 +250,15 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="panel portal-key-list">
-        <div class="panel-header portal-list-header">
-          <div class="portal-search"><Search :size="16" /><input v-model="search" :placeholder="t('portalKeys.searchPlaceholder')" /></div>
+      <section class="panel portal-key-list" data-portal-section="key-list">
+        <div class="panel-header portal-list-heading">
+          <h2>{{ t('portalKeys.listTitle') }}</h2>
           <span class="hint">{{ t('portalKeys.count', { count: filteredKeys.length }) }}</span>
         </div>
-        <div class="panel-body table-scroll">
+        <div class="portal-list-toolbar">
+          <div class="portal-search"><Search :size="16" /><input v-model="search" :aria-label="t('portalKeys.searchPlaceholder')" :placeholder="t('portalKeys.searchPlaceholder')" /></div>
+        </div>
+        <div class="table-scroll">
           <table class="data-table portal-keys-table">
             <thead><tr><th>{{ t('portalKeys.nameColumn') }}</th><th>{{ t('portalKeys.keyColumn') }}</th><th>{{ t('portalKeys.modelsColumn') }}</th><th>{{ t('portalKeys.policyColumn') }}</th><th>{{ t('portalKeys.usageColumn') }}</th><th>{{ t('portalKeys.lastUsedColumn') }}</th><th>{{ t('portalKeys.statusColumn') }}</th><th>{{ t('common.actions') }}</th></tr></thead>
             <tbody>
@@ -273,7 +278,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="panel portal-security-panel">
+      <section class="panel portal-security-panel" data-portal-section="security">
         <div class="panel-header"><div><h2>{{ t('portalKeys.securityTitle') }}</h2><p>{{ t('portalKeys.securityHelp') }}</p></div><ShieldCheck :size="18" /></div>
         <div class="portal-security-grid"><div><strong>{{ t('portalKeys.securityOneTitle') }}</strong><span>{{ t('portalKeys.securityOneHelp') }}</span></div><div><strong>{{ t('portalKeys.securityTwoTitle') }}</strong><span>{{ t('portalKeys.securityTwoHelp') }}</span></div><div><strong>{{ t('portalKeys.securityThreeTitle') }}</strong><span>{{ t('portalKeys.securityThreeHelp') }}</span></div></div>
       </section>
@@ -282,29 +287,35 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.portal-keys-page { gap: 16px; }
-.portal-keys-heading { margin-bottom: 0; }
-.portal-key-banner { display: flex; align-items: center; gap: 13px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--warning-bg) 55%, var(--surface)); }
-.portal-key-banner-icon { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--warning-bg); color: var(--warning); }
+.portal-keys-page { display: grid; width: min(1360px, 100%); margin-inline: auto; align-content: start; gap: 20px; }
+.portal-keys-page > * { min-width: 0; }
+.portal-keys-heading { margin-bottom: 0; align-items: flex-start; }
+.portal-access-grid { display: grid; grid-template-columns: minmax(300px, .8fr) minmax(480px, 1.5fr); align-items: stretch; gap: 16px; }
+.portal-key-banner { display: flex; min-height: 112px; align-items: flex-start; gap: 12px; padding: 17px; border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--warning-bg) 52%, var(--surface)); box-shadow: var(--shadow-sm); }
+.portal-key-banner.is-ready { border-color: color-mix(in srgb, var(--primary-500) 28%, var(--border)); background: color-mix(in srgb, var(--primary-50) 66%, var(--surface)); }
+.portal-key-banner-icon { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border-radius: 6px; background: var(--warning-bg); color: var(--warning); }
+.portal-key-banner.is-ready .portal-key-banner-icon { background: var(--primary-100); color: var(--primary-700); }
 .portal-key-banner div:last-child { display: grid; gap: 2px; }
 .portal-key-banner strong { color: var(--text); font-size: 13px; }
 .portal-key-banner span { color: var(--text-muted); font-size: 12px; }
-.portal-endpoint-stack { display: grid; gap: 10px; }
-.portal-endpoint-row { display: grid; grid-template-columns: auto minmax(0, 1fr) 34px; align-items: center; gap: 12px; min-height: 48px; padding: 0 12px; border-radius: 8px; background: #18181b; color: #f4f4f5; }
-.portal-endpoint-row strong { color: #d4d4d8; font-size: 11px; white-space: nowrap; }
-.portal-endpoint-row code { min-width: 0; overflow: hidden; color: #fafafa; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.portal-endpoint-row .inverse { width: 32px; color: #e4e4e7; }
-.portal-create-panel { border-radius: 10px; }
+.portal-endpoint-stack { display: grid; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.portal-endpoint-row { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr) 32px; align-items: center; gap: 12px; min-height: 55px; padding: 0 12px 0 16px; }
+.portal-endpoint-row + .portal-endpoint-row { border-top: 1px solid var(--border); }
+.portal-endpoint-row strong { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+.portal-endpoint-row code { min-width: 0; overflow: hidden; color: var(--text); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.portal-endpoint-row .icon-button { width: 30px; height: 30px; color: var(--text-muted); }
+.portal-create-panel { border-radius: 8px; }
 .compact-button { min-height: 32px; padding: 0 10px; font-size: 11px; }
 .portal-global-key .panel-body { gap: 8px; }
 .global-key-line { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; }
 .global-key-line > span { color: var(--text-muted); font-size: 12px; }
 .global-key-line code { min-width: 0; padding: 10px 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); color: var(--text); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .empty-state { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--text-muted); font-size: 13px; }
-.portal-list-header { justify-content: space-between; }
+.portal-list-heading { justify-content: space-between; }
+.portal-list-toolbar { display: flex; align-items: center; min-height: 54px; padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface-subtle); }
 .portal-search { display: flex; width: min(360px, 100%); align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-muted); }
 .portal-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
-.portal-keys-table { min-width: 1120px; }
+.portal-keys-table { min-width: 1080px; }
 .portal-keys-table td code { display: block; max-width: 170px; overflow: hidden; color: var(--text-secondary); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .portal-security-panel .panel-header { justify-content: space-between; }
 .portal-security-panel .panel-header > div { display: grid; gap: 2px; }
@@ -315,14 +326,20 @@ onMounted(() => {
 .portal-security-grid strong { color: var(--text); font-size: 12px; }
 .portal-security-grid span { color: var(--text-muted); font-size: 11px; line-height: 1.55; }
 .danger-icon { color: var(--danger); }
+@media (max-width: 1080px) {
+  .portal-access-grid { grid-template-columns: 1fr; }
+  .portal-key-banner { min-height: 0; }
+}
 @media (max-width: 760px) {
   .portal-keys-heading { display: grid; }
   .portal-keys-heading .row-actions { justify-content: flex-start; }
-  .portal-endpoint-row { grid-template-columns: 1fr 34px; gap: 6px; padding: 8px 10px; }
+  .portal-keys-page { gap: 16px; }
+  .portal-access-grid { gap: 12px; }
+  .portal-endpoint-row { grid-template-columns: 1fr 32px; gap: 6px; padding: 9px 10px; }
   .portal-endpoint-row strong { grid-column: 1 / -1; }
   .global-key-line { grid-template-columns: 1fr auto; }
   .global-key-line > span { grid-column: 1 / -1; }
-  .portal-list-header { align-items: stretch; flex-direction: column; padding: 12px 14px; }
+  .portal-list-toolbar { padding: 9px 10px; }
   .portal-search { width: 100%; }
   .portal-security-grid { grid-template-columns: 1fr; gap: 14px; }
   .portal-security-grid > div, .portal-security-grid > div:first-child { padding: 0; border-left: 0; }
