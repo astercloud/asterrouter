@@ -101,7 +101,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
       </div>
 
       <div class="topbar-actions">
-        <span v-if="demoMode" class="pill status-warning">{{ t('nav.demoMode') }}</span>
+        <span v-if="demoMode" class="pill status-warning global-demo-status">{{ t('nav.demoMode') }}</span>
         <label class="locale-control">
           <Globe2 :size="17" aria-hidden="true" />
           <select :value="getLocale()" :aria-label="t('nav.language')" @change="changeLocale">

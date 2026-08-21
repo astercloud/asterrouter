@@ -1194,7 +1194,7 @@ textarea:focus-visible {
   .admin-layout .global-brand-link strong { max-width: 116px; }
   .admin-layout .global-header-divider,
   .admin-layout .global-entry-label,
-  .admin-layout .global-theme-toggle { display: none; }
+  .admin-layout .global-demo-status { display: none; }
   .admin-layout .topbar-context,
   .admin-layout .topbar-actions { gap: 4px; }
   .admin-layout .locale-control select { max-width: 74px; }

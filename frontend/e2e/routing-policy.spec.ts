@@ -309,13 +309,9 @@ test('@e2e-routing-policy-001 enterprise routing policy workbench persists and r
   await expectNoHorizontalOverflow(page)
 
   await page.getByLabel('Language').selectOption('zh-CN')
-  if ((page.viewportSize()?.width || 0) <= 640) {
-    await page.getByRole('button', { name: '打开导航' }).click()
-  }
-  await page.getByRole('button', { name: '深色模式' }).click()
-  if ((page.viewportSize()?.width || 0) <= 640) {
-    await page.locator('.sidebar-mobile-close').click()
-  }
+  const themeButton = page.locator('.global-theme-toggle')
+  await expect(themeButton).toBeVisible()
+  await themeButton.click()
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expect(page.getByRole('heading', { level: 1, name: '路由模拟器' })).toBeVisible()
@@ -546,13 +542,9 @@ test('@e2e-routing-policy-003 hard constraints ordered batches and resilience co
   await expectNoHorizontalOverflow(page)
 
   await page.getByLabel('Language').selectOption('zh-CN')
-  if ((page.viewportSize()?.width || 0) <= 640) {
-    await page.getByRole('button', { name: '打开导航' }).click()
-  }
-  await page.getByRole('button', { name: '深色模式' }).click()
-  if ((page.viewportSize()?.width || 0) <= 640) {
-    await page.locator('.sidebar-mobile-close').click()
-  }
+  const themeButton = page.locator('.global-theme-toggle')
+  await expect(themeButton).toBeVisible()
+  await themeButton.click()
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expect(page.getByRole('heading', { level: 1, name: '路由策略' })).toBeVisible()

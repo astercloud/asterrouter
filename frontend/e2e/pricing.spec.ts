@@ -205,16 +205,9 @@ test('@e2e-pricing-001 expression pricing lifecycle remains usable across viewpo
   await expectNoHorizontalOverflow(page)
   await page.getByLabel('Language').selectOption('zh-CN')
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
-  if ((page.viewportSize()?.width || 0) <= 640) {
-    await page.getByRole('button', { name: '打开导航' }).click()
-  }
-  const themeButton = page.getByRole('button', { name: /深色模式|浅色模式/ })
+  const themeButton = page.locator('.global-theme-toggle')
+  await expect(themeButton).toBeVisible()
   await themeButton.click()
-  if ((page.viewportSize()?.width || 0) <= 640) {
-    await page.getByRole('button', { name: '关闭导航' }).first().click()
-    await expect(page.locator('.admin-sidebar')).not.toHaveClass(/mobile-open/)
-    await expect(page.locator('.sidebar-overlay')).toHaveCount(0)
-  }
   await expectNoHorizontalOverflow(page)
   await page.evaluate(() => window.scrollTo(0, 0))
   await page.screenshot({ path: testInfo.outputPath(`pricing-${suffix}.png`), fullPage: true })
