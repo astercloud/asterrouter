@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { defineComponent } from 'vue'
+import { defineComponent, markRaw } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getCurrentUser } from '@/api/auth'
 import { getPluginCatalog, getPluginWorkbench } from '@/api/plugins'
@@ -17,7 +17,7 @@ vi.mock('@/api/plugins', () => ({
   getPluginWorkbench: vi.fn()
 }))
 
-const icon = defineComponent({ template: '<span aria-hidden="true"></span>' })
+const icon = markRaw(defineComponent({ template: '<span aria-hidden="true"></span>' }))
 
 describe('ProductShell', () => {
   beforeEach(() => {
@@ -36,7 +36,11 @@ describe('ProductShell', () => {
     const child = defineComponent({ template: '<main><h1>Workbench</h1></main>' })
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/console/workbench', component: child, meta: { titleKey: 'console.workbench', descriptionKey: 'console.workbenchSubtitle' } }, { path: '/:pathMatch(.*)*', component: child }]
+      routes: [
+        { path: '/console/workbench', component: child, meta: { titleKey: 'console.workbench', descriptionKey: 'console.workbenchSubtitle' } },
+        { path: '/console/applications', component: child, meta: { titleKey: 'console.applications', descriptionKey: 'console.applicationsSubtitle' } },
+        { path: '/:pathMatch(.*)*', component: child }
+      ]
     })
     await router.push('/console/workbench')
     await router.isReady()
@@ -44,13 +48,19 @@ describe('ProductShell', () => {
       props: {
         homeTo: '/console/workbench', navLabel: 'nav.console', entry: 'console',
         navGroups: [
-          { label: 'nav.enterpriseManagement', items: [{ to: '/console/workbench', label: 'console.workbench', icon }] },
+          {
+            label: 'nav.enterpriseManagement',
+            items: [
+              { to: '/console/workbench', label: 'console.workbench', icon },
+              { to: '/console/applications', label: 'console.applications', icon }
+            ]
+          },
           { label: 'nav.systemManagement', items: [] }
         ]
       },
       global: { plugins: [pinia, router, i18n] }
     })
-    return { wrapper }
+    return { router, wrapper }
   }
 
   it('renders enterprise navigation without workspace switching', async () => {
@@ -90,6 +100,22 @@ describe('ProductShell', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
     await wrapper.get('.sidebar-collapse').trigger('click')
     expect(localStorage.getItem('asterrouter_sidebar_collapsed')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('keeps visited pages in the workspace tab bar and closes the active tab', async () => {
+    const { router, wrapper } = await mountShell()
+    expect(wrapper.get('[data-shell-tabs]').text()).toContain('Workbench')
+
+    await router.push('/console/applications')
+    await flushPromises()
+    expect(wrapper.findAll('.shell-tab')).toHaveLength(2)
+    expect(wrapper.get('.shell-tab.active').text()).toContain('Applications')
+
+    await wrapper.get('.shell-tab-close').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/console/workbench')
+    expect(wrapper.findAll('.shell-tab')).toHaveLength(1)
     wrapper.unmount()
   })
 })

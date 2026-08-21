@@ -270,9 +270,8 @@ describe('AdminSupplyCatalogView', () => {
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('temporary routes failure')
 
-    const refreshButton = wrapper.findAll('button').find((button) => button.text().includes('Refresh'))
-    expect(refreshButton).toBeDefined()
-    await refreshButton!.trigger('click')
+    const refreshButton = wrapper.get('button[aria-label="Refresh"]')
+    await refreshButton.trigger('click')
     await flushPromises()
     expect(wrapper.find('.model-catalog-group').text()).toContain('enterprise-chat')
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)

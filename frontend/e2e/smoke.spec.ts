@@ -89,10 +89,8 @@ test('@e2e-preferences-001 locale, theme, and responsive layout remain usable', 
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
   await expect(page.locator('h1')).toBeVisible()
 
-  if ((page.viewportSize()?.width || 0) <= 640) {
-    await page.getByRole('button', { name: '打开导航' }).click()
-  }
-  const themeButton = page.getByRole('button', { name: /深色模式|浅色模式/ })
+  const themeButton = page.locator('.global-theme-toggle')
+  await expect(themeButton).toBeVisible()
   await themeButton.click()
   const theme = await page.locator('html').getAttribute('data-theme')
   expect(['dark', 'light']).toContain(theme)

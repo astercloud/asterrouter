@@ -60,6 +60,8 @@ export default {
     expand: 'Expand sidebar',
     openMenu: 'Open navigation',
     closeMenu: 'Close navigation',
+    openTabs: 'Open pages',
+    closeTab: 'Close {name}',
     lightMode: 'Light mode',
     darkMode: 'Dark mode',
     demoMode: 'Demo mode'
@@ -1821,6 +1823,7 @@ export default {
     globalHelp: 'The shared entry point for OpenAI-compatible clients. A full secret is shown once after create or rotate.',
     emptyGlobal: 'No API keys yet. Click “Create new Key” to get started.',
     secretOnce: 'The full key remains in this page only after creation or rotation. Copy it now.',
+    listTitle: 'Key inventory',
     searchPlaceholder: 'Search name, note, prefix, or model…',
     count: '{count} keys',
     nameColumn: 'Name / note',
@@ -1894,13 +1897,13 @@ export default {
   marketing: marketingEn,
   supplyCatalog: {
     title: 'Model Hub',
-    subtitle: 'Compare enterprise-approved models and supply routes, then write preferred resources and ordered fallback batches directly into a routing policy.',
+    subtitle: 'Compare enterprise-approved supply routes under each model using current price, success-rate, and latency evidence.',
     summaryLabel: 'Model Hub summary',
     summary: { models: 'Published models', routes: 'Supply routes', available: 'Schedulable', unpriced: 'Missing price' },
     policyScope: {
       title: 'Policy scope', actsOn: 'Apply to routing policy', select: 'Select a routing policy',
       summary: 'Route group {group} · v{version} · {bindings} credential bindings · {preferred} preferred resources · {batches} fallback batches',
-      empty: 'Select an active routing policy before changing preferred resources or ordered batches.', manage: 'Manage policies'
+      empty: 'Select an active routing policy before changing preferred resources or ordered batches.', manage: 'View routing policies'
     },
     filters: {
       title: 'Model Hub filters', family: 'Filter by model family', modality: 'Filter by modality', allModalities: 'All modalities', all: 'All', view: 'Hub view', byRoute: 'By route', byModel: 'By model',

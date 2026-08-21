@@ -1,14 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ChevronDown, Globe2, KeyRound, LogOut, Menu, PanelsTopLeft, UserCog, UserRound } from '@lucide/vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ChevronDown, Globe2, KeyRound, LogOut, Menu, Moon, PanelsTopLeft, Sun, UserCog, UserRound } from '@lucide/vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { availableLocales, getLocale, setLocale, type LocaleCode } from '@/i18n'
 import { canAccessEntry } from '@/router/access'
 
-withDefaults(defineProps<{ showMenu?: boolean }>(), { showMenu: false })
+const props = withDefaults(defineProps<{
+  showMenu?: boolean
+  homeTo?: string
+  entry?: 'console' | 'portal'
+  brandMark?: string
+}>(), {
+  showMenu: false,
+  homeTo: '/console/workbench',
+  entry: 'console',
+  brandMark: 'AR'
+})
 
 const emit = defineEmits<{ toggleMenu: [] }>()
 const { t } = useI18n()
@@ -19,15 +29,20 @@ const router = useRouter()
 const accountOpen = ref(false)
 const accountRef = ref<HTMLElement | null>(null)
 
-const pageTitle = computed(() => typeof route.meta.titleKey === 'string' ? t(route.meta.titleKey) : app.siteName)
-const pageDescription = computed(() => typeof route.meta.descriptionKey === 'string' ? t(route.meta.descriptionKey) : app.siteSubtitle)
 const userInitials = computed(() => (auth.user?.display_name || auth.user?.email || auth.user?.username || 'AR').slice(0, 2).toUpperCase())
 const demoMode = computed(() => Boolean(app.publicSettings?.demo_mode))
 const isConsole = computed(() => route.path.startsWith('/console'))
 const isPortal = computed(() => route.path.startsWith('/portal'))
+const darkMode = ref(document.documentElement.dataset.theme === 'dark')
 
 function changeLocale(event: Event) {
   setLocale((event.target as HTMLSelectElement).value as LocaleCode)
+}
+
+function toggleTheme() {
+  darkMode.value = !darkMode.value
+  document.documentElement.dataset.theme = darkMode.value ? 'dark' : 'light'
+  localStorage.setItem('asterrouter_theme', darkMode.value ? 'dark' : 'light')
 }
 
 async function openEntry(path: string) {
@@ -63,7 +78,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
 </script>
 
 <template>
-  <header class="app-header glass topbar">
+  <header class="app-header topbar" data-global-header>
     <div class="app-header-inner">
       <div class="topbar-context">
         <button
@@ -76,20 +91,33 @@ onBeforeUnmount(() => document.removeEventListener('click', closeOnOutsideClick)
         >
           <Menu :size="20" />
         </button>
-        <div>
-          <p class="topbar-title">{{ pageTitle }}</p>
-          <p class="topbar-description">{{ pageDescription }}</p>
-        </div>
+        <RouterLink class="global-brand-link" :to="props.homeTo">
+          <img v-if="app.publicSettings?.site_logo" :src="app.publicSettings.site_logo" class="shell-brand-logo" alt="" />
+          <span v-else class="brand-mark global-brand-mark">{{ props.brandMark }}</span>
+          <strong>{{ app.siteName }}</strong>
+        </RouterLink>
+        <span class="global-header-divider" aria-hidden="true"></span>
+        <span class="global-entry-label">{{ t(props.entry === 'portal' ? 'nav.portal' : 'nav.console') }}</span>
       </div>
 
       <div class="topbar-actions">
-        <span v-if="demoMode" class="pill status-warning">{{ t('nav.demoMode') }}</span>
+        <span v-if="demoMode" class="pill status-warning global-demo-status">{{ t('nav.demoMode') }}</span>
         <label class="locale-control">
           <Globe2 :size="17" aria-hidden="true" />
           <select :value="getLocale()" :aria-label="t('nav.language')" @change="changeLocale">
             <option v-for="locale in availableLocales" :key="locale.code" :value="locale.code">{{ locale.label }}</option>
           </select>
         </label>
+        <button
+          class="icon-button global-theme-toggle"
+          type="button"
+          :aria-label="darkMode ? t('nav.lightMode') : t('nav.darkMode')"
+          :title="darkMode ? t('nav.lightMode') : t('nav.darkMode')"
+          @click="toggleTheme"
+        >
+          <Sun v-if="darkMode" :size="16" />
+          <Moon v-else :size="16" />
+        </button>
 
         <div v-if="auth.user" ref="accountRef" class="account-menu">
           <button class="account-trigger" type="button" :aria-expanded="accountOpen" :aria-label="t('nav.accountMenu')" @click="accountOpen = !accountOpen">

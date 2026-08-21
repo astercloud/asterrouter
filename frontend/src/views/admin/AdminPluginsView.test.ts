@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n, { setLocale } from '@/i18n'
 import * as plugins from '@/api/plugins'
 import AdminPluginsView from './AdminPluginsView.vue'
@@ -58,6 +58,17 @@ const catalogPlugin = {
   updated_at: '2026-07-14T00:00:00Z'
 }
 
+const activeAPIToken = {
+  id: 'pat-browser',
+  name: 'Browser plugin token',
+  plugin_id: 'com.asterrouter.notification.webhook',
+  token_prefix: 'arpt_browser',
+  scopes: ['catalog:read', 'plugin:action'],
+  status: 'active',
+  created_at: '2026-07-14T00:00:00Z',
+  updated_at: '2026-07-14T00:00:00Z'
+}
+
 function mockPluginState(options: { trust?: boolean; paidLocked?: number; enabled?: number } = {}) {
   const trust = options.trust ?? true
   const paidLocked = options.paidLocked ?? 0
@@ -98,6 +109,10 @@ function mockPluginState(options: { trust?: boolean; paidLocked?: number; enable
 }
 
 describe('AdminPluginsView workbench', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     setLocale('en-US')
@@ -254,6 +269,34 @@ describe('AdminPluginsView workbench', () => {
     const item = wrapper.findAll('.plugin-launcher-item').find((entry) => entry.text().includes('MonitorPrice'))
     expect(item).toBeDefined()
     expect(item?.find('button.button').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('does not let an older refresh overwrite a revoked API token', async () => {
+    vi.mocked(plugins.getPluginAPITokens).mockResolvedValueOnce([activeAPIToken])
+    vi.mocked(plugins.revokePluginAPIToken).mockResolvedValue({
+      ...activeAPIToken,
+      status: 'revoked',
+      updated_at: '2026-07-14T00:01:00Z'
+    })
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const wrapper = mount(AdminPluginsView, { global: { plugins: [i18n] } })
+    await flushPromises()
+    await wrapper.get('[data-tab="api"]').trigger('click')
+
+    let resolveStaleTokens!: (tokens: typeof activeAPIToken[]) => void
+    vi.mocked(plugins.getPluginAPITokens).mockReturnValueOnce(new Promise((resolve) => {
+      resolveStaleTokens = resolve
+    }))
+    await wrapper.findAll('.plugin-page-actions button').find((button) => button.text().includes('Refresh'))!.trigger('click')
+    await wrapper.get('button[title="Revoke token"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-section="api"] tbody tr').text()).toContain('revoked')
+
+    resolveStaleTokens([activeAPIToken])
+    await flushPromises()
+    expect(wrapper.get('[data-section="api"] tbody tr').text()).toContain('revoked')
+
     wrapper.unmount()
   })
 })

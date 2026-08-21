@@ -1,7 +1,7 @@
 # 路由策略算法验收矩阵
 
 > 状态：`CURRENT`
-> 适用版本：`v0.26.0`
+> 适用版本：`v0.27.0`
 > 事实源：[`README.md`](./README.md)、[`scenario-registry.json`](./scenario-registry.json)
 > 产品边界：企业 AI Gateway 的静态策略、运行时调度、路由试算与执行证据
 

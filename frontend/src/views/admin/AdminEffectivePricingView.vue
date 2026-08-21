@@ -548,11 +548,11 @@ onMounted(load)
     <div v-if="message" class="notice success">{{ message }}</div>
     <div v-if="error" class="notice">{{ error }}</div>
 
-    <section class="effective-tabs" role="tablist" :aria-label="t('effectivePricing.title')">
-      <button v-for="tab in tabs" :key="tab.id" type="button" :class="{ active: activeTab === tab.id }" @click="activeTab = tab.id">
+    <div class="effective-tabs" role="tablist" :aria-label="t('effectivePricing.title')">
+      <button v-for="tab in tabs" :key="tab.id" type="button" role="tab" :aria-selected="activeTab === tab.id" :tabindex="activeTab === tab.id ? 0 : -1" :class="{ active: activeTab === tab.id }" @click="activeTab = tab.id">
         <component :is="tab.icon" :size="16" />{{ t(`effectivePricing.tabs.${tab.id}`) }}
       </button>
-    </section>
+    </div>
     <section class="effective-filters">
       <label><span>{{ t('usage.model') }}</span><input v-model="modelFilter" :placeholder="t('effectivePricing.upstreamModel')" @keyup.enter="load" /></label>
       <label><span>{{ t('effectivePricing.protocol') }}</span><select v-model="protocolFilter" @change="load"><option value="openai_chat_completions">OpenAI Chat</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option></select></label>
@@ -724,10 +724,11 @@ onMounted(load)
 </template>
 
 <style scoped>
-.effective-pricing-page { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; gap: 16px; }
+.effective-pricing-page { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; align-content: start; grid-auto-rows: max-content; gap: 12px; }
 .effective-pricing-page > * { min-width: 0; }
-.effective-tabs { display: flex; gap: 3px; padding: 3px; border-bottom: 1px solid var(--border); background: var(--surface); }
-.effective-tabs button { display: inline-flex; min-height: 40px; align-items: center; gap: 7px; padding: 0 15px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; font-weight: 700; }
+.effective-pricing-page > .page-header { margin-bottom: 0; }
+.effective-tabs { display: flex; min-height: 40px; gap: 0; padding: 0 4px; border-bottom: 1px solid var(--border); background: var(--surface); overflow-x: auto; }
+.effective-tabs button { display: inline-flex; min-height: 40px; flex: 0 0 auto; align-items: center; gap: 7px; padding: 0 13px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer; font-weight: 700; }
 .effective-tabs button.active { border-bottom-color: var(--primary-600); color: var(--primary-700); }
 .billing-source-body { display: grid; gap: 18px; padding: 18px !important; }
 .billing-source-controls { display: flex; align-items: end; gap: 12px; }
