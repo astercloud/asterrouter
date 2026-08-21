@@ -90,6 +90,7 @@ const apiTokenRevokeID = ref('')
 const apiTokenModal = ref(false)
 const apiTokenSecret = ref('')
 const apiTokens = ref<PluginAPIToken[]>([])
+let apiTokenMutationRevision = 0
 const apiTokenForm = ref({
   name: '',
   pluginID: '',
@@ -282,6 +283,7 @@ function hasFrontendWorkbench(plugin: Plugin) {
 }
 
 async function load() {
+  const tokenRevision = apiTokenMutationRevision
   loading.value = true
   error.value = ''
   try {
@@ -296,7 +298,7 @@ async function load() {
     catalog.value = catalogData
     officialCatalogStatus.value = catalogStatus
     officialLicenseStatus.value = licenseStatus
-    apiTokens.value = tokenData
+    if (tokenRevision === apiTokenMutationRevision) apiTokens.value = tokenData
     feedStatuses.value = feedData
     feedClientInfo.value = licenseStatus.status === 'active' ? await getOfficialFeedClientInfo().catch(() => null) : null
     feedSyncRuns.value = syncRuns
@@ -318,6 +320,7 @@ async function savePluginAPIToken() {
       scopes: apiTokenForm.value.scopes,
       expires_at: apiTokenForm.value.expiresAt ? new Date(apiTokenForm.value.expiresAt).toISOString() : undefined
     })
+    apiTokenMutationRevision += 1
     apiTokens.value = [result.token, ...apiTokens.value]
     apiTokenSecret.value = result.secret
     apiTokenForm.value.name = ''
@@ -338,6 +341,7 @@ async function revokePluginToken(token: PluginAPIToken) {
   error.value = ''
   try {
     const revoked = await revokePluginAPIToken(token.id)
+    apiTokenMutationRevision += 1
     const index = apiTokens.value.findIndex((item) => item.id === token.id)
     if (index >= 0) apiTokens.value[index] = revoked
     message.value = t('plugins.apiTokenRevoked')
